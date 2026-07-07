@@ -106,11 +106,11 @@ Pętla proxy (sub-agenci nie mogą pytać użytkownika bezpośrednio):
 
 Po refinemencie ten sam sub-agent tworzy plan implementacji skillem `superpowers:writing-plans`.
 Zwraca `spec.md`, `plan.md` oraz podsumowanie (~10 zdań) do orchestratora.
-Gate: stepper pokazuje podsumowanie z przyciskiem **Approve** — dopiero kliknięcie uruchamia Krok 3; to ostatni moment interakcji.
+Gate: stepper pokazuje podsumowanie z przyciskiem **Approve** — dopiero kliknięcie uruchamia Krok 3; to ostatni planowy moment interakcji (nie licząc decyzji Retry/Zakończ przy statusie Failed).
 
 ### Krok 3 — Implementation (poglądowy)
 
-Przed startem orchestrator tworzy branch `feature/<slug>` od bieżącego.
+Przed startem orchestrator tworzy branch `feature/<slug>` od bieżącego (slug generowany z tytułu funkcjonalności podanego w Kroku 1).
 Sub-agent dostaje ścieżkę `plan.md` i wykonuje plan zadanie po zadaniu w pełni autonomicznie (podejście `superpowers:executing-plans` w wariancie subagent-driven, z TDD; checkpointy ludzkie zastąpione raportami do serwera).
 Po każdym zadaniu: `POST /api/state` z `% = ukończone/wszystkie` i nazwą bieżącego zadania.
 Zwraca listę zmienionych plików + podsumowanie.
@@ -130,7 +130,7 @@ Progress = odsetek checklisty potwierdzony.
 ### Krok 5 — Code Review (poglądowy)
 
 Sub-agent stage'uje zmiany (`git add -A`) i uruchamia skill `code-review` na staged diff w trybie z auto-fixem (analiza: błędy, architektura, wydajność, czytelność, regresje).
-Po poprawkach re-review.
+Po zastosowaniu poprawek sub-agent ponownie uruchamia testy E2E z Kroku 4 (ochrona przed regresją wprowadzoną przez fixy), a następnie wykonuje re-review.
 Koniec przy zeru findings i ≥99% zgodności z checklistą; max 3 cykle → inaczej Failed + raport.
 
 ### Podsumowanie końcowe
