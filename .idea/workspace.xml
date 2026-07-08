@@ -1,15 +1,37 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
   <component name="ChangeListManager">
-    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="" />
+    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
+      <change beforePath="$PROJECT_DIR$/.claude-plugin/marketplace.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude-plugin/marketplace.json" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="doh-plugin" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;DohGE&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/DohGE/claude.git&quot;,
+    &quot;accountId&quot;: &quot;9917d7aa-5ca8-459b-a1df-d87823f00fb0&quot;
+  }
+}</component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 2
 }</component>
@@ -23,15 +45,24 @@
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
     &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;D:/WebstormProjects/claude&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
     &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\WebstormProjects\claude" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -48,11 +79,29 @@
       <updated>1777923561706</updated>
       <workItem from="1777923562807" duration="188000" />
       <workItem from="1777923760090" duration="230000" />
-      <workItem from="1782313163752" duration="16000" />
+      <workItem from="1782313163752" duration="3613000" />
+      <workItem from="1783419749984" duration="1637000" />
+      <workItem from="1783439640383" duration="2759000" />
+      <workItem from="1783499243820" duration="53000" />
+      <workItem from="1783516871587" duration="4567000" />
+      <workItem from="1783584334500" duration="327000" />
     </task>
+    <task id="LOCAL-00001" summary="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
+      <option name="closed" value="true" />
+      <created>1783521131787</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1783521131787</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="feat(): Add new plugin doh with implementNewFeature and codeReview skills" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(): Add new plugin doh with implementNewFeature and codeReview skills" />
   </component>
 </project>

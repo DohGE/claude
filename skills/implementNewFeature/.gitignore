@@ -1,0 +1,4 @@
+node_modules/
+.implementNewFeature/
+test-results/
+playwright-report/

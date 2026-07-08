@@ -1,0 +1,13 @@
+{
+  "name": "implement-new-feature",
+  "owner": {
+    "name": "DohGE"
+  },
+  "plugins": [
+    {
+      "name": "doh",
+      "source": "./",
+      "description": "Skills: /implementNewFeature (pipeline with stepper UI), /codeReview (instruction-driven review reports)"
+    }
+  ]
+}
