@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>implementNewFeature</title>
+<style>
+  :root {
+    --bg:#07090f; --card:#1c2438; --card-2:#121927; --border:#324061; --border-hi:#44567f;
+    --text:#eef1f8; --muted:#9aa3ba; --accent:#7c8cf8; --accent-2:#a78bfa;
+    --waiting:#64748b; --in_progress:#7c8cf8; --completed:#34d399; --failed:#f87171;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:'Inter','Segoe UI',system-ui,sans-serif; line-height:1.5;
+    background:radial-gradient(1100px 550px at 70% -10%, #121728 0%, var(--bg) 55%) fixed;
+    color:var(--text);
+  }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 72px; }
+  h1 { font-size:22px; margin:0 0 28px; letter-spacing:.2px; width:fit-content;
+       background:linear-gradient(90deg,var(--accent),var(--accent-2));
+       -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
+  .step { flex:1 1 150px; background:var(--card); border:1px solid var(--border); border-radius:14px;
+          padding:14px 10px; text-align:center; transition:border-color .25s, box-shadow .25s;
+          box-shadow:0 12px 28px -18px rgba(0,0,0,.9); }
+  .step.in_progress { border-color:var(--accent);
+          box-shadow:0 0 0 1px rgba(124,140,248,.35), 0 8px 24px -12px rgba(124,140,248,.45); }
+  .step .num { display:inline-flex; align-items:center; justify-content:center;
+          width:28px; height:28px; border-radius:50%; color:#0b0e14; font-size:13px; font-weight:700;
+          background:var(--waiting); margin-bottom:8px; }
+  .step.in_progress .num { background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#fff;
+          animation:pulse 1.6s ease-in-out infinite; }
+  .step.completed .num { background:var(--completed); }
+  .step.failed .num { background:var(--failed); color:#fff; }
+  @keyframes pulse { 50% { opacity:.55; } }
+  .step .name { display:block; font-size:12.5px; font-weight:600; }
+  .step .badge { display:block; font-size:10.5px; margin-top:5px; text-transform:uppercase;
+          letter-spacing:.8px; font-weight:600; color:var(--waiting); }
+  .step.in_progress .badge { color:var(--accent); }
+  .step.completed .badge { color:var(--completed); }
+  .step.failed .badge { color:var(--failed); }
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:24px;
+          box-shadow:0 20px 50px -30px rgba(0,0,0,.8); }
+  .panel h2 { margin:0 0 14px; font-size:17px; }
+  label { display:block; font-size:13px; font-weight:600; margin:16px 0 6px; color:var(--muted); }
+  label .req { color:var(--failed); }
+  textarea, input[type=file], input[type=text], input[type=password] {
+          width:100%; font:inherit; color:var(--text); }
+  textarea, input[type=text], input[type=password] { background:var(--card-2);
+          border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
+  textarea { min-height:90px; resize:vertical; }
+  textarea:focus, input[type=text]:focus, input[type=password]:focus { outline:none;
+          border-color:var(--accent); box-shadow:0 0 0 3px rgba(124,140,248,.18); }
+  .panel h3 { font-size:14px; margin:22px 0 0; color:var(--accent); }
+  input[type=file] { background:var(--card-2); border:1px dashed var(--border); border-radius:10px;
+          padding:10px; color:var(--muted); }
+  button { font:inherit; font-weight:600; border:0; border-radius:10px; padding:10px 20px; cursor:pointer;
+          background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#fff; margin-top:16px;
+          transition:filter .15s, transform .15s; }
+  button:hover:not(:disabled) { filter:brightness(1.12); transform:translateY(-1px); }
+  button:disabled { background:var(--border); color:var(--muted); cursor:not-allowed; transform:none; }
+  button.secondary { background:var(--card-2); border:1px solid var(--border); color:var(--text); }
+  button.danger { background:var(--failed); }
+  .options button { display:block; width:100%; text-align:left; background:var(--card-2);
+          color:var(--text); border:1px solid var(--border); margin-top:10px; font-weight:500; }
+  .options button:hover:not(:disabled) { border-color:var(--accent); background:#1a2338;
+          transform:none; filter:none; }
+  .options button.selected { border-color:var(--accent); background:rgba(124,140,248,.14);
+          color:var(--text); }
+  .bar { height:8px; background:var(--card-2); border:1px solid var(--border); border-radius:99px;
+          overflow:hidden; margin:10px 0 6px; }
+  .bar > div { height:100%; background:linear-gradient(90deg,var(--accent),var(--accent-2));
+          width:0; border-radius:99px; transition:width .4s; }
+  .bar > div.indeterminate { width:100%; transition:none;
+          background:linear-gradient(90deg,transparent,rgba(124,140,248,.75),transparent);
+          background-size:40% 100%; background-repeat:no-repeat;
+          animation:slide 1.4s ease-in-out infinite; }
+  @keyframes slide { 0% { background-position:-40% 0; } 100% { background-position:140% 0; } }
+  .op { font-size:13px; color:var(--muted); margin:6px 0 14px; }
+  .log { list-style:none; margin:10px 0 0; padding:0; font-size:12.5px; }
+  .log li { padding:6px 0; border-top:1px solid var(--border); color:#c3c9d6; }
+  .log time { color:var(--waiting); margin-right:10px; font-variant-numeric:tabular-nums;
+          font-family:ui-monospace,Consolas,monospace; font-size:11.5px; }
+  pre.report, pre.summary-text { white-space:pre-wrap; background:var(--card-2);
+          border:1px solid var(--border); border-radius:10px; padding:14px; font-size:13px;
+          color:#c3c9d6; }
+  .muted { color:var(--muted); font-size:13px; }
+  .notice { display:flex; align-items:center; gap:10px; margin-top:16px; padding:12px 14px;
+          border:1px solid var(--border-hi); border-radius:10px; background:rgba(124,140,248,.08);
+          font-size:13px; }
+  .spinner { width:14px; height:14px; border-radius:50%; border:2px solid var(--accent);
+          border-top-color:transparent; animation:spin .8s linear infinite; flex:none; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .summary section { margin-bottom:18px; }
+  .summary h3 { font-size:14px; margin:0 0 6px; color:var(--accent); }
+  .summary ul { margin:0; padding-left:20px; }
+  .status-final { font-size:15px; font-weight:700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>implementNewFeature</h1>
+  <div class="stepper" id="stepper"></div>
+  <div class="panel" id="panel"><p class="muted">Connecting…</p></div>
+</div>
+<script>
+'use strict';
+const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Implementation',
+  'Validation & E2E', 'Code Review'];
+const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
+  completed: 'Completed', failed: 'Failed' };
+let lastSig = null;
+let serverDown = false; // set when the user shuts the server down from the summary
+
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
+function toB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+async function postJson(url, body) {
+  await fetch(url, { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+const sendAnswer = payload => postJson('/api/answer', payload);
+
+// Instant click feedback: disable every control and show a spinner notice.
+// The panel stays locked until the orchestrator changes the state (sig changes).
+function lockPanel(message) {
+  document.querySelectorAll('#panel button, #panel textarea, #panel input')
+    .forEach(el => { el.disabled = true; });
+  const n = document.createElement('div');
+  n.className = 'notice';
+  const spin = document.createElement('span');
+  spin.className = 'spinner';
+  const txt = document.createElement('span');
+  txt.textContent = message;
+  n.append(spin, txt);
+  $('#panel').appendChild(n);
+}
+
+async function tick() {
+  if (serverDown) return;
+  let state;
+  try {
+    state = await (await fetch('/api/state')).json();
+  } catch (_e) {
+    $('#panel').innerHTML = '<p class="muted">Server unreachable — retrying…</p>';
+    lastSig = null;
+    return;
+  }
+  renderStepper(state);
+  renderPanel(state);
+}
+
+function renderStepper(state) {
+  $('#stepper').innerHTML = state.steps.map(s => `
+    <div class="step ${s.status}">
+      <span class="num">${s.id}</span>
+      <span class="name">${esc(s.name || STEP_NAMES[s.id - 1])}</span>
+      <span class="badge">${BADGE[s.status] || s.status}</span>
+    </div>`).join('');
+}
+
+function sig(state) {
+  const step = state.steps[state.activeStep - 1] || state.steps[0];
+  return [state.activeStep, step.status,
+    state.question ? state.question.id : '',
+    state.reviewSummary ? '1' : '', state.summary ? '1' : ''].join('|');
+}
+
+function renderPanel(state) {
+  const s = sig(state);
+  const step = state.steps[state.activeStep - 1] || state.steps[0];
+  if (s === lastSig) { updateDynamic(step); return; }
+  lastSig = s;
+  if (state.summary) return renderSummary(state.summary);
+  if (step.status === 'failed') return renderFailed(step);
+  if (state.activeStep === 1) return renderStep1(step);
+  if (state.activeStep === 2) {
+    if (state.question) return renderQuestion(state.question);
+    if (state.reviewSummary) return renderReview(state.reviewSummary);
+  }
+  renderProgress(step);
+}
+
+function renderStep1(step) {
+  if (step.status !== 'in_progress') {
+    $('#panel').innerHTML = '<p class="muted">Waiting for the pipeline…</p>';
+    return;
+  }
+  $('#panel').innerHTML = `
+    <h2>Requirements</h2>
+    <label>Task description <span class="req">*</span></label>
+    <textarea id="task"></textarea>
+    <label>Business requirements <span class="req">*</span></label>
+    <textarea id="biz"></textarea>
+    <label>Mockups (optional)</label>
+    <input type="file" id="mockups" multiple accept="image/*,.pdf">
+    <label>API contracts / specs (optional — files or pasted text)</label>
+    <input type="file" id="contracts" multiple>
+    <textarea id="contractsText" placeholder="…or paste contracts here"></textarea>
+    <h3>Authorization (optional)</h3>
+    <p class="muted">Credentials for E2E tests only — stored in the session dir, outside git.</p>
+    <label>Login</label>
+    <input type="text" id="authLogin" autocomplete="off">
+    <label>Password</label>
+    <input type="password" id="authPassword" autocomplete="new-password">
+    <button id="next" disabled>Next</button>`;
+  const auth = () => {
+    const login = $('#authLogin').value.trim();
+    const password = $('#authPassword').value;
+    return { login, password, complete: !!(login && password.trim()) };
+  };
+  const gate = () => {
+    const a = auth();
+    // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
+    $('#next').disabled = !($('#task').value.trim() && $('#biz').value.trim()
+      && (a.complete || (!a.login && !a.password.trim())));
+  };
+  ['#task', '#biz', '#authLogin', '#authPassword'].forEach(sel =>
+    $(sel).addEventListener('input', gate));
+  $('#next').addEventListener('click', async () => {
+    lockPanel('Uploading and submitting…');
+    const upload = async (cat, input) => {
+      const names = [];
+      for (const f of input.files) {
+        await postJson('/api/upload',
+          { category: cat, filename: f.name, dataBase64: await toB64(f) });
+        names.push(f.name);
+      }
+      return names;
+    };
+    const mockups = await upload('mockups', $('#mockups'));
+    const contracts = await upload('contracts', $('#contracts'));
+    // Credentials go straight to the server (auth.json); the step1 answer
+    // only carries a flag so they never reach the orchestrator's context.
+    const a = auth();
+    if (a.complete) await postJson('/api/auth', { login: a.login, password: a.password });
+    await sendAnswer({ kind: 'step1',
+      taskDescription: $('#task').value.trim(),
+      businessRequirements: $('#biz').value.trim(),
+      contractsText: $('#contractsText').value.trim(),
+      mockups, contracts, authProvided: a.complete });
+  });
+}
+
+function renderQuestion(q) {
+  const opts = (q.options || []).map((o, i) =>
+    `<button data-opt="${i}">${esc(o)}</button>`).join('');
+  $('#panel').innerHTML = `
+    <h2>Feature Refinement</h2>
+    <p>${esc(q.text)}</p>
+    <div class="options">${opts}</div>
+    <label>…or type your own answer</label>
+    <textarea id="freeAnswer"></textarea>
+    <button id="send">Send answer</button>`;
+  document.querySelectorAll('[data-opt]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      btn.classList.add('selected');
+      lockPanel('Answer sent — the agent is processing it…');
+      sendAnswer({ kind: 'answer', questionId: q.id, value: q.options[+btn.dataset.opt] });
+    }));
+  $('#send').addEventListener('click', () => {
+    const v = $('#freeAnswer').value.trim();
+    if (!v) return;
+    lockPanel('Answer sent — the agent is processing it…');
+    sendAnswer({ kind: 'answer', questionId: q.id, value: v });
+  });
+}
+
+function renderReview(review) {
+  $('#panel').innerHTML = `
+    <h2>Plan review</h2>
+    <pre class="summary-text">${esc(review.text)}</pre>
+    <button id="approve">Approve</button>
+    <label>…or request changes</label>
+    <textarea id="feedback"></textarea>
+    <button id="sendFeedback" class="secondary">Send feedback</button>`;
+  $('#approve').addEventListener('click', () => {
+    lockPanel('Approved — starting implementation…');
+    sendAnswer({ kind: 'decision', decision: 'approve' });
+  });
+  $('#sendFeedback').addEventListener('click', () => {
+    const t = $('#feedback').value.trim();
+    if (!t) return;
+    lockPanel('Feedback sent — the agent is revising the plan…');
+    sendAnswer({ kind: 'decision', decision: 'feedback', text: t });
+  });
+}
+
+function renderProgress(step) {
+  $('#panel').innerHTML = `
+    <h2>${esc(step.name)}</h2>
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="op" id="op"></div>
+    <ul class="log" id="log"></ul>`;
+  updateDynamic(step);
+}
+
+function updateDynamic(step) {
+  const fill = $('#barFill');
+  if (fill) {
+    const indeterminate = step.progress == null && step.status === 'in_progress';
+    fill.classList.toggle('indeterminate', indeterminate);
+    fill.style.width = indeterminate ? '100%' : `${step.progress || 0}%`;
+  }
+  const op = $('#op');
+  if (op) op.textContent = (step.progress != null ? `${step.progress}% — ` : '')
+    + (step.currentOperation || '');
+  const log = $('#log');
+  if (log) log.innerHTML = step.log.slice(-15).reverse().map(e =>
+    `<li><time>${esc(e.time.slice(11, 19))}</time>${esc(e.text)}</li>`).join('');
+}
+
+function renderFailed(step) {
+  $('#panel').innerHTML = `
+    <h2>${esc(step.name)} — failed</h2>
+    <pre class="report">${esc(step.report || 'No report provided.')}</pre>
+    <button id="retry" class="danger">Retry step</button>
+    <button id="finish" class="secondary">Finish</button>`;
+  $('#retry').addEventListener('click', () => {
+    lockPanel('Retrying the step…');
+    sendAnswer({ kind: 'decision', decision: 'retry' });
+  });
+  $('#finish').addEventListener('click', () => {
+    lockPanel('Finishing the pipeline…');
+    sendAnswer({ kind: 'decision', decision: 'finish' });
+  });
+}
+
+function renderSummary(sum) {
+  const list = items => `<ul>${(items || []).map(i => `<li>${esc(i)}</li>`).join('')}</ul>`;
+  const block = text => `<pre class="summary-text">${esc(text || '—')}</pre>`;
+  $('#panel').innerHTML = `<div class="summary">
+    <h2>Pipeline summary</h2>
+    <section><h3>Final status</h3>
+      <p class="status-final">${esc(sum.finalStatus || '')}</p></section>
+    <section><h3>Changes</h3>${list(sum.changes)}</section>
+    <section><h3>Implemented features</h3>${list(sum.features)}</section>
+    <section><h3>Test results</h3>${block(sum.tests)}</section>
+    <section><h3>Mockup comparison</h3>${block(sum.mockupComparison)}</section>
+    <section><h3>Code review</h3>${block(sum.codeReview)}</section>
+    <section id="shutdown-section">
+      <button id="shutdown">Shut down server</button>
+    </section>
+  </div>`;
+  $('#shutdown').addEventListener('click', async () => {
+    serverDown = true;
+    $('#shutdown').disabled = true;
+    try { await postJson('/api/shutdown', {}); } catch (_e) { /* server exits mid-response */ }
+    $('#shutdown-section').innerHTML =
+      '<p class="muted">Server stopped — you can close this tab.</p>';
+  });
+}
+
+setInterval(tick, 1000);
+tick();
+</script>
+</body>
+</html>
