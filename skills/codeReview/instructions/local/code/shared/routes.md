@@ -9,5 +9,6 @@ applies-to:
 - Wizard variant (`shell/<area>-shell.routes.ts`): one entry per step with `path` taken from the step enum, `canActivate` guards declared in this file (initialization guard factory + previous-step guard), and `loadComponent` per step; state, effects and the facade are still provided by the parent at `loadChildren`.
 - An area has either `shared/routes/` or `shell/` — never both.
 - Where state is registered (the parent route), the `providers` array holds `provideState(featureKey, reducer)`, `provideEffects([ ...all effect classes of the area ])` and the facade together.
+- Every user-navigable page/step route defines a `title` (an i18n-resolved static key or resolver) unless the shell/layout sets titles centrally — a new page route without a title is a finding (accessibility + browser history).
 - Import paths inside route files may be relative within the area or aliased when crossing areas; no other logic lives in a routes file.
 - Route files have no unit specs — lazy-load correctness is verified by the build.

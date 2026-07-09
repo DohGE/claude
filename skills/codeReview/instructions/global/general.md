@@ -10,5 +10,6 @@ name: General code rules
 - Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.
 - Every user-facing string is an i18n key resolved through the translation pipe/service — never a hard-coded text, in TS or in templates.
 - No `console.log` or other leftover debug statements.
+- Errors are never swallowed: no empty `catch` blocks, no `.catch(() => {})`, no `catchError` that drops the failure without mapping it to a fail action/error state — every failure path either surfaces to state/UI or carries an explicit justification.
 - No commented-out code; a comment exists only to state a constraint the code itself cannot express — never to narrate what the next line does or why a change was made.
 - Linter and Prettier are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings.

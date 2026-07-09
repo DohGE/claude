@@ -10,6 +10,7 @@ applies-to:
 - The `imports` array lists exactly what the template uses — nothing speculative.
 - Dependency injection only through `inject()` (never constructor parameters); injected fields are `private readonly _camelCase`.
 - Inputs/outputs only through the signal API: `input()`, `input.required()`, `output()`, `model()` — never `@Input()`/`@Output()` decorators or `@Input() set` accessors.
+- An input the component cannot render without is `input.required<T>()` — no `!` definite-assignment tricks and no fake defaults that mask a missing binding.
 - Host bindings go into `host: {}` in the decorator — never `@HostBinding`/`@HostListener`.
 - Every signal, `computed()`, enum/const alias and arrow-function field is `readonly`.
 - Enum/const aliases exposed for the template keep the enum name in camelCase (`readonly buttonStyle = ButtonStyle`) — the alias name is never changed.
@@ -19,10 +20,12 @@ applies-to:
 - The constructor contains only `effect()` calls; loads, dispatches and subscriptions belong to `ngOnInit`.
 - `effect()` is used only for: propagating state to a layout/parent, state→form `patchValue(..., { emitEvent: false })`, enabling/disabling the form from a lock signal (also with `{ emitEvent: false }`), or reacting to a signal change by calling a facade method; never for writing other signals, logging, or replicating `computed()`.
 - Reactive forms are built with `_fb.nonNullable.group({...})`; every control has an explicit generic type and is seeded from the relevant signal; validators are declared in the form definition.
+- Validators changed at runtime (`addValidators`/`removeValidators`/`setValidators`) are followed by `updateValueAndValidity()` on the affected control — otherwise the control keeps its stale validity.
 - Form→state: `valueChanges` subscription with `takeUntilDestroyed(...)`; whole-form emissions are deduplicated with `distinctUntilChanged((a, b) => isEqual(a, b))` using `isEqual` from `es-toolkit`.
 - State→form: an `effect()` calling `patchValue`/`setValue` with `{ emitEvent: false }` — omitting the flag creates a feedback loop with the subscription.
 - Every subscription is cleaned up exclusively with `takeUntilDestroyed()` (outside the constructor pass `DestroyRef`); no manual `Subject`, `Subscription`, `takeUntil(this._ngUnsubscribe$)` or unsubscribe-base-class patterns.
 - `ngOnDestroy` does not exist; a flush-on-exit (persisting aggregated values when leaving a step) uses `inject(DestroyRef)` + `_destroyRef.onDestroy(() => ...)`.
+- No direct `document`/`window`/`ElementRef.nativeElement` DOM reads or writes in the constructor or `ngOnInit`; browser-only work (focus, measurement, third-party widget init) runs in `afterNextRender`/`afterEveryRender`.
 - `compareWith*` fields are readonly arrow functions, null-safe (`?.`), returning `boolean`.
 - A `dataTestPrefix` const is defined and used for `data-test` attributes on interactive elements.
 - Single `as Type` casts only where required; no double casting where a single cast suffices.

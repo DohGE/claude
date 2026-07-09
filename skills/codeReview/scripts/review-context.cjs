@@ -140,12 +140,27 @@ function q(s) {
 
 function loadInstructions(instructionsDir) {
   const warnings = [];
-  const list = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort() : []);
-  const globalDir = path.join(instructionsDir, 'global');
-  const localDir = path.join(instructionsDir, 'local');
-  const globals = list(globalDir).map((f) => path.join(globalDir, f));
-  const locals = list(localDir).map((f) => {
-    const file = path.join(localDir, f);
+  const list = (dir) => {
+    if (!fs.existsSync(dir)) return [];
+    const files = [];
+    const walk = (d) => {
+      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile() && entry.name.endsWith('.md')) files.push(full);
+      }
+    };
+    walk(dir);
+    return files.sort();
+  };
+  const globals = list(path.join(instructionsDir, 'global'));
+  for (const file of globals) {
+    const { appliesTo } = parseFrontmatter(fs.readFileSync(file, 'utf8'));
+    if (appliesTo.length > 0) {
+      warnings.push(`Global instruction declares applies-to patterns, which are ignored for global instructions (move it to instructions/local): ${file}`);
+    }
+  }
+  const locals = list(path.join(instructionsDir, 'local')).map((file) => {
     const { appliesTo } = parseFrontmatter(fs.readFileSync(file, 'utf8'));
     if (appliesTo.length === 0) {
       warnings.push(`Local instruction has no applies-to patterns and will never match: ${file}`);

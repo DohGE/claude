@@ -5,7 +5,20 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
-      <change beforePath="$PROJECT_DIR$/.claude-plugin/marketplace.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude-plugin/marketplace.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/best-practices.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/best-practices.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/component-unit-test.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/component-unit-test.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/general.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/general.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/guidelines.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/guidelines.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/+state/http-service.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/+state/http-service.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/shared/routes.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/shared/routes.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/SKILL.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/SKILL.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/references/implementation-agent.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/references/implementation-agent.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -60,6 +73,10 @@
 }</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions\local" />
+      <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions\global" />
+      <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions" />
+      <recent name="D:\WebstormProjects\claude\skills\codeReview" />
       <recent name="D:\WebstormProjects\claude" />
     </key>
   </component>
@@ -85,6 +102,7 @@
       <workItem from="1783499243820" duration="53000" />
       <workItem from="1783516871587" duration="4567000" />
       <workItem from="1783584334500" duration="327000" />
+      <workItem from="1783600843889" duration="1617000" />
     </task>
     <task id="LOCAL-00001" summary="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
       <option name="closed" value="true" />

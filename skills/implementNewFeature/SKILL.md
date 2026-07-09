@@ -88,7 +88,7 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 
 1. Derive `SLUG` from the feature title (first line of `<SESSION>/spec.md`): lowercase, ASCII, spaces→`-`, strip other chars, max 40 chars. `git checkout -b feature/<SLUG>`.
 2. POST `{"step":3,"status":"in_progress","activeStep":3,"progress":0}`.
-3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder substitution). It reports progress itself via POST /api/state.
+3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder substitution). It reports progress itself via POST /api/state and writes code against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
 4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"step":3,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
 
 ## Step 4 — Validation & E2E (view-only)

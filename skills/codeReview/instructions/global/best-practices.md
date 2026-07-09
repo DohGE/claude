@@ -1,56 +1,17 @@
-You are an expert in TypeScript, Angular, and scalable web application development. You write functional, maintainable, performant, and accessible code following Angular and TypeScript best practices.
-
-## TypeScript Best Practices
-
-- Use strict type checking
-- Prefer type inference when the type is obvious
-- Avoid the `any` type; use `unknown` when type is uncertain
-
-## Angular Best Practices
-
-- Always use standalone components over NgModules
-- Must NOT set `standalone: true` inside Angular decorators. It's the default in Angular v20+.
-- Do NOT set `changeDetection: ChangeDetectionStrategy.OnPush` explicitly. `OnPush` is the default in Angular v22+.
-- Use signals for state management
-- Implement lazy loading for feature routes
-- Do NOT use the `@HostBinding` and `@HostListener` decorators. Put host bindings inside the `host` object of the `@Component` or `@Directive` decorator instead
-- Use `NgOptimizedImage` for all static images.
-  - `NgOptimizedImage` does not work for inline base64 images.
-
-## Accessibility Requirements
-
-- It MUST pass all AXE checks.
-- It MUST follow all WCAG AA minimums, including focus management, color contrast, and ARIA attributes.
-
-### Components
-
-- Keep components small and focused on a single responsibility
-- Use `input()` and `output()` functions instead of decorators
-- Use `computed()` for derived state
-- Prefer inline templates for small components
-- Prefer Signal Forms (`@angular/forms/signals`) for new forms. They are stable in Angular v22+ and provide signal-based state, type-safe field access, and schema-based validation
-- When not using Signal Forms, prefer Reactive forms instead of Template-driven ones
-- Do NOT use `ngClass`, use `class` bindings instead
-- Do NOT use `ngStyle`, use `style` bindings instead
-- When using external templates/styles, use paths relative to the component TS file.
-
-## State Management
-
-- Use signals for local component state
-- Use `computed()` for derived state
-- Keep state transformations pure and predictable
-- Do NOT use `mutate` on signals, use `update` or `set` instead
-
-## Templates
-
-- Keep templates simple and avoid complex logic
-- Use native control flow (`@if`, `@for`, `@switch`) instead of `*ngIf`, `*ngFor`, `*ngSwitch`
-- Use the async pipe to handle observables
-- Do not assume globals like (`new Date()`) are available.
-
-## Services
-
-- Design services around a single responsibility
-- Use the `providedIn: 'root'` option for singleton services
-- Prefer the `@Service` decorator over `@Injectable({providedIn: 'root'})` for new singleton services (Angular v22+)
-- Use the `inject()` function instead of constructor injection
+---
+name: Angular & TypeScript best practices
+---
+## Checklist
+- Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.
+- Standalone components/directives/pipes only — no new `NgModule`s; `standalone: true` is never written explicitly (it is the framework default).
+- Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array.
+- Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction).
+- Dependency injection only through `inject()`, and only in an injection context (field initializers, constructor, provider/guard factories) — calling `inject()` inside methods, subscriptions or async callbacks is a runtime error (NG0203).
+- Host bindings and listeners go into the `host: {}` object of the decorator — never `@HostBinding`/`@HostListener`.
+- Templates use native control flow (`@if`, `@for`, `@switch`) — never `*ngIf`/`*ngFor`/`*ngSwitch`; classes and styles via `[class.x]`/`[style.x]` bindings — never `ngClass`/`ngStyle`.
+- Feature routes are lazy (`loadComponent`/`loadChildren`); a new eager import of a feature area into the root/shell bundle is a finding.
+- Singleton services use `@Injectable({ providedIn: 'root' })`; route-scoped classes (facades, effects) are `@Injectable()` **without** `providedIn` and are provided on the route — see the architecture instruction.
+- Forms follow the project's typed reactive-forms pattern (`_fb.nonNullable.group`, explicit control generics) — no template-driven forms, no `UntypedFormControl`/`UntypedFormGroup` or `any`-typed controls.
+- Static images use `NgOptimizedImage` (`ngSrc`) — not applicable to inline base64 images.
+- Accessibility is a review criterion: new or changed UI must satisfy WCAG AA basics (focus management, color contrast, ARIA); the concrete template-level checks live in the component template instruction.
+- Components stay small and single-responsibility; logic lives in the TS file, markup in the HTML file, styles in the SCSS file (separate files per project convention).

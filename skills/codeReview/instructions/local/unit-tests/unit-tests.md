@@ -14,4 +14,5 @@ applies-to:
 - No double casts (`as unknown as X`) where a single `as X` suffices; no `as never`; no string-index type access.
 - Snapshots are updated (`-u`) only after consciously reviewing the diff.
 - Behavior-bearing code follows TDD: a failing test first (failing for the expected reason), then the minimal implementation, then refactor with tests green.
+- Every new or behavior-changing source file in the diff ships the matching spec change in the same diff — a new handler, reducer case, selector branch or util without a test is reported as 🔵 Missing Unit Test.
 - After changing any source file, its spec is run and green before commit (the pre-commit hook lints but does not run tests).

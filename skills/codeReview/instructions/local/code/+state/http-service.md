@@ -14,5 +14,7 @@ applies-to:
 - No `.pipe(...)`, `map`, `tap`, `catchError` or `subscribe()` in methods — mapping belongs to reducers/selectors, error handling to effects (the only tolerated exception, justified in the PR, is unwrapping an internal `{ data, meta }` envelope).
 - Method names are `<verb><Subject>`: GET→`load`, POST→`create`/`search`, PUT→`edit`/`update`, PATCH→`patch`, DELETE→`remove`; optional flags use default parameter values (`= false`), not `?` + `??`; query params go in the options object (`{ params }`).
 - One endpoint function may serve several HTTP verbs on the same URL — the `endpoints` entry is not duplicated.
+- No sensitive values (tokens, credentials, PII) in URL paths or query params — they land in server logs and browser history; opaque identifiers only. Auth headers come from the global interceptor, never set per request.
+- The response generic is an honest contract: `_http.get<Dto>(...)` asserts, it does not validate — a new or changed endpoint's DTO is verified against the real API contract (field names, `snake_case`, nullability) instead of being guessed.
 - Forbidden: injecting the store, cross-area services, keeping state, composing requests (`forkJoin` belongs to effects), `firstValueFrom`/`lastValueFrom`, logging, declaring local interfaces, HTTP interceptors (global ones already apply).
 - No unit tests for a service that only wraps HTTP calls (it is covered through the effects spec); a dedicated spec exists only when the service transforms data — which itself signals the service does too much.

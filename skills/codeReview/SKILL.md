@@ -26,6 +26,8 @@ Never fix code, never commit, never checkout, never modify the reviewed project 
 1. Read EVERY file listed in `globalInstructions`.
 2. Read EVERY file listed in any `files[].localInstructions` (deduplicated).
 3. If `claudeMd` is not null, read it and treat it as one more global instruction.
+4. Precedence when rules conflict: project `CLAUDE.md` > local instruction > global instruction.
+   Apply only the winning rule; never report a violation of the overridden rule.
 
 Never skip or skim any of these files — they are the review rulebook.
 
@@ -68,6 +70,12 @@ Write to `target.reportPath` (UTF-8), with this structure and nothing else:
 - Staged header instead: `# Code Review: staged (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Take the header date and time from the trailing `-YYYY-MM-DD-HH-mm` of `reportPath`, replacing the final dash of the time with `:` (e.g. `14-30` → `14:30`), so the header always matches the file name.
 - Severity emoji, exactly: ⚪ **Low**, 🟡 **Medium**, 🔴 **High**, 🟤 **Critical**, 🔵 **Missing Unit Test**.
+- Assign severity by these criteria, picking the highest that applies:
+  - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
+  - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification).
+  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation.
+  - ⚪ **Low** — readability, naming, style, redundant code, convention drift with no behavioral impact.
+  - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
 - Group findings under one `## <file path>` section per file; omit files without findings.
 - Expected Result describes ONLY the correct state of the code plus a concrete implementation proposal.
 - No intros, no summaries, no closing remarks — findings only.

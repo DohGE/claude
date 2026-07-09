@@ -152,12 +152,13 @@ function makeSkillDir(t, locals = {}, globals = {}) {
   const dir = tempDir(t, 'cr-skill-');
   fs.mkdirSync(path.join(dir, 'instructions', 'global'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'instructions', 'local'), { recursive: true });
-  for (const [name, content] of Object.entries(globals)) {
-    fs.writeFileSync(path.join(dir, 'instructions', 'global', name), content);
-  }
-  for (const [name, content] of Object.entries(locals)) {
-    fs.writeFileSync(path.join(dir, 'instructions', 'local', name), content);
-  }
+  const write = (root, name, content) => {
+    const file = path.join(dir, 'instructions', root, ...name.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  };
+  for (const [name, content] of Object.entries(globals)) write('global', name, content);
+  for (const [name, content] of Object.entries(locals)) write('local', name, content);
   return dir;
 }
 
@@ -173,17 +174,30 @@ test('matchLocalInstructions applies globs per file', () => {
   assert.deepStrictEqual(rc.matchLocalInstructions(locals, 'src/main.ts'), []);
 });
 
-test('loadInstructions lists sorted md files and warns on missing applies-to', (t) => {
+test('loadInstructions walks nested folders and warns on missing applies-to', (t) => {
   const skillDir = makeSkillDir(
     t,
-    { 'ts.md': TS_INSTRUCTION, 'broken.md': '# no frontmatter\n' },
-    { 'naming.md': '---\nname: Naming\n---\n- rule\n' },
+    {
+      'ts.md': TS_INSTRUCTION,
+      'broken.md': '# no frontmatter\n',
+      'code/components/component.md': TS_INSTRUCTION,
+    },
+    { 'naming.md': '---\nname: Naming\n---\n- rule\n', 'quality/security.md': '---\nname: Security\n---\n- rule\n' },
   );
   const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
-  assert.deepStrictEqual(res.globals.map((f) => path.basename(f)), ['naming.md']);
-  assert.deepStrictEqual(res.locals.map((l) => path.basename(l.file)), ['broken.md', 'ts.md']);
+  assert.deepStrictEqual(res.globals.map((f) => path.basename(f)), ['naming.md', 'security.md']);
+  assert.deepStrictEqual(res.locals.map((l) => path.basename(l.file)), ['broken.md', 'component.md', 'ts.md']);
   assert.strictEqual(res.warnings.length, 1);
   assert.match(res.warnings[0], /broken\.md/);
+});
+
+test('loadInstructions warns when a global instruction declares applies-to', (t) => {
+  const skillDir = makeSkillDir(t, {}, { 'misplaced.md': TS_INSTRUCTION });
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
+  assert.deepStrictEqual(res.globals.map((f) => path.basename(f)), ['misplaced.md']);
+  assert.strictEqual(res.warnings.length, 1);
+  assert.match(res.warnings[0], /misplaced\.md/);
+  assert.match(res.warnings[0], /ignored for global instructions/);
 });
 
 test('auto mode reviews the current branch against its detected base', (t) => {

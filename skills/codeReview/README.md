@@ -20,8 +20,8 @@ Branch names are sanitized for file names (any character outside `A-Z a-z 0-9 . 
 
 Review rules live in two folders inside this skill (they start empty — add your own):
 
-- `instructions/global/*.md` — apply to every reviewed file.
-- `instructions/local/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter.
+- `instructions/global/**/*.md` — apply to every reviewed file (subfolders are scanned recursively; `applies-to` frontmatter is ignored here and reported as a warning).
+- `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
 
 The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
 Files with no matching local instruction are still reviewed against all global instructions and the universal checklist points (cross-file consistency, architecture, naming, regressions, performance, security, readability, missing unit tests).
