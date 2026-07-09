@@ -1,0 +1,29 @@
+---
+name: Angular component (common)
+applies-to:
+  - "**/*.component.ts"
+---
+## Checklist
+- `changeDetection: ChangeDetectionStrategy.OnPush` is set — no exceptions.
+- `standalone: true` is never written (it is the framework default; writing it explicitly is a lint error).
+- Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one.
+- The `imports` array lists exactly what the template uses — nothing speculative.
+- Dependency injection only through `inject()` (never constructor parameters); injected fields are `private readonly _camelCase`.
+- Inputs/outputs only through the signal API: `input()`, `input.required()`, `output()`, `model()` — never `@Input()`/`@Output()` decorators or `@Input() set` accessors.
+- Host bindings go into `host: {}` in the decorator — never `@HostBinding`/`@HostListener`.
+- Every signal, `computed()`, enum/const alias and arrow-function field is `readonly`.
+- Enum/const aliases exposed for the template keep the enum name in camelCase (`readonly buttonStyle = ButtonStyle`) — the alias name is never changed.
+- Local state uses `signal()` (never a subject or a field with a setter); mutations only via `.set()`/`.update()`.
+- Derived values that can be computed from store state are added as selectors, not computed in the component; `computed()` is reserved for purely presentational composition (e.g. building table UI data from an input signal).
+- Member order is fixed: `inject()` fields → re-exported facade/input signals → `computed()` → enum/const aliases → `dataTestPrefix` and const UI helpers → form definition → `constructor` → arrow `compareWith*` fields → lifecycle hooks → public handlers.
+- The constructor contains only `effect()` calls; loads, dispatches and subscriptions belong to `ngOnInit`.
+- `effect()` is used only for: propagating state to a layout/parent, state→form `patchValue(..., { emitEvent: false })`, enabling/disabling the form from a lock signal (also with `{ emitEvent: false }`), or reacting to a signal change by calling a facade method; never for writing other signals, logging, or replicating `computed()`.
+- Reactive forms are built with `_fb.nonNullable.group({...})`; every control has an explicit generic type and is seeded from the relevant signal; validators are declared in the form definition.
+- Form→state: `valueChanges` subscription with `takeUntilDestroyed(...)`; whole-form emissions are deduplicated with `distinctUntilChanged((a, b) => isEqual(a, b))` using `isEqual` from `es-toolkit`.
+- State→form: an `effect()` calling `patchValue`/`setValue` with `{ emitEvent: false }` — omitting the flag creates a feedback loop with the subscription.
+- Every subscription is cleaned up exclusively with `takeUntilDestroyed()` (outside the constructor pass `DestroyRef`); no manual `Subject`, `Subscription`, `takeUntil(this._ngUnsubscribe$)` or unsubscribe-base-class patterns.
+- `ngOnDestroy` does not exist; a flush-on-exit (persisting aggregated values when leaving a step) uses `inject(DestroyRef)` + `_destroyRef.onDestroy(() => ...)`.
+- `compareWith*` fields are readonly arrow functions, null-safe (`?.`), returning `boolean`.
+- A `dataTestPrefix` const is defined and used for `data-test` attributes on interactive elements.
+- Single `as Type` casts only where required; no double casting where a single cast suffices.
+- When an edit touches ≥30% of a component or the component is small (≤150 lines), the whole component is refactored to these rules.
