@@ -8,6 +8,7 @@ name: Feature architecture
 - Layering is strict: components touch state only through a facade; selectors compute every derived value; effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.
 - Components never inject the store, never import actions or selectors, and never call HTTP services directly (the shared aggregate-form-validity service is the only allowed service injection in a feature component).
 - Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, HTTP in `data-access/services/`, state files in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed.
+- An `index.ts` barrel is allowed only in `models/` and `shared/` (and the `shared/` barrel never re-exports utils); anywhere else a barrel `index.ts` is forbidden.
 - Reuse before creating: check for an existing shared/library component, util, model, mapper or i18n key before adding a new one; shared builders and ID generators are defined once and reused, never re-implemented inline.
 - New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit.
 - Self-contained local state (dialogs, embedded browsers) may use a component-scoped store service provided in `@Component.providers`; feature-slice state never is.

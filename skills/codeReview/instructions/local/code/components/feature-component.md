@@ -8,8 +8,9 @@ applies-to:
 - Allowed injections: the area facade (required — the only bridge to state), a layout facade, `FormBuilder`, `ActivatedRoute`/`Router` (rare), `DestroyRef`, a dialog ref inside dialog components, and — only when aggregating child forms — the shared forms-validity service with its components-reference token.
 - Forbidden injections: the store, HTTP/data services, repositories; no imports from `*.actions`/`*.selectors`; no `store.dispatch`.
 - State from the facade is consumed as signals re-exported 1:1 (`readonly x = this._facade.x`; the template calls `x()`); facade observable streams and the `async` pipe are not used.
-- No `pipe(map(...))` on facade streams and no `computed()` wrapping a facade signal when the value is derivable from the store — add a selector instead.
+- No `pipe(map(...))` on facade streams and no `computed()` wrapping a facade signal — derived state belongs in a new selector exposed by the facade, not computed in the component; prefer adding a selector over any `computed()` over facade values.
 - Presentation is delegated to `ui-*` children or shared/library components; the feature wires facade state to children through inputs/outputs and does not render rich markup itself.
+- An extensive, complex, or over-50-line template is extracted into `ui-*` children rather than left inline in the feature component; the feature keeps only the wiring markup that binds facade state to those children.
 - Public handlers are thin proxies to facade methods (no logic, no branching beyond trivial argument shaping).
 - `ngOnInit` reads route/query parameters, triggers the initial facade loads and creates subscriptions.
 - Edit mode: the entity identifier is read from query params in `ngOnInit` and, when present, the definition load is dispatched through the facade; both branches (present/absent) exist.

@@ -5,7 +5,7 @@ applies-to:
 ---
 ## Checklist
 - Folder and file are `ui-<segment>/ui-<segment>.component.*`, class `Ui<PascalCase>Component`, selector `<app-prefix>-ui-<segment>`.
-- Purely presentational: exchanges data exclusively through `input()`/`output()`; never injects a facade, the store, or HTTP services.
+- Purely presentational: exchanges data exclusively through `input()`/`output()`; never injects a facade, the store, or HTTP/data services; holds no business/domain logic and performs no data fetching, navigation, or state mutation — it only renders its inputs and emits user interactions as outputs, leaving all decisions to the parent feature component.
 - Owns the whole view logic for its fragment: its own form with validators, its `dataTestPrefix` (own const or `input()` from the parent), presentational `computed()`/signals, and UI event handling.
 - Form contract with the parent: input→form via `effect(() => control.setValue/patchValue(value(), { emitEvent: false }))`; form→parent via `valueChanges` piped through `takeUntilDestroyed(this._destroyRef)` (plus `debounceTime` from the central app config and/or `distinctUntilChanged(...)` where appropriate) emitting an `output()`.
 - A disabled/locked input is applied with `effect(() => { if (isDisabled()) form.disable({ emitEvent: false }); })`.

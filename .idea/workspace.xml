@@ -4,21 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/best-practices.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/best-practices.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/component-unit-test.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/component-unit-test.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/general.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/general.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/guidelines.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/guidelines.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/+state/http-service.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/+state/http-service.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/shared/routes.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/shared/routes.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/SKILL.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/SKILL.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/references/implementation-agent.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/references/implementation-agent.md" afterDir="false" />
+    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Update instructions">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -53,29 +40,29 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
-    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;D:/WebstormProjects/claude&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
-    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "update-instructions",
+    "ignore.virus.scanning.warn.message": "true",
+    "junie.onboarding.icon.badge.shown": "true",
+    "last_opened_file_path": "D:/WebstormProjects/claude",
+    "node.js.detected.package.eslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "preferences.pluginManager",
+    "to.speed.mode.migration.done": "true",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions" />
       <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions\local" />
       <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions\global" />
-      <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions" />
       <recent name="D:\WebstormProjects\claude\skills\codeReview" />
       <recent name="D:\WebstormProjects\claude" />
     </key>
@@ -112,7 +99,23 @@
       <option name="project" value="LOCAL" />
       <updated>1783521131787</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="feat(): Update instructions">
+      <option name="closed" value="true" />
+      <created>1783940542480</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1783940542480</updated>
+    </task>
+    <task id="LOCAL-00003" summary="feat(): Update instructions">
+      <option name="closed" value="true" />
+      <created>1783940632667</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1783940632667</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -120,6 +123,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="feat(): Add new plugin doh with implementNewFeature and codeReview skills" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(): Add new plugin doh with implementNewFeature and codeReview skills" />
+    <MESSAGE value="feat(): Update instructions" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(): Update instructions" />
   </component>
 </project>
