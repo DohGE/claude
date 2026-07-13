@@ -35,11 +35,25 @@ test('globToRegExp supports the documented subset', () => {
   assert.ok(!rc.globToRegExp('**/*.component.ts').test('src/app/x.service.ts'));
 });
 
-test('parseFrontmatter extracts applies-to globs', () => {
+test('parseFrontmatter extracts applies-to globs and audience', () => {
   const md = '---\nname: Angular TS\napplies-to:\n  - "**/*.component.ts"\n  - \'**/*.service.ts\'\n---\n## Checklist\n- rule\n';
   assert.deepStrictEqual(rc.parseFrontmatter(md).appliesTo, ['**/*.component.ts', '**/*.service.ts']);
   assert.deepStrictEqual(rc.parseFrontmatter('# no frontmatter\n').appliesTo, []);
   assert.deepStrictEqual(rc.parseFrontmatter('---\nname: Global rules\n---\ntext\n').appliesTo, []);
+  assert.strictEqual(rc.parseFrontmatter('---\nname: X\naudience: implement\n---\n').audience, 'implement');
+  assert.strictEqual(rc.parseFrontmatter('---\nname: X\naudience: "review"\n---\n').audience, 'review');
+  assert.strictEqual(rc.parseFrontmatter('---\nname: X\n---\n').audience, undefined);
+});
+
+test('isSkippedPath skips lockfiles, build output and binary assets', () => {
+  assert.ok(rc.isSkippedPath('package-lock.json'));
+  assert.ok(rc.isSkippedPath('web/yarn.lock'));
+  assert.ok(rc.isSkippedPath('apps/x/dist/main.js'));
+  assert.ok(rc.isSkippedPath('src\\assets\\logo.png'));
+  assert.ok(rc.isSkippedPath('vendor/lib.min.js'));
+  assert.ok(rc.isSkippedPath('.idea/workspace.xml'));
+  assert.ok(!rc.isSkippedPath('src/app/x.component.ts'));
+  assert.ok(!rc.isSkippedPath('src/assets/i18n/en.json'));
 });
 
 test('sanitizeBranchName makes Windows-safe file name parts', () => {
@@ -200,10 +214,34 @@ test('loadInstructions warns when a global instruction declares applies-to', (t)
   assert.match(res.warnings[0], /ignored for global instructions/);
 });
 
+test('loadInstructions filters by audience and warns on unknown values', (t) => {
+  const skillDir = makeSkillDir(
+    t,
+    { 'impl-only.md': '---\nname: L\naudience: implement\napplies-to:\n  - "**/*.ts"\n---\n- rule\n' },
+    {
+      'persona.md': '---\nname: Persona\naudience: implement\n---\ntext\n',
+      'rules.md': '---\nname: Rules\n---\n- rule\n',
+      'weird.md': '---\nname: Weird\naudience: nope\n---\n- rule\n',
+    },
+  );
+  const dir = path.join(skillDir, 'instructions');
+  const review = rc.loadInstructions(dir, 'review');
+  assert.deepStrictEqual(review.globals.map((f) => path.basename(f)), ['rules.md', 'weird.md']);
+  assert.deepStrictEqual(review.locals.map((l) => path.basename(l.file)), []);
+  assert.ok(review.warnings.some((w) => /Unknown audience/.test(w) && /weird\.md/.test(w)));
+  const implement = rc.loadInstructions(dir, 'implement');
+  assert.deepStrictEqual(implement.globals.map((f) => path.basename(f)), ['persona.md', 'rules.md', 'weird.md']);
+  assert.deepStrictEqual(implement.locals.map((l) => path.basename(l.file)), ['impl-only.md']);
+  const unfiltered = rc.loadInstructions(dir);
+  assert.strictEqual(unfiltered.globals.length, 3);
+  assert.strictEqual(unfiltered.locals.length, 1);
+});
+
 test('auto mode reviews the current branch against its detected base', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/auto']);
   commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  commitFile(dir, 'README.md', '# repo\nupdated\n', 'docs');
   const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   assert.deepStrictEqual(ctx.errors, []);
@@ -213,12 +251,19 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.strictEqual(t0.branch, 'feature/auto');
   assert.strictEqual(t0.baseBranch, 'main');
   assert.ok(t0.reportPath.endsWith('feature-auto-2026-07-08-10-00.md'));
-  assert.deepStrictEqual(t0.files.map((f) => f.path), ['src/a.ts']);
-  assert.strictEqual(t0.files[0].status, 'A');
-  assert.ok(t0.files[0].diffCommand.includes('diff main...feature/auto'));
-  assert.ok(t0.files[0].showCommand.includes('show "feature/auto:src/a.ts"'));
-  assert.strictEqual(t0.files[0].localInstructions.length, 1);
-  assert.strictEqual(t0.claudeMd, null);
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['README.md', 'src/a.ts']);
+  const added = t0.files.find((f) => f.path === 'src/a.ts');
+  assert.strictEqual(added.status, 'A');
+  assert.strictEqual(added.diffCommand, null, 'added files are read from showCommand alone');
+  assert.ok(added.showCommand.includes('show "feature/auto:src/a.ts"'));
+  assert.ok(added.showCommand.endsWith('| cat -n'), 'show output is line-numbered');
+  const modified = t0.files.find((f) => f.path === 'README.md');
+  assert.strictEqual(modified.status, 'M');
+  assert.ok(modified.diffCommand.includes('diff main...feature/auto'));
+  assert.deepStrictEqual(ctx.localInstructionsCatalog.map((f) => path.basename(f)), ['ts.md']);
+  assert.deepStrictEqual(added.localInstructions, [0], 'per-file matches are catalog indexes');
+  assert.deepStrictEqual(modified.localInstructions, []);
+  assert.strictEqual(ctx.claudeMd, null);
   assert.ok(fs.existsSync(path.join(skillDir, 'reports')));
 });
 
@@ -238,12 +283,42 @@ test('staged mode lists index files with index show commands', (t) => {
   assert.ok(t0.reportPath.endsWith('main-staged-2026-07-08-14-30.md'));
   const ts = t0.files.find((f) => f.path === 'app.ts');
   assert.strictEqual(ts.status, 'A');
-  assert.ok(ts.diffCommand.includes('diff --cached'));
+  assert.strictEqual(ts.diffCommand, null);
   assert.ok(ts.showCommand.includes('show ":app.ts"'));
+  assert.ok(ts.showCommand.endsWith('| cat -n'));
   const del = t0.files.find((f) => f.path === 'old.css');
   assert.strictEqual(del.status, 'D');
   assert.strictEqual(del.showCommand, null);
-  assert.strictEqual(t0.claudeMd, path.join(dir, 'CLAUDE.md'));
+  assert.ok(del.diffCommand.includes('diff --cached'));
+  assert.strictEqual(ctx.claudeMd, path.join(dir, 'CLAUDE.md'));
+});
+
+test('generated and binary files are skipped and listed per target', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/skip']);
+  commitFile(dir, 'src/ok.ts', 'const ok = 1;\n', 'code');
+  commitFile(dir, 'package-lock.json', '{}\n', 'lock');
+  commitFile(dir, 'dist/bundle.js', 'x\n', 'dist');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date() });
+  const t0 = ctx.targets[0];
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['src/ok.ts']);
+  assert.deepStrictEqual(t0.skipped.sort(), ['dist/bundle.js', 'package-lock.json']);
+});
+
+test('pruneReports keeps only the newest N reports', (t) => {
+  const dir = tempDir(t, 'cr-reports-');
+  for (let i = 0; i < 8; i++) {
+    const file = path.join(dir, `branch-${i}.md`);
+    fs.writeFileSync(file, 'x');
+    const time = new Date(2026, 0, 1 + i);
+    fs.utimesSync(file, time, time);
+  }
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'not a report');
+  rc.pruneReports(dir, 3);
+  const left = fs.readdirSync(dir).filter((n) => n.endsWith('.md')).sort();
+  assert.deepStrictEqual(left, ['branch-5.md', 'branch-6.md', 'branch-7.md']);
+  assert.ok(fs.existsSync(path.join(dir, 'notes.txt')), 'non-md files are untouched');
 });
 
 test('branches mode splits on , and ; and keeps going past missing branches', (t) => {
@@ -262,14 +337,14 @@ test('branches mode splits on , and ; and keeps going past missing branches', (t
   assert.match(ctx.errors[0], /nope/);
 });
 
-test('empty instructions produce a warning on every target', (t) => {
+test('empty instructions produce a top-level warning', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/w']);
   commitFile(dir, 'w.txt', 'w', 'w');
   const skillDir = makeSkillDir(t);
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date() });
   assert.strictEqual(ctx.targets.length, 1);
-  assert.match(ctx.targets[0].warnings[0], /empty/);
+  assert.match(ctx.warnings[0], /empty/);
 });
 
 test('non-repo and commitless repos are fatal errors', (t) => {

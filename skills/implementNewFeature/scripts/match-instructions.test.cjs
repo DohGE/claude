@@ -51,22 +51,15 @@ test('parseArgs splits, trims and dedupes files; supports instructions-dir overr
   assert.ok(mi.parseArgs([]).instructionsDir.replace(/\\/g, '/').endsWith('codeReview/instructions'));
 });
 
-test('buildOutput matches nested local instructions and reports warnings', (t) => {
+test('buildOutput with --files prints only per-file matches and warnings', (t) => {
   const dir = makeInstructionsDir(t);
   const out = mi.buildOutput({
     instructionsDir: dir,
     files: ['src/app/x/+state/x.reducer.ts', 'src\\assets\\i18n\\en.json', 'src/main.ts'],
   });
   assert.deepStrictEqual(out.errors, []);
-  assert.deepStrictEqual(
-    out.globals.map((f) => path.relative(path.join(dir, 'global'), f).replace(/\\/g, '/')),
-    ['general.md', 'nested/extra.md'],
-  );
-  assert.deepStrictEqual(
-    out.locals.map((l) => path.relative(path.join(dir, 'local'), l.file).replace(/\\/g, '/')),
-    ['broken.md', 'code/+state/ngrx-reducer.md', 'i18n.md'],
-    'nested md files are loaded, notes.txt is ignored',
-  );
+  assert.ok(!('globals' in out), 'globals are printed only on the first run (no --files)');
+  assert.ok(!('locals' in out), 'the full local catalog is never printed');
   const byPath = Object.fromEntries(out.files.map((f) => [f.path, f.localInstructions]));
   assert.deepStrictEqual(
     byPath['src/app/x/+state/x.reducer.ts'].map((f) => path.basename(f)),
@@ -79,6 +72,28 @@ test('buildOutput matches nested local instructions and reports warnings', (t) =
   assert.deepStrictEqual(byPath['src/main.ts'], []);
   assert.strictEqual(out.warnings.length, 1);
   assert.match(out.warnings[0], /broken\.md/);
+});
+
+test('buildOutput without --files prints the global rulebook', (t) => {
+  const dir = makeInstructionsDir(t);
+  const out = mi.buildOutput({ instructionsDir: dir, files: [] });
+  assert.deepStrictEqual(out.errors, []);
+  assert.ok(!('files' in out));
+  assert.deepStrictEqual(
+    out.globals.map((f) => path.relative(path.join(dir, 'global'), f).replace(/\\/g, '/')),
+    ['general.md', 'nested/extra.md'],
+    'nested md files are loaded, notes.txt is ignored',
+  );
+});
+
+test('buildOutput keeps implement-audience instructions and drops review-only ones', (t) => {
+  const dir = makeInstructionsDir(t);
+  writeFile(dir, path.join('global', 'persona.md'), '---\nname: Persona\naudience: implement\n---\ntext\n');
+  writeFile(dir, path.join('global', 'review-only.md'), '---\nname: R\naudience: review\n---\n- rule\n');
+  const out = mi.buildOutput({ instructionsDir: dir, files: [] });
+  const names = out.globals.map((f) => path.basename(f));
+  assert.ok(names.includes('persona.md'));
+  assert.ok(!names.includes('review-only.md'));
 });
 
 test('buildOutput inherits the codeReview warning for global applies-to', (t) => {
@@ -109,6 +124,7 @@ test('buildOutput warns when both instruction dirs are empty', (t) => {
   fs.mkdirSync(path.join(dir, 'local'), { recursive: true });
   const out = mi.buildOutput({ instructionsDir: dir, files: [] });
   assert.deepStrictEqual(out.errors, []);
+  assert.deepStrictEqual(out.globals, []);
   assert.strictEqual(out.warnings.length, 1);
   assert.match(out.warnings[0], /empty/);
 });

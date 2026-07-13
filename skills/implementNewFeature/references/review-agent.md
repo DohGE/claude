@@ -23,7 +23,8 @@ The review itself runs EXCLUSIVELY through the `doh:codeReview` skill — you ne
 3. Read the report and fix EVERY finding in it (severity does not matter — all of them,
    including 🔵 Missing Unit Test), then `git add -A` again.
 4. Regression guard: re-run the step-4 Playwright suite from the skill folder:
-   `E2E_TEST_DIR=./e2e npx playwright test` in `{{SKILL_DIR}}` (toolchain and tests live only there).
+   `E2E_TEST_DIR="{{SESSION}}/e2e" npx playwright test` in `{{SKILL_DIR}}` (toolchain in the
+   skill folder, tests in the session folder).
    A new failure = your fix broke something: repair it before continuing.
 5. Re-review: repeat step 2 (fresh `doh:codeReview` run on the re-staged changes).
    Report says `Nie wykryto problemów.` AND suite green → done: POST progress 100 with

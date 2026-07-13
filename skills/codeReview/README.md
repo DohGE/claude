@@ -4,6 +4,7 @@ Part of the `doh` plugin.
 Reviews git changes against instruction checklists and writes one concise Markdown report per reviewed branch.
 Reports are always written in Polish.
 Report-only: the skill never modifies the reviewed project.
+Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
 
 ## Usage
 
@@ -15,6 +16,8 @@ Report-only: the skill never modifies the reviewed project.
 
 Reports land in `reports/` inside this skill, named `{branch}-{YYYY-MM-DD}-{HH-mm}.md` (staged variant: `{branch}-staged-{YYYY-MM-DD}-{HH-mm}.md`).
 Branch names are sanitized for file names (any character outside `A-Z a-z 0-9 . _ -` becomes `-`); the time uses `HH-mm` because `:` is not allowed in Windows file names.
+Only the 30 newest reports are kept — older ones are pruned automatically at the start of a run.
+Generated and binary files (lockfiles, `*.min.*`, source maps, `dist/`/`build/`/`coverage/` output, images, fonts, media, executables) are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report.
 
 ## Instructions
 
@@ -24,7 +27,10 @@ Review rules live in two folders inside this skill (they start empty — add you
 - `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
 
 The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
-Files with no matching local instruction are still reviewed against all global instructions and the universal checklist points (cross-file consistency, architecture, naming, regressions, performance, security, readability, missing unit tests).
+Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture and test coverage are covered by the dedicated global instruction files.
+
+An instruction may declare `audience: implement|review|both` in its frontmatter (default `both`):
+`review`-audience files load only for this skill, `implement`-audience files only for the implementNewFeature coding rulebook (e.g. the developer persona in `guidelines.md`).
 
 ### Local instruction template
 
@@ -65,7 +71,7 @@ One `## <file path>` section per file with findings; each finding looks like:
     **Expected Result:** `catchError` z mapowaniem na stan błędu komponentu
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
-Line numbers refer to the file's real content (from `git show`), never to diff hunk numbering.
+Line numbers refer to the file's real content (read off the line-numbered `git show … | cat -n` output), never to diff hunk numbering.
 No findings → the report is the single line `Nie wykryto problemów.`; empty diff → `Nie wykryto zmian do analizy.`
 
 ## Mechanics

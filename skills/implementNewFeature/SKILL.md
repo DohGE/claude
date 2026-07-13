@@ -23,7 +23,7 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 2. `SESSION = <SKILL_DIR>/.implementNewFeature/<yyyyMMdd-HHmmss>` — create it.
    All skill runtime files (sessions, `node_modules`, Playwright config) live inside `SKILL_DIR`,
    never in the target project; the skill's own `.gitignore` already covers them.
-4. Start the server (pick the script for the OS) and capture the port:
+3. Start the server (pick the script for the OS) and capture the port:
    - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
    - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`
    - stdout is `{"port":N}`; remember `PORT`. Tell the user the stepper is open at `http://127.0.0.1:PORT/`.
@@ -33,9 +33,14 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Fields: `{"step":N,"status":"waiting|in_progress|completed|failed","progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"question":{...}|null,"reviewSummary":{...}|null,"summary":{...}}`
+  Merge consecutive updates into ONE POST whenever nothing (user interaction, agent work) happens
+  between them — e.g. completing a step and activating the next is a single body, never two calls.
 - Wait for a user answer (long-poll, repeat until non-null):
-  `curl -s "http://127.0.0.1:PORT/api/answer?wait=60"` → `{"answer":{...}|null}`
-  Repeat the call in a loop while `answer` is null. If curl cannot connect, the server died: re-run the launcher (state reloads from `pipeline-state.json`) and continue.
+  `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` → `{"answer":{...}|null}`
+  ALWAYS pass `timeout: 320000` to the Bash tool for this call — the default 120 s tool timeout
+  would kill the poll mid-wait. The poll returns instantly once the user answers; the long wait
+  only spares empty polls. Repeat the call in a loop while `answer` is null. If curl cannot
+  connect, the server died: re-run the launcher (state reloads from `pipeline-state.json`) and continue.
 - **Encoding (MANDATORY, also for every sub-agent):** bodies contain non-ASCII text (e.g. Polish).
   Always run curl from a POSIX shell (Bash tool) where inline UTF-8 JSON is safe.
   Never pass non-ASCII JSON inline through PowerShell — it re-encodes to the system codepage and
@@ -70,14 +75,14 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
    ```
 
    (Uploads already sit in `<SESSION>/mockups/` and `<SESSION>/contracts/`.)
-4. POST `{"step":1,"status":"completed"}` then `{"activeStep":2}`.
+4. POST `{"step":1,"status":"completed","activeStep":2}` (one call).
 
 ## Step 2 — Feature Refinement (interactive, proxy Q&A)
 
 1. POST `{"step":2,"status":"in_progress","activeStep":2,"progress":5,"currentOperation":"Refinement in progress"}`.
 2. Spawn the refinement agent: prompt = contents of `<SKILL_DIR>/references/refinement-agent.md` with placeholders `{{SESSION}}`, `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}`, `{{LANGUAGE}}` substituted.
 3. Loop on the agent's final JSON:
-   - `{"type":"question","id","text","options"?}` → POST `{"question":{...}}`, poll answers until `kind=="answer"`, then **immediately** (before contacting the agent) POST `{"question":null,"step":2,"currentOperation":"Processing answer…","logEntry":"<id>: <answer, shortened>"}` so the UI reacts to the click at once, then SendMessage the answer text to the agent.
+   - `{"type":"question","id","text","options"?}` → POST `{"question":{...}}`, poll answers until `kind=="answer"`, then **immediately** (before contacting the agent) POST `{"question":null,"step":2,"progress":<min(60, 20+5×answers so far)>,"currentOperation":"Processing answer…","logEntry":"<id>: <answer, shortened>"}` so the UI reacts to the click at once, then SendMessage the answer text to the agent. You own the Q&A progress — the agent does not report between questions.
    - `{"type":"result","summary"}` → spec/plan/checklist now exist in `<SESSION>`. Go to 4.
    - `{"type":"error","report"}` → failure protocol (below) for step 2.
 4. Gate: POST `{"reviewSummary":{"text":"<summary>"}}`; poll answers until `kind=="decision"`:
@@ -86,7 +91,7 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 
 ## Step 3 — Implementation (view-only)
 
-1. Derive `SLUG` from the feature title (first line of `<SESSION>/spec.md`): lowercase, ASCII, spaces→`-`, strip other chars, max 40 chars. `git checkout -b feature/<SLUG>`.
+1. Derive `SLUG` from the feature title (first line of `<SESSION>/spec.md`): lowercase, ASCII, spaces→`-`, strip other chars, max 40 chars. `git checkout -b feature/<SLUG>`; if the branch already exists (e.g. a retry of this step), `git checkout feature/<SLUG>` instead.
 2. POST `{"step":3,"status":"in_progress","activeStep":3,"progress":0}`.
 3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder substitution). It reports progress itself via POST /api/state and writes code against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
 4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"step":3,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
