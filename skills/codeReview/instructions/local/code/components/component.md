@@ -5,13 +5,10 @@ applies-to:
 ---
 ## Checklist
 - `changeDetection: ChangeDetectionStrategy.OnPush` is set — no exceptions.
-- `standalone: true` is never written (it is the framework default; writing it explicitly is a lint error).
 - Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one.
 - The `imports` array lists exactly what the template uses — nothing speculative.
-- Dependency injection only through `inject()` (never constructor parameters); injected fields are `private readonly _camelCase`. The field name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name.
-- Inputs/outputs only through the signal API: `input()`, `input.required()`, `output()`, `model()` — never `@Input()`/`@Output()` decorators or `@Input() set` accessors.
+- Injected fields are `private readonly _camelCase`; the field name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name. (`inject()`-only DI, the signal input/output API and `host: {}` bindings are governed by the global best-practices instruction.)
 - An input the component cannot render without is `input.required<T>()` — no `!` definite-assignment tricks and no fake defaults that mask a missing binding.
-- Host bindings go into `host: {}` in the decorator — never `@HostBinding`/`@HostListener`.
 - Every signal, `computed()`, enum/const alias and arrow-function field is `readonly`.
 - Enum/const aliases exposed for the template keep the enum name in camelCase (`readonly buttonStyle = ButtonStyle`) — the alias name is never changed.
 - Local state uses `signal()` (never a subject or a field with a setter); mutations only via `.set()`/`.update()`.

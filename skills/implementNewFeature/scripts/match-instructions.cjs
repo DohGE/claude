@@ -33,8 +33,11 @@ function parseArgs(argv) {
   return args;
 }
 
+// Output stays minimal because the implementation agent runs this before every
+// task: with --files only the per-file matches are printed; without --files
+// (the one-time first run) only the global instruction list is printed.
 function buildOutput(options) {
-  const out = { instructionsDir: null, globals: [], locals: [], files: [], warnings: [], errors: [] };
+  const out = { instructionsDir: null, warnings: [], errors: [] };
   if (!reviewContext) {
     out.errors.push(`codeReview skill not found (expected its scripts next to this skill): ${DEFAULT_INSTRUCTIONS_DIR}`);
     return out;
@@ -46,17 +49,20 @@ function buildOutput(options) {
     return out;
   }
 
-  const { globals, locals, warnings } = reviewContext.loadInstructions(dir);
-  out.globals = globals;
-  out.locals = locals;
+  const { globals, locals, warnings } = reviewContext.loadInstructions(dir, 'implement');
   out.warnings = warnings;
   if (globals.length === 0 && locals.length === 0) {
     out.warnings.push('instructions/global and instructions/local are empty - nothing to follow beyond the plan and project conventions.');
   }
-  out.files = (options.files || []).map((p) => ({
-    path: p,
-    localInstructions: reviewContext.matchLocalInstructions(locals, p),
-  }));
+  const files = options.files || [];
+  if (files.length > 0) {
+    out.files = files.map((p) => ({
+      path: p,
+      localInstructions: reviewContext.matchLocalInstructions(locals, p),
+    }));
+  } else {
+    out.globals = globals;
+  }
   return out;
 }
 
@@ -65,9 +71,9 @@ function main() {
   try {
     out = buildOutput(parseArgs(process.argv.slice(2)));
   } catch (err) {
-    out = { instructionsDir: null, globals: [], locals: [], files: [], warnings: [], errors: [String((err && err.message) || err)] };
+    out = { instructionsDir: null, warnings: [], errors: [String((err && err.message) || err)] };
   }
-  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  process.stdout.write(JSON.stringify(out) + '\n');
   process.exit(out.errors.length > 0 ? 1 : 0);
 }
 

@@ -14,8 +14,10 @@ regardless of existing setup) and — if `{{SESSION}}/mockups/` is non-empty —
 1. Read `spec.md` and `checklist.md`. Work out how to launch the app (package.json scripts, README).
 2. Setup — the Playwright toolchain lives ONLY in the skill folder, never install it in `{{PROJECT}}`:
    run `npm i` and `npx playwright install chromium` in `{{SKILL_DIR}}` (skip what is already installed).
-   Put tests in `{{SKILL_DIR}}/e2e/` (never in `{{PROJECT}}`). Run the suite from `{{SKILL_DIR}}`:
-   `E2E_TEST_DIR=./e2e npx playwright test` (the skill's `playwright.config.cjs` reads `E2E_TEST_DIR`). If the app needs booting, prefer starting it yourself in the background over
+   Put tests in `{{SESSION}}/e2e/` (create it; never in `{{PROJECT}}` and never in a shared skill
+   folder — tests are session-scoped so runs never execute a previous feature's suite).
+   Run the suite from `{{SKILL_DIR}}`:
+   `E2E_TEST_DIR="{{SESSION}}/e2e" npx playwright test` (the skill's `playwright.config.cjs` reads `E2E_TEST_DIR`). If the app needs booting, prefer starting it yourself in the background over
    editing the skill's shared config; only add a `webServer` entry via `E2E_*` env-driven values.
 3. Write a COMPLETE E2E suite covering every checklist item marked `verify: e2e`.
    If `{{SESSION}}/auth.json` exists (`{"login","password"}` entered by the user), use those
@@ -26,7 +28,9 @@ regardless of existing setup) and — if `{{SESSION}}/mockups/` is non-empty —
       to make it pass (unless the test itself is wrong against spec.md).
    b. If mockups exist: launch the app, take Playwright screenshots of the relevant screens,
       Read screenshots and mockups side by side, fix UI differences, re-shoot and re-compare
-      (covers `verify: visual` items).
+      (covers `verify: visual` items). In cycles 2-3 re-shoot and re-compare ONLY the screens
+      affected by fixes since the previous comparison — screens that already matched stay ticked
+      (image reads are the most expensive step; never re-compare everything "to be sure").
    c. Update `checklist.md`: tick `- [x]` every item confirmed by a passing test or visual check.
 5. Compliance = floor(100 × ticked / total). Loop ends at compliance ≥ 99, or after 3 cycles.
 

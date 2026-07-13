@@ -146,7 +146,9 @@ function createApp(sessionDir, opts = {}) {
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'GET' && url.pathname === '/api/answer') {
-        const waitS = Math.min(parseInt(url.searchParams.get('wait') || '0', 10) || 0, 120);
+        // 300 s cap: long polls resolve instantly when an answer arrives, so a
+        // high cap only reduces the number of empty polls while the user thinks.
+        const waitS = Math.min(parseInt(url.searchParams.get('wait') || '0', 10) || 0, 300);
         const answer = await popAnswer(waitS * 1000);
         return sendJson(res, 200, { answer });
       }

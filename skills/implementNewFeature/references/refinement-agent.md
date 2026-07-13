@@ -30,11 +30,12 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
 5. Apply the `superpowers:writing-plans` methodology to write `{{SESSION}}/plan.md`: bite-sized TDD tasks with exact paths into `{{PROJECT}}`, complete code, run commands, no placeholders. NO git commit steps — the pipeline never commits.
 6. Write `{{SESSION}}/checklist.md` — every verifiable requirement from spec.md, one line each:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`
-7. Report progress as you work — after reading inputs, after exploring the project, after EVERY
-   answered question, and after each artifact is written:
+7. Report progress at MILESTONES only — after reading inputs, after exploring the project, and
+   after each artifact is written:
    `curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":2,\"progress\":<N>,\"currentOperation\":\"<phase>\",\"logEntry\":\"<event>\"}"`
-   Milestones for `progress`: inputs read 10, project explored 20, Q&A 20→60 (spread evenly
-   across your questions), spec.md written 75, plan.md 90, checklist.md 95. Never omit `progress`.
+   Milestones for `progress`: inputs read 10, project explored 20, spec.md written 75, plan.md 90,
+   checklist.md 95. Never omit `progress`. Do NOT report between questions — the orchestrator
+   owns Q&A progress and logs every answer itself.
 
 ## Encoding (MANDATORY)
 
