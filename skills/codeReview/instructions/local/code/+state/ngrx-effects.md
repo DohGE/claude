@@ -5,7 +5,7 @@ applies-to:
 ---
 ## Checklist
 - File lives in `<area>/data-access/+state/`; class `<PascalCaseArea>Effects` with `@Injectable()` **without** `providedIn: 'root'`; registered through `provideEffects([...])` on the route; `/* eslint-disable @typescript-eslint/member-ordering */` at the top is allowed.
-- Dependencies via `inject()` as `private readonly _camelCase`; the action stream is `_actions$ = inject(Actions)`; every effect field is camelCase with a `$` suffix.
+- Dependencies via `inject()` as `private readonly _camelCase`; the field name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name; the action stream is `_actions$ = inject(Actions)`; every effect field is camelCase with a `$` suffix.
 - Canonical HTTP effect: `ofType → switchMap → service call → map(success) / catchError(fail)`; `catchError` sits **inside** the flattening operator and returns `of(failAction)` — outside it kills the stream after the first error.
 - Flattening operator choice: `switchMap` is the default (cancel previous); `mergeMap` for parallel bulk operations; `concatMap` when order is critical; `exhaustMap` to ignore repeat triggers until completion.
 - State lookups use `concatLatestFrom` from `@ngrx/operators` (never `withLatestFrom`); it may take an array of selectors and may call a payload-parameterized selector.

@@ -8,7 +8,7 @@ applies-to:
 - `standalone: true` is never written (it is the framework default; writing it explicitly is a lint error).
 - Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one.
 - The `imports` array lists exactly what the template uses — nothing speculative.
-- Dependency injection only through `inject()` (never constructor parameters); injected fields are `private readonly _camelCase`.
+- Dependency injection only through `inject()` (never constructor parameters); injected fields are `private readonly _camelCase`. The field name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name.
 - Inputs/outputs only through the signal API: `input()`, `input.required()`, `output()`, `model()` — never `@Input()`/`@Output()` decorators or `@Input() set` accessors.
 - An input the component cannot render without is `input.required<T>()` — no `!` definite-assignment tricks and no fake defaults that mask a missing binding.
 - Host bindings go into `host: {}` in the decorator — never `@HostBinding`/`@HostListener`.
@@ -28,5 +28,6 @@ applies-to:
 - No direct `document`/`window`/`ElementRef.nativeElement` DOM reads or writes in the constructor or `ngOnInit`; browser-only work (focus, measurement, third-party widget init) runs in `afterNextRender`/`afterEveryRender`.
 - `compareWith*` fields are readonly arrow functions, null-safe (`?.`), returning `boolean`.
 - A `dataTestPrefix` const is defined and used for `data-test` attributes on interactive elements.
+- The `dataTestPrefix` value is a stable descriptive name of the component, never the component selector — selectors may change and would break the test hooks.
 - Single `as Type` casts only where required; no double casting where a single cast suffices.
 - When an edit touches ≥30% of a component or the component is small (≤150 lines), the whole component is refactored to these rules.

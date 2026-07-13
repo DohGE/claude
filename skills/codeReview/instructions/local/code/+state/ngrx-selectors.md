@@ -8,6 +8,7 @@ applies-to:
 - Individual selectors are local consts prefixed `select` in camelCase; they are exported only through grouped `query` objects: one `<camelCaseArea>Query` by default, plus optional thematic `<camelCaseArea><Subdomain>Query` exports placed directly after their selectors.
 - Every exported selector belongs to a query object; a selector in no query is dead code and is removed.
 - Derived selectors compose other selectors, not the raw feature state; projector arguments and return values are explicitly typed.
+- Every selector is memoized: built with `createSelector`/`createFeatureSelector`, never a plain function or arrow that reads state directly and so bypasses memoization.
 - Selectors are pure: no side effects, no `Date.now()`/`Math.random()`/logging; results are new structures, inputs are never mutated.
 - References of unchanged elements are preserved (`if unchanged return original`) so memoization and OnPush consumers avoid useless re-renders.
 - Null-safety uses `?.` and `??`; a selector never throws — an impossible-by-flow state returns `null` with the return type widened to `<T> | null`.

@@ -1,7 +1,7 @@
 {
   "name": "doh",
   "description": "Skills: /implementNewFeature (feature pipeline with browser stepper UI) and /codeReview (deterministic instruction-driven code review reports)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "DohGE"
   },
