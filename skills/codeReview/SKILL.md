@@ -49,9 +49,11 @@ files remain. For each file:
 
 1. Run its `diffCommand` (what changed) and its `showCommand` (full file content) with the Bash tool
    — `showCommand` pipes through `cat -n`, which needs a POSIX shell.
-   Line numbers in findings are read directly off the `cat -n` output — never diff hunk numbering.
-   Added files (`diffCommand: null`) are reviewed from the `showCommand` output alone (the whole file is new);
-   deleted files (`showCommand: null`) from the diff alone.
+   `changedLines` (precomputed by the script from `git diff -U0`) is the authoritative list of the
+   lines this diff touched, numbered exactly like the `cat -n` output, e.g. `"7, 12-15"`;
+   `""` means the diff only deleted lines. Never re-derive these ranges from diff hunks yourself.
+   Added files (`diffCommand: null`, `changedLines: null`) are reviewed from the `showCommand`
+   output alone (every line is new); deleted files (`showCommand: null`) from the diff alone.
 2. Evaluate the file against every point below. Reason through them SILENTLY — do not print
    per-point notes or progress commentary; the only text a file produces is its findings (or nothing).
    Sampling checklists or skipping any point is forbidden:
@@ -72,7 +74,15 @@ files remain. For each file:
    - naming rules (general instruction) plus naming consistency across the diff;
    - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction).
 3. Record only REAL findings — no speculative or cosmetic padding.
-   Report each violation ONCE, under the most specific instruction that covers it (local wins over global).
+   One finding = one violation of one rule at one location. A rule broken in three places yields
+   three findings, each with its own block and line number; a line breaking two different rules
+   yields two findings. The SAME violation is reported ONCE, under the most specific instruction
+   that covers it (local wins over global).
+   A finding's line number is determined at the moment of writing it: locate the offending code in
+   the `cat -n` output and cite the number printed there — never diff hunk numbering, never an
+   estimate from memory. Cite one number, or one `<start>-<end>` span only when the single
+   violation itself spans contiguous lines. Cross-check against `changedLines`: a finding whose
+   line lies outside them must state in its description how the diff causes the problem there.
 4. Append the file's findings section to `target.reportPath` IMMEDIATELY after analyzing the file —
    never hold findings in memory for later.
 
@@ -90,9 +100,12 @@ unanalyzed file is not done, regardless of diff size or session length.
     # Code Review: <branch> → <baseBranch> | <YYYY-MM-DD> <HH:mm>
 
     ## <file path>
-    <emoji> **<Severity>** | linia <N> | <short problem description>
-    Reguła: <instruction file → checklist item, or the violated point name>
-    **Expected Result:** <correct code state + concrete implementation proposal>
+
+    - <emoji> **<Severity>**
+    - **Linia:** <N>
+    - **Problem:** <description of this single violation>
+    - **Reguła:** <instruction file → checklist item, or the violated point name>
+    - **Expected Result:** <correct code state + concrete implementation proposal>
 
 - Staged header instead: `# Code Review: staged (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Take the header date and time from the trailing `-YYYY-MM-DD-HH-mm` of `reportPath`, replacing the final dash of the time with `:` (e.g. `14-30` → `14:30`), so the header always matches the file name.
@@ -105,6 +118,11 @@ unanalyzed file is not done, regardless of diff size or session length.
   - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation.
   - ⚪ **Low** — readability, naming, style, redundant code, convention drift with no behavioral impact.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
+- One finding = one such five-bullet block describing exactly one violation (Step 3 point 3);
+  the next violation — even of the same rule, even on the same line — is its own block.
+  A blank line separates consecutive blocks and precedes every `##` header.
+- Each of the five fields is its own `- ` bullet line, in the order shown; a field never continues
+  on the previous field's line. `**Linia:**` holds one number or one `<start>-<end>` span.
 - Group findings under one `## <file path>` section per file; omit files without findings.
   The cross-file pass may append a second section for an already-reported path — that is acceptable.
 - Expected Result describes ONLY the correct state of the code plus a concrete implementation proposal.

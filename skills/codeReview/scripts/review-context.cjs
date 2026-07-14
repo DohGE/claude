@@ -167,6 +167,23 @@ function q(s) {
   return `"${s}"`;
 }
 
+// New-file line ranges touched by a diff, read from `git diff -U0` hunk
+// headers (@@ -a,b +c,d @@): the authoritative "which lines changed" for
+// finding line numbers. Deletion-only hunks (d=0) leave no new-file line
+// and are omitted, so a deletion-only diff yields ''.
+function parseHunkRanges(diffOutput) {
+  const ranges = [];
+  for (const line of diffOutput.split('\n')) {
+    const m = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (!m) continue;
+    const start = Number(m[1]);
+    const count = m[2] === undefined ? 1 : Number(m[2]);
+    if (count === 0) continue;
+    ranges.push(count === 1 ? String(start) : `${start}-${start + count - 1}`);
+  }
+  return ranges.join(', ');
+}
+
 // audience: 'review' | 'implement' | undefined (no filtering). An instruction
 // declares `audience: implement|review|both` in its frontmatter (default both)
 // to control which consumer loads it — e.g. a coding persona is implement-only.
@@ -283,12 +300,18 @@ function buildContext(options) {
   // Added files: the diff is the whole file, identical to showCommand output —
   // emit only one of the two. Deleted files: diff only. showCommand pipes
   // through `cat -n` so finding line numbers can be read off the output.
-  const makeFiles = (rawFiles, diffFor, showFor) => rawFiles.map((f) => ({
+  // changedLines: new-file line ranges precomputed from `git diff -U0`
+  // (rangesArgsFor), so the reviewer never derives them from hunks itself;
+  // null for added (every line is new) and deleted (no new file) files.
+  const makeFiles = (rawFiles, diffFor, showFor, rangesArgsFor) => rawFiles.map((f) => ({
     path: f.path,
     status: f.status,
     localInstructions: matchLocalInstructions(instructions.locals, f.path),
     diffCommand: f.status === 'A' ? null : diffFor(f),
     showCommand: f.status === 'D' ? null : `${showFor(f)} | cat -n`,
+    changedLines: f.status === 'A' || f.status === 'D'
+      ? null
+      : parseHunkRanges(tryGit(project, rangesArgsFor(f)) || ''),
   }));
   const partition = (rawFiles) => {
     const kept = [];
@@ -318,6 +341,7 @@ function buildContext(options) {
         kept,
         (f) => gitc(`diff ${baseRef}...${branchRef} -- ${q(f.path)}`),
         (f) => gitc(`show ${q(`${branchRef}:${f.path}`)}`),
+        (f) => ['diff', '-U0', `${baseRef}...${branchRef}`, '--', f.path],
       ),
       skipped,
     });
@@ -335,6 +359,7 @@ function buildContext(options) {
         kept,
         (f) => gitc(`diff --cached -- ${q(f.path)}`),
         (f) => gitc(`show ${q(`:${f.path}`)}`),
+        (f) => ['diff', '-U0', '--cached', '--', f.path],
       ),
       skipped,
     });
@@ -383,6 +408,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectBaseBranch, parseNameStatus, loadInstructions, matchLocalInstructions, isSkippedPath, pruneReports, buildContext };
+module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectBaseBranch, parseNameStatus, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, pruneReports, buildContext };
 
 if (require.main === module) main();

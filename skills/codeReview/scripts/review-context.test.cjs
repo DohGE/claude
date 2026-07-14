@@ -160,6 +160,35 @@ test('parseNameStatus parses statuses and rename targets', () => {
   assert.deepStrictEqual(rc.parseNameStatus(''), []);
 });
 
+test('parseHunkRanges extracts new-file line ranges from -U0 hunks', () => {
+  const diff = [
+    'diff --git a/x.ts b/x.ts',
+    '--- a/x.ts',
+    '+++ b/x.ts',
+    '@@ -10,2 +12,3 @@ context()',
+    '+a',
+    '+b',
+    '+c',
+    '@@ -20 +25 @@',
+    '+d',
+    '@@ -30,4 +34,0 @@ deletions leave no new-file line',
+    '-e',
+    '-f',
+    '-g',
+    '-h',
+    '@@ -40,3 +44,3 @@',
+    '-i',
+    '+j',
+    '-k',
+    '+l',
+    '-m',
+    '+n',
+  ].join('\n');
+  assert.strictEqual(rc.parseHunkRanges(diff), '12-14, 25, 44-46');
+  assert.strictEqual(rc.parseHunkRanges(''), '');
+  assert.strictEqual(rc.parseHunkRanges('@@ -5,2 +4,0 @@\n-x\n-y'), '', 'deletion-only diffs yield no ranges');
+});
+
 // ---------- Task 3: buildContext + CLI ----------
 
 function makeSkillDir(t, locals = {}, globals = {}) {
@@ -255,11 +284,13 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   const added = t0.files.find((f) => f.path === 'src/a.ts');
   assert.strictEqual(added.status, 'A');
   assert.strictEqual(added.diffCommand, null, 'added files are read from showCommand alone');
+  assert.strictEqual(added.changedLines, null, 'added files: every line is new');
   assert.ok(added.showCommand.includes('show "feature/auto:src/a.ts"'));
   assert.ok(added.showCommand.endsWith('| cat -n'), 'show output is line-numbered');
   const modified = t0.files.find((f) => f.path === 'README.md');
   assert.strictEqual(modified.status, 'M');
   assert.ok(modified.diffCommand.includes('diff main...feature/auto'));
+  assert.strictEqual(modified.changedLines, '2', 'script precomputes new-file changed lines');
   assert.deepStrictEqual(ctx.localInstructionsCatalog.map((f) => path.basename(f)), ['ts.md']);
   assert.deepStrictEqual(added.localInstructions, [0], 'per-file matches are catalog indexes');
   assert.deepStrictEqual(modified.localInstructions, []);
@@ -273,6 +304,8 @@ test('staged mode lists index files with index show commands', (t) => {
   fs.writeFileSync(path.join(dir, 'app.ts'), 'const x = 1;\n');
   run(dir, ['add', 'app.ts']);
   run(dir, ['rm', '-q', 'old.css']);
+  fs.writeFileSync(path.join(dir, 'README.md'), '# repo\nstaged change\n');
+  run(dir, ['add', 'README.md']);
   fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# rules\n');
   const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
   const ctx = rc.buildContext({ mode: 'staged', project: dir, skillDir, now: new Date(2026, 6, 8, 14, 30) });
@@ -284,12 +317,17 @@ test('staged mode lists index files with index show commands', (t) => {
   const ts = t0.files.find((f) => f.path === 'app.ts');
   assert.strictEqual(ts.status, 'A');
   assert.strictEqual(ts.diffCommand, null);
+  assert.strictEqual(ts.changedLines, null);
   assert.ok(ts.showCommand.includes('show ":app.ts"'));
   assert.ok(ts.showCommand.endsWith('| cat -n'));
   const del = t0.files.find((f) => f.path === 'old.css');
   assert.strictEqual(del.status, 'D');
   assert.strictEqual(del.showCommand, null);
+  assert.strictEqual(del.changedLines, null, 'deleted files have no new-file lines');
   assert.ok(del.diffCommand.includes('diff --cached'));
+  const staged = t0.files.find((f) => f.path === 'README.md');
+  assert.strictEqual(staged.status, 'M');
+  assert.strictEqual(staged.changedLines, '2', 'staged ranges come from git diff --cached -U0');
   assert.strictEqual(ctx.claudeMd, path.join(dir, 'CLAUDE.md'));
 });
 

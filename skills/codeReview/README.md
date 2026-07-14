@@ -65,19 +65,23 @@ No usable candidate → the run stops with a clear error.
 
 Always Polish, findings only — no intros, summaries or closing remarks.
 Header line: `# Code Review: <branch> → <base> | <YYYY-MM-DD> <HH:mm>` (staged variant: `# Code Review: staged (<branch>) | ...`).
-One `## <file path>` section per file with findings; each finding looks like:
+One `## <file path>` section per file with findings.
+Each finding is one five-bullet block describing exactly one violation of one rule at one location — several violations never share a block, and every field starts on its own line:
 
-    🔴 **High** | linia 87 | Brak obsługi błędu HTTP w subskrypcji
-    Reguła: instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"
-    **Expected Result:** `catchError` z mapowaniem na stan błędu komponentu
+    - 🔴 **High**
+    - **Linia:** 87
+    - **Problem:** Brak obsługi błędu HTTP w subskrypcji
+    - **Reguła:** instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"
+    - **Expected Result:** `catchError` z mapowaniem na stan błędu komponentu
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
 Line numbers refer to the file's real content (read off the line-numbered `git show … | cat -n` output), never to diff hunk numbering.
+The context script additionally precomputes each file's changed-line ranges (`changedLines`, from `git diff -U0`) as the authoritative list of lines the diff touched.
 No findings → the report is the single line `Nie wykryto problemów.`; empty diff → `Nie wykryto zmian do analizy.`
 
 ## Mechanics
 
-`scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, instruction matching, report paths and ready-to-run git commands.
+`scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, instruction matching, report paths and ready-to-run git commands.
 Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews read index content (`git show :path`).
 
 Tests: `node --test skills/codeReview/scripts/review-context.test.cjs`
