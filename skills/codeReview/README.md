@@ -5,6 +5,7 @@ Reviews git changes against instruction checklists and writes one concise Markdo
 Reports are always written in Polish.
 Report-only: the skill never modifies the reviewed project.
 Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
+Full coverage: every file in the diff and every checklist item of every matched instruction is evaluated on every run — the reviewer never skips files or rules; only the context script excludes generated/binary files.
 
 ## Usage
 

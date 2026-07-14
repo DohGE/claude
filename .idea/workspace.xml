@@ -4,26 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add new instruction; force one agent for whole codeReview">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Skills and instructions improvements">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/skills/codeReview/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/skills/codeReview/SKILL.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/SKILL.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/best-practices.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/best-practices.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/global/guidelines.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/global/guidelines.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/SKILL.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/SKILL.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/e2e/calculator.spec.cjs" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/e2e/validation.spec.cjs" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/playwright.config.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/playwright.config.cjs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/references/refinement-agent.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/references/refinement-agent.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/references/review-agent.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/references/review-agent.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/references/validation-agent.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/references/validation-agent.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/scripts/match-instructions.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/scripts/match-instructions.cjs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/scripts/match-instructions.test.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/scripts/match-instructions.test.cjs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/implementNewFeature/scripts/server.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/implementNewFeature/scripts/server.cjs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -58,24 +42,24 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "code-review-updates",
-    "ignore.virus.scanning.warn.message": "true",
-    "junie.onboarding.icon.badge.shown": "true",
-    "last_opened_file_path": "D:/WebstormProjects/claude",
-    "node.js.detected.package.eslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "preferences.pluginManager",
-    "to.speed.mode.migration.done": "true",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;D:/WebstormProjects/claude&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="D:\WebstormProjects\claude\skills\codeReview\instructions" />
@@ -108,6 +92,7 @@
       <workItem from="1783516871587" duration="4567000" />
       <workItem from="1783584334500" duration="327000" />
       <workItem from="1783600843889" duration="1617000" />
+      <workItem from="1784023503686" duration="664000" />
     </task>
     <task id="LOCAL-00001" summary="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
       <option name="closed" value="true" />

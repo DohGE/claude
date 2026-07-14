@@ -12,6 +12,9 @@ Execute EVERY step of this skill yourself, in the current conversation.
 Never dispatch sub-agents (Agent/Task/Explore tools) for any part of the run — not one per branch, not one per file, not for large diffs, not to save context or time.
 Multiple targets are reviewed by you sequentially, one after another.
 
+Coverage is non-negotiable: every file of every target and every checklist item of every applicable
+instruction gets evaluated, on every run. Violating the letter of these steps is violating their spirit.
+
 ## Step 1 — Build the review context
 
 1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = current working directory.
@@ -38,7 +41,11 @@ Never skip or skim any of these files — they are the review rulebook.
 
 ## Step 3 — Analyze (per target, per file) and write findings as you go
 
-Write the report header (Step 4 format) to `target.reportPath` first. Then, for EVERY file in `target.files`:
+Write the report header (Step 4 format) to `target.reportPath` first. Then process EVERY file in
+`target.files`, one at a time, in the listed order. The script has already excluded everything
+skippable (generated/binary → `target.skipped`), so `target.files` contains no file you may skip:
+no exceptions for renames, formatting-only diffs, tests, configs, file size, diff size, or how many
+files remain. For each file:
 
 1. Run its `diffCommand` (what changed) and its `showCommand` (full file content) with the Bash tool
    — `showCommand` pipes through `cat -n`, which needs a POSIX shell.
@@ -56,6 +63,14 @@ Write the report header (Step 4 format) to `target.reportPath` first. Then, for 
    5. Readability problems.
    Performance, security, architecture and test coverage are enforced through their global
    instruction checklists in point 1 — do not invent extra criteria beyond the instructions.
+   An item counts as evaluated only after you checked the file's code against it and reached an
+   explicit pass/violation verdict — "nothing jumped out at a glance" is not a verdict. Three rule
+   families are historically under-reported; check them deliberately for every file their
+   instructions match, even when the diff looks unrelated (they stay defined ONLY by their
+   instruction files — never re-derive them from memory):
+   - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
+   - naming rules (general instruction) plus naming consistency across the diff;
+   - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction).
 3. Record only REAL findings — no speculative or cosmetic padding.
    Report each violation ONCE, under the most specific instruction that covers it (local wins over global).
 4. Append the file's findings section to `target.reportPath` IMMEDIATELY after analyzing the file —
@@ -63,6 +78,10 @@ Write the report header (Step 4 format) to `target.reportPath` first. Then, for 
 
 After the per-file pass, do ONE cross-file pass over the whole diff for point 3 (mutual consistency,
 architecture, naming) and append any new findings to the report.
+
+Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
+had its commands run and all five points evaluated; analyze any missed file now. A target with an
+unanalyzed file is not done, regardless of diff size or session length.
 
 ## Step 4 — Report format (one file per target, ALWAYS in Polish)
 
@@ -97,3 +116,17 @@ architecture, naming) and append any new findings to the report.
 
 After writing all reports print, in Polish: each report path + finding counts per severity, plus any errors/warnings from Step 1.
 Nothing else.
+
+## Skip rationalizations — all invalid
+
+Catching yourself thinking any of these means STOP and return to the file or checklist item:
+
+| Excuse | Reality |
+|---|---|
+| "Diff too large / too many files" | Scope never shrinks with size. Continue sequentially until the list is exhausted. |
+| "Trivial / generated / config / test-only file" | The script already removed skippable files; everything in `target.files` gets the full pass. |
+| "Rename or formatting-only change" | Moved code is re-reviewed at its new location — structure, naming and import rules break exactly there. |
+| "A similar file already passed" | Every file gets its own per-item verdicts; similarity is not compliance. |
+| "This rule is pedantic here" | Rule weight is expressed through severity, never through omission. |
+| "I remember the instructions" | Verdicts come from the instruction files read this run, item by item — not from memory. |
+| "Context/time is running low" | Coverage outranks speed. Keep going file by file. |
