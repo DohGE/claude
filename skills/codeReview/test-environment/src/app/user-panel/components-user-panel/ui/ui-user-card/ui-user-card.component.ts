@@ -25,6 +25,7 @@ export class UserCardComponent {
   private router = inject(Router);
 
   user = input<CardUser>();
+  title = input<string>('');
   highlighted = false;
   @Input() set highlight(value: boolean) {
     this.highlighted = value;

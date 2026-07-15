@@ -23,6 +23,8 @@ and rule references — but for a clean experiment, commit the README separately
 - `user-panel.actions.ts` imports `UserDto` through the models barrel (correct import direction).
 - All four `+state` specs and the util spec live in `tests/` folders (correct location).
 - `user-panel.effects.ts` class name `UserPanelEffects` and the `searchUsersFail` → `of(fail)` inside `catchError` inside `mergeMap` in `searchUsers$` (correct catchError placement there).
+- The `should be created` / `should be defined` / `should create` descriptions in the service, routes, util and ui-card specs comply with the `should`-prefix naming rule — those tests are flagged as existence-only, not for their names.
+- `ui-user-card.component.ts` declaring an input named `title` (colliding with the native HTML attribute) is not itself a violation — only the parent template's plain-attribute binding of it is.
 
 ## Violation inventory (per file)
 
@@ -186,6 +188,7 @@ and rule references — but for a clean experiment, commit the README separately
 - ngrx-reducer-test: TestBed + `provideMockStore` in a reducer spec (no TestBed, no mocks allowed).
 - ngrx-reducer-test: shared `STATE` referencing the exported const directly — inputs must be fresh spreads per test; `{} as UserPanelState` used as input.
 - unit-tests: SCREAMING_SNAKE test const (`STATE`).
+- unit-tests: no `it` description starts with `should` (`'sets loading on load users'`, `'stores users on success'`, `'stores search results'`).
 - ngrx-reducer-test: single-field assertions (`state.isLoading`, `users.length`) instead of whole-state `toEqual({ ...initialState, ... })`.
 - ngrx-reducer-test: no `it.each` success/fail loading-reset dataset; no fail-action test at all.
 - ngrx-reducer-test: incomplete fixture `{ id: '1' } as UserDto` where the handler reads fields.
@@ -199,6 +202,7 @@ and rule references — but for a clean experiment, commit the README separately
 - ngrx-selectors-test: derived selector fed a full state object instead of its input selectors' outputs (`selectNextStepAllowed.projector({...state})`).
 - ngrx-selectors-test: boolean selector has only the `true` case; gate selector lacks one false-test per AND clause.
 - ngrx-selectors-test: `toEqual` asserting a passed-through reference where `toBe` is required (`selectSortedUsers`).
+- unit-tests: no `it` description starts with `should` (`'selects users'`, `'allows next step'`, `'builds table data'`, `'sorted users returns the same list'`).
 - ngrx-selectors-test (absences): no edit-mode safety test, no parameterized-selector two-step test (`selectUserById`).
 
 ### data-access/+state/tests/user-panel.effects.spec.ts
@@ -206,6 +210,7 @@ and rule references — but for a clean experiment, commit the README separately
 - ngrx-effects-test: `actions$` assigned eagerly at module level with `of(...)` — must be a lazily reassigned-per-`it` variable.
 - ngrx-effects-test: HTTP simulated with `of()` instead of per-endpoint `Subject`s.
 - ngrx-effects-test: service mock typed with `as unknown as UserPanelService` instead of `satisfies Partial<...>`; variable named `svc` (unit-tests: full descriptive names).
+- unit-tests: the only `it` description (`'loads users'`) does not start with `should`.
 - ngrx-effects-test: `fakeAsync`/`tick` instead of the `(done)` callback + `pipe(take(1))`.
 - ngrx-effects-test: bare `toHaveBeenCalled()` — payload not asserted.
 - ngrx-effects-test: no `afterEach` (`jest.clearAllMocks`, `resetSelectors`); no `ngMocks.faster()`; setup in `beforeEach` not `beforeAll`.
@@ -217,6 +222,7 @@ and rule references — but for a clean experiment, commit the README separately
 - ngrx-facade-test: nested `describe`s for a proxy class (must be flat `it`s).
 - ngrx-facade-test: bare `toHaveBeenCalled()` instead of `toHaveBeenCalledWith(actions.x({ ...payload }))`.
 - ngrx-facade-test: signals tested (`facade.list()`); `expect.objectContaining` used.
+- unit-tests: `it` descriptions do not start with `should` (`'dispatches'`, `'exposes the user list'`).
 - ngrx-facade-test: no `afterEach` with `jest.clearAllMocks()`; no null-parameter variant tests; `searchAndReturn` untested.
 
 ### shared/guards/user-panel.guard.ts
@@ -238,7 +244,7 @@ and rule references — but for a clean experiment, commit the README separately
 ### shared/utils/tests/build-user-table.util.spec.ts (+ .snap)
 
 - util-guard-test: TestBed in a util spec (plain `describe`/`it` only).
-- unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); `as any` incomplete fixture; existence-only test.
+- unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); `as any` incomplete fixture; existence-only test; `it('builds table')` description not starting with `should`.
 - util-guard-test: snapshot of impure output (id/timestamp change every run); `.snap` stored directly in `tests/` instead of `tests/__snapshots__/`.
 - util-guard-test (absences): no empty/null edge cases; no `not.toBe(input)` copy assertion; `formatUserRow` untested.
 
@@ -315,8 +321,9 @@ and rule references — but for a clean experiment, commit the README separately
 - component-template: `*ngFor` without any stable `track`.
 - performance: LCP hero image inside `@defer (on viewport)` with no `@placeholder` (layout shift + deferred LCP); `<img>` without `alt`, without `ngSrc`, without `height`, no `priority`.
 - component-template: `[(ngModel)]` template-driven binding (best-practices) mixed with reactive `[formControl]`; both inputs unlabeled (no `label for`/`aria-label`); hard-coded placeholders.
-- component-template: `(click)` on `<div>` and `<span>` without `role`/`tabindex`/keyboard handling; icon-only button (🔄) without `aria-label`; no `data-test` attributes anywhere despite `dataTestPrefix`.
-- component-template: literal property binding `[title]="'Refresh'"`; facade call with logic inline in the template (`facade.loadUsers({ pageSize: 25 })`).
+- component-template: `(click)` on `<div>` and `<span>` without `role`/`tabindex`/keyboard handling; icon-only button (🔄) without `aria-label`; no `data-test` on any interactive native element despite `dataTestPrefix` — the only `data-test` in the template sits on the `<user-card>` component host tag, where it is forbidden (the selector already targets hosts).
+- component-template: literal property binding `[title]="'Refresh'"` on a native `<button>` — still a defect, the input-name-collision exception covers component inputs only, not native elements (false-negative bait); facade call with logic inline in the template (`facade.loadUsers({ pageSize: 25 })`).
+- component-template: `title="User details"` as a plain attribute on the `<user-card>` host — the `title` input collides with the native HTML attribute, so the binding form (`[title]="'User details'"`) is required; the plain attribute lands in the DOM and adds an unwanted browser tooltip (the value is also yet another hard-coded text — i18n).
 - component-template: method calls in interpolations (`formatDate(...)`, `greet(...)`).
 - security: `[innerHTML]` bound to sanitizer-bypassed API data; `target="_blank"` link without `rel="noopener noreferrer"`; `[href]="returnUrl"` straight from query params (open redirect); `[href]="user.homepage"` unvalidated API URL.
 - component-template: duplicated branch markup (`Found ... users` + Export button twice) instead of `ng-template` + `ngTemplateOutlet`.
@@ -375,7 +382,7 @@ and rule references — but for a clean experiment, commit the README separately
 - component-test: DOM assertions via `fixture.debugElement.query(By.css(...))` (markup belongs to snapshots/e2e).
 - component-test: facade mock cast `as unknown as UserPanelFacade` instead of `Partial<Facade>` with real `signal(...)` values; signal mocked as `jest.fn`.
 - component-test: TestBed + `beforeEach` fixture instead of `MockBuilder`/`ngMocks.faster()` + one shared `MockRender` in `beforeAll`.
-- unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); injected-dependency variable named `svc`; existence-only `should create` test; `it.each` dataset inline, unused in assertions (test asserts nothing per-case).
+- unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); injected-dependency variable named `svc`; existence-only `should create` test; `it.each` dataset inline, unused in assertions (test asserts nothing per-case); `it`/`it.each` descriptions not starting with `should` (`'renders the card'`, `'renders %s %s'`, `'opens details'`).
 - component-test: bare `toHaveBeenCalled()` without arguments; no `afterEach` (`jest.clearAllMocks`, signal resets).
 - component-test (absences): no `dataTestPrefix` test, no form/validator tests, no state→form `{ emitEvent: false }` guard test, no output-emission tests.
 

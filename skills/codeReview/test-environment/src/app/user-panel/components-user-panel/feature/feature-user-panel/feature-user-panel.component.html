@@ -43,7 +43,7 @@
   <input [formControl]="form.controls.email" placeholder="Email" />
 
   @defer (on viewport) {
-    <user-card *ngFor="let user of users()" [user]="user"></user-card>
+    <user-card *ngFor="let user of users()" [user]="user" title="User details" data-test="user-card"></user-card>
   }
 </div>
 

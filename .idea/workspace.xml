@@ -4,51 +4,14 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Update codeReview skill report line numbering and findings formatting">
+    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add testing environment for code review skill">
       <change afterPath="$PROJECT_DIR$/.claude/agents/opus-low-code-review.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/README.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/index.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/index.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.selectors.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.actions.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.effects.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.facade.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.reducer.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.selectors.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/services/user-panel.service.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/services/user-panel.service.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/consts/user-panel-initial-state.const.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/consts/user-role-options.const.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/enums/user-status.enum.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/index.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/interfaces/user-dto.interface.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/interfaces/user-panel-state.interface.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/types/user-table.type.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/guards/user-panel.guard.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/index.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/routes/tests/user-panel.routes.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/routes/user-panel.routes.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/build-user-table.util.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/format-user-name.utils.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/tests/build-user-table.util.spec.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shell/user-panel-shell.routes.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/user-panel.module.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/assets/i18n/en.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/assets/i18n/pl.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.claude-plugin/plugin.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude-plugin/plugin.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -141,7 +104,7 @@
       <workItem from="1783584334500" duration="327000" />
       <workItem from="1783600843889" duration="1617000" />
       <workItem from="1784023503686" duration="3636000" />
-      <workItem from="1784107304953" duration="361000" />
+      <workItem from="1784107304953" duration="995000" />
     </task>
     <task id="LOCAL-00001" summary="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
       <option name="closed" value="true" />
@@ -191,7 +154,15 @@
       <option name="project" value="LOCAL" />
       <updated>1784025113748</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="feat(): Add testing environment for code review skill">
+      <option name="closed" value="true" />
+      <created>1784107715064</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1784107715064</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -203,6 +174,7 @@
     <MESSAGE value="feat(): Add new instruction; force one agent for whole codeReview" />
     <MESSAGE value="feat(): Update codeReview skill to always follow all instructions and check all the files" />
     <MESSAGE value="feat(): Update codeReview skill report line numbering and findings formatting" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(): Update codeReview skill report line numbering and findings formatting" />
+    <MESSAGE value="feat(): Add testing environment for code review skill" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(): Add testing environment for code review skill" />
   </component>
 </project>

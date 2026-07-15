@@ -11,6 +11,7 @@ applies-to:
 - Variables holding an injected dependency (mock, spy, `TestBed.inject(...)` result) use the full descriptive name derived from the dependency type (keeping the feature/area part of the class name), never shortened to a generic role name.
 - A dependency mock/stub is typed with `satisfies SomeService` rather than a type cast (`as SomeService`) or `Partial<SomeService>`, so the mock is checked against the real contract while keeping its literal shape.
 - `it.each(...)` datasets live in a named const, not an inline array.
+- Every `it` description starts with `should` and states the expected behavior (e.g. `it('should return an empty list when the request fails')`); `it.each` description templates follow the same rule.
 - Fixtures are complete objects of their domain type; `{} as X` is acceptable only when the code under test never reads the payload's fields.
 - No existence-only tests — never `it('should be created', () => expect(x).toBeTruthy())` or `toBeDefined()`-style assertions (zero diagnostic value).
 - Every branch and edge case that changes a unit's output is covered, not just the happy path: each condition in a computed/guard/decision method is tested for both outcomes, every boolean/loading flag it reads is exercised in its non-default state as well as its default, and each such flag is asserted independently so a single flag flipping the result is caught. Flag a spec as having a missing test whenever a branch or state permutation the code reads has no case asserting its effect.
