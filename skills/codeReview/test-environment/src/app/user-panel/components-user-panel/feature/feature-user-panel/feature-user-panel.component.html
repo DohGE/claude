@@ -1,0 +1,52 @@
+<div class="panel" id="panel-root" *ngIf="users().length > 0; else empty">
+  <h1 class="panel-title">User management panel</h1>
+
+  @defer (on viewport) {
+    <img [src]="'/assets/hero-users.png'" width="1200" />
+  }
+
+  <input [(ngModel)]="title" placeholder="Search users..." />
+
+  <div class="toolbar" (click)="onSave()">Save changes</div>
+
+  <button [title]="'Refresh'" (click)="facade.loadUsers({ pageSize: 25 })">🔄</button>
+
+  <ul>
+    <li
+      *ngFor="let user of users()"
+      [ngClass]="{ active: user.user_status === 1 }"
+      [ngStyle]="{ color: '#c62828' }"
+    >
+      {{ formatDate(user.created_at) }} — {{ greet(user) }}
+      <span [innerHTML]="trustBio(user.bio)"></span>
+      <a [href]="user.homepage" target="_blank">Homepage</a>
+    </li>
+  </ul>
+
+  <div *ngIf="resultCount > 0">
+    <p>Found {{ resultCount }} users</p>
+    <button type="button" class="btn">Export</button>
+  </div>
+  <div *ngIf="resultCount === 0">
+    <p>Found 0 users</p>
+    <button type="button" class="btn">Export</button>
+  </div>
+
+  <a [href]="returnUrl">Back to previous page</a>
+
+  <span aria-expanded="false" class="chevron" (click)="onSave()">▼</span>
+
+  <p>{{ userNames$ | async }}</p>
+
+  <div class="error" *ngIf="form.invalid">Email is required</div>
+
+  <input [formControl]="form.controls.email" placeholder="Email" />
+
+  @defer (on viewport) {
+    <user-card *ngFor="let user of users()" [user]="user" title="User details" data-test="user-card"></user-card>
+  }
+</div>
+
+<ng-template #empty>
+  <p>No users found</p>
+</ng-template>

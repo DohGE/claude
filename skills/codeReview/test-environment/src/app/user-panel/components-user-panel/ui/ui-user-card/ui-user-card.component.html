@@ -1,0 +1,12 @@
+<div class="card" (click)="openDetails()">
+  <img [src]="user()?.avatarUrl" />
+  <img ngSrc="/assets/avatar-fallback.png" />
+  <h3 [style.color]="'#3f51b5'">{{ user()?.firstName }} {{ user()?.last_name }}</h3>
+  <p>{{ title() }}</p>
+  @for (tag of user()?.tags; track tag) {
+    <span class="tag">{{ tag.label }}</span>
+  }
+  <p>{{ 'page.userPanel.labels.termsHtml' | translate }}</p>
+  <button (click)="selected.emit(user()!)">Select user</button>
+  <input [formControl]="form.controls.note" [disabled]="highlighted" />
+</div>
