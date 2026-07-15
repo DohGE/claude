@@ -1,0 +1,25 @@
+{
+  "actions": {
+    "save": "Save"
+  },
+  "labels": {
+    "userName": "User name"
+  },
+  "userCard": {
+    "selectBtn": "Select user."
+  },
+  "page": {
+    "userPanel": {
+      "labels": {
+        "user_name_label": "User name",
+        "panelHeading": "user management panel",
+        "termsHtml": "Please accept the <b>terms and conditions</b>",
+        "requiredEmail": "Email is required",
+        "greeting": "Welcome {{userName}}"
+      },
+      "actions": {
+        "saveUser": "Save"
+      }
+    }
+  }
+}

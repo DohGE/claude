@@ -4,15 +4,62 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Skills and instructions improvements">
+    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Update codeReview skill report line numbering and findings formatting">
+      <change afterPath="$PROJECT_DIR$/.claude/agents/opus-low-code-review.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/README.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/index.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/index.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/tests/user-panel.selectors.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.actions.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.effects.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.facade.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.reducer.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/+state/user-panel.selectors.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/services/user-panel.service.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/data-access/services/user-panel.service.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/consts/user-panel-initial-state.const.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/consts/user-role-options.const.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/enums/user-status.enum.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/index.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/interfaces/user-dto.interface.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/interfaces/user-panel-state.interface.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/models/types/user-table.type.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/guards/user-panel.guard.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/index.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/routes/tests/user-panel.routes.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/routes/user-panel.routes.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/build-user-table.util.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/format-user-name.utils.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shared/utils/tests/build-user-table.util.spec.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/shell/user-panel-shell.routes.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/user-panel.module.ts" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/assets/i18n/en.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/assets/i18n/pl.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.claude-plugin/plugin.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude-plugin/plugin.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/SKILL.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/SKILL.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ChangesViewManager">
+    <option name="groupingKeys">
+      <option value="directory" />
+      <option value="repository" />
+    </option>
   </component>
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
@@ -48,7 +95,7 @@
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;code-review-skill-improvments&quot;,
     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
     &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;D:/WebstormProjects/claude&quot;,
@@ -57,6 +104,7 @@
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
     &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;D:\\WebStorm 2025.2.1\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
@@ -92,7 +140,8 @@
       <workItem from="1783516871587" duration="4567000" />
       <workItem from="1783584334500" duration="327000" />
       <workItem from="1783600843889" duration="1617000" />
-      <workItem from="1784023503686" duration="664000" />
+      <workItem from="1784023503686" duration="3636000" />
+      <workItem from="1784107304953" duration="361000" />
     </task>
     <task id="LOCAL-00001" summary="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
       <option name="closed" value="true" />
@@ -126,7 +175,23 @@
       <option name="project" value="LOCAL" />
       <updated>1783941368842</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="feat(): Update codeReview skill to always follow all instructions and check all the files">
+      <option name="closed" value="true" />
+      <created>1784024223580</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1784024223580</updated>
+    </task>
+    <task id="LOCAL-00006" summary="feat(): Update codeReview skill report line numbering and findings formatting">
+      <option name="closed" value="true" />
+      <created>1784025113748</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1784025113748</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -136,6 +201,8 @@
     <MESSAGE value="feat(): Add new plugin doh with implementNewFeature and codeReview skills" />
     <MESSAGE value="feat(): Update instructions" />
     <MESSAGE value="feat(): Add new instruction; force one agent for whole codeReview" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(): Add new instruction; force one agent for whole codeReview" />
+    <MESSAGE value="feat(): Update codeReview skill to always follow all instructions and check all the files" />
+    <MESSAGE value="feat(): Update codeReview skill report line numbering and findings formatting" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(): Update codeReview skill report line numbering and findings formatting" />
   </component>
 </project>
