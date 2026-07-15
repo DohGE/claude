@@ -4,14 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add testing environment for code review skill">
-      <change afterPath="$PROJECT_DIR$/.claude/agents/opus-low-code-review.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/unit-tests/unit-tests.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts" afterDir="false" />
+    <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add new rules + update testing environment">
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/SKILL.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/SKILL.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -104,7 +98,7 @@
       <workItem from="1783584334500" duration="327000" />
       <workItem from="1783600843889" duration="1617000" />
       <workItem from="1784023503686" duration="3636000" />
-      <workItem from="1784107304953" duration="995000" />
+      <workItem from="1784107304953" duration="2576000" />
     </task>
     <task id="LOCAL-00001" summary="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
       <option name="closed" value="true" />
@@ -162,7 +156,15 @@
       <option name="project" value="LOCAL" />
       <updated>1784107715064</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="feat(): Add new rules + update testing environment">
+      <option name="closed" value="true" />
+      <created>1784108329668</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1784108329668</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -175,6 +177,7 @@
     <MESSAGE value="feat(): Update codeReview skill to always follow all instructions and check all the files" />
     <MESSAGE value="feat(): Update codeReview skill report line numbering and findings formatting" />
     <MESSAGE value="feat(): Add testing environment for code review skill" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(): Add testing environment for code review skill" />
+    <MESSAGE value="feat(): Add new rules + update testing environment" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(): Add new rules + update testing environment" />
   </component>
 </project>

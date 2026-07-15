@@ -2,6 +2,7 @@
 name: Unit tests (common)
 applies-to:
   - "**/*.spec.ts"
+  - "**/tests/**"
 ---
 ## Checklist
 - Specs live in a `tests/` folder next to the code under test; snapshots in `tests/__snapshots__/`.

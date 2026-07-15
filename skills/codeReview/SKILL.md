@@ -45,7 +45,9 @@ Write the report header (Step 4 format) to `target.reportPath` first. Then proce
 `target.files`, one at a time, in the listed order. The script has already excluded everything
 skippable (generated/binary → `target.skipped`), so `target.files` contains no file you may skip:
 no exceptions for renames, formatting-only diffs, tests, configs, file size, diff size, or how many
-files remain. For each file:
+files remain. A file whose `localInstructions` is empty still gets the complete global pass — zero
+local matches usually means the file sits outside every dedicated location (the script surfaces
+these files in `warnings[]`), not that the file may be skimmed. For each file:
 
 1. Run its `diffCommand` (what changed) and its `showCommand` (full file content) with the Bash tool
    — `showCommand` pipes through `cat -n`, which needs a POSIX shell.
@@ -54,9 +56,14 @@ files remain. For each file:
    `""` means the diff only deleted lines. Never re-derive these ranges from diff hunks yourself.
    Added files (`diffCommand: null`, `changedLines: null`) are reviewed from the `showCommand`
    output alone (every line is new); deleted files (`showCommand: null`) from the diff alone.
-2. Evaluate the file against every point below. Reason through them SILENTLY — do not print
-   per-point notes or progress commentary; the only text a file produces is its findings (or nothing).
-   Sampling checklists or skipping any point is forbidden:
+2. Evaluate the file against every point below, checklist-driven — never holistically. For points
+   1 and 2, take each instruction file in turn and walk its checklist top-to-bottom: read an item,
+   check the file's code against that one item, reach an explicit pass/violation verdict, record
+   the finding(s) on violation, then move to the next item. The checklist drives the pass — never
+   scan the file first and recall rules from memory afterwards. Reason through items SILENTLY — do
+   not print per-point notes or progress commentary; the only text a file produces is its findings
+   (or nothing). Sampling checklists, skipping items, or abandoning a checklist partway through a
+   file is forbidden:
    1. Compliance with every global instruction, checklist item by item.
    2. Compliance with every matched local instruction (its `localInstructions` indexes into
       `localInstructionsCatalog`), checklist item by item.
@@ -66,8 +73,15 @@ files remain. For each file:
    Performance, security, architecture and test coverage are enforced through their global
    instruction checklists in point 1 — do not invent extra criteria beyond the instructions.
    An item counts as evaluated only after you checked the file's code against it and reached an
-   explicit pass/violation verdict — "nothing jumped out at a glance" is not a verdict. Three rule
-   families are historically under-reported; check them deliberately for every file their
+   explicit pass/violation verdict — "nothing jumped out at a glance" is not a verdict.
+   Checklist items come in two shapes, and both get real verdicts:
+   - prohibitions — code that must not appear; scanning the file finds these;
+   - requirements — something that MUST be present (`ChangeDetectionStrategy.OnPush`, a route
+     `title`, `{ dispatch: false }`, an `afterEach`, a `should`-prefixed description, a fail action
+     completing a trio, a matching spec...). Scanning never finds an absence: a requirement's PASS
+     verdict is reached only by pointing at the exact code that satisfies it, and a requirement
+     nothing satisfies is a finding.
+   Three rule families are historically under-reported; check them deliberately for every file their
    instructions match, even when the diff looks unrelated (they stay defined ONLY by their
    instruction files — never re-derive them from memory):
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
@@ -86,8 +100,18 @@ files remain. For each file:
 4. Append the file's findings section to `target.reportPath` IMMEDIATELY after analyzing the file —
    never hold findings in memory for later.
 
-After the per-file pass, do ONE cross-file pass over the whole diff for point 3 (mutual consistency,
-architecture, naming) and append any new findings to the report.
+After the per-file pass, do ONE cross-file pass over the whole diff for point 3 and append any new
+findings to the report. Answer each of these four questions explicitly, against the diff as a whole:
+1. Duplication drift — is the same logic, formatting or literal implemented in two or more places
+   of this diff, or re-implemented next to an existing shared util? Report every copy.
+2. Layering — take every import edge between the diff's files (and from the diff into the project's
+   layers) and check its direction against the architecture instruction; report each forbidden edge
+   at the importing file.
+3. Derived-data flow — does any state field, action payload or component binding carry a value
+   computable from other state? Report every station of the flow (the action, the reducer field,
+   the dispatching component), each under its own instruction.
+4. Naming consistency — the same concept named differently across the diff's files, or one name
+   reused for different concepts.
 
 Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
 had its commands run and all five points evaluated; analyze any missed file now. A target with an
@@ -118,6 +142,9 @@ unanalyzed file is not done, regardless of diff size or session length.
   - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation.
   - ⚪ **Low** — readability, naming, style, redundant code, convention drift with no behavioral impact.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
+- When the violated rule is behavioral, **Problem:** names the observable runtime consequence
+  (infinite dispatch loop, race condition, subscription leak, crash on null, stale UI) — and
+  severity is picked from that consequence, not from the rule's category.
 - One finding = one such five-bullet block describing exactly one violation (Step 3 point 3);
   the next violation — even of the same rule, even on the same line — is its own block.
   A blank line separates consecutive blocks and precedes every `##` header.
@@ -147,4 +174,6 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "A similar file already passed" | Every file gets its own per-item verdicts; similarity is not compliance. |
 | "This rule is pedantic here" | Rule weight is expressed through severity, never through omission. |
 | "I remember the instructions" | Verdicts come from the instruction files read this run, item by item — not from memory. |
+| "This file already has plenty of findings" | Findings per file are unlimited. Stopping a checklist partway is skipping items. |
+| "No local instruction matched this file" | Global checklists apply to every file; zero local matches often means the file sits outside every dedicated location — itself a violation. |
 | "Context/time is running low" | Coverage outranks speed. Keep going file by file. |

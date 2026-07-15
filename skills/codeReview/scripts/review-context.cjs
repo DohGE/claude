@@ -376,6 +376,15 @@ function buildContext(options) {
     }
   }
 
+  // Surface files that matched no local instruction — the files a reviewer is
+  // most tempted to skim; global checklists still fully apply to them.
+  for (const target of result.targets) {
+    const noLocal = target.files.filter((f) => f.localInstructions.length === 0).map((f) => f.path);
+    if (noLocal.length > 0) {
+      result.warnings.push(`[${target.branch}] Files matching no local instruction (global checklists still apply): ${noLocal.join(', ')}`);
+    }
+  }
+
   // Deduplicate matched local instruction paths into one catalog; per-file
   // localInstructions become indexes into it (read each catalog file once).
   const catalog = new Set();

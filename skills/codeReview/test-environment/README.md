@@ -67,6 +67,13 @@ and rule references — but for a clean experiment, commit the README separately
 - models: local duplicate of the shared-library option interface (`SelectOption`).
 - models: option `label` values are raw texts, not i18n keys.
 
+### models/enums/user-status.enum.ts
+
+- models: numeric enum (`UserStatus`) — enums must be string enums with values equal to the API strings.
+- models: `UserRole` keys in SCREAMING_SNAKE_CASE and values that are UI texts, not API strings.
+- models: function (`userStatusLabel`) inside a models file — model files are purely declarative; it also returns hardcoded UI texts instead of i18n keys.
+- models: two enums plus a function — several main exports in one file.
+
 ### models/index.ts
 
 - models: barrel missing the fixed commented sections in order (`// consts`, `// enums`, `// interfaces`, `// types`).
