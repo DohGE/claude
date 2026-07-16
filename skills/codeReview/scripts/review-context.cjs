@@ -36,16 +36,17 @@ function isSkippedPath(filePath) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', project: process.cwd() };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd() };
   for (const arg of argv) {
     const m = arg.match(/^--([a-z]+)=(.*)$/);
     if (!m) continue;
     if (m[1] === 'mode') args.mode = m[2];
     else if (m[1] === 'branches') args.branches = m[2];
+    else if (m[1] === 'path') args.path = m[2];
     else if (m[1] === 'project') args.project = m[2];
   }
-  if (!['auto', 'staged', 'branches'].includes(args.mode)) {
-    throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches)`);
+  if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
+    throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
   }
   return args;
 }
@@ -165,6 +166,22 @@ function parseNameStatus(output) {
 
 function q(s) {
   return `"${s}"`;
+}
+
+// All files under dir, recursive, as project-relative forward-slash paths
+// (sorted). `.git` is never entered; everything else is left to SKIP_GLOBS.
+function listFolderFiles(project, dir) {
+  const files = [];
+  const walk = (d) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      if (entry.name === '.git') continue;
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) files.push(path.relative(project, full).replace(/\\/g, '/'));
+    }
+  };
+  walk(dir);
+  return files.sort();
 }
 
 // New-file line ranges touched by a diff, read from `git diff -U0` hunk
@@ -297,18 +314,19 @@ function buildContext(options) {
   }
 
   const gitc = (args) => `git -C ${q(project)} ${args}`;
-  // Added files: the diff is the whole file, identical to showCommand output —
-  // emit only one of the two. Deleted files: diff only. showCommand pipes
-  // through `cat -n` so finding line numbers can be read off the output.
+  // Commands are emitted ONCE per target as templates with a `<path>`
+  // placeholder (`target.commands.diff` / `.show`) instead of two full command
+  // strings per file — the reviewer substitutes each file's `path` into them.
+  // Status decides applicability: added files have no diff (every line is
+  // new), deleted files have no content to show. `show` pipes through
+  // `cat -n` so finding line numbers can be read off the output.
   // changedLines: new-file line ranges precomputed from `git diff -U0`
   // (rangesArgsFor), so the reviewer never derives them from hunks itself;
   // null for added (every line is new) and deleted (no new file) files.
-  const makeFiles = (rawFiles, diffFor, showFor, rangesArgsFor) => rawFiles.map((f) => ({
+  const makeFiles = (rawFiles, rangesArgsFor) => rawFiles.map((f) => ({
     path: f.path,
     status: f.status,
     localInstructions: matchLocalInstructions(instructions.locals, f.path),
-    diffCommand: f.status === 'A' ? null : diffFor(f),
-    showCommand: f.status === 'D' ? null : `${showFor(f)} | cat -n`,
     changedLines: f.status === 'A' || f.status === 'D'
       ? null
       : parseHunkRanges(tryGit(project, rangesArgsFor(f)) || ''),
@@ -337,12 +355,11 @@ function buildContext(options) {
       branch: branchName,
       baseBranch: baseRef,
       reportPath: path.join(reportsDir, `${sanitizeBranchName(branchName)}-${ts.date}-${ts.time}.md`),
-      files: makeFiles(
-        kept,
-        (f) => gitc(`diff ${baseRef}...${branchRef} -- ${q(f.path)}`),
-        (f) => gitc(`show ${q(`${branchRef}:${f.path}`)}`),
-        (f) => ['diff', '-U0', `${baseRef}...${branchRef}`, '--', f.path],
-      ),
+      commands: {
+        diff: gitc(`diff ${baseRef}...${branchRef} -- ${q('<path>')}`),
+        show: `${gitc(`show ${q(`${branchRef}:<path>`)}`)} | cat -n`,
+      },
+      files: makeFiles(kept, (f) => ['diff', '-U0', `${baseRef}...${branchRef}`, '--', f.path]),
       skipped,
     });
   };
@@ -355,18 +372,44 @@ function buildContext(options) {
       branch: branchName,
       baseBranch: null,
       reportPath: path.join(reportsDir, `${sanitizeBranchName(branchName)}-staged-${ts.date}-${ts.time}.md`),
-      files: makeFiles(
-        kept,
-        (f) => gitc(`diff --cached -- ${q(f.path)}`),
-        (f) => gitc(`show ${q(`:${f.path}`)}`),
-        (f) => ['diff', '-U0', '--cached', '--', f.path],
-      ),
+      commands: {
+        diff: gitc(`diff --cached -- ${q('<path>')}`),
+        show: `${gitc(`show ${q(':<path>')}`)} | cat -n`,
+      },
+      files: makeFiles(kept, (f) => ['diff', '-U0', '--cached', '--', f.path]),
       skipped,
     });
   } else if (options.mode === 'branches') {
     const names = [...new Set(String(options.branches || '').split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
     if (names.length === 0) result.errors.push('No branches given (expected --branches="a,b;c").');
     for (const name of names) addBranchTarget(name);
+  } else if (options.mode === 'folder') {
+    // Folder mode reviews the working tree instead of a diff: every file under
+    // --path (recursive, minus SKIP_GLOBS) is emitted as an added file, so the
+    // whole folder gets the added-file treatment (show template only).
+    const rel = String(options.path || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const abs = path.resolve(project, rel);
+    if (!rel) {
+      result.errors.push('No folder given (expected --path="src/app").');
+    } else if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+      result.errors.push(`Folder not found: ${rel}`);
+    } else {
+      const branchName = tryGit(project, ['rev-parse', '--abbrev-ref', 'HEAD']) || 'HEAD';
+      const { kept, skipped } = partition(listFolderFiles(project, abs).map((p) => ({ path: p, status: 'A' })));
+      result.targets.push({
+        kind: 'folder',
+        branch: branchName,
+        baseBranch: null,
+        folder: rel,
+        reportPath: path.join(reportsDir, `${sanitizeBranchName(branchName)}-folder-${sanitizeBranchName(rel)}-${ts.date}-${ts.time}.md`),
+        commands: {
+          diff: null,
+          show: `cat ${q(`${project.replace(/\\/g, '/')}/<path>`)} | cat -n`,
+        },
+        files: makeFiles(kept, () => []),
+        skipped,
+      });
+    }
   } else {
     const branchName = tryGit(project, ['rev-parse', '--abbrev-ref', 'HEAD']);
     if (!branchName || branchName === 'HEAD') {
@@ -417,6 +460,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectBaseBranch, parseNameStatus, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, pruneReports, buildContext };
+module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectBaseBranch, parseNameStatus, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

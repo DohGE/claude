@@ -14,10 +14,11 @@ const rc = require('./review-context.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', project: '/tmp/x' },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x' },
   );
   assert.strictEqual(rc.parseArgs([]).mode, 'auto');
   assert.strictEqual(rc.parseArgs(['--mode=branches', '--branches=a,b;c']).branches, 'a,b;c');
+  assert.strictEqual(rc.parseArgs(['--mode=folder', '--path=src/app']).path, 'src/app');
   assert.throws(() => rc.parseArgs(['--mode=nope']), /Unknown --mode/);
 });
 
@@ -283,13 +284,15 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.deepStrictEqual(t0.files.map((f) => f.path), ['README.md', 'src/a.ts']);
   const added = t0.files.find((f) => f.path === 'src/a.ts');
   assert.strictEqual(added.status, 'A');
-  assert.strictEqual(added.diffCommand, null, 'added files are read from showCommand alone');
   assert.strictEqual(added.changedLines, null, 'added files: every line is new');
-  assert.ok(added.showCommand.includes('show "feature/auto:src/a.ts"'));
-  assert.ok(added.showCommand.endsWith('| cat -n'), 'show output is line-numbered');
+  assert.strictEqual(added.diffCommand, undefined, 'per-file command strings are gone');
+  assert.strictEqual(added.showCommand, undefined, 'per-file command strings are gone');
+  assert.ok(t0.commands.show.includes('show "feature/auto:<path>"'), 'one show template per target');
+  assert.ok(t0.commands.show.endsWith('| cat -n'), 'show output is line-numbered');
+  assert.ok(t0.commands.diff.includes('diff main...feature/auto'));
+  assert.ok(t0.commands.diff.includes('"<path>"'), 'templates carry the <path> placeholder');
   const modified = t0.files.find((f) => f.path === 'README.md');
   assert.strictEqual(modified.status, 'M');
-  assert.ok(modified.diffCommand.includes('diff main...feature/auto'));
   assert.strictEqual(modified.changedLines, '2', 'script precomputes new-file changed lines');
   assert.deepStrictEqual(ctx.localInstructionsCatalog.map((f) => path.basename(f)), ['ts.md']);
   assert.deepStrictEqual(added.localInstructions, [0], 'per-file matches are catalog indexes');
@@ -316,15 +319,14 @@ test('staged mode lists index files with index show commands', (t) => {
   assert.ok(t0.reportPath.endsWith('main-staged-2026-07-08-14-30.md'));
   const ts = t0.files.find((f) => f.path === 'app.ts');
   assert.strictEqual(ts.status, 'A');
-  assert.strictEqual(ts.diffCommand, null);
   assert.strictEqual(ts.changedLines, null);
-  assert.ok(ts.showCommand.includes('show ":app.ts"'));
-  assert.ok(ts.showCommand.endsWith('| cat -n'));
+  assert.ok(t0.commands.show.includes('show ":<path>"'), 'index show template');
+  assert.ok(t0.commands.show.endsWith('| cat -n'));
+  assert.ok(t0.commands.diff.includes('diff --cached'));
+  assert.ok(t0.commands.diff.includes('"<path>"'));
   const del = t0.files.find((f) => f.path === 'old.css');
   assert.strictEqual(del.status, 'D');
-  assert.strictEqual(del.showCommand, null);
   assert.strictEqual(del.changedLines, null, 'deleted files have no new-file lines');
-  assert.ok(del.diffCommand.includes('diff --cached'));
   const staged = t0.files.find((f) => f.path === 'README.md');
   assert.strictEqual(staged.status, 'M');
   assert.strictEqual(staged.changedLines, '2', 'staged ranges come from git diff --cached -U0');
@@ -373,6 +375,46 @@ test('branches mode splits on , and ; and keeps going past missing branches', (t
   assert.deepStrictEqual(ctx.targets.map((x) => x.baseBranch), ['main', 'main']);
   assert.strictEqual(ctx.errors.length, 1);
   assert.match(ctx.errors[0], /nope/);
+});
+
+test('folder mode reviews every file under the folder as added', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'src/app/a.component.ts', 'const a = 1;\n', 'a');
+  commitFile(dir, 'src/app/sub/b.scss', 'b {}\n', 'b');
+  commitFile(dir, 'src/app/logo.png', 'png\n', 'img');
+  commitFile(dir, 'other/c.ts', 'const c = 1;\n', 'c');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({ mode: 'folder', path: 'src/app', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  assert.strictEqual(ctx.targets.length, 1);
+  const t0 = ctx.targets[0];
+  assert.strictEqual(t0.kind, 'folder');
+  assert.strictEqual(t0.folder, 'src/app');
+  assert.strictEqual(t0.branch, 'main');
+  assert.strictEqual(t0.baseBranch, null);
+  assert.ok(t0.reportPath.endsWith('main-folder-src-app-2026-07-15-17-12.md'));
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['src/app/a.component.ts', 'src/app/sub/b.scss'], 'recursive, sorted, folder-scoped');
+  for (const f of t0.files) {
+    assert.strictEqual(f.status, 'A', 'folder files get the added-file treatment');
+    assert.strictEqual(f.changedLines, null);
+  }
+  assert.strictEqual(t0.commands.diff, null, 'folder mode has no diffs');
+  assert.ok(t0.commands.show.startsWith('cat "'), 'working-tree files are read with cat');
+  assert.ok(t0.commands.show.endsWith('| cat -n'));
+  assert.ok(t0.commands.show.includes('/<path>"'), 'template turns the relative path into an absolute one');
+  assert.deepStrictEqual(t0.skipped, ['src/app/logo.png']);
+  const comp = t0.files.find((f) => f.path === 'src/app/a.component.ts');
+  assert.deepStrictEqual(comp.localInstructions, [0], 'local instructions match folder files too');
+});
+
+test('folder mode errors on a missing folder or missing --path', (t) => {
+  const dir = makeRepo(t);
+  const ctxMissing = rc.buildContext({ mode: 'folder', path: 'nope', project: dir, skillDir: makeSkillDir(t), now: new Date() });
+  assert.strictEqual(ctxMissing.targets.length, 0);
+  assert.match(ctxMissing.errors[0], /Folder not found: nope/);
+  const ctxNoPath = rc.buildContext({ mode: 'folder', path: '', project: dir, skillDir: makeSkillDir(t), now: new Date() });
+  assert.strictEqual(ctxNoPath.targets.length, 0);
+  assert.match(ctxNoPath.errors[0], /No folder given/);
 });
 
 test('empty instructions produce a top-level warning', (t) => {

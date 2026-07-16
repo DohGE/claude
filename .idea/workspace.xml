@@ -5,7 +5,14 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="479447d4-040a-4d25-9eec-8e991aa76fa0" name="Changes" comment="feat(): Add new rules + update testing environment">
+      <change beforePath="$PROJECT_DIR$/.claude-plugin/plugin.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude-plugin/plugin.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/skills/codeReview/SKILL.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/SKILL.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/+state/ngrx-effects.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/+state/ngrx-effects.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component-template.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/instructions/local/code/components/component.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.cjs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" beforeDir="false" afterPath="$PROJECT_DIR$/skills/codeReview/scripts/review-context.test.cjs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -52,7 +59,7 @@
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;code-review-skill-improvments&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
     &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;D:/WebstormProjects/claude&quot;,
@@ -99,6 +106,8 @@
       <workItem from="1783600843889" duration="1617000" />
       <workItem from="1784023503686" duration="3636000" />
       <workItem from="1784107304953" duration="2576000" />
+      <workItem from="1784127525279" duration="1764000" />
+      <workItem from="1784189629278" duration="3497000" />
     </task>
     <task id="LOCAL-00001" summary="feat(): Add new plugin doh with implementNewFeature and codeReview skills">
       <option name="closed" value="true" />

@@ -1,6 +1,6 @@
 ---
 name: codeReview
-description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, or a list of branches) - checks every changed file against global/local instruction checklists and writes one concise Polish Markdown report per branch with severity, real line numbers, violated rule and expected result
+description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against global/local instruction checklists and writes one concise Polish Markdown report per branch with severity, real line numbers, violated rule and expected result
 ---
 
 # codeReview — deterministic instruction-driven review
@@ -21,6 +21,8 @@ instruction gets evaluated, on every run. Violating the letter of these steps is
 2. Map the invocation arguments to the context script EXACTLY like this:
    - no arguments → `--mode=auto`
    - the single word `staged` → `--mode=staged`
+   - the word `folder` followed by one path → `--mode=folder --path="<path>"` (reviews every
+     file currently in that folder of the working tree, no diff needed)
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
 3. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] --project="<PROJECT>"`
 4. Parse the JSON from stdout:
@@ -34,7 +36,9 @@ instruction gets evaluated, on every run. Violating the letter of these steps is
 2. Read EVERY file listed in `localInstructionsCatalog` (already deduplicated across targets;
    per-file `localInstructions` are INDEXES into this catalog).
 3. If `claudeMd` is not null, read it and treat it as one more global instruction.
-4. Precedence when rules conflict: project `CLAUDE.md` > local instruction > global instruction.
+4. Issue every Read of points 1–3 as parallel tool calls in ONE message — the whole rulebook
+   loads in a single turn, never one file per turn.
+5. Precedence when rules conflict: project `CLAUDE.md` > local instruction > global instruction.
    Apply only the winning rule; never report a violation of the overridden rule.
 
 Never skip or skim any of these files — they are the review rulebook.
@@ -49,13 +53,24 @@ files remain. A file whose `localInstructions` is empty still gets the complete 
 local matches usually means the file sits outside every dedicated location (the script surfaces
 these files in `warnings[]`), not that the file may be skimmed. For each file:
 
-1. Run its `diffCommand` (what changed) and its `showCommand` (full file content) with the Bash tool
-   — `showCommand` pipes through `cat -n`, which needs a POSIX shell.
+1. Build the file's commands from the target-level `target.commands` templates by substituting
+   the file's `path` for the `<path>` placeholder: `commands.diff` shows what changed,
+   `commands.show` prints the full content piped through `cat -n` (needs a POSIX shell).
+   Status `A` files have no diff — review them from the `show` output alone (every line is new);
+   status `D` files have no content — review them from the diff alone. (`commands.diff` is `null`
+   for modes without diffs, e.g. folder mode.)
+   Fetch contents in BATCHES: one Bash call chains the commands of several consecutive files,
+   each preceded by an `echo "=== <path> ==="` marker line, up to ~1,500 output lines per call —
+   never one call per file. If a batch's output comes back truncated, re-fetch the missing files
+   in smaller batches. Only the fetching is batched — the analysis below stays strictly one file
+   at a time.
    `changedLines` (precomputed by the script from `git diff -U0`) is the authoritative list of the
    lines this diff touched, numbered exactly like the `cat -n` output, e.g. `"7, 12-15"`;
-   `""` means the diff only deleted lines. Never re-derive these ranges from diff hunks yourself.
-   Added files (`diffCommand: null`, `changedLines: null`) are reviewed from the `showCommand`
-   output alone (every line is new); deleted files (`showCommand: null`) from the diff alone.
+   `""` means the diff only deleted lines, `null` means an added/deleted file. Never re-derive
+   these ranges from diff hunks yourself.
+   While the file's content is open, append its import lines to a running import ledger
+   (`importing file → imported module`, one entry per import) — the cross-file layering question
+   consumes this ledger after the per-file pass.
 2. Evaluate the file against every point below, checklist-driven — never holistically. For points
    1 and 2, take each instruction file in turn and walk its checklist top-to-bottom: read an item,
    check the file's code against that one item, reach an explicit pass/violation verdict, record
@@ -81,37 +96,53 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      completing a trio, a matching spec...). Scanning never finds an absence: a requirement's PASS
      verdict is reached only by pointing at the exact code that satisfies it, and a requirement
      nothing satisfies is a finding.
-   Three rule families are historically under-reported; check them deliberately for every file their
+   Four rule families are historically under-reported; check them deliberately for every file their
    instructions match, even when the diff looks unrelated (they stay defined ONLY by their
    instruction files — never re-derive them from memory):
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
    - naming rules (general instruction) plus naming consistency across the diff;
-   - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction).
+   - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction);
+   - test scaffolding rules (unit-tests instruction plus the matching per-type test instruction):
+     spec and snapshot location, the prescribed setup instead of TestBed/MockStore, `ngMocks.faster()`
+     with `beforeAll`, a state-restoring `afterEach`, `should`-prefixed descriptions, a lazily
+     reassigned `actions$`, payload-asserting `toHaveBeenCalledWith(...)` — re-walked in full for
+     EVERY spec file; the sixth spec gets the same item-by-item walk as the first.
 3. Record only REAL findings — no speculative or cosmetic padding.
-   One finding = one violation of one rule at one location. A rule broken in three places yields
-   three findings, each with its own block and line number; a line breaking two different rules
-   yields two findings. The SAME violation is reported ONCE, under the most specific instruction
-   that covers it (local wins over global).
-   A finding's line number is determined at the moment of writing it: locate the offending code in
-   the `cat -n` output and cite the number printed there — never diff hunk numbering, never an
-   estimate from memory. Cite one number, or one `<start>-<end>` span only when the single
-   violation itself spans contiguous lines. Cross-check against `changedLines`: a finding whose
-   line lies outside them must state in its description how the diff causes the problem there.
-4. Append the file's findings section to `target.reportPath` IMMEDIATELY after analyzing the file —
-   never hold findings in memory for later.
+   One finding = one rule violated in one file. When the SAME rule is broken in several places of
+   one file with the same consequence and severity, that is ONE finding whose `**Linia:**` lists
+   every occurrence (`2, 8, 10-12`) — never one block per occurrence. An occurrence whose
+   consequence or severity differs (one crashes, another is cosmetic) gets its own finding, as
+   does a different rule broken on the same line. The SAME violation is reported ONCE, under the
+   most specific instruction that covers it (local wins over global).
+   Every listed line number is determined at the moment of writing it: locate the offending code
+   in the `cat -n` output and cite the number printed there — never diff hunk numbering, never an
+   estimate from memory. Each occurrence contributes one number, or one `<start>-<end>` span when
+   that single occurrence spans contiguous lines. Cross-check against `changedLines`: a finding
+   whose lines lie outside them must state in its description how the diff causes the problem there.
+4. Persist findings per fetch batch, not per file and never all at the end: when the last file of
+   the current batch (point 1) is analyzed, write the batch's findings sections — every file of
+   the batch, in listed order — as the next sequential part file
+   (`<reportPath minus .md>.part<NN>.md`, zero-padded, next to the report) with ONE Write call.
+   Findings never wait beyond their own batch; earlier parts are never edited.
 
-After the per-file pass, do ONE cross-file pass over the whole diff for point 3 and append any new
-findings to the report. Answer each of these four questions explicitly, against the diff as a whole:
+After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as the
+final part file. Answer each of these four questions explicitly, against the diff as a whole:
 1. Duplication drift — is the same logic, formatting or literal implemented in two or more places
    of this diff, or re-implemented next to an existing shared util? Report every copy.
-2. Layering — take every import edge between the diff's files (and from the diff into the project's
-   layers) and check its direction against the architecture instruction; report each forbidden edge
-   at the importing file.
+2. Layering — walk the import ledger collected in point 1 of the per-file pass, edge by edge: name
+   the layer of the importing file and of the imported module, check the edge's direction against
+   the architecture instruction, and report each forbidden edge at the importing file. "No layering
+   findings" may be claimed only after every ledger entry has its verdict — an empty ledger means
+   the collection step was skipped, not that the diff has no import edges.
 3. Derived-data flow — does any state field, action payload or component binding carry a value
    computable from other state? Report every station of the flow (the action, the reducer field,
    the dispatching component), each under its own instruction.
 4. Naming consistency — the same concept named differently across the diff's files, or one name
    reused for different concepts.
+
+Assemble the report: append every part file to `target.reportPath` (which already holds the
+header) and remove the parts, in ONE Bash call:
+`cat "<reportPath minus .md>".part*.md >> "<reportPath>" && rm "<reportPath minus .md>".part*.md`.
 
 Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
 had its commands run and all five points evaluated; analyze any missed file now. A target with an
@@ -119,19 +150,20 @@ unanalyzed file is not done, regardless of diff size or session length.
 
 ## Step 4 — Report format (one file per target, ALWAYS in Polish)
 
-`target.reportPath` (UTF-8) is written incrementally during Step 3 (header → per-file sections → cross-file findings), with this structure and nothing else:
+`target.reportPath` (UTF-8) is assembled during Step 3 (header written first, findings as part files per batch, one concatenation at the end), with this structure and nothing else:
 
     # Code Review: <branch> → <baseBranch> | <YYYY-MM-DD> <HH:mm>
 
     ## <file path>
 
     - <emoji> **<Severity>**
-    - **Linia:** <N>
+    - **Linia:** <N | N, M, X-Y>
     - **Problem:** <description of this single violation>
     - **Reguła:** <instruction file → checklist item, or the violated point name>
     - **Expected Result:** <correct code state + concrete implementation proposal>
 
 - Staged header instead: `# Code Review: staged (<branch>) | <YYYY-MM-DD> <HH:mm>`.
+- Folder header instead: `# Code Review: folder <target.folder> (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Take the header date and time from the trailing `-YYYY-MM-DD-HH-mm` of `reportPath`, replacing the final dash of the time with `:` (e.g. `14-30` → `14:30`), so the header always matches the file name.
 - If `target.skipped` is non-empty, add directly under the header the single line:
   `Pominięto pliki wygenerowane/binarne: <paths, comma-separated>`.
@@ -145,11 +177,14 @@ unanalyzed file is not done, regardless of diff size or session length.
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
   (infinite dispatch loop, race condition, subscription leak, crash on null, stale UI) — and
   severity is picked from that consequence, not from the rule's category.
-- One finding = one such five-bullet block describing exactly one violation (Step 3 point 3);
-  the next violation — even of the same rule, even on the same line — is its own block.
+- One finding = one such five-bullet block = one rule in one file (Step 3 point 3): every
+  same-consequence occurrence of that rule shares the block through the `**Linia:**` list;
+  a different rule — even on the same line — is its own block, as is an occurrence with a
+  different consequence or severity.
   A blank line separates consecutive blocks and precedes every `##` header.
 - Each of the five fields is its own `- ` bullet line, in the order shown; a field never continues
-  on the previous field's line. `**Linia:**` holds one number or one `<start>-<end>` span.
+  on the previous field's line. `**Linia:**` holds a comma-separated list of numbers and/or
+  `<start>-<end>` spans — one entry per occurrence.
 - Group findings under one `## <file path>` section per file; omit files without findings.
   The cross-file pass may append a second section for an already-reported path — that is acceptable.
 - Expected Result describes ONLY the correct state of the code plus a concrete implementation proposal.

@@ -6,7 +6,7 @@ applies-to:
 ## Checklist
 - `changeDetection: ChangeDetectionStrategy.OnPush` is set — no exceptions.
 - Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one.
-- The `imports` array lists exactly what the template uses — nothing speculative.
+- The `imports` array matches the template exactly, verified in BOTH directions: every imported entry is used by the template (nothing speculative), AND every external symbol the template uses has its entry — component/directive selectors, pipe names, `[formControl]`/`formGroup` → `ReactiveFormsModule`, `[(ngModel)]` → `FormsModule`, `ngSrc` → `NgOptimizedImage`. A missing entry breaks the template at runtime — report from this consequence.
 - Injected fields are `private readonly _camelCase`; the field name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name. (`inject()`-only DI, the signal input/output API and `host: {}` bindings are governed by the global best-practices instruction.)
 - An input the component cannot render without is `input.required<T>()` — no `!` definite-assignment tricks and no fake defaults that mask a missing binding.
 - Every signal, `computed()`, enum/const alias and arrow-function field is `readonly`.

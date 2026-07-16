@@ -9,7 +9,7 @@ applies-to:
 - Canonical HTTP effect: `ofType → switchMap → service call → map(success) / catchError(fail)`; `catchError` sits **inside** the flattening operator and returns `of(failAction)` — outside it kills the stream after the first error.
 - Flattening operator choice: `switchMap` is the default (cancel previous); `mergeMap` for parallel bulk operations; `concatMap` when order is critical; `exhaustMap` to ignore repeat triggers until completion.
 - State lookups use `concatLatestFrom` from `@ngrx/operators` (never `withLatestFrom`); it may take an array of selectors and may call a payload-parameterized selector.
-- An effect that dispatches nothing declares `{ dispatch: false }` as the second `createEffect` argument.
+- An effect that dispatches nothing declares `{ dispatch: false }` as the second `createEffect` argument. Without it NgRx dispatches whatever the stream emits — and when that value is (or triggers) an action the effect's own `ofType` listens to, every emission re-triggers the effect: an infinite dispatch loop (report from this consequence, as High).
 - `tap` is only for side effects (alerts, events, closing dialogs, notifying shared services) and never changes stream data; related side effects share one `tap`; branching that picks the resulting action happens in `map`, with every branch returning an explicit action.
 - Effects triggered by cross-area/layout actions start with a `filter(...)` narrowing to their own area/step — otherwise every sibling area reacts to foreign events.
 - A `filter` after `concatLatestFrom` guards on state; when `0` is a valid value the check is an explicit `=== 0`/`!== null`, not truthiness.
