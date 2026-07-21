@@ -20,9 +20,15 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 ## Setup
 
 1. `SKILL_DIR` = this skill's base directory (given in the skill header). `PROJECT` = current working directory.
-2. `SESSION = <SKILL_DIR>/.implementNewFeature/<yyyyMMdd-HHmmss>` — create it.
-   All skill runtime files (sessions, `node_modules`, Playwright config) live inside `SKILL_DIR`,
-   never in the target project; the skill's own `.gitignore` already covers them.
+2. Pick the session root by whether the project already has a `.claude/` folder:
+   - `PROJECT/.claude/` exists → `SESSION = <PROJECT>/.claude/doh/<yyyyMMdd-HHmmss>`, and ensure
+     `<PROJECT>/.claude/doh/.gitignore` exists holding a single `*` line, so the run's artifacts
+     (reports, plan, screenshots, `auth.json`, `pipeline-state.json`) stay out of git and the final
+     `git add -A` never stages them.
+   - otherwise → `SESSION = <SKILL_DIR>/.implementNewFeature/<yyyyMMdd-HHmmss>` (the skill's own
+     `.gitignore` already covers it).
+   Create `SESSION`. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`,
+   never in the target project.
 3. Start the server (pick the script for the OS) and capture the port:
    - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
    - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`

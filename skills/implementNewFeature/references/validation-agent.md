@@ -42,7 +42,7 @@ PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `--data-bi
 
 ## Rules
 
-- NEVER `git commit`; never touch `.implementNewFeature/` except `checklist.md` and report files.
+- NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `checklist.md` and report files.
 - Credentials from `auth.json` stay secret: never hardcode them in test files (tests are committed),
   never print them in logs, reports or your final message — pass them only via env vars, set for
   the single test-run command (never exported into the persistent shell profile or written to
