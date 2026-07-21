@@ -280,6 +280,26 @@ function pruneReports(reportsDir, retain = REPORTS_RETAIN) {
   }
 }
 
+function isDirectory(p) {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// In project mode reports live inside the reviewed repo's `.claude/doh/`, a
+// folder also shared with the implementNewFeature skill (plans, screenshots,
+// auth.json, pipeline-state.json). Keep the whole folder out of git with a
+// catch-all .gitignore so nothing there is ever committed. Best-effort; a
+// pre-existing .gitignore is left untouched.
+function ensureDohGitignore(dohDir) {
+  const gi = path.join(dohDir, '.gitignore');
+  try {
+    if (!fs.existsSync(gi)) fs.writeFileSync(gi, '*\n');
+  } catch {}
+}
+
 function buildContext(options) {
   const project = path.resolve(options.project || process.cwd());
   const skillDir = options.skillDir || SKILL_DIR;
@@ -304,7 +324,14 @@ function buildContext(options) {
 
   const instructions = loadInstructions(path.join(skillDir, 'instructions'), 'review');
   const ts = formatTimestamp(now);
-  const reportsDir = path.join(skillDir, 'reports');
+  // When the reviewed project already has a `.claude/` folder, write reports
+  // into `<project>/.claude/doh/` (created on demand) instead of the skill's
+  // own `reports/` dir, so real projects collect their artifacts under doh.
+  const projectClaudeDir = path.join(project, '.claude');
+  const useProjectDoh = isDirectory(projectClaudeDir);
+  const reportsDir = useProjectDoh
+    ? path.join(projectClaudeDir, 'doh')
+    : path.join(skillDir, 'reports');
   const claudeMdPath = path.join(project, 'CLAUDE.md');
   result.globalInstructions = instructions.globals;
   result.claudeMd = fs.existsSync(claudeMdPath) ? claudeMdPath : null;
@@ -444,7 +471,10 @@ function buildContext(options) {
 
   if (result.targets.length > 0) {
     fs.mkdirSync(reportsDir, { recursive: true });
-    pruneReports(reportsDir);
+    // The project's own `.claude/doh/` is the user's to manage (and is shared
+    // with other artifacts) — never prune it; only cap the skill-local folder.
+    if (useProjectDoh) ensureDohGitignore(reportsDir);
+    else pruneReports(reportsDir);
   }
   return result;
 }

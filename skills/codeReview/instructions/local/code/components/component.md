@@ -25,6 +25,6 @@ applies-to:
 - No direct `document`/`window`/`ElementRef.nativeElement` DOM reads or writes in the constructor or `ngOnInit`; browser-only work (focus, measurement, third-party widget init) runs in `afterNextRender`/`afterEveryRender`.
 - `compareWith*` fields are readonly arrow functions, null-safe (`?.`), returning `boolean`.
 - A `dataTestPrefix` const is defined and used for `data-test` attributes on interactive elements.
-- The `dataTestPrefix` value is a stable descriptive name of the component, never the component selector — selectors may change and would break the test hooks.
+- The `dataTestPrefix` value is a stable, descriptive name of the component's role — never the component selector (selectors may change and would break the test hooks) and never carrying the `feature`/`ui` layer words; reusing a fragment of the selector is tolerated as an exception, not the standard.
 - Single `as Type` casts only where required; no double casting where a single cast suffices.
 - When an edit touches ≥30% of a component or the component is small (≤150 lines), the whole component is refactored to these rules.

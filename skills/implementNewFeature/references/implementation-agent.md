@@ -32,7 +32,7 @@ output is authoritative.
 ## Rules
 
 - Follow the project's existing architecture and conventions; readable code over clever code.
-- NEVER `git commit`, never change branch (you are already on the feature branch), never touch `.implementNewFeature/`.
+- NEVER `git commit`, never change branch (you are already on the feature branch), never write into `{{SESSION}}` or the skill's runtime folders.
 - Resolve blockers yourself. If a plan step is wrong or impossible, implement the minimal correct alternative and record it as a deviation.
 - Human checkpoints in the plan are replaced by progress reports.
 
