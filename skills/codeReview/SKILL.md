@@ -6,7 +6,9 @@ description: Use when the user wants an instruction-driven code review of git ch
 # codeReview — deterministic instruction-driven review
 
 You produce review REPORTS only.
-Never fix code, never commit, never checkout, never modify the reviewed project in any way.
+Never fix code, never commit, never checkout, never edit the reviewed project's files.
+Staged mode is the one exception to touching the repo at all: its context script runs `git add .`
+to stage every pending change before reviewing — the index only, never a commit or a file edit.
 
 Execute EVERY step of this skill yourself, in the current conversation.
 Never dispatch sub-agents (Agent/Task/Explore tools) for any part of the run — not one per branch, not one per file, not for large diffs, not to save context or time.
@@ -20,7 +22,8 @@ instruction gets evaluated, on every run. Violating the letter of these steps is
 1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = current working directory.
 2. Map the invocation arguments to the context script EXACTLY like this:
    - no arguments → `--mode=auto`
-   - the single word `staged` → `--mode=staged`
+   - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review
+     covers every pending change — working-tree edits and untracked files staged as one set)
    - the word `folder` followed by one path → `--mode=folder --path="<path>"` (reviews every
      file currently in that folder of the working tree, no diff needed)
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
@@ -156,7 +159,7 @@ unanalyzed file is not done, regardless of diff size or session length.
 
     ## <file path>
 
-    - <emoji> **<Severity>**
+    <emoji> **<Severity>**
     - **Linia:** <N | N, M, X-Y>
     - **Problem:** <description of this single violation>
     - **Reguła:** <instruction file → checklist item, or the violated point name>
@@ -177,14 +180,17 @@ unanalyzed file is not done, regardless of diff size or session length.
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
   (infinite dispatch loop, race condition, subscription leak, crash on null, stale UI) — and
   severity is picked from that consequence, not from the rule's category.
-- One finding = one such five-bullet block = one rule in one file (Step 3 point 3): every
+- One finding = one such block = one rule in one file (Step 3 point 3): every
   same-consequence occurrence of that rule shares the block through the `**Linia:**` list;
   a different rule — even on the same line — is its own block, as is an occurrence with a
   different consequence or severity.
-  A blank line separates consecutive blocks and precedes every `##` header.
-- Each of the five fields is its own `- ` bullet line, in the order shown; a field never continues
-  on the previous field's line. `**Linia:**` holds a comma-separated list of numbers and/or
-  `<start>-<end>` spans — one entry per occurrence.
+  Separate every block from the next with exactly one blank line, and put one blank line before AND
+  after every `##` header. The severity lead line below is what makes those blank lines render as
+  real vertical spacing in a preview, so each finding shows up as its own visually separated section.
+- The severity is a bold lead line — `<emoji> **<Severity>**` with NO leading `- ` — that opens the
+  block; the other four fields follow it as `- ` bullet lines in the order shown. Each field is its
+  own line and never continues on the previous field's line. `**Linia:**` holds a comma-separated
+  list of numbers and/or `<start>-<end>` spans — one entry per occurrence.
 - Group findings under one `## <file path>` section per file; omit files without findings.
   The cross-file pass may append a second section for an already-reported path — that is acceptable.
 - Expected Result describes ONLY the correct state of the code plus a concrete implementation proposal.

@@ -393,6 +393,14 @@ function buildContext(options) {
 
   if (options.mode === 'staged') {
     const branchName = tryGit(project, ['rev-parse', '--abbrev-ref', 'HEAD']) || 'HEAD';
+    // Stage every pending change first so `staged` reviews the whole working
+    // tree (tracked edits + untracked files), not just what was already in the
+    // index. This is the skill's only intended mutation of the repo, and it
+    // touches the index alone (never a commit or a file edit). Best-effort: a
+    // failure degrades to reviewing whatever is already staged.
+    if (tryGit(project, ['add', '.']) === null) {
+      result.warnings.push('Could not run `git add .`; the staged review covers only changes already in the index.');
+    }
     const { kept, skipped } = partition(parseNameStatus(tryGit(project, ['diff', '--cached', '--name-status']) || ''));
     result.targets.push({
       kind: 'staged',

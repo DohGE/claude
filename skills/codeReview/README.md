@@ -3,7 +3,7 @@
 Part of the `doh` plugin.
 Reviews git changes against instruction checklists and writes one concise Markdown report per reviewed branch.
 Reports are always written in Polish.
-Report-only: the skill never modifies the reviewed project.
+Report-only: the skill writes no code and makes no commits; the sole repo side effect is `git add .` in staged mode, which stages every pending change before reviewing it.
 Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
 Full coverage: every file in the diff and every checklist item of every matched instruction is evaluated on every run — the reviewer never skips files or rules; only the context script excludes generated/binary files.
 
@@ -12,7 +12,7 @@ Full coverage: every file in the diff and every checklist item of every matched 
 | Invocation | Scope |
 |---|---|
 | `/codeReview` | current branch vs its auto-detected base branch |
-| `/codeReview staged` | files currently staged in the git index |
+| `/codeReview staged` | all pending changes (runs `git add .` first, then reviews the git index) |
 | `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own auto-detected base; one report per branch |
 
 Reports land in `reports/` inside this skill, named `{branch}-{YYYY-MM-DD}-{HH-mm}.md` (staged variant: `{branch}-staged-{YYYY-MM-DD}-{HH-mm}.md`).
@@ -66,9 +66,10 @@ No usable candidate → the run stops with a clear error.
 Always Polish, findings only — no intros, summaries or closing remarks.
 Header line: `# Code Review: <branch> → <base> | <YYYY-MM-DD> <HH:mm>` (staged variant: `# Code Review: staged (<branch>) | ...`).
 One `## <file path>` section per file with findings.
-Each finding is one five-bullet block describing exactly one violation of one rule at one location — several violations never share a block, and every field starts on its own line:
+Each finding is one block describing exactly one violation of one rule at one location — several violations never share a block.
+The severity is a bold lead line; the other four fields follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
 
-    - 🔴 **High**
+    🔴 **High**
     - **Linia:** 87
     - **Problem:** Brak obsługi błędu HTTP w subskrypcji
     - **Reguła:** instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"
@@ -82,6 +83,6 @@ No findings → the report is the single line `Nie wykryto problemów.`; empty d
 ## Mechanics
 
 `scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, instruction matching, report paths and ready-to-run git commands.
-Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews read index content (`git show :path`).
+Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews first run `git add .`, then read index content (`git show :path`).
 
 Tests: `node --test skills/codeReview/scripts/review-context.test.cjs`
