@@ -2,7 +2,8 @@
 name: Angular & TypeScript best practices
 ---
 ## Checklist
-- Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.
+- Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.
+- Every variable of a non-primitive type carries an explicit type annotation — any `const`/`let` holding an object, array, interface/type or class instance is declared with its type (`const car: MyCar = {}`, `const items: Item[] = []`), never left to bare inference (`const car = {}`); only primitives (`string`/`number`/`boolean`) rely on inference.
 - Standalone components/directives/pipes only — no new `NgModule`s; `standalone: true` is never written explicitly (it is the framework default).
 - Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators or `@Input() set` accessors; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array.
 - Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction).
