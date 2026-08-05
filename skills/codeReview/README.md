@@ -6,6 +6,7 @@ Reports are always written in Polish.
 Report-only: the skill writes no code and makes no commits; the sole repo side effect is `git add .` in staged mode, which stages every pending change before reviewing it.
 Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
 Full coverage: every file in the diff and every checklist item of every matched instruction is evaluated on every run — the reviewer never skips files or rules; only the context script excludes generated/binary files.
+Reporting scope is narrower than coverage: only violations carried by the lines the diff touched are reported (see [Review scope](#review-scope)).
 
 ## Usage
 
@@ -28,7 +29,7 @@ Review rules live in two folders inside this skill (they start empty — add you
 - `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
 
 The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
-Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture and test coverage are covered by the dedicated global instruction files.
+Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, code quality (duplication, dead/unnecessary/boilerplate code, narrating comments, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.
 
 An instruction may declare `audience: implement|review|both` in its frontmatter (default `both`):
 `review`-audience files load only for this skill, `implement`-audience files only for the implementNewFeature coding rulebook (e.g. the developer persona in `guidelines.md`).
@@ -54,6 +55,15 @@ A local instruction without any `applies-to` pattern never matches and is report
 `**` matches any number of directories, `*` matches within one path segment, `?` matches a single character.
 Matching is case-sensitive, against `/`-separated paths relative to the repo root.
 Everything else is matched literally.
+
+## Review scope
+
+Everything is evaluated, but only what the change touched is reported:
+
+- A finding must be carried by a line of the file's `changedLines` — pre-existing violations on untouched lines are never reported, at any severity.
+- Added files (and every file in folder mode) have no diff, so their whole content is in scope.
+- Three carve-outs, each stating its link to the diff in `**Problem:**`: an obligation the changed lines create (missing spec case, missing teardown, missing required attribute), a regression the diff causes in untouched code, and the consequences of a deletion-only diff.
+- REST endpoint paths and their `endpoints` keys are out of scope — their wording, casing, versioning, segments, slashes and changes are never reported. The one exception is an absolute URL inside the value (protocol + domain, `localhost`, IP with a port), reported as a hard-coded base URL.
 
 ## Base branch detection
 

@@ -7,6 +7,7 @@ applies-to:
 ## Checklist
 - Specs live in a `tests/` folder next to the code under test; snapshots in `tests/__snapshots__/`.
 - Stack is Jest + ng-mocks; suites sharing a fixture/TestBed use `ngMocks.faster()` with setup in `beforeAll`.
+- `MockRender` is never called in `beforeEach` unless the tested functionality genuinely requires a fresh render for every case (each `it` asserting initialization behavior — an `ngOnInit` dispatch, a constructor `effect()`'s first run). The default is one shared render in `beforeAll`; a single test needing its own render creates a local `MockRender` inside that `it` and destroys it there. A `beforeEach` render that only re-does what `beforeAll` already did is a finding — it re-runs the whole component setup per test for nothing.
 - `afterEach` restores all shared state: `jest.clearAllMocks()`, every signal mutated inside tests reset to its initial value, selector overrides reset; data (re)established in `beforeEach` is reset in `beforeEach`, not undone in `afterEach`.
 - Named test constants (fixtures, mocks, datasets) are camelCase — never SCREAMING_SNAKE_CASE or PascalCase.
 - Variables holding an injected dependency (mock, spy, `TestBed.inject(...)` result) use the full descriptive name derived from the dependency type (keeping the feature/area part of the class name), never shortened to a generic role name.
