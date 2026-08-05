@@ -3,16 +3,17 @@
 Part of the `doh` plugin.
 Reviews git changes against instruction checklists and writes one concise Markdown report per reviewed branch.
 Reports are always written in Polish.
-Report-only: the skill never modifies the reviewed project.
+Report-only: the skill writes no code and makes no commits; the sole repo side effect is `git add .` in staged mode, which stages every pending change before reviewing it.
 Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
 Full coverage: every file in the diff and every checklist item of every matched instruction is evaluated on every run — the reviewer never skips files or rules; only the context script excludes generated/binary files.
+Reporting scope is narrower than coverage: only violations carried by the lines the diff touched are reported (see [Review scope](#review-scope)).
 
 ## Usage
 
 | Invocation | Scope |
 |---|---|
 | `/codeReview` | current branch vs its auto-detected base branch |
-| `/codeReview staged` | files currently staged in the git index |
+| `/codeReview staged` | all pending changes (runs `git add .` first, then reviews the git index) |
 | `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own auto-detected base; one report per branch |
 
 Reports land in `reports/` inside this skill, named `{branch}-{YYYY-MM-DD}-{HH-mm}.md` (staged variant: `{branch}-staged-{YYYY-MM-DD}-{HH-mm}.md`).
@@ -28,7 +29,7 @@ Review rules live in two folders inside this skill (they start empty — add you
 - `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
 
 The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
-Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture and test coverage are covered by the dedicated global instruction files.
+Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, code quality (duplication, dead/unnecessary/boilerplate code, narrating comments, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.
 
 An instruction may declare `audience: implement|review|both` in its frontmatter (default `both`):
 `review`-audience files load only for this skill, `implement`-audience files only for the implementNewFeature coding rulebook (e.g. the developer persona in `guidelines.md`).
@@ -55,6 +56,15 @@ A local instruction without any `applies-to` pattern never matches and is report
 Matching is case-sensitive, against `/`-separated paths relative to the repo root.
 Everything else is matched literally.
 
+## Review scope
+
+Everything is evaluated, but only what the change touched is reported:
+
+- A finding must be carried by a line of the file's `changedLines` — pre-existing violations on untouched lines are never reported, at any severity.
+- Added files (and every file in folder mode) have no diff, so their whole content is in scope.
+- Three carve-outs, each stating its link to the diff in `**Problem:**`: an obligation the changed lines create (missing spec case, missing teardown, missing required attribute), a regression the diff causes in untouched code, and the consequences of a deletion-only diff.
+- REST endpoint paths and their `endpoints` keys are out of scope — their wording, casing, versioning, segments, slashes and changes are never reported. The one exception is an absolute URL inside the value (protocol + domain, `localhost`, IP with a port), reported as a hard-coded base URL.
+
 ## Base branch detection
 
 Deterministic candidate order: the branch pointed to by `origin/HEAD`, then `main`, `master`, `develop`, `dev` — keeping only candidates that exist locally or as `origin/<name>`, excluding the reviewed branch itself.
@@ -66,9 +76,10 @@ No usable candidate → the run stops with a clear error.
 Always Polish, findings only — no intros, summaries or closing remarks.
 Header line: `# Code Review: <branch> → <base> | <YYYY-MM-DD> <HH:mm>` (staged variant: `# Code Review: staged (<branch>) | ...`).
 One `## <file path>` section per file with findings.
-Each finding is one five-bullet block describing exactly one violation of one rule at one location — several violations never share a block, and every field starts on its own line:
+Each finding is one block describing exactly one violation of one rule at one location — several violations never share a block.
+The severity is a bold lead line; the other four fields follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
 
-    - 🔴 **High**
+    🔴 **High**
     - **Linia:** 87
     - **Problem:** Brak obsługi błędu HTTP w subskrypcji
     - **Reguła:** instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"
@@ -82,6 +93,6 @@ No findings → the report is the single line `Nie wykryto problemów.`; empty d
 ## Mechanics
 
 `scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, instruction matching, report paths and ready-to-run git commands.
-Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews read index content (`git show :path`).
+Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews first run `git add .`, then read index content (`git show :path`).
 
 Tests: `node --test skills/codeReview/scripts/review-context.test.cjs`

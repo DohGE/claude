@@ -7,11 +7,13 @@ applies-to:
 ## Checklist
 - Specs live in a `tests/` folder next to the code under test; snapshots in `tests/__snapshots__/`.
 - Stack is Jest + ng-mocks; suites sharing a fixture/TestBed use `ngMocks.faster()` with setup in `beforeAll`.
+- `MockRender` is never called in `beforeEach` unless the tested functionality genuinely requires a fresh render for every case (each `it` asserting initialization behavior — an `ngOnInit` dispatch, a constructor `effect()`'s first run). The default is one shared render in `beforeAll`; a single test needing its own render creates a local `MockRender` inside that `it` and destroys it there. A `beforeEach` render that only re-does what `beforeAll` already did is a finding — it re-runs the whole component setup per test for nothing.
 - `afterEach` restores all shared state: `jest.clearAllMocks()`, every signal mutated inside tests reset to its initial value, selector overrides reset; data (re)established in `beforeEach` is reset in `beforeEach`, not undone in `afterEach`.
 - Named test constants (fixtures, mocks, datasets) are camelCase — never SCREAMING_SNAKE_CASE or PascalCase.
 - Variables holding an injected dependency (mock, spy, `TestBed.inject(...)` result) use the full descriptive name derived from the dependency type (keeping the feature/area part of the class name), never shortened to a generic role name.
 - A dependency mock/stub is typed with `satisfies SomeService` rather than a type cast (`as SomeService`) or `Partial<SomeService>`, so the mock is checked against the real contract while keeping its literal shape.
 - `it.each(...)` datasets live in a named const, not an inline array.
+- Every `describe` title is either the exact code identifier under test — matching its real casing (`describe('myFunction')`, `describe('UserPanelFacade')`) — or a descriptive phrase whose first word is capitalized (`describe('Tests for myFunction')`); a descriptive title never starts with a lowercase word (`describe('tests for myFunction')`).
 - Every `it` description starts with `should` and states the expected behavior (e.g. `it('should return an empty list when the request fails')`); `it.each` description templates follow the same rule.
 - Fixtures are complete objects of their domain type; `{} as X` is acceptable only when the code under test never reads the payload's fields.
 - The same test data is never duplicated across cases: define a shared object/dataset once and reuse it directly when the data is identical, or derive near-identical variants from it with the spread operator (`{ ...baseFixture, changedField: value }`) — never hand-write a second copy of an equivalent literal.

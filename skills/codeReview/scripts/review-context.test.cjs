@@ -333,6 +333,28 @@ test('staged mode lists index files with index show commands', (t) => {
   assert.strictEqual(ctx.claudeMd, path.join(dir, 'CLAUDE.md'));
 });
 
+test('staged mode runs git add . so pending changes are staged and reviewed', (t) => {
+  const dir = makeRepo(t);
+  // untracked file — never `git add`ed by the test
+  fs.writeFileSync(path.join(dir, 'untracked.ts'), 'const u = 1;\n');
+  // tracked file modified in the working tree only — left unstaged
+  fs.writeFileSync(path.join(dir, 'README.md'), '# repo\nunstaged edit\n');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({ mode: 'staged', project: dir, skillDir, now: new Date(2026, 6, 8, 14, 30) });
+  assert.strictEqual(ctx.targets.length, 1);
+  const t0 = ctx.targets[0];
+  assert.strictEqual(t0.kind, 'staged');
+  const untracked = t0.files.find((f) => f.path === 'untracked.ts');
+  assert.ok(untracked, 'git add . stages untracked files before the review');
+  assert.strictEqual(untracked.status, 'A');
+  const readme = t0.files.find((f) => f.path === 'README.md');
+  assert.ok(readme, 'git add . stages working-tree modifications before the review');
+  assert.strictEqual(readme.status, 'M');
+  // the staging is a real side effect on the repo's index, not just the report
+  const indexed = rc.git(dir, ['diff', '--cached', '--name-only']).split('\n').filter(Boolean).sort();
+  assert.deepStrictEqual(indexed, ['README.md', 'untracked.ts']);
+});
+
 test('generated and binary files are skipped and listed per target', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/skip']);

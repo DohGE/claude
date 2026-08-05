@@ -7,8 +7,8 @@ applies-to:
 ## Checklist
 - The service is a thin HTTP layer — the only place in the area executing REST requests — injected **exclusively by effects**; never used by components, facades, reducers or selectors.
 - File is `<area>/data-access/services/<area>.service.ts`; class `<PascalCaseArea>Service` with `@Injectable({ providedIn: 'root' })`.
-- A module-level, non-exported `const endpoints = {...}` holds every URL: short camelCase keys; static paths as strings; dynamic paths as functions with typed parameters returning template literals; URL interpolation happens **only** inside `endpoints`.
-- No hard-coded base URL and no leading slash — paths are relative and the dev proxy decides the target; the real backend path is kept as-is (a uniform prefix is not forced).
+- A module-level, non-exported `const endpoints = {...}` holds every URL: static paths as strings; dynamic paths as functions with typed parameters returning template literals; URL interpolation happens **only** inside `endpoints`. The keys are short and camelCase — but like the paths themselves, their naming is out of review scope and is never reported.
+- No hard-coded base URL: an endpoint value never carries a protocol + domain (`https://api.example.com/...`), `localhost` or an IP with a port — paths stay relative and the dev proxy decides the target. The path text itself is out of review scope: its segments, wording, casing, versioning, leading/trailing slash, key name and any change to it are never reported (the backend contract owns them); the real backend path is kept as-is, a uniform prefix is not forced.
 - `HttpClient` is injected as `private readonly _http = inject(HttpClient)` in new services (legacy constructor injection is tolerated until refactor).
 - Every method returns an explicit `Observable<DTO>` straight from a typed `_http.<verb><T>(...)` call; arguments are typed with DTO interfaces from `models/`.
 - No `.pipe(...)`, `map`, `tap`, `catchError` or `subscribe()` in methods — mapping belongs to reducers/selectors, error handling to effects (the only tolerated exception, justified in the PR, is unwrapping an internal `{ data, meta }` envelope).

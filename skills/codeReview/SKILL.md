@@ -6,7 +6,9 @@ description: Use when the user wants an instruction-driven code review of git ch
 # codeReview — deterministic instruction-driven review
 
 You produce review REPORTS only.
-Never fix code, never commit, never checkout, never modify the reviewed project in any way.
+Never fix code, never commit, never checkout, never edit the reviewed project's files.
+Staged mode is the one exception to touching the repo at all: its context script runs `git add .`
+to stage every pending change before reviewing — the index only, never a commit or a file edit.
 
 Execute EVERY step of this skill yourself, in the current conversation.
 Never dispatch sub-agents (Agent/Task/Explore tools) for any part of the run — not one per branch, not one per file, not for large diffs, not to save context or time.
@@ -14,13 +16,16 @@ Multiple targets are reviewed by you sequentially, one after another.
 
 Coverage is non-negotiable: every file of every target and every checklist item of every applicable
 instruction gets evaluated, on every run. Violating the letter of these steps is violating their spirit.
+Coverage and reporting scope are two different things: everything is evaluated, but only violations the
+diff itself touched are reported (Step 3 scope gate).
 
 ## Step 1 — Build the review context
 
 1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = current working directory.
 2. Map the invocation arguments to the context script EXACTLY like this:
    - no arguments → `--mode=auto`
-   - the single word `staged` → `--mode=staged`
+   - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review
+     covers every pending change — working-tree edits and untracked files staged as one set)
    - the word `folder` followed by one path → `--mode=folder --path="<path>"` (reviews every
      file currently in that folder of the working tree, no diff needed)
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
@@ -44,6 +49,28 @@ instruction gets evaluated, on every run. Violating the letter of these steps is
 Never skip or skim any of these files — they are the review rulebook.
 
 ## Step 3 — Analyze (per target, per file) and write findings as you go
+
+**Scope gate — only what the diff touched.** Coverage is unchanged (every file, every checklist item);
+what shrinks is what may be REPORTED. A finding exists only when the violation is carried by a line of
+that file's `changedLines` — the diff added that line or modified it. A pre-existing violation on an
+untouched line is never a finding: not at any severity, not even when the same rule is violated on a
+changed line elsewhere in the same file, and never as a proposal to refactor code the diff left alone.
+Four narrow carve-outs, each of which must state its link to the diff in `**Problem:**`:
+- `changedLines: null` (status `A`, and every file in folder mode) — the whole file is in scope, every line counts as changed;
+- an obligation the changed lines create — the diff adds a construct whose required companion is
+  missing (a new handler/branch/action without its spec case, a new subscription without teardown, a
+  missing fail action completing a trio, a new interactive element without its required attribute):
+  reported, citing the changed line that creates the obligation;
+- a regression the diff causes in untouched code (a renamed field its old readers still use, a removed
+  guard something still relies on) — cited at the untouched line, naming the change that breaks it;
+- a deletion-only diff (`changedLines` is `""`, or status `D`) — only consequences of the removal itself.
+
+**Endpoint names are out of scope.** Never report the wording, spelling, casing, versioning, path
+segments, leading/trailing slashes, key names or CHANGES of REST endpoint paths and their `endpoints`
+constants — the backend contract decides them, not this review. The one exception is an absolute URL
+inside the value: protocol + domain (`https://api.example.com/...`), `localhost`, or an IP with a port —
+that is reported as a hard-coded environment/base URL. Everything else about such a file (typing,
+method naming, layering, `.pipe(...)` usage, secrets in query params) stays reviewable as usual.
 
 Write the report header (Step 4 format) to `target.reportPath` first. Then process EVERY file in
 `target.files`, one at a time, in the listed order. The script has already excluded everything
@@ -96,11 +123,13 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      completing a trio, a matching spec...). Scanning never finds an absence: a requirement's PASS
      verdict is reached only by pointing at the exact code that satisfies it, and a requirement
      nothing satisfies is a finding.
-   Four rule families are historically under-reported; check them deliberately for every file their
+   Five rule families are historically under-reported; check them deliberately for every file their
    instructions match, even when the diff looks unrelated (they stay defined ONLY by their
    instruction files — never re-derive them from memory):
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
    - naming rules (general instruction) plus naming consistency across the diff;
+   - code-quality rules (code-quality instruction): duplicated, unnecessary, unused and boilerplate
+     code, functionality-narrating comments, inconsistency — full 🟡 Medium findings, never nits to skip;
    - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction);
    - test scaffolding rules (unit-tests instruction plus the matching per-type test instruction):
      spec and snapshot location, the prescribed setup instead of TestBed/MockStore, `ngMocks.faster()`
@@ -117,8 +146,9 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    Every listed line number is determined at the moment of writing it: locate the offending code
    in the `cat -n` output and cite the number printed there — never diff hunk numbering, never an
    estimate from memory. Each occurrence contributes one number, or one `<start>-<end>` span when
-   that single occurrence spans contiguous lines. Cross-check against `changedLines`: a finding
-   whose lines lie outside them must state in its description how the diff causes the problem there.
+   that single occurrence spans contiguous lines. Cross-check every finding against `changedLines`
+   and the scope gate: lines outside `changedLines` are reportable only under one of the gate's four
+   carve-outs, and the description must state the link to the diff; otherwise the finding is dropped.
 4. Persist findings per fetch batch, not per file and never all at the end: when the last file of
    the current batch (point 1) is analyzed, write the batch's findings sections — every file of
    the batch, in listed order — as the next sequential part file
@@ -128,7 +158,8 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
 After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as the
 final part file. Answer each of these four questions explicitly, against the diff as a whole:
 1. Duplication drift — is the same logic, formatting or literal implemented in two or more places
-   of this diff, or re-implemented next to an existing shared util? Report every copy.
+   of this diff, or re-implemented next to an existing shared util? Report every copy the diff adds,
+   under the code-quality instruction (🟡 Medium).
 2. Layering — walk the import ledger collected in point 1 of the per-file pass, edge by edge: name
    the layer of the importing file and of the imported module, check the edge's direction against
    the architecture instruction, and report each forbidden edge at the importing file. "No layering
@@ -138,7 +169,8 @@ final part file. Answer each of these four questions explicitly, against the dif
    computable from other state? Report every station of the flow (the action, the reducer field,
    the dispatching component), each under its own instruction.
 4. Naming consistency — the same concept named differently across the diff's files, or one name
-   reused for different concepts.
+   reused for different concepts; reported under the code-quality instruction (🟡 Medium), while a
+   plain naming-convention breach stays a general-instruction finding.
 
 Assemble the report: append every part file to `target.reportPath` (which already holds the
 header) and remove the parts, in ONE Bash call:
@@ -156,7 +188,7 @@ unanalyzed file is not done, regardless of diff size or session length.
 
     ## <file path>
 
-    - <emoji> **<Severity>**
+    <emoji> **<Severity>**
     - **Linia:** <N | N, M, X-Y>
     - **Problem:** <description of this single violation>
     - **Reguła:** <instruction file → checklist item, or the violated point name>
@@ -171,20 +203,23 @@ unanalyzed file is not done, regardless of diff size or session length.
 - Assign severity by these criteria, picking the highest that applies:
   - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
   - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification).
-  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation.
-  - ⚪ **Low** — readability, naming, style, redundant code, convention drift with no behavioral impact.
+  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every code-quality finding (duplicated, unnecessary, unused or boilerplate code, functionality-narrating comment, inconsistency) — those stay Medium however cosmetic they look.
+  - ⚪ **Low** — readability, naming-convention or style drift with no behavioral impact and not covered by the code-quality instruction.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
   (infinite dispatch loop, race condition, subscription leak, crash on null, stale UI) — and
   severity is picked from that consequence, not from the rule's category.
-- One finding = one such five-bullet block = one rule in one file (Step 3 point 3): every
+- One finding = one such block = one rule in one file (Step 3 point 3): every
   same-consequence occurrence of that rule shares the block through the `**Linia:**` list;
   a different rule — even on the same line — is its own block, as is an occurrence with a
   different consequence or severity.
-  A blank line separates consecutive blocks and precedes every `##` header.
-- Each of the five fields is its own `- ` bullet line, in the order shown; a field never continues
-  on the previous field's line. `**Linia:**` holds a comma-separated list of numbers and/or
-  `<start>-<end>` spans — one entry per occurrence.
+  Separate every block from the next with exactly one blank line, and put one blank line before AND
+  after every `##` header. The severity lead line below is what makes those blank lines render as
+  real vertical spacing in a preview, so each finding shows up as its own visually separated section.
+- The severity is a bold lead line — `<emoji> **<Severity>**` with NO leading `- ` — that opens the
+  block; the other four fields follow it as `- ` bullet lines in the order shown. Each field is its
+  own line and never continues on the previous field's line. `**Linia:**` holds a comma-separated
+  list of numbers and/or `<start>-<end>` spans — one entry per occurrence.
 - Group findings under one `## <file path>` section per file; omit files without findings.
   The cross-file pass may append a second section for an already-reported path — that is acceptable.
 - Expected Result describes ONLY the correct state of the code plus a concrete implementation proposal.
