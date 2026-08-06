@@ -8,6 +8,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 // Order is the display order and the sort rank of the flat global list.
 // `missing-unit-test` sorts last: it is orthogonal to the severity ladder, and
@@ -33,9 +34,13 @@ const reHeader = /^#\s+(.+?)\s+\|\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*$/;
 const reSection = /^##\s+(.+?)\s*$/;
 const reSeverity = /^(?:-\s+)?(⚪|🟡|🔴|🟤|🔵)\uFE0F?\s*\*\*(.+?)\*\*\s*$/;
 const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result):\*\*\s?(.*)$/;
+// What a bare instruction reference - or the violated point's name, which Step 4
+// allows instead - may consist of. Quotes, backticks and brackets, or anything
+// longer than a name, mean the arrow belongs to quoted rule text.
+const reInstructionName = /^[\p{L}\p{N} ,._/-]{1,40}$/u;
 
 function parseArgs(argv) {
-  const args = { report: '', out: '', keepSource: false };
+  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false };
   for (const arg of argv) {
     if (arg === '--keep-source') {
       args.keepSource = true;
@@ -45,10 +50,25 @@ function parseArgs(argv) {
     if (!m) continue;
     if (m[1] === 'report') args.report = m[2];
     else if (m[1] === 'out') args.out = m[2];
+    else if (m[1] === 'project') args.project = m[2];
+    else if (m[1] === 'mode') args.mode = m[2];
+    else if (m[1] === 'base') args.base = m[2];
+    else if (m[1] === 'branch') args.branch = m[2];
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.md").');
   if (!args.out) args.out = args.report.replace(/\.md$/i, '') + '.html';
   return args;
+}
+
+// Code snippets are read from the working tree, so the renderer needs the root
+// the report's paths are relative to. Reports live in `<project>/.claude/doh/
+// <branch>/`, which makes the root recoverable when `--project` is absent.
+function projectRootFor(reportPath, explicit) {
+  if (explicit) return path.resolve(explicit);
+  const parts = path.resolve(path.dirname(reportPath)).split(path.sep);
+  const at = parts.lastIndexOf('.claude');
+  if (at > 0 && parts[at + 1] === 'doh') return parts.slice(0, at).join(path.sep);
+  return process.cwd();
 }
 
 // A bare left side may name several instructions (`component/performance`), but
@@ -83,9 +103,21 @@ function parseRuleField(value) {
     // or bare (`state-interface`), and Step 4 also allows the violated point's
     // name instead. Explicit `.md` tokens win - they survive a path prefix and
     // pick several files out of one segment.
-    const explicit = left.match(/[A-Za-z0-9._-]+\.md/g);
-    const names = explicit || splitInstructionNames(left);
-    for (const file of names.length ? names : [noFileLabel]) tags.push({ file, rule });
+    const explicit = left.match(/[A-Za-z0-9._+-]+\.md/g);
+    const trimmedLeft = left.trim();
+    let names;
+    if (explicit) names = explicit;
+    else if (!trimmedLeft) names = [noFileLabel];
+    else if (reInstructionName.test(trimmedLeft)) names = splitInstructionNames(left);
+    else names = [];
+    if (!names.length) {
+      // The arrow belongs to the rule text: a quoted checklist item may contain
+      // one, and a `;` in front of it must not turn that quote into a file.
+      if (tags.length) tags[tags.length - 1].rule += `; ${segment}`;
+      else tags.push({ file: noFileLabel, rule: segment.trim() });
+      continue;
+    }
+    for (const file of names) tags.push({ file, rule });
   }
   return tags.filter((tag, i) => tags.findIndex((t) => t.file === tag.file && t.rule === tag.rule) === i);
 }
@@ -227,6 +259,221 @@ function plural(n, one, few, many) {
 // The page filters on tag keys rather than on (file, rule) strings, so the
 // browser never has to join or split anything. Counts are recomputed there -
 // they have to react to ignoring - so only the structure is emitted here.
+const snippetContext = 3;
+const maxSourceBytes = 2 * 1024 * 1024;
+
+// `**Linia:**` is a comma-separated list of numbers and `start-end` spans; any
+// piece that is not one of those (a note, a stray word) is dropped rather than
+// guessed at.
+function parseLineRanges(value) {
+  const ranges = [];
+  for (const piece of String(value || '').split(',')) {
+    const m = piece.trim().match(/^(\d+)(?:\s*[-–]\s*(\d+))?$/);
+    if (!m) continue;
+    const start = Number(m[1]);
+    const end = m[2] ? Number(m[2]) : start;
+    if (start < 1 || end < start) continue;
+    ranges.push({ start, end });
+  }
+  return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+// One hunk per cited place: the lines themselves plus a few lines of context,
+// merged when the windows touch so the view never hides less than the gap
+// marker announcing it. With a diff in hand the rows also carry their diff
+// kind, which is what turns the view into a real +/- diff.
+function buildSnippet(sourceLines, linesField, diff) {
+  const ranges = parseLineRanges(linesField).filter((range) => range.start <= sourceLines.length);
+  if (!ranges.length) return null;
+  const hit = new Set();
+  const windows = [];
+  for (const range of ranges) {
+    const end = Math.min(range.end, sourceLines.length);
+    for (let n = range.start; n <= end; n++) hit.add(n);
+    const from = Math.max(1, range.start - snippetContext);
+    const to = Math.min(sourceLines.length, end + snippetContext);
+    const last = windows[windows.length - 1];
+    if (last && from <= last.to + 1) last.to = Math.max(last.to, to);
+    else windows.push({ from, to });
+  }
+  // A cited range is shown whole, however long: a finding that spans a file is
+  // exactly the one whose code the reader needs in full.
+  const hunks = [];
+  const removedBefore = (n) => (diff && diff.removed.get(n)) || [];
+  for (const window of windows) {
+    const rows = [];
+    for (let n = window.from; n <= window.to; n++) {
+      for (const text of removedBefore(n)) rows.push({ n: null, text, kind: 'del', hit: false });
+      const kind = diff && diff.added.has(n) ? 'add' : 'ctx';
+      rows.push({ n, text: sourceLines[n - 1], kind, hit: hit.has(n) });
+    }
+    // Lines dropped at the very end of the file are anchored past the last one,
+    // where the loop above can no longer reach them.
+    if (window.to === sourceLines.length) {
+      for (const text of removedBefore(sourceLines.length + 1)) rows.push({ n: null, text, kind: 'del', hit: false });
+    }
+    hunks.push({ lines: rows });
+  }
+  return hunks.length ? { hunks } : null;
+}
+
+// A trailing newline ends the last line, it does not start another one, and
+// `cat -n` - the numbering every report cites - counts it exactly that way.
+function withoutTrailingBlank(lines) {
+  return lines.length && lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines;
+}
+
+function gitText(root, args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: root, encoding: 'utf8', maxBuffer: maxSourceBytes, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch (err) {
+    return null;
+  }
+}
+
+// Same fallback as the context script: a branch reviewed from a remote-only ref
+// is still named without the `origin/` prefix in the report.
+function resolveRef(root, name) {
+  if (!name) return '';
+  if (gitText(root, ['rev-parse', '--verify', '--quiet', name]) !== null) return name;
+  if (gitText(root, ['rev-parse', '--verify', '--quiet', `origin/${name}`]) !== null) return `origin/${name}`;
+  return name;
+}
+
+// `git diff -U0` states the change exactly: `@@ -a,b +c,d @@` removed old lines
+// a..a+b-1 and added new lines c..c+d-1, with no context lines in between. The
+// report cites new-file numbers, so additions are keyed by their new number and
+// removals are anchored to the new line they sit in front of.
+function parseDiff(diffText) {
+  if (!diffText) return null;
+  const added = new Set();
+  const removed = new Map();
+  let cursor = 0;
+  let anchor = 0;
+  for (const line of String(diffText).split(/\r?\n/)) {
+    const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (hunk) {
+      const start = Number(hunk[1]);
+      const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      cursor = start;
+      // A deletion-only hunk names the new line it happened *after*, so its
+      // removals belong in front of the next one.
+      anchor = count === 0 ? start + 1 : start;
+      continue;
+    }
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('+')) {
+      added.add(cursor);
+      cursor++;
+    } else if (line.startsWith('-')) {
+      if (!removed.has(anchor)) removed.set(anchor, []);
+      removed.get(anchor).push(line.slice(1));
+    }
+  }
+  return added.size || removed.size ? { added, removed } : null;
+}
+
+// Branch and staged reviews are written against the reviewed revision, not the
+// working tree, so a snippet reads the very content the review saw.
+function sourceReader(projectRoot, source) {
+  const root = path.resolve(projectRoot);
+  const mode = source && source.mode;
+  const ref = mode === 'branch' ? resolveRef(root, source.branch) : '';
+  const cache = new Map();
+  const fromGit = (filePath) => {
+    if (mode === 'branch' && ref) return gitText(root, ['show', `${ref}:${filePath}`]);
+    if (mode === 'staged') return gitText(root, ['show', `:${filePath}`]);
+    return null;
+  };
+  const fromDisk = (filePath) => {
+    const full = path.resolve(root, filePath);
+    // Section headers are report text, so a path is only read once it is proven
+    // to stay inside the reviewed project.
+    if (full !== root && !full.startsWith(root + path.sep)) return null;
+    const stat = fs.statSync(full);
+    if (!stat.isFile() || stat.size > maxSourceBytes) return null;
+    return fs.readFileSync(full, 'utf8');
+  };
+  return (filePath) => {
+    if (cache.has(filePath)) return cache.get(filePath);
+    let lines = null;
+    try {
+      const text = fromGit(filePath) ?? fromDisk(filePath);
+      if (text !== null && text.indexOf(String.fromCharCode(0)) === -1) lines = withoutTrailingBlank(text.split(/\r?\n/));
+    } catch (err) {
+      lines = null;
+    }
+    cache.set(filePath, lines);
+    return lines;
+  };
+}
+
+function ghText(root, args) {
+  try {
+    return execFileSync('gh', args, {
+      cwd: root, encoding: 'utf8', timeout: 15000, maxBuffer: maxSourceBytes, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch (err) {
+    return null;
+  }
+}
+
+// A file:// page has no credentials, so GitHub is asked here, once: the page
+// only learns whether a PR exists and what command posts the comments to it.
+function detectPullRequest(projectRoot, branch) {
+  if (!branch) return null;
+  const out = ghText(projectRoot, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url', '--limit', '1']);
+  if (!out) return null;
+  try {
+    const list = JSON.parse(out);
+    return list.length ? { number: list[0].number, url: list[0].url } : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function postCommandFor(projectRoot, outPath) {
+  const script = path.join(__dirname, 'post-pr-comments.cjs').replace(/\\/g, '/');
+  return `node "${script}" --report="${path.resolve(outPath).replace(/\\/g, '/')}" --project="${projectRoot.replace(/\\/g, '/')}"`;
+}
+
+function diffReader(projectRoot, source) {
+  const root = path.resolve(projectRoot);
+  const mode = source && source.mode;
+  const ref = mode === 'branch' ? resolveRef(root, source.branch) : '';
+  const cache = new Map();
+  const argsFor = (filePath) => {
+    if (mode === 'branch' && ref && source.base) return ['diff', '-U0', `${source.base}...${ref}`, '--', filePath];
+    if (mode === 'staged') return ['diff', '-U0', '--cached', '--', filePath];
+    // Folder reviews have no diff at all: their snippets stay a plain file view.
+    return null;
+  };
+  return (filePath) => {
+    if (cache.has(filePath)) return cache.get(filePath);
+    const args = argsFor(filePath);
+    const diff = args ? parseDiff(gitText(root, args)) : null;
+    cache.set(filePath, diff);
+    return diff;
+  };
+}
+
+// A file that moved, vanished or is binary simply renders without a snippet -
+// the finding itself stays intact.
+function attachSnippets(report, projectRoot, source) {
+  const read = sourceReader(projectRoot, source);
+  const readDiff = diffReader(projectRoot, source);
+  for (const file of report.files) {
+    const lines = read(file.path);
+    const diff = lines ? readDiff(file.path) : null;
+    for (const finding of file.findings) {
+      finding.snippet = lines ? buildSnippet(lines, finding.lines, diff) : null;
+    }
+  }
+  return report;
+}
+
 function buildPayload(report, reportName) {
   const allFindings = report.files.flatMap((file) => file.findings);
   const groups = new Map();
@@ -262,6 +509,8 @@ function buildPayload(report, reportName) {
     skipped: report.skipped,
     emptyState: report.emptyState,
     reportName,
+    pr: report.pr || null,
+    postCommand: report.postCommand || '',
     severities: severities
       .filter((s) => allFindings.some((f) => f.severity === s.key))
       .map(({ key, label, emoji }) => ({ key, label, emoji })),
@@ -275,6 +524,7 @@ function buildPayload(report, reportName) {
         problem: finding.problem,
         rule: finding.rule,
         expected: finding.expected,
+        snippet: finding.snippet || null,
         tagKeys: finding.tags.map((tag) => keyOf.get(`${tag.file}\n${tag.rule}`)),
       })),
     })),
@@ -286,14 +536,20 @@ const pageCss = `
 :root{color-scheme:light dark;
   --bg:#f5f6f8;--panel:#fff;--panel-2:#fafbfc;--text:#1b1e23;--muted:#68707c;--border:#dee2e7;
   --accent:#2563eb;--code-bg:#eceff3;--shadow:0 1px 2px rgba(16,22,32,.06);
-  --sev-critical:#8a5a2b;--sev-high:#c0392b;--sev-medium:#b0761a;--sev-low:#78808d;--sev-missing-unit-test:#2563eb}
+  --sev-critical:#8a5a2b;--sev-high:#c0392b;--sev-medium:#b0761a;--sev-low:#78808d;--sev-missing-unit-test:#2563eb;
+  --snip-bg:#fbfcfd;--snip-gutter:#f1f3f6;--hit-bg:#fff6d9;--hit-gutter:#ffeeb8;
+  --add-bg:#e6ffec;--add-fg:#1a7f37;--del-bg:#ffebe9;--del-fg:#cf222e}
 @media (prefers-color-scheme:dark){:root{
   --bg:#141619;--panel:#1c1f24;--panel-2:#22262c;--text:#e5e8ec;--muted:#98a1ac;--border:#2f343b;
   --accent:#6ea8fe;--code-bg:#282d34;--shadow:none;
-  --sev-critical:#c58f59;--sev-high:#f0736a;--sev-medium:#e0b341;--sev-low:#98a2b0;--sev-missing-unit-test:#6ea8fe}}
+  --sev-critical:#c58f59;--sev-high:#f0736a;--sev-medium:#e0b341;--sev-low:#98a2b0;--sev-missing-unit-test:#6ea8fe;
+  --snip-bg:#181b1f;--snip-gutter:#1f2329;--hit-bg:#3a3320;--hit-gutter:#463c22;
+  --add-bg:#12261e;--add-fg:#3fb950;--del-bg:#2d1618;--del-fg:#f85149}}
 body{margin:0;background:var(--bg);color:var(--text);
   font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
-.wrap{max-width:1180px;margin:0 auto;padding:0 20px 72px}
+.wrap{max-width:1600px;margin:0 auto;padding:0 20px 72px}
+.cols{display:grid;grid-template-columns:490px minmax(0,1fr);gap:20px;align-items:start}
+.cols-plain{grid-template-columns:minmax(0,1fr)}
 code{font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:.88em;
   background:var(--code-bg);border-radius:4px;padding:.1em .35em;overflow-wrap:anywhere}
 button{font:inherit;color:inherit}
@@ -303,14 +559,18 @@ button{font:inherit;color:inherit}
 .head .meta{margin-top:6px;color:var(--muted);font-size:13.5px}
 .head .skipped{margin-top:8px;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
 
-.toolbar{position:sticky;top:0;z-index:5;background:var(--panel);border:1px solid var(--border);
+.toolbar{background:var(--panel);border:1px solid var(--border);
   border-radius:10px;padding:12px 14px;box-shadow:var(--shadow);margin-bottom:18px}
 .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .row+.row{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
 /* The rule tree grows tall when expanded; keeping this row top-aligned stops
    its labels and the grouping control from floating to the middle. */
 .row-top{align-items:flex-start}
-.row-top .row-label,.row-top .segmented{margin-top:4px}
+.row-top .row-label{margin-top:4px}
+/* Caption and buttons share one centred line, so the caption never rides above
+   the segmented control; the left margin keeps it clear of the rule box. */
+.group-ctl{display:flex;align-items:center;gap:10px;margin-left:20px}
+.row-top .group-ctl .row-label{width:auto;margin-top:0}
 .row-label{flex:0 0 auto;width:74px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border:1px solid var(--border);
@@ -324,16 +584,26 @@ button{font:inherit;color:inherit}
 .rulebox>summary::-webkit-details-marker{display:none}
 .rulebox>summary::after{content:"▾";float:right;color:var(--muted)}
 .rulebox[open]>summary::after{content:"▴"}
+.tree-actions{display:flex;gap:6px;padding:6px 8px}
 .tree{max-height:340px;overflow:auto;border-top:1px solid var(--border);padding:6px}
 .grp{padding:1px 0}
+/* Same trap as .kids: an author-level display would beat the hidden attribute
+   used to drop rules the severity filter left empty. */
+.grp[hidden],.kid[hidden]{display:none}
 .grp-head{display:flex;align-items:center;gap:7px;padding:3px 4px;border-radius:6px}
 .grp-head:hover{background:var(--panel)}
 .twisty{width:20px;flex:0 0 auto;border:0;background:none;cursor:pointer;color:var(--muted);padding:0}
 .grp-name{flex:1 1 auto;cursor:pointer;overflow-wrap:anywhere;font-size:13.5px}
 .n{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;flex:0 0 auto}
 .kids{margin:2px 0 6px 27px;display:flex;flex-direction:column;gap:2px}
-.kid{display:flex;align-items:flex-start;gap:7px;font-size:13px;color:var(--muted)}
+/* The hidden attribute alone loses to the author-level display above, so the
+   twisty would flip the attribute without ever collapsing the group. */
+.kids[hidden]{display:none}
+.kid{display:flex;align-items:flex-start;gap:7px;font-size:13px;color:var(--muted);
+  padding:2px 4px;border-radius:6px}
+.kid:hover{background:var(--panel);color:var(--text)}
 .kid label{cursor:pointer;overflow-wrap:anywhere}
+.kid .n{margin-left:auto;padding-left:10px}
 .kid input{margin-top:4px}
 
 .segmented{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
@@ -346,7 +616,36 @@ button{font:inherit;color:inherit}
 .act:hover:not(:disabled){border-color:var(--accent)}
 .act:disabled{opacity:.4;cursor:default}
 
+/* The tree is the one thing that has to stay in view while reading a long
+   report - that is what makes it a map of the review. */
+.sidebar{position:sticky;top:12px;max-height:calc(100vh - 24px);display:flex;flex-direction:column;
+  border:1px solid var(--border);border-radius:10px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden}
+.sidebar-head{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);
+  color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+.sidebar-head .grow{flex:1 1 auto}
+.filetree{overflow:auto;padding:6px 8px 10px;
+  font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12.5px;line-height:1.6}
+.tr-row{display:flex;align-items:center;gap:6px;padding:1px 6px;border-radius:6px;cursor:pointer}
+.tr-row:hover{background:var(--panel-2)}
+.tr-row[hidden],.tr-kids[hidden]{display:none}
+.tr-name{flex:1 1 auto;overflow-wrap:anywhere}
+.tr-dir>.tr-name{color:var(--muted)}
+.tr-file{padding-left:22px}
+.tr-file.active{background:var(--hit-bg);color:var(--text)}
+.tr-kids{margin-left:9px;padding-left:5px;border-left:1px solid var(--border)}
+.twisty-sm{width:12px;flex:0 0 auto;border:0;background:none;color:var(--muted);cursor:pointer;padding:0;font-size:10px}
+@media (max-width:1180px){.cols{grid-template-columns:minmax(0,1fr)}.sidebar{position:static;max-height:420px}}
+
+.cmdbox{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.cmdbox[hidden]{display:none}
+.cmd-info{margin:0 0 8px;font-size:13px;color:var(--muted)}
+.cmd{margin:0 0 8px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--code-bg);
+  font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12.5px;
+  white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
+.cmd-actions{display:flex;align-items:center;gap:10px;font-size:13px}
+
 .filesec{margin-bottom:16px}
+.filesec.flash>summary{background:var(--hit-bg)}
 .filesec>summary{cursor:pointer;display:flex;align-items:center;gap:10px;padding:7px 2px;
   font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:13px;
   border-bottom:1px solid var(--border);list-style:none;overflow-wrap:anywhere}
@@ -365,6 +664,34 @@ button{font:inherit;color:inherit}
   font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12px}
 .f-hide{margin-left:auto}
 .f-problem{margin-top:8px;overflow-wrap:anywhere}
+
+.snipbox{margin-top:10px;border:1px solid var(--border);border-radius:8px;background:var(--snip-bg);overflow:hidden}
+.snipbox>summary{cursor:pointer;list-style:none;padding:5px 11px;font-size:12.5px;color:var(--muted)}
+.snipbox>summary::-webkit-details-marker{display:none}
+.snipbox>summary::before{content:"▸ "}
+.snipbox[open]>summary::before{content:"▾ "}
+.snipbox>summary:hover{color:var(--text)}
+.snip{border-top:1px solid var(--border);overflow-x:auto;
+  font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12.5px;line-height:1.6}
+/* Rows are as wide as the widest line so the highlight spans the whole scroll
+   width instead of stopping at the viewport edge. */
+.snip-row{display:flex;align-items:flex-start;white-space:pre;min-width:max-content}
+.snip-n{flex:0 0 auto;width:56px;padding:0 10px 0 6px;text-align:right;color:var(--muted);
+  background:var(--snip-gutter);border-right:1px solid var(--border);
+  position:sticky;left:0;user-select:none;font-variant-numeric:tabular-nums}
+.snip-mark{flex:0 0 auto;width:14px;text-align:center;user-select:none;color:var(--muted)}
+.snip-code{flex:1 1 auto;padding:0 14px 0 2px}
+.snip-add{background:var(--add-bg)}
+.snip-add .snip-mark{color:var(--add-fg);font-weight:650}
+.snip-del{background:var(--del-bg);color:var(--del-fg)}
+.snip-del .snip-mark{color:var(--del-fg);font-weight:650}
+/* The highlight wins the row background so a finding stays findable inside a
+   long hunk; the marker column keeps carrying the +/- meaning. */
+.snip-hit{background:var(--hit-bg)}
+.snip-hit .snip-n{background:var(--hit-gutter);color:var(--text);font-weight:650;
+  box-shadow:inset 3px 0 0 var(--hit-mark,var(--accent))}
+.snip-gap{color:var(--muted)}
+.snip-gap .snip-n{color:var(--muted)}
 .f-grid{margin-top:9px;display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;
   font-size:13.5px;color:var(--muted)}
 .f-grid dt{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding-top:2px}
@@ -426,7 +753,9 @@ const pageJs = `
   }
 
   var state = {
-    selectedSeverities: new Set(reportData.severities.map(function (s) { return s.key; })),
+    // Severity chips include instead of exclude: an empty set means "no severity
+    // filter", picking Critical narrows the list down to Critical alone.
+    selectedSeverities: new Set(),
     selectedRules: new Set(),
     group: 'files',
     ignored: loadIgnored()
@@ -435,7 +764,7 @@ const pageJs = `
 
   function visible(f) {
     if (state.ignored.has(f.id)) return false;
-    if (!state.selectedSeverities.has(f.severity)) return false;
+    if (state.selectedSeverities.size && !state.selectedSeverities.has(f.severity)) return false;
     if (!f.tagKeys.length) return true;
     for (var i = 0; i < f.tagKeys.length; i++) if (state.selectedRules.has(f.tagKeys[i])) return true;
     return false;
@@ -445,10 +774,14 @@ const pageJs = `
   // finding but stay put while filters are being adjusted.
   function tally() {
     var sev = {}, rule = {}, active = 0;
+    var narrowed = state.selectedSeverities.size > 0;
     allFindings.forEach(function (f) {
       if (state.ignored.has(f.id)) return;
       active++;
       sev[f.severity] = (sev[f.severity] || 0) + 1;
+      // Rule counts follow the severity chips, so picking a severity also
+      // narrows the rule tree to the rules that severity actually broke.
+      if (narrowed && !state.selectedSeverities.has(f.severity)) return;
       f.tagKeys.forEach(function (k) { rule[k] = (rule[k] || 0) + 1; });
     });
     return { sev: sev, rule: rule, active: active };
@@ -468,12 +801,22 @@ const pageJs = `
     chip.appendChild(n);
     chip.addEventListener('click', function () {
       if (state.selectedSeverities.has(s.key)) state.selectedSeverities['delete'](s.key); else state.selectedSeverities.add(s.key);
-      chip.setAttribute('aria-pressed', state.selectedSeverities.has(s.key) ? 'true' : 'false');
-      renderList();
+      syncSeverityChips();
+      refresh();
     });
-    chipNodes[s.key] = n;
+    chipNodes[s.key] = { chip: chip, n: n };
     byId('sev-filter').appendChild(chip);
   });
+
+  // With nothing picked every chip stays lit — dimming them all would advertise
+  // a filter that is not actually narrowing anything.
+  function syncSeverityChips() {
+    var unfiltered = state.selectedSeverities.size === 0;
+    reportData.severities.forEach(function (s) {
+      var on = unfiltered || state.selectedSeverities.has(s.key);
+      chipNodes[s.key].chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
 
   reportData.ruleGroups.forEach(function (g) {
     var wrap = el('div', 'grp');
@@ -492,6 +835,11 @@ const pageJs = `
     kids.hidden = true;
 
     name.addEventListener('click', function () { box.click(); });
+    box.addEventListener('click', function () {
+      // A half-checked section means "some rules are on": clicking it completes
+      // the section, instead of the browser's default toggle to unchecked.
+      if (box.dataset.partial === '1') box.checked = true;
+    });
     twisty.addEventListener('click', function () {
       kids.hidden = !kids.hidden;
       twisty.textContent = kids.hidden ? '▸' : '▾';
@@ -502,7 +850,7 @@ const pageJs = `
         if (box.checked) state.selectedRules.add(r.key); else state.selectedRules['delete'](r.key);
         ruleNodes[r.key].box.checked = box.checked;
       });
-      box.indeterminate = false;
+      markGroup(box, box.checked, false);
       refresh();
     });
 
@@ -525,7 +873,7 @@ const pageJs = `
       kid.appendChild(klabel);
       kid.appendChild(kn);
       kids.appendChild(kid);
-      ruleNodes[r.key] = { box: kbox, n: kn };
+      ruleNodes[r.key] = { box: kbox, n: kn, row: kid };
     });
 
     head.appendChild(twisty);
@@ -535,42 +883,287 @@ const pageJs = `
     wrap.appendChild(head);
     wrap.appendChild(kids);
     byId('rule-tree').appendChild(wrap);
-    groupNodes.push({ group: g, box: box, n: n });
+    groupNodes.push({ group: g, box: box, n: n, wrap: wrap });
   });
+
+  // Bulk switches: with every rule off the list is empty by definition, which is
+  // the point - it is the fastest way to then pick one single rule.
+  function setAllRules(on) {
+    reportData.ruleGroups.forEach(function (g) {
+      g.rules.forEach(function (r) {
+        if (on) state.selectedRules.add(r.key); else state.selectedRules['delete'](r.key);
+        ruleNodes[r.key].box.checked = on;
+      });
+    });
+    groupNodes.forEach(function (entry) { markGroup(entry.box, on, false); });
+    refresh();
+  }
+
+  byId('rules-all').addEventListener('click', function () { setAllRules(true); });
+  byId('rules-none').addEventListener('click', function () { setAllRules(false); });
+
+  // The browser clears the indeterminate flag before the click event reaches a
+  // handler, so the mixed state is mirrored on the element to stay readable there.
+  function markGroup(box, checked, partial) {
+    box.checked = checked;
+    box.indeterminate = partial;
+    if (partial) box.dataset.partial = '1'; else delete box.dataset.partial;
+  }
 
   function syncGroup(g, box) {
     var on = 0;
     g.rules.forEach(function (r) { if (state.selectedRules.has(r.key)) on++; });
-    box.checked = on > 0;
-    box.indeterminate = on > 0 && on < g.rules.length;
+    markGroup(box, on > 0, on > 0 && on < g.rules.length);
+  }
+
+  function setGroup(name) {
+    state.group = name;
+    Array.prototype.forEach.call(byId('group-filter').querySelectorAll('button[data-group]'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-group') === name ? 'true' : 'false');
+    });
   }
 
   byId('group-filter').addEventListener('click', function (event) {
     var button = event.target.closest('button[data-group]');
     if (!button) return;
-    state.group = button.getAttribute('data-group');
-    Array.prototype.forEach.call(this.querySelectorAll('button[data-group]'), function (b) {
-      b.setAttribute('aria-pressed', b === button ? 'true' : 'false');
-    });
+    setGroup(button.getAttribute('data-group'));
     renderList();
   });
 
+  // A Set keeps insertion order and so does the stored array, which makes the
+  // last entry the last thing hidden - even after a reload.
   byId('restore').addEventListener('click', function () {
+    var hidden = Array.from(state.ignored);
+    if (!hidden.length) return;
+    state.ignored['delete'](hidden[hidden.length - 1]);
+    saveIgnored();
+    refresh();
+  });
+
+  // The page cannot post to GitHub itself, so the button hands over the exact
+  // command that does - carrying the ids hidden in this browser as exclusions.
+  if (byId('pr-comments')) {
+    byId('pr-comments').addEventListener('click', function () {
+      var hiddenIds = Array.from(state.ignored);
+      var command = reportData.postCommand + (hiddenIds.length ? ' --exclude="' + hiddenIds.join(',') + '"' : '');
+      var box = byId('cmdbox');
+      box.textContent = '';
+      box.hidden = false;
+
+      var info = el('p', 'cmd-info');
+      info.textContent = 'Do PR #' + reportData.pr.number + ' trafi ' + (allFindings.length - hiddenIds.length)
+        + ' z ' + allFindings.length + ' znalezisk — pomijane są tylko te ukryte przyciskiem „Ukryj",'
+        + ' filtry widoku nie mają na to wpływu. Uruchom w terminalu:';
+      var code = el('pre', 'cmd');
+      code.textContent = command;
+      var actions = el('div', 'cmd-actions');
+      var copy = el('button', 'act');
+      copy.type = 'button';
+      copy.textContent = 'Kopiuj polecenie';
+      copy.addEventListener('click', function () {
+        // Clipboard access is refused on file:// in some browsers; the command
+        // stays selectable on the page, which is the fallback.
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(command).then(function () { copy.textContent = 'Skopiowano'; }, function () {});
+      });
+      var link = el('a');
+      link.href = reportData.pr.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Otwórz PR #' + reportData.pr.number;
+      actions.appendChild(copy);
+      actions.appendChild(link);
+      box.appendChild(info);
+      box.appendChild(code);
+      box.appendChild(actions);
+    });
+  }
+
+  byId('restore-all').addEventListener('click', function () {
     state.ignored.clear();
     saveIgnored();
     refresh();
   });
 
   byId('clear-filters').addEventListener('click', function () {
-    reportData.severities.forEach(function (s) { state.selectedSeverities.add(s.key); });
-    Array.prototype.forEach.call(byId('sev-filter').querySelectorAll('.chip'), function (c) {
-      c.setAttribute('aria-pressed', 'true');
-    });
-    reportData.ruleGroups.forEach(function (g) { g.rules.forEach(function (r) { state.selectedRules.add(r.key); }); });
-    groupNodes.forEach(function (entry) { entry.box.checked = true; entry.box.indeterminate = false; });
-    Object.keys(ruleNodes).forEach(function (key) { ruleNodes[key].box.checked = true; });
-    refresh();
+    state.selectedSeverities.clear();
+    syncSeverityChips();
+    setGroup('files');
+    setAllRules(true);
   });
+
+  // ---------- file tree ----------
+  // One row per reviewed path, nested by directory, counting only what the
+  // current filters leave visible - the sidebar is a map of the review, so it
+  // has to shrink with it.
+  var fileRows = {};
+  var dirRows = [];
+  var sectionNodes = {};
+  var treeCollapsed = false;
+
+  function treeNode(name) { return { name: name, dirs: {}, order: [], files: [] }; }
+
+  function buildTreeModel() {
+    var root = treeNode('');
+    var seen = {};
+    reportData.files.forEach(function (file) {
+      if (seen[file.path]) return;
+      seen[file.path] = true;
+      var parts = String(file.path).split('/');
+      var leaf = parts.pop();
+      var node = root;
+      parts.forEach(function (part) {
+        if (!node.dirs[part]) { node.dirs[part] = treeNode(part); node.order.push(part); }
+        node = node.dirs[part];
+      });
+      node.files.push({ name: leaf, path: file.path });
+    });
+    return root;
+  }
+
+  // A chain of single-child directories folds into one row, the way GitHub
+  // shows src/app/user-panel instead of three nested rows.
+  function squashTree(node) {
+    node.order.forEach(function (key) {
+      var dir = node.dirs[key];
+      while (dir.files.length === 0 && dir.order.length === 1) {
+        var only = dir.dirs[dir.order[0]];
+        dir.name += '/' + only.name;
+        dir.dirs = only.dirs;
+        dir.order = only.order;
+        dir.files = only.files;
+      }
+      squashTree(dir);
+    });
+  }
+
+  function collectPaths(node, into) {
+    node.files.forEach(function (file) { into.push(file.path); });
+    node.order.forEach(function (key) { collectPaths(node.dirs[key], into); });
+    return into;
+  }
+
+  function renderTree(node, host) {
+    node.order.forEach(function (key) {
+      var dir = node.dirs[key];
+      var row = el('div', 'tr-row tr-dir');
+      var twisty = el('button', 'twisty-sm');
+      twisty.type = 'button';
+      twisty.textContent = '▾';
+      var name = el('span', 'tr-name');
+      name.textContent = dir.name + '/';
+      var n = el('span', 'n');
+      var kids = el('div', 'tr-kids');
+      var entry = { row: row, kids: kids, n: n, twisty: twisty, collapsed: false, paths: collectPaths(dir, []) };
+      row.appendChild(twisty);
+      row.appendChild(name);
+      row.appendChild(n);
+      row.addEventListener('click', function () { setDirCollapsed(entry, !entry.collapsed); });
+      host.appendChild(row);
+      host.appendChild(kids);
+      dirRows.push(entry);
+      renderTree(dir, kids);
+    });
+    node.files.forEach(function (file) {
+      var row = el('div', 'tr-row tr-file');
+      var name = el('span', 'tr-name');
+      name.textContent = file.name;
+      var n = el('span', 'n');
+      row.appendChild(name);
+      row.appendChild(n);
+      row.addEventListener('click', function () { focusFile(file.path); });
+      host.appendChild(row);
+      fileRows[file.path] = { row: row, n: n };
+    });
+  }
+
+  function setDirCollapsed(entry, collapsed) {
+    entry.collapsed = collapsed;
+    entry.kids.hidden = collapsed;
+    entry.twisty.textContent = collapsed ? '▸' : '▾';
+  }
+
+  function updateTree(counts, worst) {
+    Object.keys(fileRows).forEach(function (filePath) {
+      var entry = fileRows[filePath];
+      var count = counts[filePath] || 0;
+      entry.n.textContent = count;
+      entry.n.style.color = count ? 'var(--sev-' + worst[filePath] + ')' : '';
+      entry.row.hidden = count === 0;
+    });
+    dirRows.forEach(function (entry) {
+      var total = 0;
+      entry.paths.forEach(function (filePath) { total += counts[filePath] || 0; });
+      entry.n.textContent = total;
+      entry.row.hidden = total === 0;
+      entry.kids.hidden = total === 0 || entry.collapsed;
+    });
+  }
+
+  // Sections only exist in the files grouping, so a click from the flat list
+  // switches back to it instead of scrolling nowhere.
+  function focusFile(filePath) {
+    if (state.group !== 'files') {
+      setGroup('files');
+      renderList();
+    }
+    var section = sectionNodes[filePath];
+    if (!section) return;
+    Object.keys(fileRows).forEach(function (key) { fileRows[key].row.classList.remove('active'); });
+    if (fileRows[filePath]) fileRows[filePath].row.classList.add('active');
+    section.open = true;
+    section.scrollIntoView({ block: 'start' });
+    section.classList.add('flash');
+    setTimeout(function () { section.classList.remove('flash'); }, 1200);
+  }
+
+  if (byId('filetree')) {
+    var treeModel = buildTreeModel();
+    squashTree(treeModel);
+    renderTree(treeModel, byId('filetree'));
+    byId('tree-toggle').addEventListener('click', function () {
+      treeCollapsed = !treeCollapsed;
+      this.textContent = treeCollapsed ? 'Rozwiń' : 'Zwiń';
+      dirRows.forEach(function (entry) { setDirCollapsed(entry, treeCollapsed); });
+    });
+  }
+
+  var marks = { add: '+', del: '-', ctx: ' ', gap: ' ' };
+
+  function snipRow(number, kind, text) {
+    var row = el('div', 'snip-row snip-' + kind);
+    var num = el('span', 'snip-n');
+    num.textContent = number === null ? '' : number;
+    var mark = el('span', 'snip-mark');
+    mark.textContent = marks[kind] || ' ';
+    var code = el('span', 'snip-code');
+    code.textContent = text;
+    row.appendChild(num);
+    row.appendChild(mark);
+    row.appendChild(code);
+    return row;
+  }
+
+  // Source lines go in as text nodes, exactly like every other report value, and
+  // the highlight marker takes the finding's severity colour.
+  function snippet(f, color) {
+    var box = el('details', 'snipbox');
+    var summary = el('summary');
+    summary.textContent = 'Kod · linie ' + f.lines;
+    var body = el('div', 'snip');
+    body.style.setProperty('--hit-mark', color);
+    f.snippet.hunks.forEach(function (hunk, index) {
+      if (index) body.appendChild(snipRow('⋯', 'gap', ''));
+      hunk.lines.forEach(function (line) {
+        var row = snipRow(line.n, line.kind || 'ctx', line.text);
+        if (line.hit) row.classList.add('snip-hit');
+        body.appendChild(row);
+      });
+    });
+    box.appendChild(summary);
+    box.appendChild(body);
+    return box;
+  }
 
   function card(f, withPath) {
     var node = el('div', 'finding');
@@ -625,6 +1218,7 @@ const pageJs = `
       grid.appendChild(dd);
     });
     node.appendChild(grid);
+    if (f.snippet && f.snippet.hunks.length) node.appendChild(snippet(f, color));
     return node;
   }
 
@@ -632,6 +1226,14 @@ const pageJs = `
     counts = counts || tally();
     var shown = allFindings.filter(visible);
     byId('visible-count').textContent = 'Widoczne: ' + shown.length + ' z ' + counts.active;
+    var perPath = {}, worstPerPath = {};
+    shown.forEach(function (f) {
+      perPath[f.filePath] = (perPath[f.filePath] || 0) + 1;
+      var best = worstPerPath[f.filePath];
+      if (best === undefined || f.rank < severityByKey[best].rank) worstPerPath[f.filePath] = f.severity;
+    });
+    updateTree(perPath, worstPerPath);
+    sectionNodes = {};
     host.textContent = '';
     if (!shown.length) {
       host.appendChild(note('Brak znalezisk spełniających kryteria.'));
@@ -654,6 +1256,9 @@ const pageJs = `
         mine.forEach(function (f) { list.appendChild(card(f, false)); });
         section.appendChild(summary);
         section.appendChild(list);
+        // The cross-file pass may add a second section for a path; the tree
+        // jumps to the first one, where that file's findings start.
+        if (!sectionNodes[file.path]) sectionNodes[file.path] = section;
         host.appendChild(section);
       });
       return;
@@ -669,17 +1274,19 @@ const pageJs = `
 
   function refresh() {
     var counts = tally();
-    reportData.severities.forEach(function (s) { chipNodes[s.key].textContent = counts.sev[s.key] || 0; });
+    reportData.severities.forEach(function (s) { chipNodes[s.key].n.textContent = counts.sev[s.key] || 0; });
     var selected = 0;
     groupNodes.forEach(function (entry) {
       var total = 0;
       entry.group.rules.forEach(function (r) {
         var value = counts.rule[r.key] || 0;
         ruleNodes[r.key].n.textContent = value;
+        ruleNodes[r.key].row.hidden = value === 0;
         total += value;
         if (state.selectedRules.has(r.key)) selected++;
       });
       entry.n.textContent = total;
+      entry.wrap.hidden = total === 0;
     });
     var allRules = Object.keys(ruleNodes).length;
     byId('rule-summary').textContent = selected === allRules
@@ -688,6 +1295,7 @@ const pageJs = `
     var ignored = state.ignored.size;
     byId('ignored-count').textContent = 'Zignorowane: ' + ignored;
     byId('restore').disabled = ignored === 0;
+    byId('restore-all').disabled = ignored === 0;
     renderList(counts);
   }
 
@@ -709,6 +1317,9 @@ function renderHtml(report, reportName) {
   const skipped = report.skipped.length
     ? `\n      <p class="skipped">${escapeHtml(skippedPrefix)} ${escapeHtml(report.skipped.join(', '))}</p>`
     : '';
+  const prButton = report.pr
+    ? `\n        <button type="button" class="act" id="pr-comments">Dodaj komentarze do PR #${escapeHtml(String(report.pr.number))}</button>`
+    : '';
   const toolbar = report.emptyState ? '' : `
     <section class="toolbar" id="toolbar">
       <div class="row">
@@ -719,23 +1330,40 @@ function renderHtml(report, reportName) {
         <span class="row-label">Reguła</span>
         <details class="rulebox">
           <summary><span id="rule-summary">wszystkie</span></summary>
+          <div class="tree-actions">
+            <button type="button" class="act" id="rules-all">Zaznacz wszystkie</button>
+            <button type="button" class="act" id="rules-none">Odznacz wszystkie</button>
+          </div>
           <div class="tree" id="rule-tree"></div>
         </details>
-        <span class="row-label">Grupowanie</span>
-        <div class="segmented" id="group-filter">
-          <button type="button" data-group="files" aria-pressed="true">Pliki</button>
-          <button type="button" data-group="global" aria-pressed="false">Globalnie</button>
+        <div class="group-ctl">
+          <span class="row-label">Grupowanie</span>
+          <div class="segmented" id="group-filter">
+            <button type="button" data-group="files" aria-pressed="true">Pliki</button>
+            <button type="button" data-group="global" aria-pressed="false">Globalnie</button>
+          </div>
         </div>
       </div>
       <div class="row status">
         <span id="visible-count"></span>
         <span class="grow"></span>
         <span id="ignored-count"></span>
-        <button type="button" class="act" id="restore" disabled>Przywróć</button>
-        <button type="button" class="act" id="clear-filters">Wyczyść filtry</button>
+        <button type="button" class="act" id="restore" title="Przywróć ostatnio ukryte znalezisko" disabled>Przywróć</button>
+        <button type="button" class="act" id="restore-all" disabled>Przywróć wszystkie</button>
+        <button type="button" class="act" id="clear-filters">Wyczyść filtry</button>${prButton}
       </div>
+      <div class="cmdbox" id="cmdbox" hidden></div>
     </section>
 `;
+
+  const sidebar = report.emptyState ? '' : `
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <span class="grow">Struktura plików</span>
+          <button type="button" class="act" id="tree-toggle">Zwiń</button>
+        </div>
+        <div class="filetree" id="filetree"></div>
+      </aside>`;
 
   return `<!doctype html>
 <html lang="pl">
@@ -752,7 +1380,9 @@ function renderHtml(report, reportName) {
       <p class="meta">${meta}</p>${skipped}
     </header>
 ${toolbar}    <noscript><div class="note">Ten raport wymaga włączonego JavaScriptu.</div></noscript>
-    <main id="findings"></main>
+    <div class="cols${report.emptyState ? ' cols-plain' : ''}">${sidebar}
+      <main id="findings"></main>
+    </div>
   </div>
 <script id="report-data" type="application/json">${json}</script>
 <script>${pageJs}</script>
@@ -777,6 +1407,10 @@ function main(argv) {
     return 1;
   }
   const report = parseReport(markdown);
+  const projectRoot = projectRootFor(args.report, args.project);
+  attachSnippets(report, projectRoot, { mode: args.mode, base: args.base, branch: args.branch });
+  report.pr = report.emptyState ? null : detectPullRequest(projectRoot, args.branch);
+  report.postCommand = report.pr ? postCommandFor(projectRoot, args.out) : '';
   try {
     fs.writeFileSync(args.out, renderHtml(report, path.basename(args.out)), 'utf8');
   } catch (err) {
@@ -801,6 +1435,9 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { parseArgs, parseRuleField, parseReport, findingId, buildPayload, renderHtml, main };
+module.exports = {
+  parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet,
+  projectRootFor, attachSnippets, buildPayload, renderHtml, main,
+};
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

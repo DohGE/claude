@@ -182,7 +182,12 @@ something to concatenate.
 Assemble the report in ONE Bash call: append every part file to `target.reportPath` (which already
 holds the header), remove the parts, and — when `target.htmlReportPath` is not null — render the
 HTML report from the assembled Markdown:
-`cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>"`.
+`cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>" --project="<PROJECT>" --mode="<target.kind>" --branch="<target.branch>" --base="<target.baseBranch>"`.
+The four trailing arguments are what puts a code snippet under every finding: `--project` locates the
+reviewed files, and `--mode`/`--branch`/`--base` make the snippet read the same revision the review
+read — rendering it as a real `+`/`-` diff for `branch` and `staged`, and as a plain file view for
+`folder`. Drop `--base` when `target.baseBranch` is null (staged and folder targets). Without these
+arguments the HTML still renders, only without snippets.
 The separators are `;`, never `&&`: the renderer must run even if the concatenation found nothing,
 otherwise a clean review would silently fall back to Markdown in HTML mode.
 Drop the last command when `htmlReportPath` is null (`--only-md` was passed) — the Markdown

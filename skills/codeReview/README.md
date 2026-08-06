@@ -117,8 +117,16 @@ No findings → the report is the single line `Nie wykryto problemów.`; empty d
 Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews first run `git add .`, then read index content (`git show :path`).
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
-Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--out=<path.html>] [--keep-source]`.
+Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source]`.
+Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
+`--mode` decides what the snippet is: `branch` reads `git show <branch>:<path>` plus `git diff -U0 <base>...<branch>`, `staged` reads the index plus `git diff -U0 --cached`, and both render a real `+`/`-` diff; `folder` (and a missing `--mode`) renders the working-tree file with no diff markers.
+`--project` names the root the report paths are relative to; when it is omitted the root is recovered from a report living in `<project>/.claude/doh/<branch>/`, and a file that cannot be read simply renders without a snippet.
 It accepts the severity lead line with and without a leading `- ` (reports written before `ee76300` use the dashed form), and reads `**Reguła:**` whether the instruction is named with its `.md` extension, without it, or replaced by the violated point's name.
 
-Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs`
+`scripts/post-pr-comments.cjs` (Node, needs the `gh` CLI) posts the findings of a rendered HTML report as a PR review.
+The report page cannot do it itself — a `file://` page has no GitHub credentials — so when an open PR exists for the reviewed branch the renderer adds a **Dodaj komentarze do PR #n** button that hands over the ready command, carrying the findings hidden in that browser as `--exclude=<ids>`.
+Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> [--project=<repo root>] [--pr=<number>] [--exclude=<ids>] [--dry-run]`.
+Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments.
+
+Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs`
 (paths are listed explicitly because PowerShell does not expand globs for native commands).

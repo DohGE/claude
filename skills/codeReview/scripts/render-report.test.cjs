@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const rr = require('./render-report.cjs');
 const { tempDir } = require('./test-helpers.cjs');
@@ -102,7 +103,7 @@ const REPORT = [
 test('parseArgs requires a report and derives the html path', () => {
   assert.deepStrictEqual(
     rr.parseArgs(['--report=reports/a-b.md']),
-    { report: 'reports/a-b.md', out: 'reports/a-b.html', keepSource: false },
+    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false },
   );
   assert.strictEqual(rr.parseArgs(['--report=a.MD']).out, 'a.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--out=/tmp/x.html']).out, '/tmp/x.html');
@@ -560,4 +561,236 @@ test('main reports a failed write and exits 1', (t) => {
   assert.strictEqual(result.code, 1);
   assert.match(result.err, /Nie można zapisać raportu HTML/);
   assert.ok(fs.existsSync(md), 'the source survives a failed render');
+});
+
+test('parseLineRanges reads numbers and spans and drops everything else', () => {
+  assert.deepStrictEqual(rr.parseLineRanges('7, 12-15'), [{ start: 7, end: 7 }, { start: 12, end: 15 }]);
+  assert.deepStrictEqual(rr.parseLineRanges('3'), [{ start: 3, end: 3 }]);
+  assert.deepStrictEqual(rr.parseLineRanges('cała sekcja, 4'), [{ start: 4, end: 4 }]);
+  assert.deepStrictEqual(rr.parseLineRanges('9-2'), [], 'a backwards span is not a range');
+  assert.deepStrictEqual(rr.parseLineRanges(''), []);
+});
+
+test('buildSnippet marks the cited lines and pads them with context', () => {
+  const source = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+  const snippet = rr.buildSnippet(source, '10');
+  assert.strictEqual(snippet.hunks.length, 1);
+  assert.deepStrictEqual(snippet.hunks[0].lines.map((l) => l.n), [7, 8, 9, 10, 11, 12, 13]);
+  assert.deepStrictEqual(snippet.hunks[0].lines.filter((l) => l.hit).map((l) => l.n), [10]);
+  assert.strictEqual(snippet.hunks[0].lines[3].text, 'line 10');
+});
+
+test('buildSnippet merges touching windows and splits distant ones', () => {
+  const source = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+  const merged = rr.buildSnippet(source, '10, 15');
+  assert.strictEqual(merged.hunks.length, 1, 'overlapping context is one hunk, not two');
+  assert.deepStrictEqual(merged.hunks[0].lines.filter((l) => l.hit).map((l) => l.n), [10, 15]);
+
+  const apart = rr.buildSnippet(source, '10, 50');
+  assert.strictEqual(apart.hunks.length, 2);
+  assert.strictEqual(apart.hunks[1].lines[0].n, 47);
+});
+
+test('buildSnippet clamps to the file and never shortens a long range', () => {
+  const source = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
+  const clamped = rr.buildSnippet(source, '4-99');
+  assert.deepStrictEqual(clamped.hunks[0].lines.map((l) => l.n), [1, 2, 3, 4, 5]);
+  assert.ok(clamped.hunks[0].lines.every((l) => l.hit === (l.n >= 4)));
+
+  const long = rr.buildSnippet(Array.from({ length: 200 }, (_, i) => `line ${i + 1}`), '1-150');
+  assert.strictEqual(long.hunks.length, 1);
+  assert.deepStrictEqual(
+    [long.hunks[0].lines.length, long.hunks[0].lines[152].n],
+    [153, 153],
+    'the cited range is shown whole, with its trailing context',
+  );
+});
+
+test('buildSnippet returns nothing when the citation points past the file', () => {
+  assert.strictEqual(rr.buildSnippet(['a', 'b'], '9'), null);
+  assert.strictEqual(rr.buildSnippet(['a', 'b'], 'cały plik'), null);
+});
+
+test('attachSnippets reads the sources and leaves unreadable files without one', (t) => {
+  const dir = tempDir(t, 'cr-snippet-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n', 'utf8');
+  const report = rr.parseReport(reportOf(
+    ['## src/a.ts', ''], findingOf({ lines: '2' }),
+    ['## src/gone.ts', ''], findingOf({ lines: '2' }),
+  ));
+
+  rr.attachSnippets(report, dir);
+  const present = report.files[0].findings[0].snippet;
+  assert.deepStrictEqual(present.hunks[0].lines.map((l) => l.text), ['const a = 1;', 'const b = 2;', 'const c = 3;']);
+  assert.deepStrictEqual(present.hunks[0].lines.filter((l) => l.hit).map((l) => l.n), [2]);
+  assert.strictEqual(report.files[1].findings[0].snippet, null, 'a missing file costs the snippet, not the finding');
+});
+
+test('attachSnippets refuses a path pointing outside the project', (t) => {
+  const dir = tempDir(t, 'cr-snippet-');
+  const root = path.join(dir, 'repo');
+  fs.mkdirSync(root);
+  fs.writeFileSync(path.join(dir, 'secret.txt'), 'top secret\n', 'utf8');
+  const report = rr.parseReport(reportOf(['## ../secret.txt', ''], findingOf({ lines: '1' })));
+
+  rr.attachSnippets(report, root);
+  assert.strictEqual(report.files[0].findings[0].snippet, null);
+});
+
+test('projectRootFor recovers the root from the report location', () => {
+  const reportPath = path.join('C:', 'work', 'repo', '.claude', 'doh', 'feature', 'r.md');
+  assert.strictEqual(rr.projectRootFor(reportPath, ''), path.join('C:', 'work', 'repo'));
+  assert.strictEqual(rr.projectRootFor(reportPath, path.join('D:', 'elsewhere')), path.resolve(path.join('D:', 'elsewhere')));
+  assert.strictEqual(rr.projectRootFor(path.join('C:', 'loose', 'r.md'), ''), process.cwd());
+});
+
+test('parseArgs takes the project root', () => {
+  assert.strictEqual(rr.parseArgs(['--report=r.md', '--project=/repo']).project, '/repo');
+  assert.strictEqual(rr.parseArgs(['--report=r.md']).project, '');
+});
+
+test('main embeds the snippet of the reviewed file in the payload', (t) => {
+  const dir = tempDir(t, 'cr-render-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'one\ntwo\nthree\nfour\n', 'utf8');
+  const md = path.join(dir, 'branch.md');
+  fs.writeFileSync(md, reportOf(['## src/a.ts', ''], findingOf({ lines: '3' })), 'utf8');
+
+  const result = runMain([`--report=${md}`, `--project=${dir}`]);
+  assert.strictEqual(result.code, 0);
+  const payload = embeddedPayload(fs.readFileSync(path.join(dir, 'branch.html'), 'utf8'));
+  const snippet = payload.files[0].findings[0].snippet;
+  assert.deepStrictEqual(snippet.hunks[0].lines.map((l) => l.text), ['one', 'two', 'three', 'four']);
+  assert.deepStrictEqual(snippet.hunks[0].lines.filter((l) => l.hit).map((l) => l.n), [3]);
+});
+
+test('parseRuleField keeps an arrow inside quoted rule text out of the file list', () => {
+  assert.deepStrictEqual(
+    rr.parseRuleField('models.md → "no functions (→ `shared/utils/`)"; no functions (→ `x`)" + "Mappers are consts"'),
+    [{
+      file: 'models.md',
+      rule: '"no functions (→ `shared/utils/`)"; no functions (→ `x`)" + "Mappers are consts"',
+    }],
+    'prose on the left of an arrow is rule text, never an instruction file',
+  );
+  assert.deepStrictEqual(
+    rr.parseRuleField('brak pliku (→ coś)'),
+    [{ file: '(bez pliku)', rule: 'brak pliku (→ coś)' }],
+  );
+});
+
+test('parseDiff reads additions and anchors removals on the new file', () => {
+  const diff = rr.parseDiff([
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,0 +2,2 @@',
+    '+added one',
+    '+added two',
+    '@@ -8,1 +9,0 @@',
+    '-dropped',
+    '',
+  ].join('\n'));
+  assert.deepStrictEqual([...diff.added].sort((a, b) => a - b), [2, 3]);
+  assert.deepStrictEqual([...diff.removed.entries()], [[10, ['dropped']]], 'a deletion-only hunk sits before the next line');
+  assert.strictEqual(rr.parseDiff(''), null);
+  assert.strictEqual(rr.parseDiff('diff --git a/x b/x\n'), null, 'a header-only diff carries no change');
+});
+
+test('buildSnippet marks added lines and inserts the removed ones', () => {
+  const source = ['keep 1', 'new 2', 'new 3', 'keep 4'];
+  const diff = rr.parseDiff('@@ -1,0 +2,2 @@\n+new 2\n+new 3\n@@ -4,1 +4,0 @@\n-old tail\n');
+  const snippet = rr.buildSnippet(source, '2-3', diff);
+  assert.deepStrictEqual(
+    snippet.hunks[0].lines.map((l) => [l.kind, l.n, l.text, l.hit]),
+    [
+      ['ctx', 1, 'keep 1', false],
+      ['add', 2, 'new 2', true],
+      ['add', 3, 'new 3', true],
+      ['ctx', 4, 'keep 4', false],
+      ['del', null, 'old tail', false],
+    ],
+  );
+});
+
+test('buildSnippet without a diff leaves every row as context', () => {
+  const snippet = rr.buildSnippet(['a', 'b', 'c'], '2');
+  assert.deepStrictEqual(snippet.hunks[0].lines.map((l) => l.kind), ['ctx', 'ctx', 'ctx']);
+});
+
+test('attachSnippets renders a branch review against the branch, with its diff', (t) => {
+  const dir = tempDir(t, 'cr-diff-');
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'test@test.local']);
+  run(['config', 'user.name', 'Test']);
+  run(['config', 'commit.gpgsign', 'false']);
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'one\ntwo\nthree\n', 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'base']);
+  run(['checkout', '-q', '-b', 'feature']);
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'one\nTWO\nthree\n', 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'change']);
+  // The working tree is left on another revision on purpose: the snippet must
+  // come from the reviewed branch, not from whatever is checked out.
+  run(['checkout', '-q', 'main']);
+
+  const report = rr.parseReport(reportOf(['## src/a.ts', ''], findingOf({ lines: '2' })));
+  rr.attachSnippets(report, dir, { mode: 'branch', base: 'main', branch: 'feature' });
+  const rows = report.files[0].findings[0].snippet.hunks[0].lines;
+  assert.deepStrictEqual(rows.map((l) => [l.kind, l.text]), [
+    ['ctx', 'one'],
+    ['del', 'two'],
+    ['add', 'TWO'],
+    ['ctx', 'three'],
+  ]);
+  assert.deepStrictEqual(rows.filter((l) => l.hit).map((l) => l.n), [2]);
+});
+
+test('attachSnippets renders a staged review from the index', (t) => {
+  const dir = tempDir(t, 'cr-diff-');
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'test@test.local']);
+  run(['config', 'user.name', 'Test']);
+  run(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(dir, 'a.ts'), 'one\ntwo\n', 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'base']);
+  fs.writeFileSync(path.join(dir, 'a.ts'), 'one\ntwo\nthree\n', 'utf8');
+  run(['add', '.']);
+
+  const report = rr.parseReport(reportOf(['## a.ts', ''], findingOf({ lines: '3' })));
+  rr.attachSnippets(report, dir, { mode: 'staged', base: '', branch: 'main' });
+  const rows = report.files[0].findings[0].snippet.hunks[0].lines;
+  assert.deepStrictEqual(rows.map((l) => [l.kind, l.n, l.text]), [
+    ['ctx', 1, 'one'],
+    ['ctx', 2, 'two'],
+    ['add', 3, 'three'],
+  ]);
+});
+
+test('renderHtml adds the file-tree sidebar and drops it for an empty state', () => {
+  const html = rr.renderHtml(rr.parseReport(REPORT), 'r.html');
+  assert.match(html, /<aside class="sidebar">/);
+  assert.match(html, /id="filetree"/);
+  assert.match(html, /id="restore-all"/);
+
+  const empty = rr.renderHtml(rr.parseReport(reportOf(['Nie wykryto problemów.'])), 'r.html');
+  assert.ok(!empty.includes('<aside class="sidebar">'), 'nothing to map when there are no findings');
+  assert.match(empty, /class="cols cols-plain"/);
+});
+
+test('renderHtml offers the PR button only when a pull request was found', () => {
+  const report = rr.parseReport(REPORT);
+  assert.ok(!rr.renderHtml(report, 'r.html').includes('id="pr-comments"'), 'no PR, no button');
+
+  report.pr = { number: 7, url: 'https://example.test/pull/7' };
+  report.postCommand = 'node post-pr-comments.cjs --report=r.html';
+  const html = rr.renderHtml(report, 'r.html');
+  assert.match(html, /id="pr-comments">Dodaj komentarze do PR #7</);
+  assert.match(embeddedPayload(html).postCommand, /post-pr-comments\.cjs/);
+  assert.deepStrictEqual(embeddedPayload(html).pr, { number: 7, url: 'https://example.test/pull/7' });
 });
