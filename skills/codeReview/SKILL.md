@@ -1,6 +1,6 @@
 ---
 name: codeReview
-description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against global/local instruction checklists and writes one concise Polish Markdown report per branch with severity, real line numbers, violated rule and expected result
+description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against global/local instruction checklists and writes one concise Polish report per branch (interactive HTML by default, Markdown with --output-md) with severity, real line numbers, violated rule and expected result
 ---
 
 # codeReview — deterministic instruction-driven review
@@ -22,15 +22,18 @@ diff itself touched are reported (Step 3 scope gate).
 ## Step 1 — Build the review context
 
 1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = current working directory.
-2. Map the invocation arguments to the context script EXACTLY like this:
+2. If the arguments contain the exact token `--output-md`, remove it and set `OUTPUT=md`; otherwise
+   `OUTPUT=html`. Do this FIRST and on the whole argument list, wherever the flag sits — an
+   unstripped `--output-md` would be mapped below as a branch name.
+3. Map the REMAINING arguments to the context script EXACTLY like this:
    - no arguments → `--mode=auto`
    - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review
      covers every pending change — working-tree edits and untracked files staged as one set)
    - the word `folder` followed by one path → `--mode=folder --path="<path>"` (reviews every
      file currently in that folder of the working tree, no diff needed)
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-3. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] --project="<PROJECT>"`
-4. Parse the JSON from stdout:
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] --output=<OUTPUT> --project="<PROJECT>"`
+5. Parse the JSON from stdout:
    - Report every `errors[]` entry to the user immediately, in Polish.
    - No targets / exit code 1 → stop after reporting the errors.
    - Report every top-level `warnings[]` entry, in Polish.
@@ -172,9 +175,19 @@ final part file. Answer each of these four questions explicitly, against the dif
    reused for different concepts; reported under the code-quality instruction (🟡 Medium), while a
    plain naming-convention breach stays a general-instruction finding.
 
-Assemble the report: append every part file to `target.reportPath` (which already holds the
-header) and remove the parts, in ONE Bash call:
-`cat "<reportPath minus .md>".part*.md >> "<reportPath>" && rm "<reportPath minus .md>".part*.md`.
+A target with no findings still gets a part file: write `Nie wykryto problemów.` (or
+`Nie wykryto zmian do analizy.` for an empty diff) as `part01`, so the assembly below always has
+something to concatenate.
+
+Assemble the report in ONE Bash call: append every part file to `target.reportPath` (which already
+holds the header), remove the parts, and — when `target.htmlReportPath` is not null — render the
+HTML report from the assembled Markdown:
+`cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>"`.
+The separators are `;`, never `&&`: the renderer must run even if the concatenation found nothing,
+otherwise a clean review would silently fall back to Markdown in HTML mode.
+Drop the last command when `htmlReportPath` is null (`--output-md` was passed) — the Markdown
+is the report then. Otherwise the renderer replaces it with `target.htmlReportPath`; if it prints
+warnings it keeps the Markdown too, which means the report drifted from the Step 4 format.
 
 Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
 had its commands run and all five points evaluated; analyze any missed file now. A target with an
@@ -182,7 +195,8 @@ unanalyzed file is not done, regardless of diff size or session length.
 
 ## Step 4 — Report format (one file per target, ALWAYS in Polish)
 
-`target.reportPath` (UTF-8) is assembled during Step 3 (header written first, findings as part files per batch, one concatenation at the end), with this structure and nothing else:
+`target.reportPath` (UTF-8) is assembled during Step 3 (header written first, findings as part files per batch, one concatenation at the end), with this structure and nothing else.
+`render-report.cjs` parses exactly this structure to build the HTML report, so it is a contract, not a suggestion — every deviation degrades the HTML and makes the renderer keep the Markdown:
 
     # Code Review: <branch> → <baseBranch> | <YYYY-MM-DD> <HH:mm>
 
@@ -229,7 +243,7 @@ unanalyzed file is not done, regardless of diff size or session length.
 
 ## Step 5 — Terminal summary (Polish)
 
-After writing all reports print, in Polish: each report path + finding counts per severity, plus any errors/warnings from Step 1.
+After writing all reports print, in Polish: each report path (`target.htmlReportPath` when the renderer ran, otherwise `target.reportPath`) + finding counts per severity, plus any errors/warnings from Step 1 and any warning the renderer printed.
 Nothing else.
 
 ## Skip rationalizations — all invalid

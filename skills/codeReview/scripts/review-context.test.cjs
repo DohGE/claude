@@ -3,23 +3,30 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
 const rc = require('./review-context.cjs');
+const { tempDir } = require('./test-helpers.cjs');
 
 // ---------- Task 1: utilities ----------
 
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x' },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html' },
   );
   assert.strictEqual(rc.parseArgs([]).mode, 'auto');
   assert.strictEqual(rc.parseArgs(['--mode=branches', '--branches=a,b;c']).branches, 'a,b;c');
   assert.strictEqual(rc.parseArgs(['--mode=folder', '--path=src/app']).path, 'src/app');
   assert.throws(() => rc.parseArgs(['--mode=nope']), /Unknown --mode/);
+});
+
+test('parseArgs defaults --output to html and validates it', () => {
+  assert.strictEqual(rc.parseArgs([]).output, 'html');
+  assert.strictEqual(rc.parseArgs(['--output=md']).output, 'md');
+  assert.strictEqual(rc.parseArgs(['--output=html']).output, 'html');
+  assert.throws(() => rc.parseArgs(['--output=pdf']), /Unknown --output/);
 });
 
 test('globToRegExp supports the documented subset', () => {
@@ -77,18 +84,6 @@ function run(dir, args) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
-}
-
-function tempDir(t, prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  t.after(() => {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    } catch {
-      // best-effort temp cleanup (Windows may hold read-only git objects)
-    }
-  });
-  return dir;
 }
 
 function commitFile(dir, file, content, message) {
@@ -301,6 +296,30 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.ok(fs.existsSync(path.join(skillDir, 'reports')));
 });
 
+test('output format decides htmlReportPath across modes', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/html']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const now = new Date(2026, 6, 8, 10, 0);
+
+  const html = rc.buildContext({ mode: 'auto', project: dir, skillDir, now });
+  assert.strictEqual(html.outputFormat, 'html', 'html is the default output format');
+  assert.ok(html.targets[0].reportPath.endsWith('feature-html-2026-07-08-10-00.md'), 'the working file stays Markdown');
+  assert.ok(html.targets[0].htmlReportPath.endsWith('feature-html-2026-07-08-10-00.html'));
+
+  const md = rc.buildContext({ mode: 'auto', project: dir, skillDir, now, output: 'md' });
+  assert.strictEqual(md.outputFormat, 'md');
+  assert.ok(md.targets[0].reportPath.endsWith('feature-html-2026-07-08-10-00.md'));
+  assert.strictEqual(md.targets[0].htmlReportPath, null, 'md mode renders no html');
+
+  const folder = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now });
+  assert.ok(folder.targets[0].htmlReportPath.endsWith('feature-html-folder-src-2026-07-08-10-00.html'));
+
+  const staged = rc.buildContext({ mode: 'staged', project: dir, skillDir, now });
+  assert.ok(staged.targets[0].htmlReportPath.endsWith('feature-html-staged-2026-07-08-10-00.html'));
+});
+
 test('staged mode lists index files with index show commands', (t) => {
   const dir = makeRepo(t);
   commitFile(dir, 'old.css', 'body {}\n', 'add css');
@@ -381,6 +400,23 @@ test('pruneReports keeps only the newest N reports', (t) => {
   const left = fs.readdirSync(dir).filter((n) => n.endsWith('.md')).sort();
   assert.deepStrictEqual(left, ['branch-5.md', 'branch-6.md', 'branch-7.md']);
   assert.ok(fs.existsSync(path.join(dir, 'notes.txt')), 'non-md files are untouched');
+});
+
+test('pruneReports counts html reports toward the same cap', (t) => {
+  const dir = tempDir(t, 'cr-reports-html-');
+  const stamp = (name, day) => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, 'x');
+    const time = new Date(2026, 0, day);
+    fs.utimesSync(file, time, time);
+  };
+  stamp('branch-0.html', 1);
+  stamp('branch-1.md', 2);
+  stamp('branch-2.html', 3);
+  stamp('branch-3.md', 4);
+  stamp('branch-4.html', 5);
+  rc.pruneReports(dir, 2);
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['branch-3.md', 'branch-4.html']);
 });
 
 test('branches mode splits on , and ; and keeps going past missing branches', (t) => {
@@ -470,4 +506,11 @@ test('CLI prints JSON and exits 1 when nothing is reviewable', (t) => {
   const json = JSON.parse(res.stdout);
   assert.deepStrictEqual(json.targets, []);
   assert.match(json.errors[0], /Not a git repository/);
+});
+
+test('outputFormat survives the fatal early returns', (t) => {
+  const dir = tempDir(t, 'cr-nonrepo-');
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, output: 'md' });
+  assert.ok(ctx.errors.some((e) => /Not a git repository/.test(e)));
+  assert.strictEqual(ctx.outputFormat, 'md', 'the requested format is reported even when the run aborts');
 });
