@@ -1,6 +1,6 @@
 ---
 name: codeReview
-description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against global/local instruction checklists and writes one concise Polish report per branch (interactive HTML by default, Markdown with --output-md) with severity, real line numbers, violated rule and expected result
+description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against global/local instruction checklists and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md) with severity, real line numbers, violated rule and expected result
 ---
 
 # codeReview — deterministic instruction-driven review
@@ -22,9 +22,9 @@ diff itself touched are reported (Step 3 scope gate).
 ## Step 1 — Build the review context
 
 1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = current working directory.
-2. If the arguments contain the exact token `--output-md`, remove it and set `OUTPUT=md`; otherwise
+2. If the arguments contain the exact token `--only-md`, remove it and set `OUTPUT=md`; otherwise
    `OUTPUT=html`. Do this FIRST and on the whole argument list, wherever the flag sits — an
-   unstripped `--output-md` would be mapped below as a branch name.
+   unstripped `--only-md` would be mapped below as a branch name.
 3. Map the REMAINING arguments to the context script EXACTLY like this:
    - no arguments → `--mode=auto`
    - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review
@@ -185,7 +185,7 @@ HTML report from the assembled Markdown:
 `cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>"`.
 The separators are `;`, never `&&`: the renderer must run even if the concatenation found nothing,
 otherwise a clean review would silently fall back to Markdown in HTML mode.
-Drop the last command when `htmlReportPath` is null (`--output-md` was passed) — the Markdown
+Drop the last command when `htmlReportPath` is null (`--only-md` was passed) — the Markdown
 is the report then. Otherwise the renderer replaces it with `target.htmlReportPath`; if it prints
 warnings it keeps the Markdown too, which means the report drifted from the Step 4 format.
 

@@ -262,26 +262,47 @@ function matchLocalInstructions(locals, filePath) {
 // Keep only the reportsRetain newest reports so the reports folder does not
 // grow without bound across runs. Both output formats count toward the cap, so
 // a folder of HTML reports is capped exactly like a folder of Markdown ones.
-// Best-effort: failures never break a review.
+// Reports live one level deep (one folder per branch); loose reports directly
+// in reportsDir are still counted, so folders written before the per-branch
+// grouping stay capped too. Best-effort: failures never break a review.
 function pruneReports(reportsDir, retain = reportsRetain) {
-  let names;
+  const isReport = (name) => name.endsWith('.md') || name.endsWith('.html');
+  let entries;
   try {
-    names = fs.readdirSync(reportsDir).filter((n) => n.endsWith('.md') || n.endsWith('.html'));
+    entries = fs.readdirSync(reportsDir, { withFileTypes: true });
   } catch {
     return;
   }
-  if (names.length <= retain) return;
-  const stamped = names.map((name) => {
-    const full = path.join(reportsDir, name);
-    let mtime = 0;
+  const branchDirs = [];
+  const files = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) branchDirs.push(path.join(reportsDir, entry.name));
+    else if (isReport(entry.name)) files.push(path.join(reportsDir, entry.name));
+  }
+  for (const dir of branchDirs) {
     try {
-      mtime = fs.statSync(full).mtimeMs;
+      for (const name of fs.readdirSync(dir)) if (isReport(name)) files.push(path.join(dir, name));
     } catch {}
-    return { full, mtime };
-  }).sort((a, b) => b.mtime - a.mtime);
-  for (const { full } of stamped.slice(retain)) {
+  }
+  if (files.length > retain) {
+    const stamped = files.map((full) => {
+      let mtime = 0;
+      try {
+        mtime = fs.statSync(full).mtimeMs;
+      } catch {}
+      return { full, mtime };
+    }).sort((a, b) => b.mtime - a.mtime);
+    for (const { full } of stamped.slice(retain)) {
+      try {
+        fs.unlinkSync(full);
+      } catch {}
+    }
+  }
+  // A branch folder the pruning above emptied goes with its reports; rmdir on a
+  // folder that still holds something throws and is ignored.
+  for (const dir of branchDirs) {
     try {
-      fs.unlinkSync(full);
+      fs.rmdirSync(dir);
     } catch {}
   }
 }
@@ -342,11 +363,17 @@ function buildContext(options) {
   const reportsDir = useProjectDoh
     ? path.join(projectClaudeDir, 'doh')
     : path.join(skillDir, 'reports');
+  // Every report of a branch lands in that branch's own folder, so a reports
+  // dir shared by many branches stays browsable. The file name keeps the branch
+  // prefix on purpose: the HTML page namespaces its localStorage by file name,
+  // and two branches reviewed in the same minute would otherwise collide.
   // The Markdown report is always the working file the reviewer writes to. In
   // html mode `render-report.cjs` turns it into `htmlReportPath` at the end of
   // the run and removes it, so the analysis steps never see the format choice.
-  const reportPaths = (name) => {
-    const reportPath = path.join(reportsDir, `${name}-${ts.date}-${ts.time}.md`);
+  const reportPaths = (branchName, suffix = '') => {
+    const branchDir = sanitizeBranchName(branchName);
+    const name = suffix ? `${branchDir}-${suffix}` : branchDir;
+    const reportPath = path.join(reportsDir, branchDir, `${name}-${ts.date}-${ts.time}.md`);
     return { reportPath, htmlReportPath: wantsHtml ? reportPath.replace(/\.md$/, '.html') : null };
   };
   const claudeMdPath = path.join(project, 'CLAUDE.md');
@@ -398,7 +425,7 @@ function buildContext(options) {
       kind: 'branch',
       branch: branchName,
       baseBranch: baseRef,
-      ...reportPaths(sanitizeBranchName(branchName)),
+      ...reportPaths(branchName),
       commands: {
         diff: gitc(`diff ${baseRef}...${branchRef} -- ${q('<path>')}`),
         show: `${gitc(`show ${q(`${branchRef}:<path>`)}`)} | cat -n`,
@@ -423,7 +450,7 @@ function buildContext(options) {
       kind: 'staged',
       branch: branchName,
       baseBranch: null,
-      ...reportPaths(`${sanitizeBranchName(branchName)}-staged`),
+      ...reportPaths(branchName, 'staged'),
       commands: {
         diff: gitc(`diff --cached -- ${q('<path>')}`),
         show: `${gitc(`show ${q(':<path>')}`)} | cat -n`,
@@ -453,7 +480,7 @@ function buildContext(options) {
         branch: branchName,
         baseBranch: null,
         folder: rel,
-        ...reportPaths(`${sanitizeBranchName(branchName)}-folder-${sanitizeBranchName(rel)}`),
+        ...reportPaths(branchName, `folder-${sanitizeBranchName(rel)}`),
         commands: {
           diff: null,
           show: `cat ${q(`${project.replace(/\\/g, '/')}/<path>`)} | cat -n`,
@@ -500,6 +527,9 @@ function buildContext(options) {
     // with other artifacts) — never prune it; only cap the skill-local folder.
     if (useProjectDoh) ensureDohGitignore(reportsDir);
     else pruneReports(reportsDir);
+    // After the pruning, so an emptied branch folder is not removed right after
+    // being created for this run.
+    for (const target of result.targets) fs.mkdirSync(path.dirname(target.reportPath), { recursive: true });
   }
   return result;
 }

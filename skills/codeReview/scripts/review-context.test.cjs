@@ -387,6 +387,45 @@ test('generated and binary files are skipped and listed per target', (t) => {
   assert.deepStrictEqual(t0.skipped.sort(), ['dist/bundle.js', 'package-lock.json']);
 });
 
+test('reports are grouped in a folder named after the branch', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/grouped']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const now = new Date(2026, 6, 8, 10, 0);
+  const reportsDir = path.join(skillDir, 'reports');
+  const rel = (p) => path.relative(reportsDir, p).replace(/\\/g, '/');
+
+  const branch = rc.buildContext({ mode: 'auto', project: dir, skillDir, now });
+  assert.strictEqual(rel(branch.targets[0].reportPath), 'feature-grouped/feature-grouped-2026-07-08-10-00.md');
+  assert.strictEqual(rel(branch.targets[0].htmlReportPath), 'feature-grouped/feature-grouped-2026-07-08-10-00.html');
+  assert.ok(fs.existsSync(path.join(reportsDir, 'feature-grouped')), 'the branch folder exists before the reviewer writes');
+
+  const staged = rc.buildContext({ mode: 'staged', project: dir, skillDir, now });
+  assert.strictEqual(rel(staged.targets[0].reportPath), 'feature-grouped/feature-grouped-staged-2026-07-08-10-00.md');
+
+  const folder = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now });
+  assert.strictEqual(rel(folder.targets[0].reportPath), 'feature-grouped/feature-grouped-folder-src-2026-07-08-10-00.md');
+});
+
+test('each branch of a multi-branch run gets its own folder', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/a']);
+  commitFile(dir, 'a.txt', 'a', 'a');
+  run(dir, ['checkout', '-q', 'main']);
+  run(dir, ['checkout', '-q', '-b', 'feature/b']);
+  commitFile(dir, 'b.txt', 'b', 'b');
+  run(dir, ['checkout', '-q', 'main']);
+  const skillDir = makeSkillDir(t);
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature/a,feature/b', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const reportsDir = path.join(skillDir, 'reports');
+  assert.deepStrictEqual(
+    ctx.targets.map((x) => path.relative(reportsDir, x.reportPath).replace(/\\/g, '/')),
+    ['feature-a/feature-a-2026-07-08-10-00.md', 'feature-b/feature-b-2026-07-08-10-00.md'],
+  );
+  assert.deepStrictEqual(fs.readdirSync(reportsDir).sort(), ['feature-a', 'feature-b']);
+});
+
 test('pruneReports keeps only the newest N reports', (t) => {
   const dir = tempDir(t, 'cr-reports-');
   for (let i = 0; i < 8; i++) {
@@ -417,6 +456,33 @@ test('pruneReports counts html reports toward the same cap', (t) => {
   stamp('branch-4.html', 5);
   rc.pruneReports(dir, 2);
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['branch-3.md', 'branch-4.html']);
+});
+
+test('pruneReports caps reports across branch folders and drops emptied ones', (t) => {
+  const dir = tempDir(t, 'cr-reports-nested-');
+  const stamp = (relPath, day) => {
+    const file = path.join(dir, relPath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'x');
+    const time = new Date(2026, 0, day);
+    fs.utimesSync(file, time, time);
+  };
+  stamp('feature-a/feature-a-1.html', 1);
+  stamp('feature-a/feature-a-2.md', 2);
+  stamp('feature-b/feature-b-3.md', 3);
+  stamp('feature-b/feature-b-4.html', 4);
+  rc.pruneReports(dir, 2);
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['feature-b'], 'the emptied branch folder goes with its reports');
+  assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'feature-b')).sort(), ['feature-b-3.md', 'feature-b-4.html']);
+});
+
+test('pruneReports keeps a branch folder that still holds something', (t) => {
+  const dir = tempDir(t, 'cr-reports-keep-');
+  fs.mkdirSync(path.join(dir, 'feature-a'));
+  fs.writeFileSync(path.join(dir, 'feature-a', 'old.md'), 'x');
+  fs.writeFileSync(path.join(dir, 'feature-a', 'notes.txt'), 'not a report');
+  rc.pruneReports(dir, 0);
+  assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'feature-a')), ['notes.txt'], 'non-report files are untouched');
 });
 
 test('branches mode splits on , and ; and keeps going past missing branches', (t) => {

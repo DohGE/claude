@@ -1,7 +1,7 @@
 # /codeReview — deterministic instruction-driven code review
 
 Part of the `doh` plugin.
-Reviews git changes against instruction checklists and writes one concise report per reviewed branch — an interactive HTML page by default, Markdown with `--output-md`.
+Reviews git changes against instruction checklists and writes one concise report per reviewed branch — an interactive HTML page by default, Markdown with `--only-md`.
 Reports are always written in Polish.
 Report-only: the skill writes no code and makes no commits; the sole repo side effect is `git add .` in staged mode, which stages every pending change before reviewing it.
 Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
@@ -15,15 +15,16 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview` | current branch vs its auto-detected base branch |
 | `/codeReview staged` | all pending changes (runs `git add .` first, then reviews the git index) |
 | `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own auto-detected base; one report per branch |
-| `/codeReview [target] --output-md` | any of the above, but the report stays Markdown and no HTML is rendered |
+| `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
 
-`--output-md` may sit anywhere in the arguments and is stripped before the rest is mapped to a mode.
-The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--output-md` renders no HTML.
+`--only-md` may sit anywhere in the arguments and is stripped before the rest is mapped to a mode.
+The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
 
-Reports land in `reports/` inside this skill, named `{branch}-{YYYY-MM-DD}-{HH-mm}.html` (staged variant: `{branch}-staged-{YYYY-MM-DD}-{HH-mm}.html`, folder variant: `{branch}-folder-{path}-{YYYY-MM-DD}-{HH-mm}.html`), or the same name with `.md` under `--output-md`.
-When the reviewed project has its own `.claude/` folder, reports go to `<project>/.claude/doh/` instead.
-Branch names are sanitized for file names (any character outside `A-Z a-z 0-9 . _ -` becomes `-`); the time uses `HH-mm` because `:` is not allowed in Windows file names.
-Only the 30 newest reports are kept — older ones (either format) are pruned automatically at the start of a run.
+Reports are grouped per branch: every report of a branch lands in `reports/{branch}/` inside this skill, named `{branch}-{YYYY-MM-DD}-{HH-mm}.html` (staged variant: `{branch}-staged-{YYYY-MM-DD}-{HH-mm}.html`, folder variant: `{branch}-folder-{path}-{YYYY-MM-DD}-{HH-mm}.html`), or the same name with `.md` under `--only-md`.
+A multi-branch run writes one folder per reviewed branch. The branch stays in the file name too, so the HTML page's `localStorage` key (namespaced by file name) never collides between branches reviewed in the same minute.
+When the reviewed project has its own `.claude/` folder, reports go to `<project>/.claude/doh/{branch}/` instead.
+Branch names are sanitized for file and folder names (any character outside `A-Z a-z 0-9 . _ -` becomes `-`); the time uses `HH-mm` because `:` is not allowed in Windows file names.
+Only the 30 newest reports are kept — older ones (either format, in any branch folder) are pruned automatically at the start of a run, and a branch folder emptied by that pruning is removed with them.
 Generated and binary files (lockfiles, `*.min.*`, source maps, `dist/`/`build/`/`coverage/` output, images, fonts, media, executables) are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report.
 
 ## Instructions
@@ -91,7 +92,7 @@ Report text reaches the page as JSON data and is written into the DOM with `text
 
 ## Report format
 
-The Markdown below is the report under `--output-md` and the intermediate representation the HTML is rendered from, so its structure is a contract — `render-report.cjs` parses it, and a deviation both degrades the HTML and makes the renderer keep the `.md` next to it as a signal.
+The Markdown below is the report under `--only-md` and the intermediate representation the HTML is rendered from, so its structure is a contract — `render-report.cjs` parses it, and a deviation both degrades the HTML and makes the renderer keep the `.md` next to it as a signal.
 
 Always Polish, findings only — no intros, summaries or closing remarks.
 Header line: `# Code Review: <branch> → <base> | <YYYY-MM-DD> <HH:mm>` (staged variant: `# Code Review: staged (<branch>) | ...`).
