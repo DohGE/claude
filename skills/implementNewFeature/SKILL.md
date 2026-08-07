@@ -140,8 +140,11 @@ leaves the panel locked on the previous answer.
 ## Step 5 — Validation & E2E (view-only)
 
 1. POST `{"step":5,"status":"in_progress","activeStep":5,"progress":0}`.
-2. Spawn the validation agent from `references/validation-agent.md`.
-3. `{"type":"result","compliance":NN,"testsSummary","mockupSummary"}` with `compliance>=99` → POST completed. `{"type":"error","report"}` (e.g. <99% after 3 cycles) → failure protocol.
+2. Spawn the validation agent from `references/validation-agent.md`. It runs the test suite in
+   Playwright and, when the Claude Chrome extension is available, uses the user's own Chrome for
+   discovery, failure debugging and a UX pass — expect a tab to open there during this step. If the
+   extension is missing it degrades to Playwright-only by itself; never intervene.
+3. `{"type":"result","compliance":NN,"testsSummary","mockupSummary","uxSummary"}` with `compliance>=99` → POST completed. `{"type":"error","report"}` (e.g. <99% after 3 cycles) → failure protocol.
 
 ## Step 6 — Code Review (view-only)
 
@@ -162,8 +165,8 @@ leaves the panel locked on the previous answer.
 1. Delete `<SESSION>/auth.json` if it exists (credentials must not outlive the pipeline; the
    server also wipes it on shutdown as a backstop). Do this on BOTH outcomes — success and
    `finish` after a failure.
-2. Collect from step results only (no file contents): changes, features, tests, mockup comparison, review results.
-3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","mockupComparison":"...","codeReview":"..."}}`.
+2. Collect from step results only (no file contents): changes, features, tests, mockup comparison, UX findings, review results.
+3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`uxReview` = the validation agent's `uxSummary`).
 4. Print the same summary in the terminal (user's language).
 5. Stage everything: `git add -A` (already done by the step-6 agent; verify with `git status --short`).
 6. Suggest `superpowers:finishing-a-development-branch` for commit/merge/PR.
