@@ -152,6 +152,22 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    that single occurrence spans contiguous lines. Cross-check every finding against `changedLines`
    and the scope gate: lines outside `changedLines` are reportable only under one of the gate's four
    carve-outs, and the description must state the link to the diff; otherwise the finding is dropped.
+
+   **Two sweeps close every file — a cited line is not a retired line.** The checklist pass of point 2
+   finds a rule's FIRST violation; these two sweeps find the rest, and both run before the file's
+   findings are written:
+   - *occurrence sweep* — for every rule you are reporting, search the WHOLE file for its remaining
+     occurrences and list each one in `**Linia:**`. The first hit is never assumed to be the only one.
+   - *line sweep* — re-read every line you cited and ask which OTHER checklist items that same line
+     breaks. One line routinely violates several rules at once: `<input [(ngModel)]="q"
+     placeholder="Search">` breaks the forms rule, the i18n rule and the label rule; a
+     `@Component({...})` bag that already produced a missing-`OnPush` finding still hides inline
+     `styles:`, a mismatched `imports` array and a selector-prefix breach; an `<a target="_blank">`
+     flagged for its unvalidated URL still lacks `rel="noopener noreferrer"`; a field flagged as
+     mutable-bound-in-template still holds a hard-coded user-facing string. Writing a finding for a
+     line marks that ONE rule handled — never the line.
+   Both sweeps run on every file, and most of all on files that already produced many findings: that
+   is where further occurrences hide, not where they run out.
 4. Persist findings per fetch batch, not per file and never all at the end: when the last file of
    the current batch (point 1) is analyzed, write the batch's findings sections — every file of
    the batch, in listed order — as the next sequential part file
@@ -164,8 +180,10 @@ final part file. Answer each of these four questions explicitly, against the dif
    of this diff, or re-implemented next to an existing shared util? Report every copy the diff adds,
    under the code-quality instruction (🟡 Medium).
 2. Layering — walk the import ledger collected in point 1 of the per-file pass, edge by edge: name
-   the layer of the importing file and of the imported module, check the edge's direction against
-   the architecture instruction, and report each forbidden edge at the importing file. "No layering
+   the layer of the importing file and of the imported module, check the edge's direction AND its
+   form (barrel vs concrete path, per the architecture instruction) against the architecture
+   instruction, and report each forbidden edge at the importing file. A permitted direction does not
+   end the edge's verdict — a legal edge taken through the wrong form is still a finding. "No layering
    findings" may be claimed only after every ledger entry has its verdict — an empty ledger means
    the collection step was skipped, not that the diff has no import edges.
 3. Derived-data flow — does any state field, action payload or component binding carry a value
@@ -264,5 +282,7 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "This rule is pedantic here" | Rule weight is expressed through severity, never through omission. |
 | "I remember the instructions" | Verdicts come from the instruction files read this run, item by item — not from memory. |
 | "This file already has plenty of findings" | Findings per file are unlimited. Stopping a checklist partway is skipping items. |
+| "This line already has a finding" | Findings are per rule, not per line. A cited line goes back through the remaining checklist items (Step 3 point 3, line sweep) — one line commonly breaks three or four rules. |
+| "I already reported this rule here" | You reported its first occurrence. The occurrence sweep (Step 3 point 3) searches the whole file for the rest and puts every one into `**Linia:**`. |
 | "No local instruction matched this file" | Global checklists apply to every file; zero local matches often means the file sits outside every dedicated location — itself a violation. |
 | "Context/time is running low" | Coverage outranks speed. Keep going file by file. |
