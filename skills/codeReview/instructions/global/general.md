@@ -10,5 +10,7 @@ name: General code rules
 - Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.
 - Every user-facing string is an i18n key resolved through the translation pipe/service — never a hard-coded text, in TS or in templates.
 - No `console.log` or other leftover debug statements.
+- No focused or skipped tests in the diff: `fdescribe`, `fit`, `describe.only`, `it.only`, `xdescribe`, `xit`, `test.skip` — a committed `.only` silently reduces CI to one suite while staying green (report as 🔴 High).
+- In-app navigation goes through `Router` (`navigate`/`navigateByUrl`/`routerLink`) — `window.location.href`/`assign`/`replace` discards router state, guards and the SPA boundary; a deliberate full page load carries a justification or it is a finding.
 - Errors are never swallowed: no empty `catch` blocks, no `.catch(() => {})`, no `catchError` that drops the failure without mapping it to a fail action/error state — every failure path either surfaces to state/UI or carries an explicit justification.
 - Linter and Prettier are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings.

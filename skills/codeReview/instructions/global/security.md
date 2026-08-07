@@ -14,5 +14,7 @@ name: Security
 - Authentication headers are attached by the shared interceptor only — never hand-built per request; an interceptor never forwards `Authorization`/cookies to hosts outside the app's API origin and never logs request/response bodies or headers.
 - Access control is enforced by route guards (and the backend) — hiding a button or menu entry is presentation, not authorization; every security-relevant route added in the diff has its guard.
 - User-provided content (file names, rich text, uploaded HTML/SVG) is treated as untrusted: never rendered through `innerHTML`/`srcdoc` and never used to build selectors, URLs or templates.
-- SSR-enabled apps only: server-side `useValue` providers must be request-independent (a mutable `useValue` singleton is shared between requests and leaks state between users — per-request values use `useFactory`); no user-specific data is serialized into transfer state (`TransferState`, `resource`/`httpResource` `id`) because that HTML may be cached and shared; the HTTP transfer-cache `includeHeaders` option never includes auth or cookie headers.
+- SSR only: server-side `useValue` providers are request-independent — a mutable `useValue` singleton is shared between requests and leaks state between users; per-request values use `useFactory`.
+- SSR only: no user-specific data is serialized into transfer state (`TransferState`, `resource`/`httpResource` `id`) — that HTML may be cached and served to another user.
+- SSR only: the HTTP transfer-cache `includeHeaders` option never includes auth or cookie headers.
 - A new third-party dependency introduced in the diff is reported for verification (maintenance status, license, known vulnerabilities) — never silently accepted.

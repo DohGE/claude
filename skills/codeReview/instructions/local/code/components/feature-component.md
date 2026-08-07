@@ -12,8 +12,9 @@ applies-to:
 - Presentation is delegated to `ui-*` children or shared/library components; the feature wires facade state to children through inputs/outputs and does not render rich markup itself.
 - An extensive, complex, or over-50-line template is extracted into `ui-*` children rather than left inline in the feature component; the feature keeps only the wiring markup that binds facade state to those children.
 - Public handlers are thin proxies to facade methods (no logic, no branching beyond trivial argument shaping).
-- `ngOnInit` reads route/query parameters, triggers the initial facade loads and creates subscriptions.
-- Edit mode: the entity identifier is read from query params in `ngOnInit` and, when present, the definition load is dispatched through the facade; both branches (present/absent) exist.
+- Route and query parameters arrive as signal `input()`s bound by `withComponentInputBinding()`; `ActivatedRoute` is injected only for what the binding cannot express (reacting to a sibling route, reading a parent route's snapshot).
+- `ngOnInit` triggers the initial facade loads and creates subscriptions — it no longer reads route parameters.
+- Edit mode: the entity identifier is the bound `input()` and, when present, the definition load is dispatched through the facade; both branches (present/absent) exist and are expressed as a signal read (`effect()`/`computed()`), not a params subscription.
 - Aggregated child-form validity uses the shared forms-validity service pattern: subscribe to the components-reference token and register references, subscribe to the aggregate-validity observable with `debounceTime` taken from the central app config, `distinctUntilChanged()` and `takeUntilDestroyed(...)`, then propagate the result (e.g. to the layout facade or a facade flag).
 - Values aggregated from children and persisted only on step exit are flushed in `DestroyRef.onDestroy(() => facade.upsert...())` — never in `ngOnDestroy`.
 - Wizard gating (`canGoToNextStep`-style calls) combines the dedicated gate selector exposed by the facade with local form validity; tooltips/labels passed there are i18n keys.

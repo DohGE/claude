@@ -1,7 +1,6 @@
 ---
 name: Models folder
 applies-to:
-  - "**/models/*.ts"
   - "**/models/**/*.ts"
 ---
 ## Checklist
@@ -17,7 +16,9 @@ applies-to:
 - Existing endpoint DTO interfaces are not modified unless the task explicitly states the API contract changed.
 - Domain/UI types use `camelCase` fields (the DTO→domain mapping happens in the reducer or a util); the exception keeping `snake_case` is a structure that stores the raw API shape and is passed 1:1 into a payload without transformation.
 - `type` is used for unions/intersections/utility types (`Pick`, `Omit`, `Partial`, mapped types) and for enriching library types by intersection; `interface` for plain extensible objects; discriminated unions keep the literal discriminant field and all member interfaces in one file.
-- Table UI type files keep the complete set together: the table type, the `...DisplayedColumns` enum (all columns, including action-only ones), the `...DisplayedColumnsLabels` enum (only translated headers) — two separate enums whose string values equal their keys — plus the `...SourceData`/`...Cell` interfaces; drag-and-drop table types are parameterized with the existing domain item type instead of a separate source-data interface.
+- Table UI type files keep the complete set together: the table type, the `...DisplayedColumns` enum, the `...DisplayedColumnsLabels` enum and the `...SourceData`/`...Cell` interfaces.
+- `...DisplayedColumns` lists ALL columns including action-only ones; `...DisplayedColumnsLabels` lists only translated headers; both are string enums whose values equal their keys.
+- Drag-and-drop table types are parameterized with the existing domain item type instead of a separate source-data interface.
 - Enums are string enums only: camelCase keys, values equal to the API strings; never numeric enums.
 - Mappers are `Record<EnumKey, Value>` consts (completeness enforced by the compiler) named `...Mapper` in `-mapper.const.ts` files; the mapper imports its enum by relative path; a mapper that outgrows a plain `Record` becomes a util with a spec.
 - Radio/select option consts are typed with the shared-library option interface, and their `label`/`description` values are i18n keys, never texts.

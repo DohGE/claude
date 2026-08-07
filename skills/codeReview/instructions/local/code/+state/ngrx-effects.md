@@ -13,7 +13,9 @@ applies-to:
 - `tap` is only for side effects (alerts, events, closing dialogs, notifying shared services) and never changes stream data; related side effects share one `tap`; branching that picks the resulting action happens in `map`, with every branch returning an explicit action.
 - Effects triggered by cross-area/layout actions start with a `filter(...)` narrowing to their own area/step — otherwise every sibling area reacts to foreign events.
 - A `filter` after `concatLatestFrom` guards on state; when `0` is a valid value the check is an explicit `=== 0`/`!== null`, not truthiness.
-- Polling: outer `switchMap` over `timer(0, <interval from the central app config>)`, inner `switchMap` for the request, `takeUntil(this._stop$)` closing the inner pipe; `_stop$` is a `private readonly Subject<void>`; a separate `{ dispatch: false }` effect calls `_stop$.next()` on the stop and fail actions; intervals are never hard-coded.
+- Polling: an outer `switchMap` over `timer(0, <interval from the central app config>)` with an inner `switchMap` for the request; the interval is never hard-coded.
+- Polling: the inner pipe is closed with `takeUntil(this._stop$)`, where `_stop$` is a `private readonly Subject<void>`.
+- Polling: a separate `{ dispatch: false }` effect calls `_stop$.next()` on BOTH the stop and the fail actions — a fail that leaves the timer running polls a broken endpoint forever.
 - Multiple resulting actions are returned as an action array from one effect (branches unified with `of(action)` vs `[a, b]`) — not via `forkJoin` or duplicated effects.
 - Identical reactions to several actions are merged into one `ofType(a, b, c)`; the source is distinguished with `action.type === x.type` or `'prop' in action` type-narrowing.
 - Dialogs: `dialog.open<Component, Data, Result>(...)` always with all three generics; `afterClosed()` inside `switchMap`; cancellation is rejected with `filter((result): result is T => !!result)` before `map` (the predicate also removes the union with `null`/`false` without casting).
