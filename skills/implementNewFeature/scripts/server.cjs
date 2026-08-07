@@ -4,9 +4,19 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Implementation',
+const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
   'Validation & E2E', 'Code Review'];
+// Ids stay fixed so agent prompts can hardcode their step number; opt-in steps
+// start disabled and the orchestrator enables them from the step-1 answer.
+const OPTIONAL_STEPS = [3];
 const STATUSES = ['waiting', 'in_progress', 'completed', 'failed'];
+const MOCKUP_DIR = 'generated-mockups';
+const MOCKUP_TYPES = {
+  '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.woff2': 'font/woff2'
+};
 const MAX_BODY = 25 * 1024 * 1024;
 const MAX_LOG = 50;
 
@@ -14,9 +24,10 @@ function initialState() {
   return {
     steps: STEP_NAMES.map((name, i) => ({
       id: i + 1, name, status: 'waiting', progress: null,
+      enabled: !OPTIONAL_STEPS.includes(i + 1),
       currentOperation: '', report: null, log: []
     })),
-    activeStep: 1, question: null, reviewSummary: null, summary: null
+    activeStep: 1, question: null, reviewSummary: null, mockupReview: null, summary: null
   };
 }
 
@@ -87,6 +98,7 @@ function createApp(sessionDir, opts = {}) {
         if (!STATUSES.includes(body.status)) throw new Error(`bad status ${body.status}`);
         step.status = body.status;
       }
+      if (body.enabled !== undefined) step.enabled = !!body.enabled;
       if (body.progress !== undefined) step.progress = body.progress;
       if (body.currentOperation !== undefined) step.currentOperation = body.currentOperation;
       if (body.report !== undefined) step.report = body.report;
@@ -98,6 +110,7 @@ function createApp(sessionDir, opts = {}) {
     if (body.activeStep !== undefined) state.activeStep = body.activeStep;
     if (body.question !== undefined) state.question = body.question;
     if (body.reviewSummary !== undefined) state.reviewSummary = body.reviewSummary;
+    if (body.mockupReview !== undefined) state.mockupReview = body.mockupReview;
     if (body.summary !== undefined) state.summary = body.summary;
     persist();
   }
@@ -191,6 +204,29 @@ function createApp(sessionDir, opts = {}) {
           if (server.closeAllConnections) server.closeAllConnections();
         }));
         return sendJson(res, 200, { ok: true });
+      }
+      if (req.method === 'GET' && url.pathname.startsWith(`/${MOCKUP_DIR}/`)) {
+        // Read-only window into <SESSION>/generated-mockups for the review iframe.
+        // Only a bare filename with a known extension is served, so the route can
+        // never walk out of the session dir or hand back auth.json.
+        let name;
+        try {
+          name = path.basename(
+            decodeURIComponent(url.pathname.slice(MOCKUP_DIR.length + 2)).replace(/\\/g, '/'));
+        } catch (_e) {
+          return sendJson(res, 400, { error: 'bad path' });
+        }
+        const type = MOCKUP_TYPES[path.extname(name).toLowerCase()];
+        if (!type || name.startsWith('.')) return sendJson(res, 404, { error: 'not found' });
+        let data;
+        try {
+          data = fs.readFileSync(path.join(sessionDir, MOCKUP_DIR, name));
+        } catch (_e) {
+          return sendJson(res, 404, { error: 'not found' });
+        }
+        // no-store: the agent rewrites the same filenames between chat rounds.
+        res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
+        return res.end(data);
       }
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const html = fs.readFileSync(path.join(__dirname, 'ui', 'index.html'));

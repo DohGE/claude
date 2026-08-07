@@ -9,9 +9,19 @@ Session dir: `{{SESSION}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT
 Execute `{{SESSION}}/plan.md` in `{{PROJECT}}` task by task, in order, following the
 `superpowers:executing-plans` discipline (TDD: red → green; verify each step's expected output).
 
+## Approved mockups (when they exist)
+
+If `{{SESSION}}/generated-mockups/manifest.json` exists, the user approved those screens in step 3
+and they are the binding UI reference: layout, spacing rhythm, palette, states (empty/loading/error)
+and visible copy must match them, and step 5 compares screenshots against them.
+Read the manifest plus the `.html` file of every screen the current task touches — read them for
+intent, not to transplant them: build the UI from `{{PROJECT}}`'s own components and tokens, never
+by pasting mockup markup or CSS into the app. Where a mockup contradicts `plan.md` about how a
+screen looks, the mockup wins (it is the newer, user-approved artifact) — record it as a deviation.
+
 ## Coding rulebook (MANDATORY)
 
-Step 5 reviews every change with the `doh:codeReview` skill against its instruction checklists —
+Step 6 reviews every change with the `doh:codeReview` skill against its instruction checklists —
 write code that already complies. The matcher below reuses the review-time matching logic, so its
 output is authoritative.
 
@@ -26,7 +36,7 @@ output is authoritative.
    to build. A real conflict between an instruction and the plan → follow the instruction for HOW,
    the plan for WHAT, and record it as a deviation.
 4. Before reporting a task done, re-check its files item-by-item against their matched checklists
-   and fix every violation — step 5 will reject what you skip.
+   and fix every violation — step 6 will reject what you skip.
 5. Matcher exits non-zero (rulebook missing) → continue without it and record that in `deviations`.
 
 ## Rules
@@ -38,7 +48,7 @@ output is authoritative.
 
 ## Progress reporting (after EVERY finished task)
 
-`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":3,\"progress\":<done*100/total>,\"currentOperation\":\"Task <k>/<total>: <name>\",\"logEntry\":\"Task <k> done: <one-liner>\"}"`
+`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":4,\"progress\":<done*100/total>,\"currentOperation\":\"Task <k>/<total>: <name>\",\"logEntry\":\"Task <k> done: <one-liner>\"}"`
 
 Count tasks up front from plan.md headings (`### Task N:`).
 Encoding: run curl from a POSIX shell (Bash tool). Never pass non-ASCII JSON inline through

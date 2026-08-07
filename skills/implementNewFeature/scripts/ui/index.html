@@ -22,7 +22,8 @@
        background:linear-gradient(90deg,var(--accent),var(--accent-2));
        -webkit-background-clip:text; background-clip:text; color:transparent; }
   .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
-  .step { flex:1 1 150px; background:var(--card); border:1px solid var(--border); border-radius:14px;
+  /* 120px basis keeps all six tiles (Mockups enabled) on a single row at 940px. */
+  .step { flex:1 1 120px; background:var(--card); border:1px solid var(--border); border-radius:14px;
           padding:14px 10px; text-align:center; transition:border-color .25s, box-shadow .25s;
           box-shadow:0 12px 28px -18px rgba(0,0,0,.9); }
   .step.in_progress { border-color:var(--accent);
@@ -50,7 +51,8 @@
           width:100%; font:inherit; color:var(--text); }
   textarea, input[type=text], input[type=password] { background:var(--card-2);
           border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
-  textarea { min-height:90px; resize:vertical; }
+  /* Height is driven by autoGrow(); manual dragging would fight it. */
+  textarea { min-height:90px; resize:none; overflow-y:hidden; }
   textarea:focus, input[type=text]:focus, input[type=password]:focus { outline:none;
           border-color:var(--accent); box-shadow:0 0 0 3px rgba(124,140,248,.18); }
   .panel h3 { font-size:14px; margin:22px 0 0; color:var(--accent); }
@@ -69,6 +71,45 @@
           transform:none; filter:none; }
   .options button.selected { border-color:var(--accent); background:rgba(124,140,248,.14);
           color:var(--text); }
+  .field-with-btn { position:relative; }
+  .field-with-btn input { padding-right:46px; }
+  button.reveal { position:absolute; top:50%; right:6px; transform:translateY(-50%); margin:0;
+          background:transparent; padding:6px 8px; color:var(--muted); line-height:0;
+          border-radius:8px; }
+  button.reveal:hover:not(:disabled) { color:var(--text); background:var(--card);
+          transform:translateY(-50%); filter:none; }
+  button.reveal[aria-pressed=true] { color:var(--accent); }
+  button.reveal:disabled { background:transparent; }
+  .switch { display:flex; align-items:center; gap:10px; margin-top:12px; }
+  .switch input { appearance:none; -webkit-appearance:none; flex:none; margin:0; cursor:pointer;
+          width:40px; height:22px; border-radius:99px; background:var(--card-2);
+          border:1px solid var(--border); position:relative;
+          transition:background .2s, border-color .2s; }
+  .switch input::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px;
+          border-radius:50%; background:var(--muted); transition:transform .2s, background .2s; }
+  .switch input:checked { background:rgba(124,140,248,.28); border-color:var(--accent); }
+  .switch input:checked::after { transform:translateX(18px); background:var(--accent); }
+  .switch input:disabled { opacity:.5; cursor:not-allowed; }
+  .switch label { margin:0; color:var(--text); cursor:pointer; }
+  .hint { font-size:12.5px; color:var(--muted); margin:6px 0 0; }
+  .mockup-bar { display:flex; justify-content:space-between; align-items:center; gap:12px;
+          flex-wrap:wrap; margin:18px 0 10px; }
+  .tabs { display:flex; gap:6px; flex-wrap:wrap; }
+  .tabs button { margin-top:0; padding:6px 12px; font-size:12.5px; background:var(--card-2);
+          color:var(--muted); border:1px solid var(--border); }
+  .tabs button:hover:not(:disabled) { color:var(--text); border-color:var(--border-hi);
+          transform:none; filter:none; }
+  .tabs button.selected { color:var(--text); border-color:var(--accent);
+          background:rgba(124,140,248,.14); }
+  .frame { overflow:hidden; border:1px solid var(--border); border-radius:12px;
+          background:var(--card-2); }
+  .frame iframe { border:0; display:block; transform-origin:top left; }
+  .chat { margin-top:18px; border-top:1px solid var(--border); }
+  .msg { padding:10px 0; border-bottom:1px solid var(--border); font-size:13px;
+          white-space:pre-wrap; color:#c3c9d6; }
+  .msg .who { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.8px;
+          font-weight:700; margin-bottom:4px; color:var(--muted); }
+  .msg.user .who { color:var(--accent); }
   .bar { height:8px; background:var(--card-2); border:1px solid var(--border); border-radius:99px;
           overflow:hidden; margin:10px 0 6px; }
   .bar > div { height:100%; background:linear-gradient(90deg,var(--accent),var(--accent-2));
@@ -87,6 +128,7 @@
           border:1px solid var(--border); border-radius:10px; padding:14px; font-size:13px;
           color:#c3c9d6; }
   .muted { color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
   .notice { display:flex; align-items:center; gap:10px; margin-top:16px; padding:12px 14px;
           border:1px solid var(--border-hi); border-radius:10px; background:rgba(124,140,248,.08);
           font-size:13px; }
@@ -107,12 +149,23 @@
 </div>
 <script>
 'use strict';
-const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Implementation',
+const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
   'Validation & E2E', 'Code Review'];
 const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
   completed: 'Completed', failed: 'Failed' };
+const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
+const EYE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M17.9 17.9A10 10 0 0 1 12 20C5 20 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 4.2A9.1 9.1 0'
+  + ' 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.2 3.2m-6.7-1.1a3 3 0 1 1-4.2-4.2"/>'
+  + '<path d="M1 1l22 22"/></svg>';
 let lastSig = null;
 let serverDown = false; // set when the user shuts the server down from the summary
+let mockupScreen = 0;   // preview selection survives re-renders of the mockup panel
+let mockupViewport = 'Desktop';
 
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s == null ? '' : s)
@@ -148,6 +201,29 @@ function lockPanel(message) {
   $('#panel').appendChild(n);
 }
 
+// Textareas grow with their content up to 45vh, then scroll — a pasted wall of
+// text must never push the panel's buttons off screen.
+function autoGrow(el) {
+  el.style.height = 'auto';
+  const border = el.offsetHeight - el.clientHeight;
+  const max = Math.round(window.innerHeight * 0.45);
+  const want = el.scrollHeight + border;
+  el.style.height = `${Math.min(want, max)}px`;
+  el.style.overflowY = want > max ? 'auto' : 'hidden';
+}
+
+function wireTextareas() {
+  document.querySelectorAll('#panel textarea').forEach(el => {
+    if (!el.dataset.autogrow) {
+      el.dataset.autogrow = '1';
+      el.addEventListener('input', () => autoGrow(el));
+    }
+    autoGrow(el);
+  });
+}
+
+window.addEventListener('resize', wireTextareas);
+
 async function tick() {
   if (serverDown) return;
   let state;
@@ -162,33 +238,50 @@ async function tick() {
   renderPanel(state);
 }
 
+// Step ids are fixed, but disabled steps (Mockups when the toggle stayed off)
+// are hidden and the visible ones are numbered 1..n so the badges stay contiguous.
 function renderStepper(state) {
-  $('#stepper').innerHTML = state.steps.map(s => `
+  $('#stepper').innerHTML = state.steps.filter(s => s.enabled !== false).map((s, i) => `
     <div class="step ${s.status}">
-      <span class="num">${s.id}</span>
+      <span class="num">${i + 1}</span>
       <span class="name">${esc(s.name || STEP_NAMES[s.id - 1])}</span>
       <span class="badge">${BADGE[s.status] || s.status}</span>
     </div>`).join('');
 }
 
+const activeStepOf = state =>
+  state.steps.find(s => s.id === state.activeStep) || state.steps[0];
+
 function sig(state) {
-  const step = state.steps[state.activeStep - 1] || state.steps[0];
+  const step = activeStepOf(state);
   return [state.activeStep, step.status,
     state.question ? state.question.id : '',
-    state.reviewSummary ? '1' : '', state.summary ? '1' : ''].join('|');
+    state.reviewSummary ? '1' : '',
+    // rev changes on every agent round, which re-renders the mockup panel and
+    // clears the lock left by the previous Send.
+    state.mockupReview ? `m${state.mockupReview.rev || 0}` : '',
+    state.summary ? '1' : ''].join('|');
 }
 
 function renderPanel(state) {
   const s = sig(state);
-  const step = state.steps[state.activeStep - 1] || state.steps[0];
+  const step = activeStepOf(state);
   if (s === lastSig) { updateDynamic(step); return; }
   lastSig = s;
+  renderActive(state, step);
+  wireTextareas();
+}
+
+function renderActive(state, step) {
   if (state.summary) return renderSummary(state.summary);
   if (step.status === 'failed') return renderFailed(step);
   if (state.activeStep === 1) return renderStep1(step);
   if (state.activeStep === 2) {
     if (state.question) return renderQuestion(state.question);
     if (state.reviewSummary) return renderReview(state.reviewSummary);
+  }
+  if (state.activeStep === 3 && state.mockupReview) {
+    return renderMockupReview(state.mockupReview);
   }
   renderProgress(step);
 }
@@ -206,6 +299,13 @@ function renderStep1(step) {
     <textarea id="biz"></textarea>
     <label>Mockups (optional)</label>
     <input type="file" id="mockups" multiple accept="image/*,.pdf">
+    <div class="switch">
+      <input type="checkbox" id="genMockups">
+      <label for="genMockups">Generate mockups</label>
+    </div>
+    <p class="hint">Adds a Mockups step after planning: an agent designs the screens from the plan
+      (and from the files above, if any), you refine them in a chat, and the approved design drives
+      both the implementation and the visual E2E comparison.</p>
     <label>API contracts / specs (optional — files or pasted text)</label>
     <input type="file" id="contracts" multiple>
     <textarea id="contractsText" placeholder="…or paste contracts here"></textarea>
@@ -214,8 +314,23 @@ function renderStep1(step) {
     <label>Login</label>
     <input type="text" id="authLogin" autocomplete="off">
     <label>Password</label>
-    <input type="password" id="authPassword" autocomplete="new-password">
+    <div class="field-with-btn">
+      <input type="password" id="authPassword" autocomplete="new-password">
+      <button type="button" id="togglePassword" class="reveal" aria-pressed="false"
+        aria-label="Show password" title="Show password">${EYE}</button>
+    </div>
     <button id="next" disabled>Next</button>`;
+  $('#togglePassword').addEventListener('click', () => {
+    const input = $('#authPassword');
+    const btn = $('#togglePassword');
+    const reveal = input.type === 'password';
+    input.type = reveal ? 'text' : 'password';
+    btn.innerHTML = reveal ? EYE_OFF : EYE;
+    btn.setAttribute('aria-pressed', String(reveal));
+    btn.setAttribute('aria-label', reveal ? 'Hide password' : 'Show password');
+    btn.setAttribute('title', reveal ? 'Hide password' : 'Show password');
+    input.focus();
+  });
   const auth = () => {
     const login = $('#authLogin').value.trim();
     const password = $('#authPassword').value;
@@ -250,7 +365,8 @@ function renderStep1(step) {
       taskDescription: $('#task').value.trim(),
       businessRequirements: $('#biz').value.trim(),
       contractsText: $('#contractsText').value.trim(),
-      mockups, contracts, authProvided: a.complete });
+      mockups, contracts, authProvided: a.complete,
+      generateMockups: $('#genMockups').checked });
   });
 }
 
@@ -296,6 +412,78 @@ function renderReview(review) {
     lockPanel('Feedback sent — the agent is revising the plan…');
     sendAnswer({ kind: 'decision', decision: 'feedback', text: t });
   });
+}
+
+function mockupUrl(review, screen) {
+  return `/generated-mockups/${encodeURIComponent(screen.file)}?rev=${review.rev || 0}`;
+}
+
+// The panel is ~930 px wide, so a 1280 px mockup is scaled down rather than
+// letterboxed — otherwise the preview would misreport the layout.
+function drawPreview(review) {
+  const box = $('#preview');
+  const screen = (review.screens || [])[mockupScreen];
+  if (!box) return;
+  if (!screen) {
+    box.innerHTML = '<p class="muted">No screen to preview yet.</p>';
+    return;
+  }
+  const [w, h] = MOCKUP_VIEWPORTS[mockupViewport];
+  const scale = Math.min(1, (box.clientWidth || w) / w);
+  const url = mockupUrl(review, screen);
+  box.innerHTML = `
+    <div class="frame" style="height:${Math.round(h * scale)}px">
+      <iframe id="mockupFrame" src="${esc(url)}" sandbox="allow-scripts"
+        style="width:${w}px;height:${h}px;transform:scale(${scale})"></iframe>
+    </div>
+    <p class="hint"><a href="${esc(url)}" target="_blank" rel="noopener">Open in a new tab ↗</a></p>`;
+}
+
+function renderMockupReview(review) {
+  const screens = review.screens || [];
+  if (mockupScreen >= screens.length) mockupScreen = 0;
+  const tabs = screens.map((s, i) =>
+    `<button data-screen="${i}"${i === mockupScreen ? ' class="selected"' : ''}>${
+      esc(s.title || s.id)}</button>`).join('');
+  const viewports = Object.keys(MOCKUP_VIEWPORTS).map(v =>
+    `<button data-viewport="${v}"${v === mockupViewport ? ' class="selected"' : ''}>${v}</button>`)
+    .join('');
+  const chat = (review.chat || []).map(m =>
+    `<div class="msg ${m.role === 'user' ? 'user' : 'agent'}">
+      <span class="who">${m.role === 'user' ? 'You' : 'Agent'}</span>${esc(m.text)}</div>`).join('');
+  $('#panel').innerHTML = `
+    <h2>Mockups</h2>
+    ${review.text ? `<pre class="summary-text">${esc(review.text)}</pre>` : ''}
+    <div class="mockup-bar">
+      <div class="tabs">${tabs || '<span class="muted">No screens yet</span>'}</div>
+      <div class="tabs">${viewports}</div>
+    </div>
+    <div id="preview"></div>
+    ${chat ? `<div class="chat">${chat}</div>` : ''}
+    <label>Refine the mockup — describe what to change</label>
+    <textarea id="mockupFeedback"></textarea>
+    <button id="sendMockup" class="secondary">Send</button>
+    <button id="approveMockup">Approve mockups</button>`;
+  const select = (attr, apply) => document.querySelectorAll(`[data-${attr}]`).forEach(btn =>
+    btn.addEventListener('click', () => {
+      document.querySelectorAll(`[data-${attr}]`)
+        .forEach(other => other.classList.toggle('selected', other === btn));
+      apply(btn.dataset[attr]);
+      drawPreview(review);
+    }));
+  select('screen', v => { mockupScreen = +v; });
+  select('viewport', v => { mockupViewport = v; });
+  $('#sendMockup').addEventListener('click', () => {
+    const t = $('#mockupFeedback').value.trim();
+    if (!t) return;
+    lockPanel('Feedback sent — the agent is reworking the mockup…');
+    sendAnswer({ kind: 'mockup', decision: 'feedback', text: t });
+  });
+  $('#approveMockup').addEventListener('click', () => {
+    lockPanel('Approved — the agent is updating spec, plan and checklist…');
+    sendAnswer({ kind: 'mockup', decision: 'approve' });
+  });
+  drawPreview(review);
 }
 
 function renderProgress(step) {

@@ -7,7 +7,16 @@ Session dir: `{{SESSION}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT
 ## Mission
 
 Prove the implementation meets `{{SESSION}}/spec.md` via Playwright E2E tests (always Playwright,
-regardless of existing setup) and — if `{{SESSION}}/mockups/` is non-empty — visual comparison.
+regardless of existing setup) and, when a visual baseline exists, visual comparison.
+
+## Visual baseline (pick ONE source)
+
+- `{{SESSION}}/generated-mockups/manifest.json` exists → those screens are the baseline, and the
+  ONLY one. They were designed from the plan and approved by the user in step 3, so the files the
+  user uploaded in step 1 were merely input for that step — do not compare against them and do not
+  treat a difference from them as a defect.
+- No manifest → the images in `{{SESSION}}/mockups/` are the baseline (read them directly).
+- Neither → no visual comparison; report `mockupSummary` as `n/a`.
 
 ## Process
 
@@ -26,23 +35,29 @@ regardless of existing setup) and — if `{{SESSION}}/mockups/` is non-empty —
 4. Cycle (max 3 full cycles):
    a. Run the suite. Fix application bugs the failures reveal — fix the app, never weaken a test
       to make it pass (unless the test itself is wrong against spec.md).
-   b. If mockups exist: launch the app, take Playwright screenshots of the relevant screens,
-      Read screenshots and mockups side by side, fix UI differences, re-shoot and re-compare
-      (covers `verify: visual` items). In cycles 2-3 re-shoot and re-compare ONLY the screens
-      affected by fixes since the previous comparison — screens that already matched stay ticked
-      (image reads are the most expensive step; never re-compare everything "to be sure").
+   b. If a visual baseline exists: launch the app and take Playwright screenshots of the relevant
+      screens, Read screenshot and baseline side by side, fix UI differences, re-shoot and
+      re-compare (covers `verify: visual` items).
+      With generated mockups, shoot both sides yourself so the comparison is like-for-like: open
+      `file://{{SESSION}}/generated-mockups/<file>` and the matching app screen in the SAME
+      viewport — 1280×800 for desktop, 390×780 for mobile, the sizes the user reviewed — and
+      `screenshot({ fullPage: true })` each. Store them as
+      `{{SESSION}}/screenshots/<screen>-mockup.png` and `<screen>-app.png`.
+      In cycles 2-3 re-shoot and re-compare ONLY the screens affected by fixes since the previous
+      comparison — screens that already matched stay ticked (image reads are the most expensive
+      step; never re-compare everything "to be sure").
    c. Update `checklist.md`: tick `- [x]` every item confirmed by a passing test or visual check.
 5. Compliance = floor(100 × ticked / total). Loop ends at compliance ≥ 99, or after 3 cycles.
 
 ## Progress reporting (after every run/fix/comparison)
 
-`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":4,\"progress\":<compliance>,\"currentOperation\":\"<cycle k/3: phase>\",\"logEntry\":\"<event>\"}"`
+`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":5,\"progress\":<compliance>,\"currentOperation\":\"<cycle k/3: phase>\",\"logEntry\":\"<event>\"}"`
 Encoding: run curl from a POSIX shell (Bash tool). Never pass non-ASCII JSON inline through
 PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `--data-binary "@file"`.
 
 ## Rules
 
-- NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `checklist.md` and report files.
+- NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `screenshots/`, `checklist.md` and report files. `generated-mockups/` is read-only for you — it is the approved baseline, never "fix" it to match the app.
 - Credentials from `auth.json` stay secret: never hardcode them in test files (tests are committed),
   never print them in logs, reports or your final message — pass them only via env vars, set for
   the single test-run command (never exported into the persistent shell profile or written to
