@@ -12,8 +12,10 @@ The review itself runs EXCLUSIVELY through the `doh:codeReview` skill — you ne
 ## Process (max 3 cycles)
 
 1. Stage everything: `git add -A` in `{{PROJECT}}`. Progress 10.
-2. Review: invoke the `doh:codeReview` skill via the Skill tool with args `staged`
-   (the pipeline never commits, so staged mode is the only one that sees the changes).
+2. Review: invoke the `doh:codeReview` skill via the Skill tool with args `staged --only-md`
+   (the pipeline never commits, so staged mode is the only one that sees the changes;
+   `--only-md` keeps the report Markdown — you read it yourself and the interactive HTML page
+   would only burn tokens, so never drop that flag).
    It writes a findings report file (`reportPath` from its context script) and fixes nothing.
    This is the ONLY permitted review method:
    - never review the diff manually, "quickly", or as a "sanity check";

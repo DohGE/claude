@@ -9,15 +9,15 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SKILL_DIR = path.resolve(__dirname, '..');
-const BASE_CANDIDATES = ['main', 'master', 'develop', 'dev'];
-const AUDIENCES = ['implement', 'review', 'both'];
-const REPORTS_RETAIN = 30;
+const defaultSkillDir = path.resolve(__dirname, '..');
+const baseBranchNames = ['main', 'master', 'develop', 'dev'];
+const audiences = ['implement', 'review', 'both'];
+const reportsRetain = 30;
 
 // Generated, vendored and binary files: reviewing them wastes context without
 // producing findings. Skipped paths are listed per target so the report can
 // mention them in one line.
-const SKIP_GLOBS = [
+const skipGlobs = [
   '**/package-lock.json', '**/npm-shrinkwrap.json', '**/yarn.lock', '**/pnpm-lock.yaml',
   '**/bun.lockb', '**/composer.lock', '**/Cargo.lock', '**/Gemfile.lock', '**/poetry.lock', '**/uv.lock',
   '**/*.min.js', '**/*.min.css', '**/*.map',
@@ -30,13 +30,13 @@ const SKIP_GLOBS = [
 ];
 let skipRes = null;
 function isSkippedPath(filePath) {
-  if (!skipRes) skipRes = SKIP_GLOBS.map(globToRegExp);
+  if (!skipRes) skipRes = skipGlobs.map(globToRegExp);
   const normalized = filePath.replace(/\\/g, '/');
   return skipRes.some((re) => re.test(normalized));
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd() };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html' };
   for (const arg of argv) {
     const m = arg.match(/^--([a-z]+)=(.*)$/);
     if (!m) continue;
@@ -44,9 +44,13 @@ function parseArgs(argv) {
     else if (m[1] === 'branches') args.branches = m[2];
     else if (m[1] === 'path') args.path = m[2];
     else if (m[1] === 'project') args.project = m[2];
+    else if (m[1] === 'output') args.output = m[2];
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
+  }
+  if (!['html', 'md'].includes(args.output)) {
+    throw new Error(`Unknown --output=${args.output} (expected md|html)`);
   }
   return args;
 }
@@ -137,7 +141,7 @@ function baseCandidates(project) {
   const names = [];
   const head = tryGit(project, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
   if (head) names.push(head.replace('refs/remotes/origin/', ''));
-  for (const n of BASE_CANDIDATES) if (!names.includes(n)) names.push(n);
+  for (const n of baseBranchNames) if (!names.includes(n)) names.push(n);
   return names;
 }
 
@@ -169,7 +173,7 @@ function q(s) {
 }
 
 // All files under dir, recursive, as project-relative forward-slash paths
-// (sorted). `.git` is never entered; everything else is left to SKIP_GLOBS.
+// (sorted). `.git` is never entered; everything else is left to skipGlobs.
 function listFolderFiles(project, dir) {
   const files = [];
   const walk = (d) => {
@@ -221,7 +225,7 @@ function loadInstructions(instructionsDir, audience) {
   };
   const keep = (file, fm) => {
     const declared = fm.audience === undefined ? 'both' : fm.audience;
-    if (!AUDIENCES.includes(declared)) {
+    if (!audiences.includes(declared)) {
       warnings.push(`Unknown audience "${fm.audience}" (expected implement|review|both), treating as both: ${file}`);
       return true;
     }
@@ -255,27 +259,50 @@ function matchLocalInstructions(locals, filePath) {
     .map((l) => l.file);
 }
 
-// Keep only the REPORTS_RETAIN newest reports so the reports folder does not
-// grow without bound across runs. Best-effort: failures never break a review.
-function pruneReports(reportsDir, retain = REPORTS_RETAIN) {
-  let names;
+// Keep only the reportsRetain newest reports so the reports folder does not
+// grow without bound across runs. Both output formats count toward the cap, so
+// a folder of HTML reports is capped exactly like a folder of Markdown ones.
+// Reports live one level deep (one folder per branch); loose reports directly
+// in reportsDir are still counted, so folders written before the per-branch
+// grouping stay capped too. Best-effort: failures never break a review.
+function pruneReports(reportsDir, retain = reportsRetain) {
+  const isReport = (name) => name.endsWith('.md') || name.endsWith('.html');
+  let entries;
   try {
-    names = fs.readdirSync(reportsDir).filter((n) => n.endsWith('.md'));
+    entries = fs.readdirSync(reportsDir, { withFileTypes: true });
   } catch {
     return;
   }
-  if (names.length <= retain) return;
-  const stamped = names.map((name) => {
-    const full = path.join(reportsDir, name);
-    let mtime = 0;
+  const branchDirs = [];
+  const files = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) branchDirs.push(path.join(reportsDir, entry.name));
+    else if (isReport(entry.name)) files.push(path.join(reportsDir, entry.name));
+  }
+  for (const dir of branchDirs) {
     try {
-      mtime = fs.statSync(full).mtimeMs;
+      for (const name of fs.readdirSync(dir)) if (isReport(name)) files.push(path.join(dir, name));
     } catch {}
-    return { full, mtime };
-  }).sort((a, b) => b.mtime - a.mtime);
-  for (const { full } of stamped.slice(retain)) {
+  }
+  if (files.length > retain) {
+    const stamped = files.map((full) => {
+      let mtime = 0;
+      try {
+        mtime = fs.statSync(full).mtimeMs;
+      } catch {}
+      return { full, mtime };
+    }).sort((a, b) => b.mtime - a.mtime);
+    for (const { full } of stamped.slice(retain)) {
+      try {
+        fs.unlinkSync(full);
+      } catch {}
+    }
+  }
+  // A branch folder the pruning above emptied goes with its reports; rmdir on a
+  // folder that still holds something throws and is ignored.
+  for (const dir of branchDirs) {
     try {
-      fs.unlinkSync(full);
+      fs.rmdirSync(dir);
     } catch {}
   }
 }
@@ -302,9 +329,13 @@ function ensureDohGitignore(dohDir) {
 
 function buildContext(options) {
   const project = path.resolve(options.project || process.cwd());
-  const skillDir = options.skillDir || SKILL_DIR;
+  const skillDir = options.skillDir || defaultSkillDir;
   const now = options.now || new Date();
+  // Decided before the early error returns below, so the reported format is
+  // never a default the caller did not ask for.
+  const wantsHtml = options.output !== 'md';
   const result = {
+    outputFormat: wantsHtml ? 'html' : 'md',
     globalInstructions: [],
     localInstructionsCatalog: [],
     claudeMd: null,
@@ -332,6 +363,19 @@ function buildContext(options) {
   const reportsDir = useProjectDoh
     ? path.join(projectClaudeDir, 'doh')
     : path.join(skillDir, 'reports');
+  // Every report of a branch lands in that branch's own folder, so a reports
+  // dir shared by many branches stays browsable. The file name keeps the branch
+  // prefix on purpose: the HTML page namespaces its localStorage by file name,
+  // and two branches reviewed in the same minute would otherwise collide.
+  // The Markdown report is always the working file the reviewer writes to. In
+  // html mode `render-report.cjs` turns it into `htmlReportPath` at the end of
+  // the run and removes it, so the analysis steps never see the format choice.
+  const reportPaths = (branchName, suffix = '') => {
+    const branchDir = sanitizeBranchName(branchName);
+    const name = suffix ? `${branchDir}-${suffix}` : branchDir;
+    const reportPath = path.join(reportsDir, branchDir, `${name}-${ts.date}-${ts.time}.md`);
+    return { reportPath, htmlReportPath: wantsHtml ? reportPath.replace(/\.md$/, '.html') : null };
+  };
   const claudeMdPath = path.join(project, 'CLAUDE.md');
   result.globalInstructions = instructions.globals;
   result.claudeMd = fs.existsSync(claudeMdPath) ? claudeMdPath : null;
@@ -381,7 +425,7 @@ function buildContext(options) {
       kind: 'branch',
       branch: branchName,
       baseBranch: baseRef,
-      reportPath: path.join(reportsDir, `${sanitizeBranchName(branchName)}-${ts.date}-${ts.time}.md`),
+      ...reportPaths(branchName),
       commands: {
         diff: gitc(`diff ${baseRef}...${branchRef} -- ${q('<path>')}`),
         show: `${gitc(`show ${q(`${branchRef}:<path>`)}`)} | cat -n`,
@@ -406,7 +450,7 @@ function buildContext(options) {
       kind: 'staged',
       branch: branchName,
       baseBranch: null,
-      reportPath: path.join(reportsDir, `${sanitizeBranchName(branchName)}-staged-${ts.date}-${ts.time}.md`),
+      ...reportPaths(branchName, 'staged'),
       commands: {
         diff: gitc(`diff --cached -- ${q('<path>')}`),
         show: `${gitc(`show ${q(':<path>')}`)} | cat -n`,
@@ -420,7 +464,7 @@ function buildContext(options) {
     for (const name of names) addBranchTarget(name);
   } else if (options.mode === 'folder') {
     // Folder mode reviews the working tree instead of a diff: every file under
-    // --path (recursive, minus SKIP_GLOBS) is emitted as an added file, so the
+    // --path (recursive, minus skipGlobs) is emitted as an added file, so the
     // whole folder gets the added-file treatment (show template only).
     const rel = String(options.path || '').replace(/\\/g, '/').replace(/\/+$/, '');
     const abs = path.resolve(project, rel);
@@ -436,7 +480,7 @@ function buildContext(options) {
         branch: branchName,
         baseBranch: null,
         folder: rel,
-        reportPath: path.join(reportsDir, `${sanitizeBranchName(branchName)}-folder-${sanitizeBranchName(rel)}-${ts.date}-${ts.time}.md`),
+        ...reportPaths(branchName, `folder-${sanitizeBranchName(rel)}`),
         commands: {
           diff: null,
           show: `cat ${q(`${project.replace(/\\/g, '/')}/<path>`)} | cat -n`,
@@ -483,6 +527,9 @@ function buildContext(options) {
     // with other artifacts) — never prune it; only cap the skill-local folder.
     if (useProjectDoh) ensureDohGitignore(reportsDir);
     else pruneReports(reportsDir);
+    // After the pruning, so an emptied branch folder is not removed right after
+    // being created for this run.
+    for (const target of result.targets) fs.mkdirSync(path.dirname(target.reportPath), { recursive: true });
   }
   return result;
 }

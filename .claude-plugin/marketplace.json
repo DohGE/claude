@@ -7,7 +7,7 @@
     {
       "name": "doh",
       "source": "./",
-      "description": "Skills: /implementNewFeature (pipeline with stepper UI), /codeReview (instruction-driven review reports)"
+      "description": "Skills: /implementNewFeature (pipeline with stepper UI), /codeReview (instruction-driven review, interactive HTML reports)"
     }
   ]
 }
