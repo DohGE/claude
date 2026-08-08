@@ -15,18 +15,88 @@ async function listen(app) {
   return `http://127.0.0.1:${app.server.address().port}`;
 }
 
-test('GET /api/state returns initial 5-step state', async t => {
+test('GET /api/state returns the 6-step pipeline with Mockups opt-in', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);
   t.after(() => app.server.close());
   const res = await fetch(`${base}/api/state`);
   assert.equal(res.status, 200);
   const state = await res.json();
-  assert.equal(state.steps.length, 5);
-  assert.equal(state.steps[0].name, 'Requirements');
-  assert.equal(state.steps[4].name, 'Code Review');
+  assert.deepEqual(state.steps.map(s => s.name),
+    ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
+      'Validation & E2E', 'Code Review']);
   assert.ok(state.steps.every(s => s.status === 'waiting'));
+  // Mockups is the only step the stepper hides until the step-1 toggle enables it.
+  assert.deepEqual(state.steps.filter(s => s.enabled === false).map(s => s.id), [3]);
   assert.equal(state.activeStep, 1);
+  assert.equal(state.mockupReview, null);
+});
+
+test('POST /api/state enables the Mockups step and round-trips mockupReview', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const review = {
+    rev: 2, text: 'Dwa ekrany — logowanie i lista',
+    screens: [{ id: 'login', title: 'Logowanie', file: 'login.html' }],
+    chat: [{ role: 'agent', text: 'Pierwsza wersja' }, { role: 'user', text: 'Szerszy przycisk' }]
+  };
+  await fetch(`${base}/api/state`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ step: 3, enabled: true, status: 'in_progress',
+      activeStep: 3, mockupReview: review })
+  });
+  const state = await (await fetch(`${base}/api/state`)).json();
+  assert.equal(state.steps[2].enabled, true);
+  assert.deepEqual(state.mockupReview, review);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'pipeline-state.json'), 'utf8'));
+  assert.equal(onDisk.steps[2].enabled, true);
+
+  await fetch(`${base}/api/state`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mockupReview: null })
+  });
+  assert.equal((await (await fetch(`${base}/api/state`)).json()).mockupReview, null);
+});
+
+function writeMockup(dir, name, body) {
+  const d = path.join(dir, 'generated-mockups');
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, name), body);
+}
+
+test('GET /generated-mockups/<file> serves the mockup uncached', async t => {
+  const dir = tmpDir();
+  writeMockup(dir, 'login.html', '<h1>Logowanie</h1>');
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const res = await fetch(`${base}/generated-mockups/login.html?rev=3`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/html/);
+  // The agent rewrites the same filenames between chat rounds.
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  assert.equal(await res.text(), '<h1>Logowanie</h1>');
+});
+
+test('GET /generated-mockups rejects traversal, unknown types and missing files', async t => {
+  const dir = tmpDir();
+  writeMockup(dir, 'login.html', 'ok');
+  fs.writeFileSync(path.join(dir, 'auth.json'), '{"login":"u","password":"s3cret"}');
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const blocked = ['/generated-mockups/..%2Fauth.json', '/generated-mockups/..%5Cauth.json',
+    '/generated-mockups/auth.json', '/generated-mockups/missing.html',
+    '/generated-mockups/notes.txt', '/generated-mockups/.env'];
+  for (const p of blocked) {
+    const res = await fetch(`${base}${p}`);
+    assert.equal(res.status, 404, `expected 404 for ${p}`);
+    assert.ok(!(await res.text()).includes('s3cret'), `${p} leaked credentials`);
+  }
+  const malformed = await fetch(`${base}/generated-mockups/%zz.html`);
+  assert.equal(malformed.status, 400);
 });
 
 test('POST /api/state merges updates and persists to pipeline-state.json', async t => {

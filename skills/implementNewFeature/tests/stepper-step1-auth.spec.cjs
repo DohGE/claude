@@ -45,6 +45,22 @@ test('pola autoryzacji dziedziczą styl istniejących pól formularza', async ({
   expect(await style('#authPassword')).toEqual(await style('#task'));
 });
 
+test('przycisk podglądu odsłania i ponownie maskuje hasło', async ({ page }) => {
+  const btn = page.locator('#togglePassword');
+  const pw = page.locator('#authPassword');
+  await pw.fill('S3kret!');
+  await expect(btn).toHaveAttribute('aria-pressed', 'false');
+  await btn.click();
+  await expect(pw).toHaveAttribute('type', 'text');
+  await expect(btn).toHaveAttribute('aria-pressed', 'true');
+  await expect(btn).toHaveAttribute('aria-label', 'Hide password');
+  await btn.click();
+  await expect(pw).toHaveAttribute('type', 'password');
+  await expect(btn).toHaveAttribute('aria-pressed', 'false');
+  await expect(btn).toHaveAttribute('aria-label', 'Show password');
+  await expect(pw).toHaveValue('S3kret!');
+});
+
 test('Next jest zablokowany, gdy wypełniono tylko jedno z pól autoryzacji', async ({ page }) => {
   await fillRequired(page);
   await expect(page.locator('#next')).toBeEnabled();

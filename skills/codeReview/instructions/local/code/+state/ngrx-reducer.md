@@ -10,6 +10,7 @@ applies-to:
 - Loading flags: `true` on the start action, `false` on both success and fail.
 - Actions with an identical state effect are merged into one `on(a, b, ...)`; when a success additionally stores a payload, a merged flag-reset handler plus a second seeding `on(success, ...)` is acceptable.
 - Refreshing a collection of objects is an upsert by id: build a map of the response by id, replace matching existing items, append only brand-new ones — never blindly append (it duplicates seeded items in edit mode).
+- That upsert is implemented ONCE, as a generic `shared/utils/` function with its own spec, and reused by every reducer that refreshes a collection; hand-writing the map-and-merge loop a second time is duplication under the code-quality instruction.
 - The edit-mode `load* success` handler seeds **every** field and collection the templates use, including placeholder objects for nested data that will be enriched later; a field whose payload may mean "keep the original/default" is seeded conditionally, never blindly overwritten.
 - Handlers that may run against missing data are explicit no-ops: `if (!state.x) return state;` — no flags or errors set in that case.
 - Default selections use a fallback chain: `state.selectedX ?? list[0] ?? null` (preserve the user/edit-mode choice first, `null` last — never `undefined`).

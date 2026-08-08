@@ -25,6 +25,8 @@ and rule references — but for a clean experiment, commit the README separately
 - `user-panel.effects.ts` class name `UserPanelEffects` and the `searchUsersFail` → `of(fail)` inside `catchError` inside `mergeMap` in `searchUsers$` (correct catchError placement there).
 - The `should be created` / `should be defined` / `should create` descriptions in the service, routes, util and ui-card specs comply with the `should`-prefix naming rule — those tests are flagged as existence-only, not for their names.
 - `ui-user-card.component.ts` declaring an input named `title` (colliding with the native HTML attribute) is not itself a violation — only the parent template's plain-attribute binding of it is.
+- `build-user-table.util.ts` exporting two related user-table functions from one file is NOT a violation (`utils.md`: "never report a cohesive multi-function util file"). What IS a violation there is `formatUserRow` being a pass-through wrapper over `deepClone`.
+- The endpoint path text in `user-panel.service.ts` — segments, wording, casing, versioning, leading/trailing slash, key names — is out of review scope entirely. Only the absolute base URL inside the value is reportable.
 
 ## Violation inventory (per file)
 
@@ -140,6 +142,7 @@ and rule references — but for a clean experiment, commit the README separately
 - ngrx-effects: forbidden facade injection; `store.dispatch(...)` inside the class; manual `subscribe()` in the constructor.
 - ngrx-effects: `loadUsers` — `catchError` OUTSIDE `switchMap` (first error kills the stream) and swallowed via `EMPTY` (general: errors never swallowed; no fail action exists).
 - ngrx-effects: `withLatestFrom` instead of `concatLatestFrom`.
+- best-practices: operators imported from `rxjs/operators` (deprecated since RxJS 7.2 — import from `rxjs`).
 - ngrx-effects: truthiness state guard (`!!users.length`) where `0` is a valid value.
 - ngrx-effects: `mergeMap` for a search (races/out-of-order results — should be `switchMap`).
 - ngrx-effects: `tap` mutates the action payload and runs domain logic (`buildResultLabel`).
@@ -167,18 +170,20 @@ and rule references — but for a clean experiment, commit the README separately
 
 ### data-access/+state/index.ts
 
-- architecture: barrel `index.ts` outside `models/`/`shared/` is forbidden (and it re-exports the whole state layer to the world).
+- architecture: barrel `index.ts` outside `models/` is forbidden (and it re-exports the whole state layer to the world).
+- code-quality: no file in the repo imports through this barrel — every consumer already uses a concrete path, so the file is dead on arrival.
 
 ### data-access/services/user-panel.service.ts
 
 - security: hardcoded API key (`API_KEY = 'sk_live_...'`) — secret in the diff; also SCREAMING_SNAKE (general).
 - security + http-service: key appended to query params and an `Authorization` header hand-built per request (must come from the interceptor).
-- http-service: `endpoints` exported (must be module-level, non-exported); hard-coded absolute base URL (private endpoint); URL interpolation outside `endpoints` (string concatenation in methods); leading-slash path in `searchUsers`.
+- http-service: `endpoints` exported (must be module-level, non-exported); hard-coded absolute base URL (private endpoint); URL interpolation outside `endpoints` (string concatenation in methods). The path text itself — including the leading slash in `searchUsers` — is out of scope and must NOT be reported.
 - http-service: local interface declared in the service (`SearchResponse`).
 - http-service: `@Injectable()` without `providedIn: 'root'` (inverse of the facade rule).
 - http-service + best-practices: constructor injection in a new service; store injected into an HTTP service.
 - http-service: `Observable<any>` (+ `get<any>`) — no honest DTO generic; `pageSize ?? 25` instead of a default parameter value.
 - http-service: `.pipe(map, catchError, tap)` inside the service — mapping/error handling belong to reducer/effects; `catchError(() => of([]))` swallows failures (general); `tap` + `console.log` logging.
+- best-practices: operators imported from `rxjs/operators` (deprecated since RxJS 7.2 — import from `rxjs`).
 - http-service: method names `getUsers`/`deleteUser` instead of `loadUsers`/`removeUser`; `firstValueFrom` forbidden.
 - security: user email as a query param (`?email=` — PII in URL).
 - models: `UserDto` imported by concrete path from outside `models/` (must go through the barrel).
@@ -243,7 +248,8 @@ and rule references — but for a clean experiment, commit the README separately
 
 ### shared/utils/build-user-table.util.ts
 
-- utils: export is a `const` arrow function and a `default` export (must be a named `export function`); two public functions in one file; missing explicit return types.
+- utils: export is a `const` arrow function and a `default` export (must be a named `export function`); missing explicit return types. (Grouping two related functions in one file is NOT the violation — see the bait list.)
+- code-quality: `formatUserRow` only forwards to `deepClone` — a wrapper that adds no behavior.
 - utils: impure — `Math.random()` inline id, `Date.now()`, and in-place `sort` mutating the argument.
 - utils: `displayedColumns` hard-coded instead of `Object.values(<ColumnsEnum>)`; labels are texts, not i18n keys; rows lack an explicit row type; id not from the shared ID-generator util.
 - security: new third-party dependency (`tiny-clone-x`) introduced silently.
@@ -253,6 +259,7 @@ and rule references — but for a clean experiment, commit the README separately
 - util-guard-test: TestBed in a util spec (plain `describe`/`it` only).
 - unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); `as any` incomplete fixture; existence-only test; `it('builds table')` description not starting with `should`.
 - util-guard-test: snapshot of impure output (id/timestamp change every run); `.snap` stored directly in `tests/` instead of `tests/__snapshots__/`.
+- util-guard-test: the stored snapshot is also stale — it omits `rows` and `displayedColumnsLabels`, which the util returns, so the comparison fails even ignoring the non-deterministic fields.
 - util-guard-test (absences): no empty/null edge cases; no `not.toBe(input)` copy assertion; `formatUserRow` untested.
 
 ### shared/utils/format-user-name.utils.ts
@@ -263,7 +270,8 @@ and rule references — but for a clean experiment, commit the README separately
 
 ### shared/index.ts
 
-- architecture: the `shared/` barrel re-exports utils (never allowed) — and re-exports the guard.
+- architecture: a barrel `index.ts` in `shared/` is forbidden outright — `models/` is the only folder allowed to have one; every export here (guard and both utils) must be imported from its concrete file.
+- utils: the two util re-exports additionally break the utils rule that utils are never reached through a barrel.
 
 ### shared/routes/user-panel.routes.ts
 
@@ -271,7 +279,9 @@ and rule references — but for a clean experiment, commit the README separately
 - routes + best-practices: eager `component:` import of the feature component instead of `loadComponent`.
 - routes: simple-page variant carries `providers` (`provideState`/`provideEffects`/facade) and `canActivate` — must be thin and stateless.
 - routes: no `title` on a user-navigable route.
-- routes: helper function (`buildPath`) — no logic allowed in a routes file.
+- routes: helper function (`buildPath`) — no logic allowed in a routes file; it also returns `'/'` for an empty segment, so the route `path` is `'/'` instead of `''` and never matches.
+- routes: `provideState('userPanel', reducer)` registers the slice under a magic string instead of the exported `userPanelFeatureKey` — it can drift from the key the feature selector uses.
+- routes: no `withComponentInputBinding()` anywhere in the routing setup, so the feature component has no way to receive route params as `input()`s (it falls back to reading `location.search` by hand).
 - architecture: area has BOTH `shared/routes/` and `shell/` (either, never both).
 
 ### shared/routes/tests/user-panel.routes.spec.ts
@@ -282,6 +292,8 @@ and rule references — but for a clean experiment, commit the README separately
 ### shell/user-panel-shell.routes.ts
 
 - routes: wizard variant with magic-string step paths (not the step enum), no `canActivate` guards (initialization + previous-step), no titles.
+- routes: export has no `: Routes` type annotation, so route definitions are not type-checked.
+- code-quality: both steps load the exact same component with the same dynamic import — a copy-pasted route entry.
 - architecture: duplicate routing variant for the area (see above).
 
 ### user-panel.module.ts
@@ -296,6 +308,8 @@ and rule references — but for a clean experiment, commit the README separately
 - component: inline `styles: [...]` — no own `.scss` file; hard-coded color in it (component-styles).
 - general: import order scrambled (relative first, framework last).
 - component: `imports` array not matching the template — `NgOptimizedImage` unused, `ReactiveFormsModule` missing though `[formControl]` is used in the template.
+- component: `CommonModule` in `imports` — the native control flow and `[class.x]`/`[style.x]` bindings replace it.
+- component: every member is public — template-only members must be `protected`, internals (`destroy$`, `sub`, `usersBackup`) `private`.
 - best-practices: explicit `standalone: true`; `@Input()`/`@Output()` decorators with `!` definite assignment and `EventEmitter<any>` instead of `input.required`/`output()`.
 - feature-component + architecture: store injected + `store.dispatch`, actions/selectors imported, HTTP service injected and called — components may talk only to the facade.
 - component: injected fields public and unprefixed (`facade`, `store`, `svc` — generic name), not `private readonly _...`.
@@ -310,7 +324,10 @@ and rule references — but for a clean experiment, commit the README separately
 - performance: `toSignal()` inside a getter — new subscription per read.
 - component: constructor does loads/dispatches and logging (only `effect()` allowed); `effect()` writes state (`resultCount`) and patches the form without `{ emitEvent: false }` (feedback loop with the `valueChanges` subscription).
 - best-practices: `inject()` inside a method (`onSave`) — NG0203 runtime error.
-- feature-component: `ngOnInit` reads query params via `URLSearchParams` instead of `ActivatedRoute`; edit-mode has only the id-present branch (no else).
+- feature-component: route/query params read by hand via `URLSearchParams(location.search)` instead of arriving as signal `input()`s bound by `withComponentInputBinding()`; edit-mode has only the id-present branch (no else), and it is a `ngOnInit` branch rather than a signal read.
+- best-practices: `subscribe()` nested inside `subscribe()` (the inner stream escapes the outer `takeUntil`).
+- best-practices: operators imported from `rxjs/operators` (deprecated since RxJS 7.2), and `@angular/common` imported twice.
+- best-practices: `toSignal()` called without `initialValue`/`requireSync`, so the signal type silently widens with `undefined`.
 - performance: hard-coded `setInterval` polling, never cleared, resubscribing a cold HTTP observable each tick.
 - component: untyped form (`UntypedFormGroup`/`UntypedFormControl`) instead of `_fb.nonNullable.group` with explicit generics; `addValidators` without `updateValueAndValidity()`; `valueChanges` without `distinctUntilChanged(isEqual)`.
 - security: `setTimeout('this.refresh()', 500)` — string argument; `bypassSecurityTrustHtml(user.bio)` on API-derived data (Critical).
@@ -326,7 +343,9 @@ and rule references — but for a clean experiment, commit the README separately
 
 - component-template: `*ngIf`/`*ngFor` instead of `@if`/`@for`; `[ngClass]`/`[ngStyle]` instead of `[class.x]`/`[style.x]`; hard-coded color in `ngStyle`.
 - component-template: `*ngFor` without any stable `track`.
-- performance: LCP hero image inside `@defer (on viewport)` with no `@placeholder` (layout shift + deferred LCP); `<img>` without `alt`, without `ngSrc`, without `height`, no `priority`.
+- performance: LCP hero image inside `@defer (on viewport)` (layout shift + deferred LCP); `<img>` without `alt`, without `ngSrc`, without `height`, no `priority`.
+- component-template: BOTH `@defer (on viewport)` blocks lack a `@placeholder` — the viewport trigger has no element to observe (the hero block and the `user-card` block).
+- component-template: no `@let` at the top of the template although `users()` is read three times.
 - component-template: `[(ngModel)]` template-driven binding (best-practices) mixed with reactive `[formControl]`; both inputs unlabeled (no `label for`/`aria-label`); hard-coded placeholders.
 - component-template: `(click)` on `<div>` and `<span>` without `role`/`tabindex`/keyboard handling; icon-only button (🔄) without `aria-label`; no `data-test` on any interactive native element despite `dataTestPrefix` — the only `data-test` in the template sits on the `<user-card>` component host tag, where it is forbidden (the selector already targets hosts).
 - component-template: literal property binding `[title]="'Refresh'"` on a native `<button>` — still a defect, the input-name-collision exception covers component inputs only, not native elements (false-negative bait); facade call with logic inline in the template (`facade.loadUsers({ pageSize: 25 })`).
@@ -353,13 +372,15 @@ and rule references — but for a clean experiment, commit the README separately
 ### components-user-panel/ui/ui-user-card/ui-user-card.component.ts
 
 - ui-component: class `UserCardComponent` (should be `UiUserCardComponent`), selector `user-card` (missing app prefix + `ui-` segment).
+- component: the template uses the `translate` pipe but `imports` lists only `NgOptimizedImage` and `ReactiveFormsModule` — the missing entry breaks the template at runtime (🔴, and the strongest finding in this file).
+- component: template-read members (`highlighted`, `form`) are public instead of `protected`.
 - ui-component: facade injected + `loadUsers` called, Router injected + navigation — a presentational component must only render inputs and emit outputs.
 - ui-component/models: local duplicate model (`CardUser`) instead of a `models/` type.
 - component: input the template cannot render without is plain `input<CardUser>()` (with `!` assertions later) instead of `input.required`.
 - best-practices: `@Input() set` accessor (`highlight`); output as a bare `EventEmitter` field instead of `output()`.
 - performance: mutable field bound in the template (`highlighted`) — stale under OnPush.
 - component: form not `_fb.nonNullable.group`, control without explicit generic; fields not `readonly`.
-- ui-component: `valueChanges` subscription in the constructor without `takeUntilDestroyed`, `debounceTime` (central config) or `distinctUntilChanged` — emits on every keystroke and leaks.
+- ui-component: `valueChanges` subscription in the constructor without `takeUntilDestroyed`, `debounceTime` (central config) or `distinctUntilChanged` — emits on every keystroke and leaks; the constructor is also supposed to hold `effect()` calls only.
 - general: `as never` cast on the emitted value (also emits the form value typed as `CardUser` — wrong contract).
 - component: `effect()` patching the form without `{ emitEvent: false }` — feedback loop with the subscription.
 - ui-component: no `dataTestPrefix`; no form-reference tracking decorator though the form feeds a parent.
@@ -371,6 +392,8 @@ and rule references — but for a clean experiment, commit the README separately
 - component-template: `<img [src]>` without `alt`; `ngSrc` without `width`+`height` (performance: layout shift).
 - component-template: hard-coded color in `[style.color]="'#3f51b5'"` (also a literal binding).
 - component-template: `@for ... track tag` — reference identity on an object collection.
+- component-template: the `@for` over `user()?.tags` has no `@empty` block, so a user without tags renders as blank space.
+- component-template: no `@let` at the top although `user()` is read four times.
 - component-template + security-adjacent: HTML-bearing translation (`termsHtml`) rendered via interpolation instead of `[innerHTML]` (shows escaped `<b>` tags).
 - component-template: hard-coded `Select user` text; `<button>` without `type`; no `data-test` attributes.
 - ui-component: `[disabled]` bound on a reactive control instead of `effect(() => form.disable({ emitEvent: false }))`.
@@ -391,6 +414,7 @@ and rule references — but for a clean experiment, commit the README separately
 - component-test: TestBed + `beforeEach` fixture instead of `MockBuilder`/`ngMocks.faster()` + one shared `MockRender` in `beforeAll`.
 - unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); injected-dependency variable named `svc`; existence-only `should create` test; `it.each` dataset inline, unused in assertions (test asserts nothing per-case); `it`/`it.each` descriptions not starting with `should` (`'renders the card'`, `'renders %s %s'`, `'opens details'`).
 - component-test: bare `toHaveBeenCalled()` without arguments; no `afterEach` (`jest.clearAllMocks`, signal resets).
+- component-test: `it('opens details')` calls `component.openDetails()` without ever setting the `user` input, so `this.user()!.id` dereferences `undefined` and the test throws `TypeError` (🔴 — the spec is broken, not merely weak). A signal `input()` is written with `MockRender(C, { user })` or `fixture.componentRef.setInput(...)`, never by property assignment.
 - component-test (absences): no `dataTestPrefix` test, no form/validator tests, no state→form `{ emitEvent: false }` guard test, no output-emission tests.
 
 ### src/assets/i18n/en.json
@@ -410,6 +434,8 @@ and rule references — but for a clean experiment, commit the README separately
 ## Cross-file findings the review should also produce
 
 - Naming drift: `userStatusLabel` (models fn) vs `buildResultLabel` (effects method) vs `formatUserName`/`formatUserRow` (utils) re-implement overlapping formatting; the `firstName + ' ' + last_name` join is inlined in the reducer, a selector, a util and the template (define once, reuse).
+- One concept, four types: `UserDto` and `UserVm` (models), `CardUser` (`ui-user-card.component.ts`) and `HelperUser` (`user-panel.helpers.ts`) all describe a user with different fields and different casing conventions — the area should carry exactly two (`UserDto` for the API contract, one domain model).
+- The result label is computed twice with the same rule: `buildResultLabel` in the effects and the `switch` inside the reducer's `searchUsersSuccess` handler.
 - Layer inversion loop: effects → ui barrel → component → facade → service, while the guard and feature component also reach the service directly.
 - `filteredUsers` flows action → reducer → state although it is derivable — action, state field and dispatching component should all be findings under their own instructions.
 - The area registers state in `shared/routes` providers, has a parallel `shell` routing variant, an NgModule, and three forbidden barrels — canonical layout broken at area level.

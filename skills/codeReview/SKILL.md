@@ -126,7 +126,12 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      completing a trio, a matching spec...). Scanning never finds an absence: a requirement's PASS
      verdict is reached only by pointing at the exact code that satisfies it, and a requirement
      nothing satisfies is a finding.
-   Five rule families are historically under-reported; check them deliberately for every file their
+   Element-level template rules (`data-test`, `type` on `<button>`, `[alt]`, `aria-label`, programmatic
+   labels, bound ARIA state) are verified per ELEMENT, never per file: walk EVERY interactive and media
+   element of the template (`button`, `a`, `input`, `select`, `textarea`, `img`, any element with an event
+   binding) and reach a separate verdict for each applicable rule on each element — one compliant element
+   never passes the file, and a rule's walk ends at the last element, not at its first violation.
+   Seven rule families are historically under-reported; check them deliberately for every file their
    instructions match, even when the diff looks unrelated (they stay defined ONLY by their
    instruction files — never re-derive them from memory):
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
@@ -138,7 +143,13 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      spec and snapshot location, the prescribed setup instead of TestBed/MockStore, `ngMocks.faster()`
      with `beforeAll`, a state-restoring `afterEach`, `should`-prefixed descriptions, a lazily
      reassigned `actions$`, payload-asserting `toHaveBeenCalledWith(...)` — re-walked in full for
-     EVERY spec file; the sixth spec gets the same item-by-item walk as the first.
+     EVERY spec file; the sixth spec gets the same item-by-item walk as the first;
+   - change-detection escape hatches and missing `effect()` `onCleanup` (performance instruction):
+     absence-shaped rules that scanning never surfaces — a `markForCheck()`/`detectChanges()`/`NgZone`
+     call reads as ordinary code until you ask why the state it compensates for is not a signal;
+   - signal-input wiring in specs (unit-tests instruction): an input written by property assignment
+     instead of `setInput`/`MockRender` inputs — the spec passes either way, so only an explicit
+     verdict per input-setting line finds it.
 3. Record only REAL findings — no speculative or cosmetic padding.
    One finding = one rule violated in one file. When the SAME rule is broken in several places of
    one file with the same consequence and severity, that is ONE finding whose `**Linia:**` lists

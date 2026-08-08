@@ -68,7 +68,7 @@ Everything is evaluated, but only what the change touched is reported:
 
 - A finding must be carried by a line of the file's `changedLines` — pre-existing violations on untouched lines are never reported, at any severity.
 - Added files (and every file in folder mode) have no diff, so their whole content is in scope.
-- Three carve-outs, each stating its link to the diff in `**Problem:**`: an obligation the changed lines create (missing spec case, missing teardown, missing required attribute), a regression the diff causes in untouched code, and the consequences of a deletion-only diff.
+- Four carve-outs, each stating its link to the diff in `**Problem:**`: a file with no diff at all (`changedLines: null` — an added file, or any file in folder mode), an obligation the changed lines create (missing spec case, missing teardown, missing required attribute), a regression the diff causes in untouched code, and the consequences of a deletion-only diff.
 - REST endpoint paths and their `endpoints` keys are out of scope — their wording, casing, versioning, segments, slashes and changes are never reported. The one exception is an absolute URL inside the value (protocol + domain, `localhost`, IP with a port), reported as a hard-coded base URL.
 
 ## Base branch detection

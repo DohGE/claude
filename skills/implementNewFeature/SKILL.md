@@ -1,6 +1,6 @@
 ---
 name: implementNewFeature
-description: Use when the user wants a complete feature implemented end-to-end - runs a 5-step pipeline (Requirements, Feature Refinement, Implementation, Validation & E2E, Code Review) with a browser stepper UI; the orchestrator coordinates sub-agents and keeps the main context clean
+description: Use when the user wants a complete feature implemented end-to-end - runs a 5-step pipeline (Requirements, Feature Refinement, Implementation, Validation & E2E, Code Review) plus an optional Mockups step, with a browser stepper UI; the orchestrator coordinates sub-agents and keeps the main context clean
 ---
 
 # implementNewFeature — pipeline orchestrator
@@ -38,7 +38,10 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
-  Fields: `{"step":N,"status":"waiting|in_progress|completed|failed","progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"question":{...}|null,"reviewSummary":{...}|null,"summary":{...}}`
+  Fields: `{"step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"summary":{...}}`
+  Step ids are fixed (1 Requirements, 2 Feature Refinement, 3 Mockups, 4 Implementation,
+  5 Validation & E2E, 6 Code Review). Step 3 ships `enabled:false` and the stepper hides it, so a
+  run without mockups shows the usual five tiles numbered 1-5.
   Merge consecutive updates into ONE POST whenever nothing (user interaction, agent work) happens
   between them — e.g. completing a step and activating the next is a single body, never two calls.
 - Wait for a user answer (long-poll, repeat until non-null):
@@ -78,10 +81,16 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 
    ## Authorization
    <"Provided — credentials in auth.json (session dir); never copy them into spec/plan/tests" if authProvided, else "—">
+
+   ## Mockup generation
+   <"Enabled — step 3 designs the screens" if generateMockups, else "Disabled">
    ```
 
    (Uploads already sit in `<SESSION>/mockups/` and `<SESSION>/contracts/`.)
-4. POST `{"step":1,"status":"completed","activeStep":2}` (one call).
+4. Remember `MOCKUPS = answer.generateMockups` — it decides whether step 3 runs after step 2.
+   When `MOCKUPS`, POST `{"step":3,"enabled":true}` first (`enabled` binds to the body's `step`,
+   so it cannot ride along with the step-1 update).
+5. POST `{"step":1,"status":"completed","activeStep":2}`.
 
 ## Step 2 — Feature Refinement (interactive, proxy Q&A)
 
@@ -92,25 +101,54 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
    - `{"type":"result","summary"}` → spec/plan/checklist now exist in `<SESSION>`. Go to 4.
    - `{"type":"error","report"}` → failure protocol (below) for step 2.
 4. Gate: POST `{"reviewSummary":{"text":"<summary>"}}`; poll answers until `kind=="decision"`:
-   - `approve` → POST `{"reviewSummary":null,"step":2,"status":"completed"}`; continue.
+   - `approve` → POST `{"reviewSummary":null,"step":2,"status":"completed","activeStep":<3 if MOCKUPS else 4>}`; continue.
    - `feedback` → SendMessage the feedback to the agent; back to 3.
 
-## Step 3 — Implementation (view-only)
+## Step 3 — Mockups (interactive, conditional)
+
+Runs ONLY when `MOCKUPS`. Otherwise skip the whole step: it stays `enabled:false` / `waiting`, the
+stepper never shows it, and step 2's gate already moved `activeStep` straight to 4.
+
+1. POST `{"step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
+2. Spawn the mockup agent: prompt = contents of `<SKILL_DIR>/references/mockup-agent.md` with the
+   usual placeholders substituted.
+3. Keep `REV = 0` and a `CHAT` array of `{"role":"agent"|"user","text":"…"}`. Loop on the agent's final JSON:
+   - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → append `{"role":"agent","text":summary}`
+     to `CHAT`, `REV++`, and POST
+     `{"step":3,"progress":<min(90, 20+10×REV)>,"currentOperation":"Waiting for your review","mockupReview":{"rev":REV,"text":"<summary>","screens":[…],"chat":CHAT}}`.
+     Then poll answers until `kind=="mockup"`:
+     - `decision=="feedback"` → append `{"role":"user","text":<text>}` to `CHAT`, then **immediately**
+       (before contacting the agent) POST `{"step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>"}`
+       so the UI reacts to the click at once, then SendMessage the feedback text to the agent. Back to 3.
+     - `decision=="approve"` → SendMessage exactly: `APPROVED — update spec.md, plan.md and
+       checklist.md to match the approved mockups, then reply with the result JSON.` Back to 3.
+   - `{"type":"result","summary","screens":[…]}` (only ever arrives after the approval message) →
+     POST `{"step":3,"status":"completed","progress":100,"mockupReview":null,"activeStep":4}`.
+     Keep the screen count and the summary only — never the mockup markup.
+   - `{"type":"error","report"}` → failure protocol for step 3.
+
+`rev` must increase on every agent round: the UI keys its re-render on it, so a repeated value
+leaves the panel locked on the previous answer.
+
+## Step 4 — Implementation (view-only)
 
 1. Derive `SLUG` from the feature title (first line of `<SESSION>/spec.md`): lowercase, ASCII, spaces→`-`, strip other chars, max 40 chars. `git checkout -b feature/<SLUG>`; if the branch already exists (e.g. a retry of this step), `git checkout feature/<SLUG>` instead.
-2. POST `{"step":3,"status":"in_progress","activeStep":3,"progress":0}`.
+2. POST `{"step":4,"status":"in_progress","activeStep":4,"progress":0}`.
 3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder substitution). It reports progress itself via POST /api/state and writes code against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
-4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"step":3,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
+4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"step":4,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
 
-## Step 4 — Validation & E2E (view-only)
-
-1. POST `{"step":4,"status":"in_progress","activeStep":4,"progress":0}`.
-2. Spawn the validation agent from `references/validation-agent.md`.
-3. `{"type":"result","compliance":NN,"testsSummary","mockupSummary"}` with `compliance>=99` → POST completed. `{"type":"error","report"}` (e.g. <99% after 3 cycles) → failure protocol.
-
-## Step 5 — Code Review (view-only)
+## Step 5 — Validation & E2E (view-only)
 
 1. POST `{"step":5,"status":"in_progress","activeStep":5,"progress":0}`.
+2. Spawn the validation agent from `references/validation-agent.md`. It runs the test suite in
+   Playwright and, when the Claude Chrome extension is available, uses the user's own Chrome for
+   discovery, failure debugging and a UX pass — expect a tab to open there during this step. If the
+   extension is missing it degrades to Playwright-only by itself; never intervene.
+3. `{"type":"result","compliance":NN,"testsSummary","mockupSummary","uxSummary"}` with `compliance>=99` → POST completed. `{"type":"error","report"}` (e.g. <99% after 3 cycles) → failure protocol.
+
+## Step 6 — Code Review (view-only)
+
+1. POST `{"step":6,"status":"in_progress","activeStep":6,"progress":0}`.
 2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method).
 3. `{"type":"result","findingsFixed":N,"reviewSummary"}` → POST completed. `error` → failure protocol.
 
@@ -127,9 +165,9 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 1. Delete `<SESSION>/auth.json` if it exists (credentials must not outlive the pipeline; the
    server also wipes it on shutdown as a backstop). Do this on BOTH outcomes — success and
    `finish` after a failure.
-2. Collect from step results only (no file contents): changes, features, tests, mockup comparison, review results.
-3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","mockupComparison":"...","codeReview":"..."}}`.
+2. Collect from step results only (no file contents): changes, features, tests, mockup comparison, UX findings, review results.
+3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`uxReview` = the validation agent's `uxSummary`).
 4. Print the same summary in the terminal (user's language).
-5. Stage everything: `git add -A` (already done by step 5 agent; verify with `git status --short`).
+5. Stage everything: `git add -A` (already done by the step-6 agent; verify with `git status --short`).
 6. Suggest `superpowers:finishing-a-development-branch` for commit/merge/PR.
 7. Leave the server running — the summary screen shows a "Shut down server" button; the user stops the server by clicking it (POST `/api/shutdown`). Do NOT kill the PID yourself.
