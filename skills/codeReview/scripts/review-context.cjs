@@ -9,10 +9,13 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const github = require('./github.cjs');
+
 const defaultSkillDir = path.resolve(__dirname, '..');
 const baseBranchNames = ['main', 'master', 'develop', 'dev'];
 const audiences = ['implement', 'review', 'both'];
 const reportsRetain = 30;
+const forkCandidateLimit = 60;
 
 // Generated, vendored and binary files: reviewing them wastes context without
 // producing findings. Skipped paths are listed per target so the report can
@@ -131,10 +134,25 @@ function tryGit(project, args) {
   }
 }
 
-function resolveRef(project, name) {
-  if (tryGit(project, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]) !== null) return name;
-  if (tryGit(project, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${name}`]) !== null) return `origin/${name}`;
+// preferRemote is for a base that describes the remote (a PR's target branch):
+// `origin/<name>` is what GitHub diffs against, a stale local branch of the
+// same name is not.
+function resolveRef(project, name, preferRemote = false) {
+  const order = preferRemote ? [`origin/${name}`, name] : [name, `origin/${name}`];
+  for (const ref of order) {
+    const full = ref === name ? `refs/heads/${ref}` : `refs/remotes/${ref}`;
+    if (tryGit(project, ['rev-parse', '--verify', '--quiet', full]) !== null) return ref;
+  }
   return null;
+}
+
+// The target branch of the reviewed branch's open PR - only GitHub knows it.
+// `github.findOpenPr` reaches the API directly (no CLI); a repo with no GitHub
+// remote is never asked, so it neither pays for the call nor warns about one.
+function detectPrBase(project, branchName, findPr = github.findOpenPr) {
+  const { pr, error } = findPr(project, branchName);
+  if (!pr) return { base: null, number: null, error };
+  return { base: pr.base, number: pr.number, error: null };
 }
 
 function baseCandidates(project) {
@@ -145,7 +163,50 @@ function baseCandidates(project) {
   return names;
 }
 
-function detectBaseBranch(project, branchRef, branchName) {
+// Every ref that could be the branch's parent: local heads plus origin's
+// branches, minus origin/HEAD (an alias, not a branch) and the reviewed branch
+// under either name. Capped at the most recently updated ones so a repo with
+// hundreds of stale branches does not pay a git call for each of them.
+function branchRefs(project, branchName) {
+  const out = tryGit(project, ['for-each-ref', '--format=%(refname:short)', '--sort=-committerdate', `--count=${forkCandidateLimit}`, 'refs/heads/', 'refs/remotes/origin/']);
+  if (!out) return [];
+  return out.split('\n').map((s) => s.trim())
+    .filter((ref) => ref && ref !== 'origin/HEAD' && ref !== branchName && ref !== `origin/${branchName}`);
+}
+
+// The branch this one was created from, read off the topology: among all other
+// branches, the one the reviewed branch is fewest commits ahead of — the one it
+// diverged from last. Ties go to the conventional base names in candidate
+// order, then to a local ref over its origin twin.
+// A candidate that already contains the whole branch counts only when it is one
+// of those conventional names, where it means "not diverged from the trunk yet,
+// or already merged into it" and an empty diff is the honest answer. The same
+// zero from a feature branch means that branch was created FROM the reviewed
+// one, and letting a branch's own child become its base would review nothing.
+function detectForkBase(project, branchRef, branchName) {
+  const preferred = baseCandidates(project);
+  let best = null;
+  for (const ref of branchRefs(project, branchName)) {
+    // Commits the branch has and the candidate does not: 0 means the candidate
+    // contains the branch, anything else is how far the branch ran ahead of it.
+    const count = Number(tryGit(project, ['rev-list', '--count', branchRef, `^${ref}`]));
+    if (!Number.isFinite(count)) continue;
+    const rank = preferred.indexOf(ref.replace(/^origin\//, ''));
+    if (count === 0 && rank === -1) continue;
+    const cand = { ref, count, rank: rank === -1 ? preferred.length : rank, local: !ref.startsWith('origin/') };
+    const better = !best || cand.count < best.count
+      || (cand.count === best.count && cand.rank < best.rank)
+      || (cand.count === best.count && cand.rank === best.rank && cand.local && !best.local);
+    if (better) best = cand;
+  }
+  return best ? best.ref : null;
+}
+
+// Conventional bases only (origin/HEAD's branch, main, master, develop, dev),
+// nearest merge-base wins. The last resort of detectBaseBranch, and the one
+// answer for a branch already merged everywhere: its diff is empty, which is
+// the truth about it.
+function detectCandidateBase(project, branchRef, branchName) {
   let best = null;
   for (const name of baseCandidates(project)) {
     if (name === branchName) continue;
@@ -158,6 +219,29 @@ function detectBaseBranch(project, branchRef, branchName) {
     if (!best || count < best.count) best = { ref, count };
   }
   return best ? best.ref : null;
+}
+
+// The base to diff against, in the order the change will actually be merged:
+// 1. the target branch of the branch's open PR — exactly the diff GitHub shows;
+// 2. the branch it was forked from — the nearest branch it still diverges from;
+// 3. the conventional candidates.
+// `source` says which step answered, so the run can report the base it picked.
+// Step 2 is skipped for a conventional base branch itself: `master` was not
+// forked from anything, and every feature branch merged into it looks like a
+// very near fork point, which would make its own children its base.
+function detectBaseBranch(project, branchRef, branchName, findPr = github.findOpenPr) {
+  const pr = detectPrBase(project, branchName, findPr);
+  let unresolvedPrBase = null;
+  if (pr.base) {
+    const ref = resolveRef(project, pr.base, true);
+    if (ref && ref !== branchRef) return { ref, source: 'pr', prNumber: pr.number, apiError: null, unresolvedPrBase };
+    unresolvedPrBase = pr.base;
+  }
+  const rest = { prNumber: pr.number, apiError: pr.error, unresolvedPrBase };
+  const fork = baseCandidates(project).includes(branchName) ? null : detectForkBase(project, branchRef, branchName);
+  if (fork) return { ref: fork, source: 'fork', ...rest };
+  const candidate = detectCandidateBase(project, branchRef, branchName);
+  return { ref: candidate, source: candidate ? 'candidate' : null, ...rest };
 }
 
 function parseNameStatus(output) {
@@ -331,6 +415,8 @@ function buildContext(options) {
   const project = path.resolve(options.project || process.cwd());
   const skillDir = options.skillDir || defaultSkillDir;
   const now = options.now || new Date();
+  const findPr = options.findOpenPr || github.findOpenPr;
+  let apiWarned = false;
   // Decided before the early error returns below, so the reported format is
   // never a default the caller did not ask for.
   const wantsHtml = options.output !== 'md';
@@ -415,9 +501,18 @@ function buildContext(options) {
       result.errors.push(`Branch not found (local or origin): ${branchName}`);
       return;
     }
-    const baseRef = detectBaseBranch(project, branchRef, branchName);
+    const base = detectBaseBranch(project, branchRef, branchName, findPr);
+    // One warning per run, not per branch: the API fails the same way for all.
+    if (base.apiError && !apiWarned) {
+      apiWarned = true;
+      result.warnings.push(`Could not ask GitHub which branch the pull request targets (${base.apiError}) - the base branch comes from git history instead. A private repository needs a token: set GH_TOKEN, or store a github.com credential (any HTTPS push does).`);
+    }
+    if (base.unresolvedPrBase) {
+      result.warnings.push(`[${branchName}] The open PR targets "${base.unresolvedPrBase}", which exists neither locally nor as origin/${base.unresolvedPrBase} (fetch it) - falling back to the base detected from git history.`);
+    }
+    const baseRef = base.ref;
     if (!baseRef) {
-      result.errors.push(`Cannot detect base branch for: ${branchName} (no origin/HEAD, main, master, develop or dev candidate found)`);
+      result.errors.push(`Cannot detect base branch for: ${branchName} (no open PR, no branch it forked from, and no origin/HEAD, main, master, develop or dev candidate found)`);
       return;
     }
     const { kept, skipped } = partition(parseNameStatus(tryGit(project, ['diff', '--name-status', `${baseRef}...${branchRef}`]) || ''));
@@ -425,6 +520,8 @@ function buildContext(options) {
       kind: 'branch',
       branch: branchName,
       baseBranch: baseRef,
+      baseSource: base.source,
+      prNumber: base.source === 'pr' ? base.prNumber : null,
       ...reportPaths(branchName),
       commands: {
         diff: gitc(`diff ${baseRef}...${branchRef} -- ${q('<path>')}`),
@@ -449,7 +546,11 @@ function buildContext(options) {
     result.targets.push({
       kind: 'staged',
       branch: branchName,
+      // No base: staged reviews the uncommitted changes themselves (the index
+      // against HEAD), so no branch comparison is involved.
       baseBranch: null,
+      baseSource: null,
+      prNumber: null,
       ...reportPaths(branchName, 'staged'),
       commands: {
         diff: gitc(`diff --cached -- ${q('<path>')}`),
@@ -479,6 +580,8 @@ function buildContext(options) {
         kind: 'folder',
         branch: branchName,
         baseBranch: null,
+        baseSource: null,
+        prNumber: null,
         folder: rel,
         ...reportPaths(branchName, `folder-${sanitizeBranchName(rel)}`),
         commands: {
@@ -545,6 +648,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectBaseBranch, parseNameStatus, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseNameStatus, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

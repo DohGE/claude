@@ -606,6 +606,45 @@ test('buildSnippet clamps to the file and never shortens a long range', () => {
   );
 });
 
+test('buildSnippet lists the cited lines for the full view to highlight', () => {
+  const source = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+  assert.deepStrictEqual(rr.buildSnippet(source, '10, 15-17').hits, [10, 15, 16, 17]);
+  assert.deepStrictEqual(rr.buildSnippet(Array.from({ length: 5 }, (_, i) => `l${i}`), '4-99').hits, [4, 5],
+    'a range running past the file is clamped, exactly like the highlight');
+});
+
+test('buildFullView covers the file and keeps the fragment row shapes', () => {
+  // Old file: keep 1 / keep 4 / old tail. Two lines went in after old line 1 and
+  // the old tail went away, which leaves keep 4 sitting at new line 4.
+  const source = ['keep 1', 'new 2', 'new 3', 'keep 4'];
+  const diff = rr.parseDiff('@@ -1,0 +2,2 @@\n+new 2\n+new 3\n@@ -3,1 +4,0 @@\n-old tail\n');
+  const full = rr.buildFullView(source, diff);
+  assert.deepStrictEqual(
+    full.rows.map((r) => [r.kind, r.oldN, r.n, r.text]),
+    [
+      ['ctx', 1, 1, 'keep 1'],
+      ['add', null, 2, 'new 2'],
+      ['add', null, 3, 'new 3'],
+      ['ctx', 2, 4, 'keep 4'],
+      ['del', 3, null, 'old tail'],
+    ],
+    'the same rows buildSnippet would emit for a window spanning the whole file',
+  );
+  assert.ok(full.rows.every((r) => r.hit === false), 'the full view is not tied to one finding, so nothing is pre-marked');
+});
+
+test('buildFullView renders a file with no diff as a plain listing', () => {
+  const full = rr.buildFullView(['a', 'b', 'c'], null);
+  assert.deepStrictEqual(full.rows.map((r) => [r.kind, r.n, r.oldN]), [['ctx', 1, null], ['ctx', 2, null], ['ctx', 3, null]]);
+});
+
+test('buildFullView refuses a file past the embedding limit', () => {
+  const atLimit = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`);
+  assert.strictEqual(rr.buildFullView(atLimit, null).rows.length, 3000);
+  assert.strictEqual(rr.buildFullView(atLimit.concat('line 3001'), null), null);
+  assert.strictEqual(rr.buildFullView([], null), null, 'an empty file has nothing to show');
+});
+
 test('buildSnippet returns nothing when the citation points past the file', () => {
   assert.strictEqual(rr.buildSnippet(['a', 'b'], '9'), null);
   assert.strictEqual(rr.buildSnippet(['a', 'b'], 'cały plik'), null);
@@ -665,6 +704,64 @@ test('main embeds the snippet of the reviewed file in the payload', (t) => {
   assert.deepStrictEqual(snippet.hunks[0].lines.filter((l) => l.hit).map((l) => l.n), [3]);
 });
 
+test('attachSnippets hangs one full view on the file, not on each finding', (t) => {
+  const dir = tempDir(t, 'cr-full-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'one\ntwo\nthree\n', 'utf8');
+  const report = rr.parseReport(reportOf(
+    ['## src/a.ts', ''], findingOf({ lines: '1' }), findingOf({ lines: '3', problem: 'Inne.' }),
+    ['## src/gone.ts', ''], findingOf({ lines: '2' }),
+  ));
+
+  rr.attachSnippets(report, dir);
+  assert.deepStrictEqual(report.files[0].full.rows.map((r) => r.text), ['one', 'two', 'three']);
+  assert.strictEqual(report.files[0].fullLines, null);
+  assert.deepStrictEqual(report.files[0].findings.map((f) => f.snippet.hits), [[1], [3]],
+    'both findings share the one full view and bring their own highlights');
+  assert.strictEqual(report.files[1].full, null, 'an unreadable file has no full view either');
+  assert.strictEqual(report.files[1].fullLines, null, 'unreadable is not the same as too long');
+});
+
+test('attachSnippets reports the line count of a file too long to embed', (t) => {
+  const dir = tempDir(t, 'cr-full-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'big.ts'), `${Array.from({ length: 3001 }, (_, i) => `line ${i + 1}`).join('\n')}\n`, 'utf8');
+  const report = rr.parseReport(reportOf(['## src/big.ts', ''], findingOf({ lines: '5' })));
+
+  rr.attachSnippets(report, dir);
+  assert.strictEqual(report.files[0].full, null);
+  assert.strictEqual(report.files[0].fullLines, 3001);
+  assert.ok(report.files[0].findings[0].snippet, 'the fragment still renders');
+});
+
+test('main embeds the full view once per file', (t) => {
+  const dir = tempDir(t, 'cr-render-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'one\ntwo\nthree\nfour\n', 'utf8');
+  const md = path.join(dir, 'branch.md');
+  fs.writeFileSync(md, reportOf(['## src/a.ts', ''], findingOf({ lines: '2' }), findingOf({ lines: '4', problem: 'Inne.' })), 'utf8');
+
+  assert.strictEqual(runMain([`--report=${md}`, `--project=${dir}`]).code, 0);
+  const file = embeddedPayload(fs.readFileSync(path.join(dir, 'branch.html'), 'utf8')).files[0];
+  assert.deepStrictEqual(file.full.rows.map((r) => r.n), [1, 2, 3, 4]);
+  assert.strictEqual(file.fullLines, null);
+  assert.deepStrictEqual(file.findings.map((f) => f.snippet.hits), [[2], [4]]);
+});
+
+test('the page ships the full-view switch and its styles', (t) => {
+  const dir = tempDir(t, 'cr-render-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'one\ntwo\nthree\n', 'utf8');
+  const md = path.join(dir, 'branch.md');
+  fs.writeFileSync(md, reportOf(['## src/a.ts', ''], findingOf({ lines: '2' })), 'utf8');
+
+  assert.strictEqual(runMain([`--report=${md}`, `--project=${dir}`]).code, 0);
+  const html = fs.readFileSync(path.join(dir, 'branch.html'), 'utf8');
+  assert.ok(html.includes('.snip-full{'), 'the full view needs its own scroll box');
+  assert.ok(html.includes('Cały plik'), 'the switch is built by the page script');
+  assert.ok(html.includes('Fragment'), 'and it switches back');
+});
+
 test('parseRuleField keeps an arrow inside quoted rule text out of the file list', () => {
   assert.deepStrictEqual(
     rr.parseRuleField('models.md → "no functions (→ `shared/utils/`)"; no functions (→ `x`)" + "Mappers are consts"'),
@@ -692,9 +789,20 @@ test('parseDiff reads additions and anchors removals on the new file', () => {
     '',
   ].join('\n'));
   assert.deepStrictEqual([...diff.added].sort((a, b) => a - b), [2, 3]);
-  assert.deepStrictEqual([...diff.removed.entries()], [[10, ['dropped']]], 'a deletion-only hunk sits before the next line');
+  assert.deepStrictEqual([...diff.removed.entries()], [[10, [{ n: 8, text: 'dropped' }]]], 'a deletion-only hunk sits before the next line, under its old number');
   assert.strictEqual(rr.parseDiff(''), null);
   assert.strictEqual(rr.parseDiff('diff --git a/x b/x\n'), null, 'a header-only diff carries no change');
+});
+
+test('parseDiff tracks how far the old numbering runs ahead of the new one', () => {
+  // Two lines added at new 2-3, one line dropped at old 8: from new line 4 on
+  // the old file is 2 lines behind, from new line 10 on only 1.
+  const diff = rr.parseDiff('@@ -1,0 +2,2 @@\n+added one\n+added two\n@@ -8,1 +9,0 @@\n-dropped\n');
+  assert.deepStrictEqual(diff.shifts, [
+    { from: 1, delta: 0 },
+    { from: 4, delta: -2 },
+    { from: 10, delta: -1 },
+  ]);
 });
 
 test('buildSnippet marks added lines and inserts the removed ones', () => {
@@ -716,6 +824,22 @@ test('buildSnippet marks added lines and inserts the removed ones', () => {
 test('buildSnippet without a diff leaves every row as context', () => {
   const snippet = rr.buildSnippet(['a', 'b', 'c'], '2');
   assert.deepStrictEqual(snippet.hunks[0].lines.map((l) => l.kind), ['ctx', 'ctx', 'ctx']);
+  assert.deepStrictEqual(snippet.hunks[0].lines.map((l) => l.oldN), [null, null, null], 'no diff, no old numbering');
+});
+
+test('buildSnippet numbers every row on the old side too', () => {
+  // Old file: keep 1 / gone 2 / keep 3, with "new 2" put in place of "gone 2".
+  const source = ['keep 1', 'new 2', 'keep 3'];
+  const diff = rr.parseDiff('@@ -2 +2 @@\n-gone 2\n+new 2\n');
+  assert.deepStrictEqual(
+    rr.buildSnippet(source, '2', diff).hunks[0].lines.map((l) => [l.kind, l.oldN, l.n, l.text]),
+    [
+      ['ctx', 1, 1, 'keep 1'],
+      ['del', 2, null, 'gone 2'],
+      ['add', null, 2, 'new 2'],
+      ['ctx', 3, 3, 'keep 3'],
+    ],
+  );
 });
 
 test('attachSnippets renders a branch review against the branch, with its diff', (t) => {
@@ -770,6 +894,33 @@ test('attachSnippets renders a staged review from the index', (t) => {
     ['ctx', 2, 'two'],
     ['add', 3, 'three'],
   ]);
+});
+
+// The PR lookup: a stub of github.findOpenPr keeps every case off the network.
+test('detectPullRequest returns the open pull request', () => {
+  const calls = [];
+  const findPr = (root, branch) => {
+    calls.push(branch);
+    return { pr: { number: 7, url: 'https://github.com/acme/repo/pull/7', base: 'main' }, error: null };
+  };
+  assert.deepStrictEqual(rr.detectPullRequest('/repo', 'feature/x', findPr), {
+    pr: { number: 7, url: 'https://github.com/acme/repo/pull/7' },
+    warning: null,
+  });
+  assert.deepStrictEqual(calls, ['feature/x']);
+});
+
+test('detectPullRequest reports a refused lookup instead of silently dropping the button', () => {
+  const result = rr.detectPullRequest('/repo', 'feature/x', () => ({ pr: null, error: 'Bad credentials - the GitHub token was rejected' }));
+  assert.strictEqual(result.pr, null);
+  assert.match(result.warning, /Bad credentials/);
+  assert.match(result.warning, /przycisku dodawania komentarzy/);
+});
+
+test('detectPullRequest stays quiet when no PR is open and asks nothing without a branch', () => {
+  assert.deepStrictEqual(rr.detectPullRequest('/repo', 'feature/x', () => ({ pr: null, error: null })), { pr: null, warning: null });
+  const findPr = () => { throw new Error('the lookup must not run here'); };
+  assert.deepStrictEqual(rr.detectPullRequest('/repo', '', findPr), { pr: null, warning: null });
 });
 
 test('renderHtml adds the file-tree sidebar and drops it for an empty state', () => {
