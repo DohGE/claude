@@ -8,8 +8,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
+const github = require('./github.cjs');
 const { parseLineRanges } = require('./render-report.cjs');
 
 const maxCommentsPerReview = 50;
@@ -140,13 +140,9 @@ function chunk(items, size) {
   return out;
 }
 
-function gh(project, args, input) {
-  return execFileSync('gh', args, {
-    cwd: project, encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'],
-  });
-}
-
-function main(argv) {
+// `api` is the GitHub client, injectable so the tests can drive the whole flow
+// without a network.
+function main(argv, api = github) {
   let args;
   try {
     args = parseArgs(argv);
@@ -184,13 +180,15 @@ function main(argv) {
     return 1;
   }
 
-  let repo;
-  let diff;
-  try {
-    repo = JSON.parse(gh(project, ['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
-    diff = gh(project, ['pr', 'diff', String(number)]);
-  } catch (err) {
-    process.stderr.write(`Nie udało się odpytać GitHuba przez gh: ${(err && err.message) || err}\n`);
+  const slug = api.repoSlug(project);
+  if (!slug) {
+    process.stderr.write(`Nie znalazłem remote'a GitHuba w ${project}.\n`);
+    return 1;
+  }
+  const repo = `${slug.owner}/${slug.repo}`;
+  const { diff, error } = api.pullRequestDiff(project, slug, number);
+  if (diff === null) {
+    process.stderr.write(`Nie udało się pobrać diffa PR-a #${number} z API GitHuba: ${error}\n`);
     return 1;
   }
 
@@ -208,11 +206,9 @@ function main(argv) {
 
   for (let i = 0; i < Math.max(batches.length, 1); i++) {
     const review = { event: 'COMMENT', body: bodies[i], comments: batches[i] || [] };
-    try {
-      gh(project, ['api', '--method', 'POST', `repos/${repo}/pulls/${number}/reviews`, '--input', '-'], JSON.stringify(review));
-    } catch (err) {
-      const detail = (err && (err.stderr || err.message)) || err;
-      process.stderr.write(`Nie udało się wysłać review (partia ${i + 1}): ${detail}\n`);
+    const posted = api.postReview(project, slug, number, review);
+    if (posted.error) {
+      process.stderr.write(`Nie udało się wysłać review (partia ${i + 1}): ${posted.error}\n`);
       return 1;
     }
   }

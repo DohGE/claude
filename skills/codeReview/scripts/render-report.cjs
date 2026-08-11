@@ -10,6 +10,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
+const github = require('./github.cjs');
+
 // Order is the display order and the sort rank of the flat global list.
 // `missing-unit-test` sorts last: it is orthogonal to the severity ladder, and
 // Step 4 already lists it last within a file.
@@ -260,6 +262,10 @@ function plural(n, one, few, many) {
 // browser never has to join or split anything. Counts are recomputed there -
 // they have to react to ignoring - so only the structure is emitted here.
 const snippetContext = 3;
+// Full sources ride inside the HTML, so the switch is capped by what a page can
+// carry and a browser can lay out as DOM rows - not by the 2 MB read guard,
+// which is about what is safe to read at all.
+const maxFullViewLines = 3000;
 const maxSourceBytes = 2 * 1024 * 1024;
 
 // `**Linia:**` is a comma-separated list of numbers and `start-end` spans; any
@@ -276,6 +282,27 @@ function parseLineRanges(value) {
     ranges.push({ start, end });
   }
   return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+// The rows of one span of the file: the source lines themselves, each carrying
+// its diff kind and - for anything the diff did not add - the number it had in
+// the old file. Removed lines have no place in the new file at all, so they are
+// emitted in front of the new line they used to precede.
+function rowsFor(sourceLines, diff, from, to, hit) {
+  const rows = [];
+  const removedBefore = (n) => (diff && diff.removed.get(n)) || [];
+  const removedRow = ({ n, text }) => ({ n: null, oldN: n, text, kind: 'del', hit: false });
+  for (let n = from; n <= to; n++) {
+    for (const gone of removedBefore(n)) rows.push(removedRow(gone));
+    const kind = diff && diff.added.has(n) ? 'add' : 'ctx';
+    rows.push({ n, oldN: kind === 'add' ? null : oldLineOf(diff, n), text: sourceLines[n - 1], kind, hit: hit ? hit.has(n) : false });
+  }
+  // Lines dropped at the very end of the file are anchored past the last one,
+  // where the loop above can no longer reach them.
+  if (to === sourceLines.length) {
+    for (const gone of removedBefore(sourceLines.length + 1)) rows.push(removedRow(gone));
+  }
+  return rows;
 }
 
 // One hunk per cited place: the lines themselves plus a few lines of context,
@@ -298,23 +325,18 @@ function buildSnippet(sourceLines, linesField, diff) {
   }
   // A cited range is shown whole, however long: a finding that spans a file is
   // exactly the one whose code the reader needs in full.
-  const hunks = [];
-  const removedBefore = (n) => (diff && diff.removed.get(n)) || [];
-  for (const window of windows) {
-    const rows = [];
-    for (let n = window.from; n <= window.to; n++) {
-      for (const text of removedBefore(n)) rows.push({ n: null, text, kind: 'del', hit: false });
-      const kind = diff && diff.added.has(n) ? 'add' : 'ctx';
-      rows.push({ n, text: sourceLines[n - 1], kind, hit: hit.has(n) });
-    }
-    // Lines dropped at the very end of the file are anchored past the last one,
-    // where the loop above can no longer reach them.
-    if (window.to === sourceLines.length) {
-      for (const text of removedBefore(sourceLines.length + 1)) rows.push({ n: null, text, kind: 'del', hit: false });
-    }
-    hunks.push({ lines: rows });
-  }
-  return hunks.length ? { hunks } : null;
+  const hunks = windows.map((window) => ({ lines: rowsFor(sourceLines, diff, window.from, window.to, hit) }));
+  // The full view highlights the same lines, and it renders from the file's
+  // rows rather than from these, so it needs the numbers, not the marked rows.
+  return hunks.length ? { hunks, hits: [...hit].sort((a, b) => a - b) } : null;
+}
+
+// The whole file as one continuous run of rows - no windows, so no gap markers.
+// Highlighting is left to the client, because one file serves every finding in
+// it and each of them marks different lines.
+function buildFullView(sourceLines, diff) {
+  if (!sourceLines.length || sourceLines.length > maxFullViewLines) return null;
+  return { rows: rowsFor(sourceLines, diff, 1, sourceLines.length, null) };
 }
 
 // A trailing newline ends the last line, it does not start another one, and
@@ -345,22 +367,31 @@ function resolveRef(root, name) {
 // `git diff -U0` states the change exactly: `@@ -a,b +c,d @@` removed old lines
 // a..a+b-1 and added new lines c..c+d-1, with no context lines in between. The
 // report cites new-file numbers, so additions are keyed by their new number and
-// removals are anchored to the new line they sit in front of.
+// removals are anchored to the new line they sit in front of, carrying the old
+// number they had. `shifts` is what the untouched lines in between need: from
+// the named new line on, the old file's numbering runs `delta` ahead.
 function parseDiff(diffText) {
   if (!diffText) return null;
   const added = new Set();
   const removed = new Map();
+  const shifts = [{ from: 1, delta: 0 }];
   let cursor = 0;
   let anchor = 0;
+  let oldCursor = 0;
   for (const line of String(diffText).split(/\r?\n/)) {
-    const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunk) {
-      const start = Number(hunk[1]);
-      const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      const oldStart = Number(hunk[1]);
+      const oldCount = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      const start = Number(hunk[3]);
+      const count = hunk[4] === undefined ? 1 : Number(hunk[4]);
       cursor = start;
-      // A deletion-only hunk names the new line it happened *after*, so its
-      // removals belong in front of the next one.
+      oldCursor = oldStart;
+      // A hunk that adds or removes nothing on one side names the line it
+      // happened *after*, so that side continues one line further on.
       anchor = count === 0 ? start + 1 : start;
+      const afterNew = count === 0 ? start + 1 : start + count;
+      shifts.push({ from: afterNew, delta: (oldCount === 0 ? oldStart + 1 : oldStart + oldCount) - afterNew });
       continue;
     }
     if (line.startsWith('+++') || line.startsWith('---')) continue;
@@ -369,10 +400,23 @@ function parseDiff(diffText) {
       cursor++;
     } else if (line.startsWith('-')) {
       if (!removed.has(anchor)) removed.set(anchor, []);
-      removed.get(anchor).push(line.slice(1));
+      removed.get(anchor).push({ n: oldCursor, text: line.slice(1) });
+      oldCursor++;
     }
   }
-  return added.size || removed.size ? { added, removed } : null;
+  return added.size || removed.size ? { added, removed, shifts } : null;
+}
+
+// The old-file number of a line the diff left untouched - what the left side of
+// the split view prints next to it. An added line has no old counterpart.
+function oldLineOf(diff, n) {
+  if (!diff || !diff.shifts) return null;
+  let delta = 0;
+  for (const shift of diff.shifts) {
+    if (shift.from > n) break;
+    delta = shift.delta;
+  }
+  return n + delta > 0 ? n + delta : null;
 }
 
 // Branch and staged reviews are written against the reviewed revision, not the
@@ -410,28 +454,18 @@ function sourceReader(projectRoot, source) {
   };
 }
 
-function ghText(root, args) {
-  try {
-    return execFileSync('gh', args, {
-      cwd: root, encoding: 'utf8', timeout: 15000, maxBuffer: maxSourceBytes, stdio: ['ignore', 'pipe', 'ignore'],
-    });
-  } catch (err) {
-    return null;
-  }
-}
-
 // A file:// page has no credentials, so GitHub is asked here, once: the page
 // only learns whether a PR exists and what command posts the comments to it.
-function detectPullRequest(projectRoot, branch) {
-  if (!branch) return null;
-  const out = ghText(projectRoot, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url', '--limit', '1']);
-  if (!out) return null;
-  try {
-    const list = JSON.parse(out);
-    return list.length ? { number: list[0].number, url: list[0].url } : null;
-  } catch (err) {
-    return null;
+// A lookup that could not run comes back as a warning, because a button missing
+// because the API refused looks exactly like a button missing because no PR is
+// open. Repos that do not point at GitHub are never asked, so they never warn.
+function detectPullRequest(projectRoot, branch, findPr = github.findOpenPr) {
+  if (!branch) return { pr: null, warning: null };
+  const { pr, error } = findPr(projectRoot, branch);
+  if (error) {
+    return { pr: null, warning: `Nie udało się sprawdzić PR-a w API GitHuba (${error}) - raport nie dostał przycisku dodawania komentarzy do PR.` };
   }
+  return { pr: pr ? { number: pr.number, url: pr.url } : null, warning: null };
 }
 
 function postCommandFor(projectRoot, outPath) {
@@ -467,6 +501,10 @@ function attachSnippets(report, projectRoot, source) {
   for (const file of report.files) {
     const lines = read(file.path);
     const diff = lines ? readDiff(file.path) : null;
+    file.full = lines ? buildFullView(lines, diff) : null;
+    // Only a file that was read and then turned down for its length gets a
+    // count: a missing file has no length to report and no switch to explain.
+    file.fullLines = lines && !file.full ? lines.length : null;
     for (const finding of file.findings) {
       finding.snippet = lines ? buildSnippet(lines, finding.lines, diff) : null;
     }
@@ -517,6 +555,8 @@ function buildPayload(report, reportName) {
     ruleGroups,
     files: report.files.map((file) => ({
       path: file.path,
+      full: file.full || null,
+      fullLines: file.fullLines || null,
       findings: file.findings.map((finding) => ({
         id: finding.id,
         severity: finding.severity,
@@ -666,7 +706,16 @@ button{font:inherit;color:inherit}
 .f-problem{margin-top:8px;overflow-wrap:anywhere}
 
 .snipbox{margin-top:10px;border:1px solid var(--border);border-radius:8px;background:var(--snip-bg);overflow:hidden}
-.snipbox>summary{cursor:pointer;list-style:none;padding:5px 11px;font-size:12.5px;color:var(--muted)}
+.snipbox>summary{cursor:pointer;list-style:none;padding:5px 11px;font-size:12.5px;color:var(--muted);
+  display:flex;align-items:center;gap:10px}
+.snip-title{flex:1 1 auto;overflow-wrap:anywhere}
+/* Small enough to sit in the summary line without stretching it, otherwise the
+   same segmented control the toolbar uses. */
+.snip-modes{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;flex:0 0 auto}
+.snip-modes button{border:0;background:var(--panel-2);padding:2px 9px;cursor:pointer;font-size:11.5px;color:var(--muted)}
+.snip-modes button+button{border-left:1px solid var(--border)}
+.snip-modes button[aria-pressed=true]{background:var(--accent);color:#fff}
+.snip-modes button:disabled{opacity:.4;cursor:default}
 .snipbox>summary::-webkit-details-marker{display:none}
 .snipbox>summary::before{content:"▸ "}
 .snipbox[open]>summary::before{content:"▾ "}
@@ -675,7 +724,7 @@ button{font:inherit;color:inherit}
   font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12.5px;line-height:1.6}
 /* Rows are as wide as the widest line so the highlight spans the whole scroll
    width instead of stopping at the viewport edge. */
-.snip-row{display:flex;align-items:flex-start;white-space:pre;min-width:max-content}
+.snip-row{display:flex;align-items:flex-start;white-space:pre;min-width:max-content;min-height:1.6em}
 .snip-n{flex:0 0 auto;width:56px;padding:0 10px 0 6px;text-align:right;color:var(--muted);
   background:var(--snip-gutter);border-right:1px solid var(--border);
   position:sticky;left:0;user-select:none;font-variant-numeric:tabular-nums}
@@ -692,6 +741,20 @@ button{font:inherit;color:inherit}
   box-shadow:inset 3px 0 0 var(--hit-mark,var(--accent))}
 .snip-gap{color:var(--muted)}
 .snip-gap .snip-n{color:var(--muted)}
+/* Split view: the file before the change on the left, after it on the right.
+   Each side scrolls horizontally on its own, so one long line never pushes the
+   other side out of view; the rows stay aligned because every row is exactly one
+   line high and both sides get the same number of them. The single-column grid
+   inside a side stretches every row to the widest line, which is what lets a
+   blank counterpart cell keep its background across the whole scroll width. */
+.snip-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);overflow-x:hidden}
+.snip-side{overflow-x:auto;min-width:0;display:grid;grid-template-columns:minmax(100%,max-content)}
+.snip-side+.snip-side{border-left:1px solid var(--border)}
+.snip-blank{background:var(--snip-gutter)}
+/* A whole file would push the next finding off the page, so the full view keeps
+   its own scrollbar and the card its size. Both columns of a split view sit
+   inside this box, which is what keeps them scrolling together. */
+.snip-full{max-height:70vh;overflow-y:auto}
 .f-grid{margin-top:9px;display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;
   font-size:13.5px;color:var(--muted)}
 .f-grid dt{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding-top:2px}
@@ -1133,7 +1196,9 @@ const pageJs = `
   function snipRow(number, kind, text) {
     var row = el('div', 'snip-row snip-' + kind);
     var num = el('span', 'snip-n');
-    num.textContent = number === null ? '' : number;
+    // A gap row stands for the lines the fragment view skipped, so its gutter
+    // carries the marker instead of a number it does not have.
+    num.textContent = kind === 'gap' ? '⋯' : (number === null || number === undefined ? '' : number);
     var mark = el('span', 'snip-mark');
     mark.textContent = marks[kind] || ' ';
     var code = el('span', 'snip-code');
@@ -1144,22 +1209,146 @@ const pageJs = `
     return row;
   }
 
+  // Split view, like GitHub: the file before the change on the left, after it on
+  // the right. Inside one block of consecutive removals and additions the k-th
+  // removal faces the k-th addition; whatever is left over faces a blank cell.
+  // An unchanged line is the same line on both sides, printed with each file's
+  // own numbering.
+  function pairRows(lines) {
+    var pairs = [];
+    var dels = [];
+    var adds = [];
+    function flush() {
+      for (var i = 0; i < Math.max(dels.length, adds.length); i++) {
+        pairs.push([dels[i] || null, adds[i] || null]);
+      }
+      dels = [];
+      adds = [];
+    }
+    lines.forEach(function (line) {
+      if (line.kind === 'del') { dels.push(line); return; }
+      if (line.kind === 'add') { adds.push(line); return; }
+      flush();
+      pairs.push([line, line]);
+    });
+    flush();
+    return pairs;
+  }
+
+  // One cell of a pair: the left one is the old file (a removal, or an unchanged
+  // line under its old number), the right one the new file. Only a changed line
+  // takes its side's colour; context and gap markers keep their own kind.
+  function sideRow(line, isOld, hits) {
+    if (!line) return snipRow(null, 'blank', '');
+    var kind = line.kind === 'add' || line.kind === 'del' ? (isOld ? 'del' : 'add') : line.kind;
+    var row = snipRow(isOld ? line.oldN : line.n, kind, line.text);
+    if (line.hit || (line.n !== null && hits.indexOf(line.n) !== -1)) row.classList.add('snip-hit');
+    return row;
+  }
+
   // Source lines go in as text nodes, exactly like every other report value, and
   // the highlight marker takes the finding's severity colour.
-  function snippet(f, color) {
-    var box = el('details', 'snipbox');
-    var summary = el('summary');
-    summary.textContent = 'Kod · linie ' + f.lines;
-    var body = el('div', 'snip');
+  function snipBody(rows, hits, color) {
+    // Two identical columns say nothing, so a run of rows the diff never touched
+    // - a folder review, or a finding on a line left alone - stays a plain file
+    // view; anything with a +/- in it becomes a real split diff.
+    var split = rows.some(function (line) { return line.kind === 'del' || line.kind === 'add'; });
+    var body = el('div', split ? 'snip snip-split' : 'snip');
     body.style.setProperty('--hit-mark', color);
-    f.snippet.hunks.forEach(function (hunk, index) {
-      if (index) body.appendChild(snipRow('⋯', 'gap', ''));
-      hunk.lines.forEach(function (line) {
+    if (!split) {
+      rows.forEach(function (line) {
         var row = snipRow(line.n, line.kind || 'ctx', line.text);
-        if (line.hit) row.classList.add('snip-hit');
+        if (line.hit || (line.n !== null && hits.indexOf(line.n) !== -1)) row.classList.add('snip-hit');
         body.appendChild(row);
       });
+      return body;
+    }
+    var sides = [el('div', 'snip-side'), el('div', 'snip-side')];
+    pairRows(rows).forEach(function (pair) {
+      sides[0].appendChild(sideRow(pair[0], true, hits));
+      sides[1].appendChild(sideRow(pair[1], false, hits));
     });
+    sides.forEach(function (side) { body.appendChild(side); });
+    return body;
+  }
+
+  // The gap marker is what tells the reader the fragment view skipped something;
+  // one continuous run of rows never needs it, which is why only this path adds
+  // the markers between hunks.
+  function fragmentRows(hunks) {
+    var rows = [];
+    hunks.forEach(function (hunk, index) {
+      if (index) rows.push({ n: null, oldN: null, text: '', kind: 'gap', hit: false });
+      hunk.lines.forEach(function (line) { rows.push(line); });
+    });
+    return rows;
+  }
+
+  // The whole file opens at line 1, which is almost never where the finding is.
+  // "First" has to mean highest on the page rather than first in document order,
+  // because a split view lays the entire old column out before the new one: a
+  // cited line that was added exists only on the right, so the first hit in the
+  // DOM can easily be a later line that happens to sit on the left. offsetTop
+  // would be measured against whatever the split grid positions, so the offset
+  // is taken from the boxes themselves.
+  function showFirstHit(body) {
+    body.classList.add('snip-full');
+    var boxTop = body.getBoundingClientRect().top;
+    var top = null;
+    [].forEach.call(body.querySelectorAll('.snip-hit'), function (row) {
+      var offset = row.getBoundingClientRect().top;
+      if (top === null || offset < top) top = offset;
+    });
+    if (top === null) return;
+    body.scrollTop += top - boxTop - 60;
+  }
+
+  function snippet(f, color, file) {
+    var box = el('details', 'snipbox');
+    var summary = el('summary');
+    var title = el('span', 'snip-title');
+    title.textContent = 'Kod · linie ' + f.lines;
+    summary.appendChild(title);
+
+    var hits = f.snippet.hits || [];
+    var views = {
+      part: function () { return snipBody(fragmentRows(f.snippet.hunks), [], color); },
+      full: function () { return snipBody(file.full.rows, hits, color); },
+    };
+    var body = views.part();
+
+    var modes = el('div', 'snip-modes');
+    var buttons = {};
+    [['part', 'Fragment'], ['full', 'Cały plik']].forEach(function (pair) {
+      var button = el('button');
+      button.type = 'button';
+      button.textContent = pair[1];
+      button.setAttribute('aria-pressed', String(pair[0] === 'part'));
+      if (pair[0] === 'full' && !file.full) {
+        button.disabled = true;
+        button.title = file.fullLines
+          ? 'Plik ma ' + file.fullLines + ' linii (limit 3000) - dostępny tylko fragment'
+          : 'Nie udało się odczytać pliku - dostępny tylko fragment';
+      }
+      button.addEventListener('click', function (event) {
+        // Inside a <summary> the default action collapses the box, so the switch
+        // would close the very view it was asked to change.
+        event.preventDefault();
+        event.stopPropagation();
+        if (button.disabled || button.getAttribute('aria-pressed') === 'true') { box.open = true; return; }
+        buttons.part.setAttribute('aria-pressed', String(pair[0] === 'part'));
+        buttons.full.setAttribute('aria-pressed', String(pair[0] === 'full'));
+        var next = views[pair[0]]();
+        box.replaceChild(next, body);
+        body = next;
+        box.open = true;
+        if (pair[0] === 'full') showFirstHit(next);
+      });
+      buttons[pair[0]] = button;
+      modes.appendChild(button);
+    });
+    summary.appendChild(modes);
+
     box.appendChild(summary);
     box.appendChild(body);
     return box;
@@ -1218,7 +1407,7 @@ const pageJs = `
       grid.appendChild(dd);
     });
     node.appendChild(grid);
-    if (f.snippet && f.snippet.hunks.length) node.appendChild(snippet(f, color));
+    if (f.snippet && f.snippet.hunks.length) node.appendChild(snippet(f, color, reportData.files[f.fileIndex]));
     return node;
   }
 
@@ -1409,7 +1598,8 @@ function main(argv) {
   const report = parseReport(markdown);
   const projectRoot = projectRootFor(args.report, args.project);
   attachSnippets(report, projectRoot, { mode: args.mode, base: args.base, branch: args.branch });
-  report.pr = report.emptyState ? null : detectPullRequest(projectRoot, args.branch);
+  const pullRequest = report.emptyState ? { pr: null, warning: null } : detectPullRequest(projectRoot, args.branch);
+  report.pr = pullRequest.pr;
   report.postCommand = report.pr ? postCommandFor(projectRoot, args.out) : '';
   try {
     fs.writeFileSync(args.out, renderHtml(report, path.basename(args.out)), 'utf8');
@@ -1417,6 +1607,9 @@ function main(argv) {
     process.stderr.write(`Nie można zapisać raportu HTML: ${args.out} (${(err && err.message) || err})\n`);
     return 1;
   }
+  // Not a parser warning: it says nothing about the report format, so it never
+  // makes the Markdown below stay behind.
+  if (pullRequest.warning) process.stderr.write(`${pullRequest.warning}\n`);
   for (const warning of report.warnings) process.stderr.write(`Ostrzeżenie parsera: ${warning}\n`);
   // The Markdown is only discarded when it was understood completely: a kept
   // source file is the signal that the report format drifted.
@@ -1436,8 +1629,8 @@ function main(argv) {
 }
 
 module.exports = {
-  parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet,
-  projectRootFor, attachSnippets, buildPayload, renderHtml, main,
+  parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
+  projectRootFor, attachSnippets, buildPayload, renderHtml, detectPullRequest, main,
 };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

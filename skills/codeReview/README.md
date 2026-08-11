@@ -12,9 +12,9 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 
 | Invocation | Scope |
 |---|---|
-| `/codeReview` | current branch vs its auto-detected base branch |
-| `/codeReview staged` | all pending changes (runs `git add .` first, then reviews the git index) |
-| `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own auto-detected base; one report per branch |
+| `/codeReview` | current branch vs its base — the target branch of its open PR, else the branch it was created from (see [Base branch detection](#base-branch-detection)) |
+| `/codeReview staged` | all uncommitted changes (runs `git add .` first, then reviews the git index against `HEAD`) |
+| `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own detected base; one report per branch |
 | `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
 
 `--only-md` may sit anywhere in the arguments and is stripped before the rest is mapped to a mode.
@@ -73,15 +73,40 @@ Everything is evaluated, but only what the change touched is reported:
 
 ## Base branch detection
 
-Deterministic candidate order: the branch pointed to by `origin/HEAD`, then `main`, `master`, `develop`, `dev` — keeping only candidates that exist locally or as `origin/<name>`, excluding the reviewed branch itself.
-The candidate with the fewest commits between its merge-base and the reviewed branch wins; ties resolve by candidate order.
+Only branch targets have a base: `staged` reviews the uncommitted changes themselves (the index against `HEAD`) and `folder` reviews the working tree, so neither compares branches.
+
+For a branch, the base is the first of these that answers:
+
+1. **The target branch of its open pull request** — asked straight of the GitHub REST API, so the review diffs exactly what GitHub shows. Resolved to `origin/<base>` when that ref exists, rather than to a possibly stale local branch of the same name. A PR base that was never fetched is reported as a warning and the detection falls through to step 2.
+2. **The branch it was created from** — among the 60 most recently updated local and `origin/` branches, the one the reviewed branch is fewest commits ahead of. Ties go to the conventional names of step 3, in their order, then to a local ref over its `origin/` twin. A feature branch that already contains the whole reviewed branch is skipped, so a branch created *from* the reviewed one never becomes its base; the same from a conventional name is kept, because there it means the branch has not diverged from the trunk yet (or is already merged into it) and an empty diff is the honest answer. This step is skipped entirely when the reviewed branch *is* one of the conventional names — `master` was not forked from anything, and every feature branch merged into it would otherwise look like a very near fork point.
+3. **The conventional candidates** — the branch pointed to by `origin/HEAD`, then `main`, `master`, `develop`, `dev`, nearest merge-base first. This is also the answer for a branch already merged everywhere: its diff is empty, which is the truth about it.
+
 No usable candidate → the run stops with a clear error.
+The terminal summary names the base and which of the three steps picked it.
+
+Step 1 runs only when a remote points at github.com, and needs no tooling at all — see [GitHub access](#github-access). A call that cannot be made warns once and the run starts at step 2.
+
+## GitHub access
+
+Two features talk to GitHub: the base branch taken from an open pull request, and the report's **Dodaj komentarze do PR** button. Both go straight to the REST API — the `gh` CLI is not required (and not used, beyond being one possible source of a token).
+
+- **Reading** (is there an open PR, what does it target, what is its diff) works **unauthenticated on a public repository**, capped at GitHub's 60 requests/h per IP. A private repository needs a token.
+- **Posting** the review always needs a token.
+
+The token is looked up in this order, and the first hit wins:
+
+1. `GH_TOKEN`, then `GITHUB_TOKEN` from the environment.
+2. The credential git already stores for github.com — any HTTPS push puts one there (Windows Credential Manager, macOS keychain, `git credential-store`). Asked with `credential.interactive=false`, so a missing credential can never pop a prompt mid-review.
+3. `gh auth token`, if the CLI happens to be installed.
+
+The value is never logged and never passed on a command line: it reaches the request child on stdin. A repository whose remotes do not point at github.com is never asked and never warns.
 
 ## HTML report
 
 The default output is one self-contained page — inline CSS and JS, no fonts, images or CDN requests — so it opens straight from disk over `file://` and survives being copied or attached somewhere else.
 It follows the reader's light/dark theme.
 
+- **Code snippet** — every finding carries a collapsible view of the cited lines with three lines of context. When those lines changed, it is a side-by-side diff like GitHub's split view: the file before the change on the left under its own line numbers, after it on the right, the k-th removal facing the k-th addition inside a change block and a blank cell facing whatever has no counterpart. Each side scrolls horizontally on its own. A snippet with nothing changed in it (a folder review, or a finding on a line the diff left alone) stays a single column. A switch in the snippet header swaps between the cited lines and the whole file; the full view renders under the same rules — split diff when the file changed, single column when it did not — highlights the cited lines, scrolls inside its own box and opens on the first highlight. Files over 3000 lines are not embedded, and their switch says so.
 - **Severity filter** — one toggle chip per severity present in the report, with a count.
 - **Rule filter** — a two-level checkbox tree: instruction file, expanding to its concrete rules. Toggling the file toggles all of its rules; a partial selection shows an indeterminate parent. A finding stays visible while at least one of its rules is selected, so a finding citing two rules survives either way.
 - **Grouping** — `Pliki` (one collapsible section per file, in report order) or `Globalnie` (one flat list sorted by severity, then path); the flat list labels each finding with its file.
@@ -119,14 +144,21 @@ Branch reviews never touch the working tree (`git diff base...branch`, `git show
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
 Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source]`.
 Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
-`--mode` decides what the snippet is: `branch` reads `git show <branch>:<path>` plus `git diff -U0 <base>...<branch>`, `staged` reads the index plus `git diff -U0 --cached`, and both render a real `+`/`-` diff; `folder` (and a missing `--mode`) renders the working-tree file with no diff markers.
+`--mode` decides what the snippet is: `branch` reads `git show <branch>:<path>` plus `git diff -U0 <base>...<branch>`, `staged` reads the index plus `git diff -U0 --cached`, and both render a real before/after split diff; `folder` (and a missing `--mode`) renders the working-tree file with no diff markers.
+The old-file line numbers the left side prints are derived from the `-U0` hunk headers, which state how far the old numbering runs ahead of the new one from each hunk on.
+The full source of every file with a finding is embedded once per file, so a file with four findings carries one copy, not four.
+Files longer than 3000 lines are left out and the `Cały plik` button reports the count instead — the fragment still renders.
 `--project` names the root the report paths are relative to; when it is omitted the root is recovered from a report living in `<project>/.claude/doh/<branch>/`, and a file that cannot be read simply renders without a snippet.
 It accepts the severity lead line with and without a leading `- ` (reports written before `ee76300` use the dashed form), and reads `**Reguła:**` whether the instruction is named with its `.md` extension, without it, or replaced by the violated point's name.
 
-`scripts/post-pr-comments.cjs` (Node, needs the `gh` CLI) posts the findings of a rendered HTML report as a PR review.
+`scripts/github.cjs` (Node, no dependencies) is the only place that talks to GitHub: the owner/repo read off the remote URL, the token lookup, and the three calls the skill needs (find the open PR, read its diff, post the review).
+`fetch` is asynchronous while every script around it is not, so the request runs in a child copy of that file — the parent hands it a JSON request on stdin and reads the JSON response off stdout, which keeps the calling scripts synchronous.
+
+`scripts/post-pr-comments.cjs` (Node, no dependencies) posts the findings of a rendered HTML report as a PR review.
 The report page cannot do it itself — a `file://` page has no GitHub credentials — so when an open PR exists for the reviewed branch the renderer adds a **Dodaj komentarze do PR #n** button that hands over the ready command, carrying the findings hidden in that browser as `--exclude=<ids>`.
+Finding the PR needs no credentials on a public repository; posting the review needs a token (see [GitHub access](#github-access)). When the lookup cannot run, the renderer says why instead of silently dropping the button.
 Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> [--project=<repo root>] [--pr=<number>] [--exclude=<ids>] [--dry-run]`.
 Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments.
 
-Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs`
+Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs`
 (paths are listed explicitly because PowerShell does not expand globs for native commands).

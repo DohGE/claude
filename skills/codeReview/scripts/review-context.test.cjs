@@ -123,7 +123,9 @@ test('detectBaseBranch prefers the nearest merge-base', (t) => {
   commitFile(dir, 'd.txt', 'd', 'develop work');
   run(dir, ['checkout', '-q', '-b', 'feature/x']);
   commitFile(dir, 'f.txt', 'f', 'feature work');
-  assert.strictEqual(rc.detectBaseBranch(dir, 'feature/x', 'feature/x'), 'develop');
+  assert.deepStrictEqual(rc.detectBaseBranch(dir, 'feature/x', 'feature/x'), {
+    ref: 'develop', source: 'fork', prNumber: null, apiError: null, unresolvedPrBase: null,
+  });
 });
 
 test('detectBaseBranch resolves ties by candidate order', (t) => {
@@ -131,7 +133,7 @@ test('detectBaseBranch resolves ties by candidate order', (t) => {
   run(dir, ['branch', 'master']);
   run(dir, ['checkout', '-q', '-b', 'feature/y']);
   commitFile(dir, 'y.txt', 'y', 'y');
-  assert.strictEqual(rc.detectBaseBranch(dir, 'feature/y', 'feature/y'), 'main');
+  assert.strictEqual(rc.detectBaseBranch(dir, 'feature/y', 'feature/y').ref, 'main');
 });
 
 test('detectBaseBranch honors origin/HEAD and origin-only branches', (t) => {
@@ -142,7 +144,129 @@ test('detectBaseBranch honors origin/HEAD and origin-only branches', (t) => {
   run(dir, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/release']);
   run(dir, ['checkout', '-q', '-b', 'feature/z']);
   commitFile(dir, 'z.txt', 'z', 'feature z');
-  assert.strictEqual(rc.detectBaseBranch(dir, 'feature/z', 'feature/z'), 'origin/release');
+  assert.strictEqual(rc.detectBaseBranch(dir, 'feature/z', 'feature/z').ref, 'origin/release');
+});
+
+// A findOpenPr stub, same shape as github.cjs returns, so no test ever reaches
+// the network. github.test.cjs covers the real lookup and its gating.
+function prStub(pr, error = null) {
+  const calls = [];
+  const fn = (project, branch) => {
+    calls.push(branch);
+    return { slug: { owner: 'acme', repo: 'repo' }, pr, error };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+function withGitHubRemote(dir) {
+  run(dir, ['remote', 'add', 'origin', 'https://github.com/acme/repo.git']);
+}
+
+test('detectBaseBranch takes the base from the open PR', (t) => {
+  const dir = makeRepo(t);
+  withGitHubRemote(dir);
+  run(dir, ['checkout', '-q', '-b', 'develop']);
+  commitFile(dir, 'd.txt', 'd', 'develop work');
+  run(dir, ['checkout', '-q', '-b', 'feature/pr']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  // The PR targets main, which is farther away than the forked-from develop:
+  // the PR wins anyway, because that is the diff GitHub shows.
+  const findPr = prStub({ number: 42, url: 'https://github.com/acme/repo/pull/42', base: 'main' });
+  assert.deepStrictEqual(rc.detectBaseBranch(dir, 'feature/pr', 'feature/pr', findPr), {
+    ref: 'main', source: 'pr', prNumber: 42, apiError: null, unresolvedPrBase: null,
+  });
+  assert.deepStrictEqual(findPr.calls, ['feature/pr']);
+});
+
+test('detectBaseBranch reads a PR base from origin, not from a stale local branch', (t) => {
+  const dir = makeRepo(t);
+  withGitHubRemote(dir);
+  run(dir, ['checkout', '-q', '-b', 'develop']);
+  commitFile(dir, 'd.txt', 'd', 'develop work');
+  run(dir, ['update-ref', 'refs/remotes/origin/develop', 'HEAD']);
+  run(dir, ['checkout', '-q', '-b', 'feature/remote-base']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  const base = rc.detectBaseBranch(dir, 'feature/remote-base', 'feature/remote-base', prStub({ number: 7, base: 'develop' }));
+  assert.strictEqual(base.ref, 'origin/develop');
+  assert.strictEqual(base.source, 'pr');
+});
+
+test('detectBaseBranch falls back and reports a PR base that was never fetched', (t) => {
+  const dir = makeRepo(t);
+  withGitHubRemote(dir);
+  run(dir, ['checkout', '-q', '-b', 'feature/unfetched']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  const base = rc.detectBaseBranch(dir, 'feature/unfetched', 'feature/unfetched', prStub({ number: 9, base: 'release/2.0' }));
+  assert.strictEqual(base.ref, 'main', 'falls back to git history');
+  assert.strictEqual(base.source, 'fork');
+  assert.strictEqual(base.unresolvedPrBase, 'release/2.0');
+});
+
+test('detectBaseBranch reports a refused API call and still detects a base', (t) => {
+  const dir = makeRepo(t);
+  withGitHubRemote(dir);
+  run(dir, ['checkout', '-q', '-b', 'feature/no-token']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  const base = rc.detectBaseBranch(dir, 'feature/no-token', 'feature/no-token', prStub(null, 'Not Found - not found, or the token cannot see this repository'));
+  assert.strictEqual(base.ref, 'main');
+  assert.strictEqual(base.source, 'fork');
+  assert.match(base.apiError, /Not Found/);
+});
+
+test('detectForkBase picks the feature branch a branch was created from', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'm.txt', 'm', 'main work');
+  run(dir, ['checkout', '-q', '-b', 'feature/parent']);
+  commitFile(dir, 'p.txt', 'p', 'parent work');
+  run(dir, ['checkout', '-q', '-b', 'feature/child']);
+  commitFile(dir, 'c.txt', 'c', 'child work');
+  assert.strictEqual(rc.detectForkBase(dir, 'feature/child', 'feature/child'), 'feature/parent');
+  assert.strictEqual(rc.detectCandidateBase(dir, 'feature/child', 'feature/child'), 'main',
+    'the conventional detection would have diffed against main');
+});
+
+test('detectForkBase never picks a branch created from the reviewed one', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/base']);
+  commitFile(dir, 'b.txt', 'b', 'base work');
+  // Created from feature/base's tip: it contains the whole branch, so diffing
+  // against it would review nothing.
+  run(dir, ['branch', 'feature/base-experiment']);
+  assert.strictEqual(rc.detectForkBase(dir, 'feature/base', 'feature/base'), 'main');
+});
+
+test('detectBaseBranch never gives a base branch its own merged children as base', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/merged']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  run(dir, ['checkout', '-q', 'main']);
+  run(dir, ['merge', '-q', '--no-ff', '-m', 'merge feature', 'feature/merged']);
+  // feature/merged is one commit behind main and would be the nearest fork
+  // point of every branch - including of the branch it was merged into.
+  assert.strictEqual(rc.detectForkBase(dir, 'main', 'main'), 'feature/merged');
+  assert.strictEqual(rc.detectBaseBranch(dir, 'main', 'main').ref, null, 'main has no base to be reviewed against');
+});
+
+test('detectForkBase keeps the trunk for a branch that has not diverged yet', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'm.txt', 'm', 'main work');
+  run(dir, ['checkout', '-q', '-b', 'feature/older']);
+  commitFile(dir, 'o.txt', 'o', 'older work');
+  run(dir, ['checkout', '-q', 'main']);
+  run(dir, ['merge', '-q', '--no-ff', '-m', 'merge older', 'feature/older']);
+  // Freshly created off main and still empty: main contains it, feature/older
+  // does not - but the branch was created from main, and that is what is used.
+  run(dir, ['checkout', '-q', '-b', 'feature/fresh']);
+  assert.strictEqual(rc.detectForkBase(dir, 'feature/fresh', 'feature/fresh'), 'main');
+});
+
+test('detectForkBase ignores the branch itself under either name', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/pushed']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  run(dir, ['update-ref', 'refs/remotes/origin/feature/pushed', 'HEAD']);
+  assert.strictEqual(rc.detectForkBase(dir, 'feature/pushed', 'feature/pushed'), 'main');
 });
 
 test('parseNameStatus parses statuses and rename targets', () => {
@@ -275,6 +399,8 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.strictEqual(t0.kind, 'branch');
   assert.strictEqual(t0.branch, 'feature/auto');
   assert.strictEqual(t0.baseBranch, 'main');
+  assert.strictEqual(t0.baseSource, 'fork');
+  assert.strictEqual(t0.prNumber, null);
   assert.ok(t0.reportPath.endsWith('feature-auto-2026-07-08-10-00.md'));
   assert.deepStrictEqual(t0.files.map((f) => f.path), ['README.md', 'src/a.ts']);
   const added = t0.files.find((f) => f.path === 'src/a.ts');
@@ -294,6 +420,47 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.deepStrictEqual(modified.localInstructions, []);
   assert.strictEqual(ctx.claudeMd, null);
   assert.ok(fs.existsSync(path.join(skillDir, 'reports')));
+});
+
+test('auto mode diffs against the open PR base and names its source', (t) => {
+  const dir = makeRepo(t);
+  withGitHubRemote(dir);
+  run(dir, ['checkout', '-q', '-b', 'develop']);
+  commitFile(dir, 'd.txt', 'd', 'develop work');
+  run(dir, ['checkout', '-q', '-b', 'feature/pr-target']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({
+    mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0),
+    findOpenPr: prStub({ number: 42, base: 'main' }),
+  });
+  const t0 = ctx.targets[0];
+  assert.strictEqual(t0.baseBranch, 'main', 'the PR base wins over the forked-from develop');
+  assert.strictEqual(t0.baseSource, 'pr');
+  assert.strictEqual(t0.prNumber, 42);
+  assert.ok(t0.commands.diff.includes('diff main...feature/pr-target'));
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['d.txt', 'src/a.ts'], 'develop`s commit is part of the PR diff');
+});
+
+test('buildContext warns once when the GitHub lookup fails', (t) => {
+  const dir = makeRepo(t);
+  withGitHubRemote(dir);
+  commitFile(dir, 'm.txt', 'm', 'main work');
+  run(dir, ['checkout', '-q', '-b', 'feature/a']);
+  commitFile(dir, 'a.ts', 'const a = 1;\n', 'a');
+  run(dir, ['checkout', '-q', 'main']);
+  run(dir, ['checkout', '-q', '-b', 'feature/b']);
+  commitFile(dir, 'b.ts', 'const b = 1;\n', 'b');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({
+    mode: 'branches', branches: 'feature/a,feature/b', project: dir, skillDir,
+    now: new Date(2026, 6, 8, 10, 0), findOpenPr: prStub(null, 'HTTP 403 - forbidden or rate limited'),
+  });
+  const apiWarnings = ctx.warnings.filter((w) => /Could not ask GitHub/.test(w));
+  assert.strictEqual(apiWarnings.length, 1, 'one warning per run, not per branch');
+  assert.match(apiWarnings[0], /GH_TOKEN/);
+  assert.deepStrictEqual(ctx.targets.map((x) => x.baseBranch), ['main', 'main']);
+  assert.deepStrictEqual(ctx.targets.map((x) => x.baseSource), ['fork', 'fork']);
 });
 
 test('output format decides htmlReportPath across modes', (t) => {
