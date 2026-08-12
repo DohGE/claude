@@ -3,9 +3,10 @@ name: Component template
 applies-to:
   - "**/*.component.html"
 ---
-This instruction OWNS everything inside the template, including template-level accessibility (the global
-best-practices instruction only states that accessibility is a review criterion). `@defer` trigger and
-bundling rules are owned by the performance instruction.
+This instruction OWNS everything inside the template except accessibility, which is owned by the global
+accessibility instruction (WCAG 2.2 AA — alternative texts, labels, ARIA, keyboard, focus, target size):
+a template violation of those rules is reported there, once, never twice. `@defer` trigger and bundling
+rules are owned by the performance instruction.
 
 ## Checklist
 - Only native control flow: `@if/@else`, `@for`, `@switch`, `@let` — never `*ngIf`, `*ngFor`, `*ngSwitch` or `*ngVar`.
@@ -24,7 +25,4 @@ bundling rules are owned by the performance instruction.
 - Repeated markup between branches is extracted to `ng-template` + `[ngTemplateOutlet]` instead of being duplicated in `@if/@else`.
 - Before adding new markup, an existing presentational or shared-library component is reused if one fits.
 - Global utility classes are added only when they change something; no redundant classes.
-- Interactive behavior sits on native elements (`<button type="...">`, `<a href>`); a `(click)` on a `<div>`/`<span>`/icon is a defect unless the element also provides `role`, `tabindex` and keyboard handling; every `<button>` declares an explicit `type` (`type="button"` unless it submits).
-- Every `<img>` has an `[alt]` (empty `alt=""` only for decorative images); icon-only buttons carry an `aria-label` resolved from an i18n key.
-- Every form control is programmatically labeled (`<label for>`, `aria-label` or `aria-labelledby`); dynamic ARIA state (`aria-expanded`, `aria-selected`, `aria-disabled`) is bound to the driving signal, not left static.
-- Status and error messages the user must notice (save results, async failures) are announced to assistive technology — rendered through the shared alert/snackbar component or inside an `aria-live` region.
+- Every `<button>` declares an explicit `type` (`type="button"` unless it submits) — a missing `type` inside a form submits it (whether the element should be a `<button>` at all, and its labeling, belong to the accessibility instruction).

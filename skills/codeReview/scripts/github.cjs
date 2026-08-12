@@ -12,6 +12,8 @@
 // synchronous scripts async for a single call each.
 
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const apiRoot = 'https://api.github.com';
 const apiVersion = '2022-11-28';
@@ -46,31 +48,121 @@ function repoSlug(project) {
   return null;
 }
 
-// The API token, in the order that asks the least of the user: an explicit
-// environment variable, then the credential git already stores for github.com
-// (pushing over HTTPS puts one there), then gh if it happens to be installed.
-// `credential.interactive=false` keeps a missing credential from popping a GUI
-// prompt in the middle of a review. The value is never logged and never travels
-// on a command line - the request child receives it on stdin.
+// The API token, in the order that asks the least of the user. Each source is
+// named, because a review that could not reach GitHub has to be able to say
+// whether it failed for want of a token or because the token it did find was
+// refused - the two look identical from the outside, and only one of them is
+// fixed by setting GH_TOKEN. Nothing here is ever logged, and no token travels
+// on a command line: the request child receives it on stdin.
+const tokenSources = [
+  { name: 'GH_TOKEN', find: (project, o) => (o.env || process.env).GH_TOKEN || null },
+  { name: 'GITHUB_TOKEN', find: (project, o) => (o.env || process.env).GITHUB_TOKEN || null },
+  { name: 'git credential', find: (project, o) => credentialToken(project, o.env ? { env: o.env } : {}) },
+  { name: '.netrc', find: (project, o) => netrcToken(o) },
+  { name: 'konfiguracja gh', find: (project, o) => ghConfigToken(o) },
+  { name: 'gh CLI', find: (project, o) => (o.skipCli ? null : ghToken(project)) },
+];
+
 const tokenCache = new Map();
-function token(project) {
-  if (tokenCache.has(project)) return tokenCache.get(project);
-  const found = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
-    || credentialToken(project) || ghToken(project) || null;
-  tokenCache.set(project, found);
+function tokenWithSource(project, options = {}) {
+  const cacheable = !Object.keys(options).length;
+  if (cacheable && tokenCache.has(project)) return tokenCache.get(project);
+  const tried = [];
+  let found = { token: null, source: null, tried };
+  for (const source of tokenSources) {
+    tried.push(source.name);
+    const value = source.find(project, options);
+    if (value) { found = { token: value, source: source.name, tried }; break; }
+  }
+  if (cacheable) tokenCache.set(project, found);
   return found;
 }
 
-// `options` is the seam the tests use to point git at an isolated config, so no
-// test ever reaches the real credential store.
+function token(project) {
+  return tokenWithSource(project).token;
+}
+
+// Two queries, because a credential store can be keyed either way: with the
+// repository path, which is the only shape `credential.useHttpPath=true` setups
+// match, and then without it, which is what a plain host-scoped store holds.
+// `credential.interactive=false` keeps a missing credential from popping a GUI
+// prompt in the middle of a review. `options` is the seam the tests use to point
+// git at an isolated config, so no test ever reaches the real store.
 function credentialToken(project, options = {}) {
-  const out = run('git', ['-C', project, '-c', 'credential.interactive=false', 'credential', 'fill'], {
-    input: 'protocol=https\nhost=github.com\n\n',
-    timeout: requestTimeoutMs,
-    ...options,
-  });
-  const line = String(out || '').split(/\r?\n/).find((l) => l.startsWith('password='));
-  return line ? line.slice('password='.length).trim() || null : null;
+  const slug = repoSlug(project);
+  const queries = [];
+  if (slug) queries.push(`protocol=https\nhost=github.com\npath=${slug.owner}/${slug.repo}.git\n\n`);
+  queries.push('protocol=https\nhost=github.com\n\n');
+  for (const input of queries) {
+    const out = run('git', ['-C', project, '-c', 'credential.interactive=false', 'credential', 'fill'], {
+      input, timeout: requestTimeoutMs, ...options,
+    });
+    const line = String(out || '').split(/\r?\n/).find((l) => l.startsWith('password='));
+    const value = line ? line.slice('password='.length).trim() : '';
+    if (value) return value;
+  }
+  return null;
+}
+
+// The classic token file, and the one an SSH-cloned repository can still carry:
+// nothing about `git@github.com:` remotes ever writes an HTTPS credential, so
+// for those this is the first place that can answer at all. Both spellings are
+// read, because Windows writes `_netrc`.
+function netrcToken(options = {}) {
+  const home = options.home || process.env.HOME || process.env.USERPROFILE;
+  if (!home) return null;
+  for (const name of ['.netrc', '_netrc']) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(home, name), 'utf8');
+    } catch (err) {
+      continue;
+    }
+    // netrc is one flat stream of whitespace-separated words, so the entry ends
+    // wherever the next `machine` begins - line breaks carry no meaning.
+    const words = text.split(/\s+/).filter(Boolean);
+    let inside = false;
+    for (let i = 0; i < words.length; i++) {
+      if (words[i] === 'machine' || words[i] === 'default') {
+        inside = words[i] === 'default' || words[i + 1] === 'github.com';
+        continue;
+      }
+      if (inside && words[i] === 'password' && words[i + 1]) return words[i + 1];
+    }
+  }
+  return null;
+}
+
+// gh keeps its token in a file, so a repository whose owner once ran `gh auth
+// login` stays reachable even when the binary is not on PATH - a fresh machine
+// restored from a config backup, or a PATH the review did not inherit.
+function ghConfigToken(options = {}) {
+  const dirs = options.configDir ? [options.configDir] : [
+    process.env.GH_CONFIG_DIR,
+    process.env.XDG_CONFIG_HOME && path.join(process.env.XDG_CONFIG_HOME, 'gh'),
+    process.env.APPDATA && path.join(process.env.APPDATA, 'GitHub CLI'),
+    (process.env.HOME || process.env.USERPROFILE) && path.join(process.env.HOME || process.env.USERPROFILE, '.config', 'gh'),
+  ].filter(Boolean);
+  for (const dir of dirs) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(dir, 'hosts.yml'), 'utf8');
+    } catch (err) {
+      continue;
+    }
+    // Only the github.com block counts, and it runs until the next line that
+    // starts in column zero. Reaching for a YAML parser to read one key out of
+    // a file gh writes itself is not worth a dependency.
+    const lines = String(text).split(/\r?\n/);
+    const start = lines.findIndex((l) => l.trim() === 'github.com:');
+    if (start === -1) continue;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (lines[i].trim() && !/^\s/.test(lines[i])) break;
+      const m = lines[i].match(/^\s+oauth_token:\s*(\S+)/);
+      if (m) return m[1];
+    }
+  }
+  return null;
 }
 
 function ghToken(project) {
@@ -124,17 +216,27 @@ function errorOf(result, json) {
 // `head=<owner>:<branch>` is the exact query for the usual same-repo pull
 // request; a pull request opened from a fork carries another owner there, so a
 // miss falls back to scanning the most recently updated open ones.
-function findOpenPr(project, branch, send = request) {
+// `findToken` is a seam like `send`: it keeps the credential store out of every
+// test that only cares about the pull request lookup.
+function findOpenPr(project, branch, send = request, findToken = tokenWithSource) {
   const slug = repoSlug(project);
-  if (!slug || !branch) return { slug, pr: null, error: null };
+  // Where the token came from travels with the answer, so a caller that has to
+  // explain a refusal can tell "no token anywhere" from "the token was refused".
+  // Resolved only once a call is actually going out: a repository that is not on
+  // GitHub has no reason to touch a credential store at all.
+  const out = (pr, error) => {
+    const found = findToken(project);
+    return { slug, pr, error, tokenSource: found.source, triedTokenSources: found.tried };
+  };
+  if (!slug || !branch) return { slug, pr: null, error: null, tokenSource: null, triedTokenSources: [] };
   const head = encodeURIComponent(`${slug.owner}:${branch}`);
   const direct = send(project, { path: `/repos/${slug.owner}/${slug.repo}/pulls?state=open&per_page=1&head=${head}` });
-  if (!direct.ok) return { slug, pr: null, error: direct.error };
-  if (Array.isArray(direct.json) && direct.json.length) return { slug, pr: prOf(direct.json[0]), error: null };
+  if (!direct.ok) return out(null, direct.error);
+  if (Array.isArray(direct.json) && direct.json.length) return out(prOf(direct.json[0]), null);
   const scan = send(project, { path: `/repos/${slug.owner}/${slug.repo}/pulls?state=open&per_page=100&sort=updated&direction=desc` });
-  if (!scan.ok) return { slug, pr: null, error: scan.error };
+  if (!scan.ok) return out(null, scan.error);
   const match = Array.isArray(scan.json) ? scan.json.find((pr) => pr.head && pr.head.ref === branch) : null;
-  return { slug, pr: match ? prOf(match) : null, error: null };
+  return out(match ? prOf(match) : null, null);
 }
 
 function prOf(pr) {
@@ -191,6 +293,9 @@ async function serve() {
   process.stdout.write(JSON.stringify(out));
 }
 
-module.exports = { repoSlug, token, credentialToken, request, findOpenPr, pullRequestDiff, postReview, errorOf };
+module.exports = {
+  repoSlug, token, tokenWithSource, credentialToken, netrcToken, ghConfigToken,
+  request, findOpenPr, pullRequestDiff, postReview, errorOf,
+};
 
 if (require.main === module && process.argv[2] === '--serve') serve();

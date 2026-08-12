@@ -1,25 +1,62 @@
 <div class="panel" id="panel-root" *ngIf="users().length > 0; else empty">
+  <div class="nav">
+    <a href="/reports">Reports</a>
+    <a href="/users">Users</a>
+  </div>
+
   <h1 class="panel-title">User management panel</h1>
+  <h4 class="panel-subtitle">Filters</h4>
+  <div class="section-title">Team members</div>
+
+  <div class="promo">{{ banners[bannerIndex] }}</div>
 
   @defer (on viewport) {
-    <img [src]="'/assets/hero-users.png'" width="1200" />
+    <img [src]="'/assets/hero-users.png'" alt="hero-users.png" width="1200" />
   }
+
+  <svg class="logo" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"></path></svg>
+
+  <video src="/assets/onboarding.mp4" autoplay loop></video>
+  <audio src="/assets/notification.mp3" autoplay></audio>
 
   <input [(ngModel)]="title" placeholder="Search users..." />
 
-  <div class="toolbar" (click)="onSave()">Save changes</div>
+  <div class="toolbar" tabindex="3" (click)="onSave()">Save changes</div>
 
-  <button [title]="'Refresh'" (click)="facade.loadUsers({ pageSize: 25 })">🔄</button>
+  <button class="icon-btn" [title]="'Refresh'" (click)="facade.loadUsers({ pageSize: 25 })">🔄</button>
 
-  <ul>
+  <span class="tooltip-host" (mouseenter)="showTooltip = true" (mouseleave)="showTooltip = false">
+    ⓘ
+    <span class="tooltip" *ngIf="showTooltip">Only active users are exported</span>
+  </span>
+
+  <select class="role-select" (change)="onRoleChange($event)">
+    <option value="admin">Admin</option>
+    <option value="viewer">Viewer</option>
+  </select>
+
+  <input type="radio" name="role" value="admin" /> Admin
+  <input type="radio" name="role" value="viewer" /> Viewer
+
+  <div class="tabs">
+    <div class="tab" role="tab" (click)="activeTab = 'all'">All</div>
+    <div class="tab" role="tab" (click)="activeTab = 'active'">Active</div>
+  </div>
+
+  <ul class="user-list">
     <li
       *ngFor="let user of users()"
       [ngClass]="{ active: user.user_status === 1 }"
       [ngStyle]="{ color: '#c62828' }"
+      draggable="true"
+      (dragstart)="onDragStart(user)"
+      (drop)="onDrop(user)"
     >
+      <span class="status-dot" [ngStyle]="{ background: user.user_status === 1 ? '#2e7d32' : '#c62828' }"></span>
       {{ formatDate(user.created_at) }} — {{ greet(user) }}
       <span [innerHTML]="trustBio(user.bio)"></span>
       <a [href]="user.homepage" target="_blank">Homepage</a>
+      <span class="remove" role="presentation" (mousedown)="removeUser(user)">✖</span>
     </li>
   </ul>
 
@@ -33,19 +70,59 @@
   </div>
 
   <a [href]="returnUrl">Back to previous page</a>
+  <a class="more" href="/docs/user-panel">Click here</a>
 
   <span aria-expanded="false" class="chevron" (click)="onSave()">▼</span>
 
   <p>{{ userNames$ | async }}</p>
 
-  <div class="error" *ngIf="form.invalid">Email is required</div>
+  <div class="error red-text" *ngIf="form.invalid">Email is required</div>
 
-  <input [formControl]="form.controls.email" placeholder="Email" />
+  <span class="req">*</span>
+  <input
+    [formControl]="form.controls.email"
+    placeholder="Email"
+    (focus)="openOverlay()"
+    (change)="onSave()"
+  />
+  <input [formControl]="form.controls.emailAgain" placeholder="Confirm your email (type it again)" />
+  <input
+    type="password"
+    [formControl]="form.controls.password"
+    autocomplete="off"
+    placeholder="Password"
+    (paste)="$event.preventDefault()"
+  />
+  <img [src]="captchaUrl" width="120" />
+  <input [formControl]="form.controls.captcha" placeholder="Retype the code from the image" />
+
+  <div class="toast" *ngIf="toastMessage">{{ toastMessage }}</div>
+
+  <span class="chip" aria-lable="Active filter">Active</span>
+
+  <div aria-hidden="true" class="legend">
+    <button type="button" (click)="onSave()">Legend</button>
+  </div>
+
+  <a class="help" *ngIf="userId" href="/help">Need help?</a>
+
+  <div class="panel-actions">
+    <button type="button" [disabled]="form.invalid" aria-label="Submit form">Save changes</button>
+    <button type="button" class="btn-danger" (click)="deleteAccount()">Delete account</button>
+    <button type="button" aria-label="Save changes and close the panel">Save changes</button>
+  </div>
+
+  <div class="overlay" *ngIf="isOverlayOpen" tabindex="-1">
+    <p>User details</p>
+    <button type="button" (click)="isOverlayOpen = false">Close</button>
+  </div>
 
   @defer (on viewport) {
     <user-card *ngFor="let user of users()" [user]="user" title="User details" data-test="user-card"></user-card>
   }
 </div>
+
+<div class="footer">© User panel</div>
 
 <ng-template #empty>
   <p>No users found</p>

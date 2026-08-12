@@ -10,6 +10,7 @@ export interface CardUser {
   firstName: string;
   last_name: string;
   avatarUrl: string;
+  bio: string;
   tags: { label: string }[];
 }
 
@@ -47,5 +48,9 @@ export class UserCardComponent {
   openDetails(): void {
     this.facade.loadUsers({ pageSize: 10 });
     this.router.navigateByUrl('/users/' + this.user()!.id);
+  }
+
+  removeTag(tag: { label: string }): void {
+    this.user()!.tags = this.user()!.tags.filter((item) => item.label !== tag.label);
   }
 }

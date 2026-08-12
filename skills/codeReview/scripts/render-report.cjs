@@ -461,9 +461,20 @@ function sourceReader(projectRoot, source) {
 // open. Repos that do not point at GitHub are never asked, so they never warn.
 function detectPullRequest(projectRoot, branch, findPr = github.findOpenPr) {
   if (!branch) return { pr: null, warning: null };
-  const { pr, error } = findPr(projectRoot, branch);
+  const { pr, error, tokenSource, triedTokenSources } = findPr(projectRoot, branch);
   if (error) {
-    return { pr: null, warning: `Nie udało się sprawdzić PR-a w API GitHuba (${error}) - raport nie dostał przycisku dodawania komentarzy do PR.` };
+    const tail = 'Raport nie dostał przycisku dodawania komentarzy do PR.';
+    // The two failures need opposite advice, and they are indistinguishable from
+    // the HTTP status alone: a private repository answers 404 to an anonymous
+    // call exactly as it does to a token that may not see it. Which one it was
+    // is settled by whether a token was found at all, so the message says so
+    // instead of leaving the reader to guess.
+    const warning = tokenSource
+      ? `Token z „${tokenSource}” nie pozwolił sprawdzić PR-a w API GitHuba: ${error}. ${tail}`
+      : `Nie znaleziono tokena GitHuba - sprawdzono: ${(triedTokenSources || []).join(', ')}. `
+        + `Prywatne repozytorium odpowiada na zapytanie bez tokena tak samo jak na brak PR-a (${error}). `
+        + `Ustaw GH_TOKEN na token z uprawnieniem \`repo\`. ${tail}`;
+    return { pr: null, warning };
   }
   return { pr: pr ? { number: pr.number, url: pr.url } : null, warning: null };
 }
@@ -598,6 +609,10 @@ button{font:inherit;color:inherit}
 .head h1{margin:0;font-size:20px;font-weight:650;letter-spacing:-.01em;overflow-wrap:anywhere}
 .head .meta{margin-top:6px;color:var(--muted);font-size:13.5px}
 .head .skipped{margin-top:8px;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
+/* Louder than .skipped: this one is not a note about the review, it is the
+   reason a button the reader expected is not there. */
+.head .pr-warning{margin-top:10px;padding:8px 11px;border:1px solid var(--border);border-left:3px solid var(--sev-medium);
+  border-radius:8px;background:var(--panel);color:var(--text);font-size:12.5px;overflow-wrap:anywhere}
 
 .toolbar{background:var(--panel);border:1px solid var(--border);
   border-radius:10px;padding:12px 14px;box-shadow:var(--shadow);margin-bottom:18px}
@@ -1506,6 +1521,12 @@ function renderHtml(report, reportName) {
   const skipped = report.skipped.length
     ? `\n      <p class="skipped">${escapeHtml(skippedPrefix)} ${escapeHtml(report.skipped.join(', '))}</p>`
     : '';
+  // The missing button is the symptom the reader actually sees, so the reason
+  // belongs next to it on the page - stderr scrolls past long before anyone
+  // opens the report.
+  const prWarning = report.prWarning
+    ? `\n      <p class="pr-warning">${escapeHtml(report.prWarning)}</p>`
+    : '';
   const prButton = report.pr
     ? `\n        <button type="button" class="act" id="pr-comments">Dodaj komentarze do PR #${escapeHtml(String(report.pr.number))}</button>`
     : '';
@@ -1566,7 +1587,7 @@ function renderHtml(report, reportName) {
   <div class="wrap">
     <header class="head">
       <h1>${escapeHtml(report.title || 'Code Review')}</h1>
-      <p class="meta">${meta}</p>${skipped}
+      <p class="meta">${meta}</p>${skipped}${prWarning}
     </header>
 ${toolbar}    <noscript><div class="note">Ten raport wymaga włączonego JavaScriptu.</div></noscript>
     <div class="cols${report.emptyState ? ' cols-plain' : ''}">${sidebar}
@@ -1600,6 +1621,7 @@ function main(argv) {
   attachSnippets(report, projectRoot, { mode: args.mode, base: args.base, branch: args.branch });
   const pullRequest = report.emptyState ? { pr: null, warning: null } : detectPullRequest(projectRoot, args.branch);
   report.pr = pullRequest.pr;
+  report.prWarning = pullRequest.warning || '';
   report.postCommand = report.pr ? postCommandFor(projectRoot, args.out) : '';
   try {
     fs.writeFileSync(args.out, renderHtml(report, path.basename(args.out)), 'utf8');

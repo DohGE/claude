@@ -917,10 +917,46 @@ test('detectPullRequest reports a refused lookup instead of silently dropping th
   assert.match(result.warning, /przycisku dodawania komentarzy/);
 });
 
+test('detectPullRequest says what to set when no token was found anywhere', () => {
+  const result = rr.detectPullRequest('/repo', 'feature/x', () => ({
+    pr: null,
+    error: 'Not Found - not found, or the token cannot see this repository',
+    tokenSource: null,
+    triedTokenSources: ['GH_TOKEN', 'GITHUB_TOKEN', 'git credential', '.netrc', 'konfiguracja gh', 'gh CLI'],
+  }));
+  assert.strictEqual(result.pr, null);
+  assert.match(result.warning, /Nie znaleziono tokena/, 'the reader has to learn a token is what is missing');
+  assert.match(result.warning, /GH_TOKEN/, 'and how to supply one');
+  assert.match(result.warning, /git credential/, 'and where it already looked, so the fix is not guesswork');
+});
+
+test('detectPullRequest names the token that was refused rather than blaming its absence', () => {
+  const result = rr.detectPullRequest('/repo', 'feature/x', () => ({
+    pr: null,
+    error: 'Bad credentials - the GitHub token was rejected',
+    tokenSource: 'git credential',
+    triedTokenSources: ['GH_TOKEN', 'GITHUB_TOKEN', 'git credential'],
+  }));
+  assert.match(result.warning, /git credential/);
+  assert.match(result.warning, /Bad credentials/);
+  assert.ok(!/Nie znaleziono tokena/.test(result.warning), 'a token was found - telling the reader to set one would send them the wrong way');
+});
+
 test('detectPullRequest stays quiet when no PR is open and asks nothing without a branch', () => {
   assert.deepStrictEqual(rr.detectPullRequest('/repo', 'feature/x', () => ({ pr: null, error: null })), { pr: null, warning: null });
   const findPr = () => { throw new Error('the lookup must not run here'); };
   assert.deepStrictEqual(rr.detectPullRequest('/repo', '', findPr), { pr: null, warning: null });
+});
+
+test('renderHtml puts the pull-request warning on the page, not only on stderr', () => {
+  const report = rr.parseReport(REPORT);
+  report.prWarning = 'Nie znaleziono tokena GitHuba (sprawdzono: GH_TOKEN, git credential).';
+  const html = rr.renderHtml(report, 'r.html');
+  assert.match(html, /class="pr-warning"/, 'a warning nobody sees is the silent failure it was meant to replace');
+  assert.match(html, /Nie znaleziono tokena GitHuba/);
+
+  // The stylesheet names the class too, so the check has to be about the element.
+  assert.ok(!/<p class="pr-warning">/.test(rr.renderHtml(rr.parseReport(REPORT), 'r.html')), 'nothing to warn about, nothing shown');
 });
 
 test('renderHtml adds the file-tree sidebar and drops it for an empty state', () => {

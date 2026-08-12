@@ -35,7 +35,7 @@ Review rules live in two folders inside this skill (they start empty — add you
 - `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
 
 The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
-Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, code quality (duplication, dead/unnecessary/boilerplate code, narrating comments, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.
+Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, narrating comments, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.
 
 An instruction may declare `audience: implement|review|both` in its frontmatter (default `both`):
 `review`-audience files load only for this skill, `implement`-audience files only for the implementNewFeature coding rulebook (e.g. the developer persona in `guidelines.md`).
@@ -96,8 +96,13 @@ Two features talk to GitHub: the base branch taken from an open pull request, an
 The token is looked up in this order, and the first hit wins:
 
 1. `GH_TOKEN`, then `GITHUB_TOKEN` from the environment.
-2. The credential git already stores for github.com — any HTTPS push puts one there (Windows Credential Manager, macOS keychain, `git credential-store`). Asked with `credential.interactive=false`, so a missing credential can never pop a prompt mid-review.
-3. `gh auth token`, if the CLI happens to be installed.
+2. The credential git already stores for github.com — any HTTPS push puts one there (Windows Credential Manager, macOS keychain, `git credential-store`). Asked with `credential.interactive=false`, so a missing credential can never pop a prompt mid-review. Asked twice: once carrying the repository path, which is the only shape a `credential.useHttpPath=true` store matches, then once with the bare host.
+3. `~/.netrc` (`_netrc` on Windows) — the `machine github.com` entry. This is the first source that can answer for a repository cloned over SSH, since `git@github.com:` remotes never write an HTTPS credential.
+4. gh's own `hosts.yml` (`GH_CONFIG_DIR`, `XDG_CONFIG_HOME/gh`, `%AppData%\GitHub CLI`, `~/.config/gh`) — so a machine that was once authenticated with gh keeps working after the binary leaves the PATH.
+5. `gh auth token`, if the CLI happens to be installed.
+
+None of these can be conjured for a private repository that has never been authenticated from this machine: there, `GH_TOKEN` is the answer.
+The report says which of the two it is — a token was found and refused, or none was found at all — because a private repository answers an anonymous call with the same 404 it gives a token that cannot see it, and only one of those is fixed by setting `GH_TOKEN`.
 
 The value is never logged and never passed on a command line: it reaches the request child on stdin. A repository whose remotes do not point at github.com is never asked and never warns.
 
@@ -156,7 +161,7 @@ It accepts the severity lead line with and without a leading `- ` (reports writt
 
 `scripts/post-pr-comments.cjs` (Node, no dependencies) posts the findings of a rendered HTML report as a PR review.
 The report page cannot do it itself — a `file://` page has no GitHub credentials — so when an open PR exists for the reviewed branch the renderer adds a **Dodaj komentarze do PR #n** button that hands over the ready command, carrying the findings hidden in that browser as `--exclude=<ids>`.
-Finding the PR needs no credentials on a public repository; posting the review needs a token (see [GitHub access](#github-access)). When the lookup cannot run, the renderer says why instead of silently dropping the button.
+Finding the PR needs no credentials on a public repository; a private one needs a token for the lookup as well, and posting the review always does (see [GitHub access](#github-access)). When the lookup cannot run, the reason is printed to stderr *and* shown on the report page itself, so a missing button is never left unexplained.
 Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> [--project=<repo root>] [--pr=<number>] [--exclude=<ids>] [--dry-run]`.
 Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments.
 

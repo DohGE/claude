@@ -132,6 +132,130 @@ test('credentialToken returns nothing when no helper answers', (t) => {
   assert.strictEqual(gh.credentialToken(dir, { env }), null);
 });
 
+// A credential helper that records what git asked it for, so the test can prove
+// the query carried the repository path - the shape `credential.useHttpPath=true`
+// setups need in order to match anything at all.
+// A credential helper that records what git asked it for. `answer` is shell run
+// after the request was captured, with $LAST holding that one request, so a
+// helper can decide what to say based on what it was asked. Git refuses a reply
+// that carries no username, so every answer here has to supply one.
+// `useHttpPath` matters: git strips `path=` before the helper sees it unless the
+// repository asked for path-scoped credentials, which is the whole reason
+// credentialToken sends the path at all.
+function recordingHelper(t, dir, answer, useHttpPath = false) {
+  const log = path.join(dir, 'asked.txt').replace(/\\/g, '/');
+  const last = path.join(dir, 'last.txt').replace(/\\/g, '/');
+  const empty = path.join(dir, 'empty.gitconfig');
+  fs.writeFileSync(empty, '');
+  const config = (key, value) => execFileSync('git', ['-C', dir, 'config', key, value], { stdio: 'ignore' });
+  config('credential.helper', `!f() { LAST="${last}"; cat > "$LAST"; cat "$LAST" >> "${log}"; ${answer} }; f`);
+  config('credential.useHttpPath', String(useHttpPath));
+  return { log, env: { ...process.env, GIT_CONFIG_GLOBAL: empty, GIT_CONFIG_SYSTEM: empty, GIT_TERMINAL_PROMPT: '0' } };
+}
+
+test('credentialToken sends the repository path, which is all a useHttpPath store matches on', (t) => {
+  const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
+  const { log, env } = recordingHelper(t, dir, 'echo username=x-access-token; echo password=stored-token;', true);
+  assert.strictEqual(gh.credentialToken(dir, { env }), 'stored-token');
+  assert.match(fs.readFileSync(log, 'utf8'), /path=DohGE\/claude\.git/,
+    'without the path such a store has nothing to match and the review finds no token at all');
+});
+
+test('credentialToken retries without the path when the path-scoped lookup is empty', (t) => {
+  const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
+  // Answers only the query that carries no path, which is how a host-scoped
+  // store behaves when it is asked about one particular path.
+  const { log, env } = recordingHelper(t, dir,
+    'case "$(cat "$LAST")" in *path=*) ;; *) echo username=x-access-token; echo password=host-token;; esac;', true);
+  assert.strictEqual(gh.credentialToken(dir, { env }), 'host-token');
+  const asked = fs.readFileSync(log, 'utf8');
+  assert.ok(asked.includes('path=DohGE/claude.git'), 'the path query is tried first');
+  assert.strictEqual(asked.split('host=github.com').length - 1, 2, 'and the bare host query follows it');
+});
+
+test('netrcToken reads the github.com entry out of either netrc filename', (t) => {
+  const home = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(home, '.netrc'), 'machine gitlab.com login a password wrong\nmachine github.com login me password netrc-token\n');
+  assert.strictEqual(gh.netrcToken({ home }), 'netrc-token');
+
+  const winHome = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(winHome, '_netrc'), 'machine github.com\n  login me\n  password win-token\n');
+  assert.strictEqual(gh.netrcToken({ home: winHome }), 'win-token', 'Windows spells the file _netrc');
+
+  assert.strictEqual(gh.netrcToken({ home: tempDir(t, 'cr-netrc-') }), null, 'no file, no token');
+});
+
+test('netrcToken ignores a machine that is not github.com', (t) => {
+  const home = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(home, '.netrc'), 'machine example.com login me password nope\n');
+  assert.strictEqual(gh.netrcToken({ home }), null);
+});
+
+test('ghConfigToken reads the token gh stored without running gh', (t) => {
+  const configDir = tempDir(t, 'cr-ghcfg-');
+  fs.writeFileSync(path.join(configDir, 'hosts.yml'), [
+    'github.com:',
+    '    users:',
+    '        DohGE:',
+    '            oauth_token: user-scoped-token',
+    '    git_protocol: https',
+    '    oauth_token: hosts-token',
+    '',
+  ].join('\n'));
+  assert.strictEqual(gh.ghConfigToken({ configDir }), 'user-scoped-token');
+
+  const bare = tempDir(t, 'cr-ghcfg-');
+  fs.writeFileSync(path.join(bare, 'hosts.yml'), 'github.com:\n    oauth_token: hosts-token\n');
+  assert.strictEqual(gh.ghConfigToken({ configDir: bare }), 'hosts-token');
+
+  assert.strictEqual(gh.ghConfigToken({ configDir: tempDir(t, 'cr-ghcfg-') }), null);
+});
+
+test('ghConfigToken stays out of another host section', (t) => {
+  const configDir = tempDir(t, 'cr-ghcfg-');
+  fs.writeFileSync(path.join(configDir, 'hosts.yml'), 'ghe.example.com:\n    oauth_token: enterprise-token\n');
+  assert.strictEqual(gh.ghConfigToken({ configDir }), null, 'only github.com is addressed by this script');
+});
+
+test('tokenWithSource names where the token came from', (t) => {
+  const dir = tempDir(t, 'cr-src-');
+  const before = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = 'env-token';
+  t.after(() => {
+    if (before === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = before;
+  });
+  const found = gh.tokenWithSource(dir);
+  assert.strictEqual(found.token, 'env-token');
+  assert.strictEqual(found.source, 'GH_TOKEN');
+});
+
+test('tokenWithSource reports every place it looked when nothing answers', (t) => {
+  // A repository with a helper that answers nothing and an isolated git config:
+  // the machine's real credential store must never be reachable from a test.
+  const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
+  const { env } = recordingHelper(t, dir, ':;');
+  const empty = tempDir(t, 'cr-src-');
+  const none = gh.tokenWithSource(dir, { env: { ...env, GH_TOKEN: '', GITHUB_TOKEN: '' }, home: empty, configDir: empty, skipCli: true });
+  assert.strictEqual(none.token, null);
+  assert.strictEqual(none.source, null);
+  assert.deepStrictEqual(none.tried, ['GH_TOKEN', 'GITHUB_TOKEN', 'git credential', '.netrc', 'konfiguracja gh', 'gh CLI'],
+    'the report names every place that was looked in, in order');
+});
+
+test('findOpenPr carries the token source so a refusal can name it', (t) => {
+  const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
+  const send = () => ({ ok: false, status: 404, json: { message: 'Not Found' }, error: 'Not Found - not found, or the token cannot see this repository' });
+  const findToken = () => ({ token: null, source: null, tried: ['GH_TOKEN', 'git credential'] });
+  const res = gh.findOpenPr(dir, 'feature', send, findToken);
+  assert.strictEqual(res.pr, null);
+  assert.strictEqual(res.tokenSource, null);
+  assert.deepStrictEqual(res.triedTokenSources, ['GH_TOKEN', 'git credential']);
+
+  const withToken = gh.findOpenPr(dir, 'feature', send, () => ({ token: 't', source: 'git credential', tried: ['GH_TOKEN', 'git credential'] }));
+  assert.strictEqual(withToken.tokenSource, 'git credential', 'a refused token has to be nameable');
+});
+
 test('request round-trips a real call through the child process', async (t) => {
   const stub = await server(t, 201, JSON.stringify({ number: 7 }));
   const res = gh.request('.', { url: `${stub.base}/reviews`, method: 'POST', body: { event: 'COMMENT' }, token: 'secret-token' });
@@ -211,7 +335,9 @@ test('findOpenPr reports no pull request, and a refusal separately', (t) => {
 
 test('findOpenPr asks nothing outside GitHub or without a branch', (t) => {
   const send = () => { throw new Error('must not be called'); };
-  assert.deepStrictEqual(gh.findOpenPr(repoWithRemote(t, 'git@gitlab.com:a/b.git'), 'feature/x', send), { slug: null, pr: null, error: null });
+  assert.deepStrictEqual(gh.findOpenPr(repoWithRemote(t, 'git@gitlab.com:a/b.git'), 'feature/x', send),
+    { slug: null, pr: null, error: null, tokenSource: null, triedTokenSources: [] },
+    'a repository outside GitHub never reaches a credential store either');
   const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
   assert.deepStrictEqual(gh.findOpenPr(dir, '', send).pr, null);
 });

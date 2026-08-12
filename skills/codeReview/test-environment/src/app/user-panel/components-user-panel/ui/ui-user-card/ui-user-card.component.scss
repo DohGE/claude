@@ -3,10 +3,67 @@
   padding: 13px;
   border: 1px solid #3f51b5;
   color: rgb(66, 66, 66);
+  width: 980px;
 
   .btnPrimary {
     background: #3f51b5;
     margin-top: 13px;
+  }
+
+  &__meta {
+    color: #b0b0b0;
+    background: #ffffff;
+    font-size: 11px;
+  }
+
+  &__bio {
+    height: 32px;
+    line-height: 1;
+    overflow: hidden;
+  }
+
+  &__actions {
+    display: flex;
+    flex-direction: row-reverse;
+  }
+
+  &__new-badge {
+    animation: blink 0.2s infinite;
+  }
+
+  &__rotate-hint {
+    display: none;
+  }
+
+  *:focus {
+    outline: none;
+  }
+}
+
+.tag__remove {
+  width: 16px;
+  height: 16px;
+  border: 1px solid #e8e8e8;
+  background: #ffffff;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (orientation: portrait) {
+  .card {
+    display: none;
+  }
+
+  .card__rotate-hint {
+    display: block;
   }
 }
 
