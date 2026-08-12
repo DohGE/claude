@@ -2,11 +2,21 @@
   <img [src]="user()?.avatarUrl" />
   <img ngSrc="/assets/avatar-fallback.png" />
   <h3 [style.color]="'#3f51b5'">{{ user()?.firstName }} {{ user()?.last_name }}</h3>
-  <p>{{ title() }}</p>
+  <p class="card__meta">{{ title() }}</p>
+  <p class="card__bio">{{ user()?.bio }}</p>
+  <span class="card__new-badge">NEW</span>
   @for (tag of user()?.tags; track tag) {
-    <span class="tag">{{ tag.label }}</span>
+    <span class="tag">
+      {{ tag.label }}
+      <button class="tag__remove" (click)="removeTag(tag)">×</button>
+    </span>
   }
   <p>{{ 'page.userPanel.labels.termsHtml' | translate }}</p>
   <button (click)="selected.emit(user()!)">Select user</button>
+  <div class="card__actions">
+    <button type="button" (click)="openDetails()">Details</button>
+    <button type="button" (click)="selected.emit(user()!)">Select</button>
+  </div>
   <input [formControl]="form.controls.note" [disabled]="highlighted" />
+  <div class="card__rotate-hint">Rotate your device to see the card</div>
 </div>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>App</title>
+  </head>
+  <body>
+    <div class="app-header">
+      <div class="app-nav" onclick="window.location.href='/users'">Users</div>
+      <div class="app-nav" onclick="window.location.href='/reports'">Reports</div>
+    </div>
+
+    <app-root></app-root>
+
+    <div class="cookie-bar" style="position: fixed; bottom: 0; left: 0; right: 0; height: 64px">
+      <span style="color: #a8a8a8">We use cookies</span>
+      <span class="cookie-accept" style="width: 18px; height: 18px" onclick="acceptCookies()">OK</span>
+    </div>
+  </body>
+</html>

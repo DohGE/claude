@@ -6,6 +6,10 @@ run a review over these files and diff the report against the inventory below.
 
 The code is not meant to compile — it only has to be realistic enough to review.
 
+Accessibility entries below are labelled `accessibility:` and carry the WCAG 2.2 success criterion they
+break (`instructions/global/accessibility.md`); every one of them must be reported as 🟡 **Medium**, and
+none of them may be reported twice under the component-template or component-styles instructions.
+
 ## How to run a review over it
 
 The files must appear in a git diff to be reviewed:
@@ -27,6 +31,9 @@ and rule references — but for a clean experiment, commit the README separately
 - `ui-user-card.component.ts` declaring an input named `title` (colliding with the native HTML attribute) is not itself a violation — only the parent template's plain-attribute binding of it is.
 - `build-user-table.util.ts` exporting two related user-table functions from one file is NOT a violation (`utils.md`: "never report a cohesive multi-function util file"). What IS a violation there is `formatUserRow` being a pass-through wrapper over `deepClone`.
 - The endpoint path text in `user-panel.service.ts` — segments, wording, casing, versioning, leading/trailing slash, key names — is out of review scope entirely. Only the absolute base URL inside the value is reportable.
+- `feature-user-panel.component.html`: the third action button carries `aria-label="Save changes and close the panel"` over the visible text `Save changes` — the accessible name CONTAINS the visible label, so 2.5.3 Label in Name is satisfied (bait sitting right next to the button that really breaks it).
+- `feature-user-panel.component.html`: `tabindex="-1"` on the overlay container is NOT a violation — only positive `tabindex` values are (the overlay's real defects are its missing focus management, listed below).
+- `ui-user-card.component.html`: `<h3>` for the user name inside a card is a plausible heading level for a card — the heading-order violations live in the feature template, not here.
 
 ## Violation inventory (per file)
 
@@ -315,7 +322,7 @@ and rule references — but for a clean experiment, commit the README separately
 - component: injected fields public and unprefixed (`facade`, `store`, `svc` — generic name), not `private readonly _...`.
 - component: `dataTestPrefix` equals the selector (must be a stable descriptive name).
 - general/i18n: hard-coded user-facing strings (`title`, template texts).
-- performance: mutable class fields bound in the template (`title`, `resultCount`); `resultCount` mutated in `ngDoCheck` every CD cycle; `ngDoCheck` itself forbidden.
+- performance: mutable class fields bound in the template (`title`, `resultCount`, `showTooltip`, `isOverlayOpen`, `activeTab`, `toastMessage`, `bannerIndex`, `banners`); `resultCount` mutated in `ngDoCheck` every CD cycle; `ngDoCheck` itself forbidden.
 - general: string-index type access (`UserPanelState['users']`).
 - performance/SSR + component: `location.search`/`window`/`document` in field initializers, constructor and `ngOnInit` (browser work belongs in `afterNextRender`).
 - feature-component: `computed()` wrapping a facade signal (`filtered`) and `pipe(map(...))` on a facade stream (`userNames$`) — derived state belongs in a selector (historically under-reported rule).
@@ -337,25 +344,60 @@ and rule references — but for a clean experiment, commit the README separately
 - i18n: greeting built by string concatenation (`buildGreeting(user) + ', ' + this.title`) instead of a translation with params.
 - general: `console.log` calls; commented-out `refresh()` code block.
 - component: enum alias renamed (`statuses = UserStatus` — must keep the enum name, `userStatus`); signals/aliases not `readonly`; member order broken (handlers before lifecycle, fields interleaved).
+- accessibility 2.1.4: `@HostListener('document:keydown.s')` — a single-character shortcut bound to the whole document, always active, with no way to turn it off or remap it (it also steals `s` from every text field).
+- accessibility 2.4.3: `document.getElementById('panel-root')?.focus()` targets a `<div>` that has no `tabindex`, so the focus move silently does nothing and the user is left at the top of the document.
+- accessibility 2.2.2: the second `setInterval` rotates the promo banner every 4 s with no pause/stop/hide control (and, like the polling one, is never cleared).
+- accessibility 3.2.2: `onRoleChange` navigates (`window.location.href = ...`) from the `change` event of a `<select>` — changing a setting must not change context by itself.
+- accessibility 3.3.4: `deleteAccount()` and `removeUser()` call `deleteUser(...)` immediately — no confirmation, no undo for an irreversible operation.
+- accessibility 1.4.3: inline `styles` set `.promo { color: #cccccc; background: #ffffff; }` — about 1.6:1 against white, far under 4.5:1.
+- accessibility 2.4.7: inline `styles` kill the focus ring for every button, link and the toolbar (`button:focus, a:focus, .toolbar:focus { outline: none; }`) with no `:focus-visible` replacement.
+- accessibility 2.4.11: `.panel-actions { position: fixed; bottom: 0; height: 72px; }` — a fixed action bar with no matching `scroll-padding-bottom`, so it covers whatever the user tabs to at the bottom of the list.
+- accessibility 2.5.8: `.icon-btn { width: 16px; height: 16px; }` and `.remove { width: 14px; height: 14px; }` — both under the 24×24 CSS px minimum, with no spacing exception.
+- accessibility 1.4.10: `.panel { width: 1180px; }` — a fixed pixel width forces two-dimensional scrolling at 320 CSS px / 400% zoom.
 - test-coverage: no spec for the whole component (🔵).
 
 ### components-user-panel/feature/feature-user-panel/feature-user-panel.component.html
 
 - component-template: `*ngIf`/`*ngFor` instead of `@if`/`@for`; `[ngClass]`/`[ngStyle]` instead of `[class.x]`/`[style.x]`; hard-coded color in `ngStyle`.
 - component-template: `*ngFor` without any stable `track`.
-- performance: LCP hero image inside `@defer (on viewport)` (layout shift + deferred LCP); `<img>` without `alt`, without `ngSrc`, without `height`, no `priority`.
+- performance: LCP hero image inside `@defer (on viewport)` (layout shift + deferred LCP); `<img>` without `ngSrc`, without `height`, no `priority`.
 - component-template: BOTH `@defer (on viewport)` blocks lack a `@placeholder` — the viewport trigger has no element to observe (the hero block and the `user-card` block).
 - component-template: no `@let` at the top of the template although `users()` is read three times.
-- component-template: `[(ngModel)]` template-driven binding (best-practices) mixed with reactive `[formControl]`; both inputs unlabeled (no `label for`/`aria-label`); hard-coded placeholders.
-- component-template: `(click)` on `<div>` and `<span>` without `role`/`tabindex`/keyboard handling; icon-only button (🔄) without `aria-label`; no `data-test` on any interactive native element despite `dataTestPrefix` — the only `data-test` in the template sits on the `<user-card>` component host tag, where it is forbidden (the selector already targets hosts).
+- component-template: `[(ngModel)]` template-driven binding (best-practices) mixed with reactive `[formControl]`; hard-coded placeholders.
+- component-template: no `data-test` on any interactive native element despite `dataTestPrefix` — the only `data-test` in the template sits on the `<user-card>` component host tag, where it is forbidden (the selector already targets hosts).
+- component-template: logic and state writes inline in the template — `facade.loadUsers({ pageSize: 25 })`, `showTooltip = true/false`, `activeTab = 'all'`, `isOverlayOpen = false`.
+- general: in-app navigation as raw `<a href="/users">`/`/reports`/`/help` links instead of `routerLink` — every one of them reloads the app and discards router state.
 - component-template: literal property binding `[title]="'Refresh'"` on a native `<button>` — still a defect, the input-name-collision exception covers component inputs only, not native elements (false-negative bait); facade call with logic inline in the template (`facade.loadUsers({ pageSize: 25 })`).
 - component-template: `title="User details"` as a plain attribute on the `<user-card>` host — the `title` input collides with the native HTML attribute, so the binding form (`[title]="'User details'"`) is required; the plain attribute lands in the DOM and adds an unwanted browser tooltip (the value is also yet another hard-coded text — i18n).
 - component-template: method calls in interpolations (`formatDate(...)`, `greet(...)`).
 - security: `[innerHTML]` bound to sanitizer-bypassed API data; `target="_blank"` link without `rel="noopener noreferrer"`; `[href]="returnUrl"` straight from query params (open redirect); `[href]="user.homepage"` unvalidated API URL.
 - component-template: duplicated branch markup (`Found ... users` + Export button twice) instead of `ng-template` + `ngTemplateOutlet`.
-- component-template: static `aria-expanded="false"` never bound to state.
 - component-template: `async` pipe (`userNames$ | async`).
-- component-template: error message (`Email is required`) hard-coded and not announced (no `aria-live`/shared alert).
+- accessibility 1.1.1: hero `<img alt="hero-users.png">` — the alternative is a file name; `<img [src]="captchaUrl">` has no `alt` at all; the icon-only 🔄 button and the ✖ remove control have no accessible name; decorative inline `<svg class="logo">` is exposed instead of `aria-hidden="true"`.
+- accessibility 1.3.1 / 2.4.6: heading order jumps `h1` → `h4`, and `<div class="section-title">` is a heading styled by CSS only; the two `<input type="radio" name="role">` sit outside any `fieldset`/`legend` and their labels are bare text nodes.
+- accessibility 2.4.1: no landmarks and no skip link — `<div class="nav">`, `<div class="footer">` and no `<main>` anywhere in the view.
+- accessibility 3.3.2 / 1.3.1: no control in the template has a label — search, email, confirm-email, password, captcha and the role `<select>` are identified by `placeholder`/`option` text only.
+- accessibility 1.3.5: the search, email and confirm-email inputs declare no `autocomplete` token at all, and the password field opts out of autofill with `autocomplete="off"`.
+- accessibility 1.4.1: required state is carried only by the red `<span class="req">*</span>`, and the row status only by `<span class="status-dot">` colored green/red — no text or icon equivalent (the error text is also styled through `.red-text`).
+- accessibility 1.4.13: the ⓘ tooltip opens on `(mouseenter)` only — no focus trigger, no Escape dismissal, and it disappears the moment the pointer leaves, so it can never be hovered.
+- accessibility 2.1.1: `(click)` on `<div class="toolbar">`, `<span class="chevron">` and the `role="tab"` divs, with no `tabindex` or keyboard handler — keyboard users cannot reach or fire them.
+- accessibility 1.3.2 / 2.4.3: `tabindex="3"` on the toolbar — a positive value rewrites the focus order of the whole page.
+- accessibility 2.5.7: the user list reorders through `draggable="true"` + `(dragstart)`/`(drop)` only — no button, arrow-key or select alternative.
+- accessibility 2.5.2: the ✖ remove control fires on `(mousedown)`, so the action commits before the pointer is released and cannot be aborted.
+- accessibility 4.1.2: `role="presentation"` on that same interactive ✖ span; `role="tab"` divs with no `tablist` parent, no `aria-selected` and no roving `tabindex`; static `aria-expanded="false"` never bound to state; misspelled `aria-lable="Active filter"` on the chip; `aria-hidden="true"` wrapping a focusable `<button>Legend</button>`.
+- accessibility 4.1.2 / 3.3.1: `[disabled]="form.invalid"` on the primary action removes it from the tab order, and the reason it is blocked is nowhere in the DOM — an unavailable-but-explained control uses `aria-disabled`.
+- accessibility 2.5.3: `aria-label="Submit form"` over the visible text `Save changes` — the accessible name does not contain the visible label, so voice control cannot activate it.
+- accessibility 2.1.2 / 2.4.3: the `*ngIf="isOverlayOpen"` overlay is a dialog in everything but behavior — focus never moves into it, it has no `role="dialog"`/`aria-modal`, nothing outside it is inert, Escape does not close it and focus never returns to the trigger.
+- accessibility 3.2.1 / 3.2.2: the email input opens that overlay on `(focus)` and submits the form on `(change)` — two context changes with no explicit activation.
+- accessibility 3.3.1 / 3.3.3 / 4.1.3: `Email is required` is a floating `<div>` — not tied to the control (`aria-describedby`, `aria-invalid`), not announced (no `aria-live`, no shared alert), with no correction suggestion; the `toast` message has the same problem.
+- accessibility 3.3.4: `Delete account` calls `deleteAccount()` straight from the click — an irreversible action with no confirmation, review or undo.
+- accessibility 3.3.7: `Confirm your email (type it again)` re-asks for a value the user already entered in the same form instead of prefilling or reusing it.
+- accessibility 3.3.8: the password input blocks paste (`(paste)="$event.preventDefault()"`) and disables autofill (`autocomplete="off"`), and the captcha image + `Retype the code from the image` field is a cognitive function test with no alternative path.
+- accessibility 2.4.4: `<a class="more">Click here</a>` — link text that does not say where it leads; the `target="_blank"` Homepage link does not announce that it opens a new tab.
+- accessibility 2.2.2: the promo banner rotates on a timer with no pause/stop/hide control (the rotation itself lives in the component).
+- accessibility 1.4.2 / 1.2.2 / 1.2.5: `<video autoplay loop>` without captions or `<track>`, `<audio autoplay>` that cannot be stopped.
+- accessibility 3.2.6: `Need help?` is rendered only under `*ngIf="userId"`, so the help mechanism disappears on every other entry into the panel.
+- accessibility 3.2.3: the panel's own nav repeats the shell navigation in the opposite order (`Reports`, `Users` here vs `Users`, `Reports` in `index.html`).
 - feature-component: rich presentation markup rendered directly in the feature (belongs in `ui-*` children); deferred `user-card` imported through the `ui` barrel `index.ts` (performance: barrel import keeps it in the main bundle).
 - i18n: every user-facing text hard-coded; `page.userPanel.labels.greeting` exists in en.json but code concatenates instead.
 
@@ -384,12 +426,14 @@ and rule references — but for a clean experiment, commit the README separately
 - general: `as never` cast on the emitted value (also emits the form value typed as `CardUser` — wrong contract).
 - component: `effect()` patching the form without `{ emitEvent: false }` — feedback loop with the subscription.
 - ui-component: no `dataTestPrefix`; no form-reference tracking decorator though the form feeds a parent.
+- ui-component: `removeTag` mutates the `input()` value in place (`user()!.tags = ...`) — a presentational child rewriting the parent's data instead of emitting an output.
 - test-coverage: `openDetails`/`highlight` behaviors untested (spec below tests almost nothing).
 
 ### components-user-panel/ui/ui-user-card/ui-user-card.component.html
 
-- component-template: `(click)` on a `<div>` without `role`/`tabindex`/keyboard.
-- component-template: `<img [src]>` without `alt`; `ngSrc` without `width`+`height` (performance: layout shift).
+- accessibility 2.1.1: `(click)` on the root `<div class="card">` — no `role`, no `tabindex`, no keyboard handler, and it wraps every other control in the card.
+- accessibility 1.1.1: neither `<img>` has an `alt` (avatar and fallback).
+- component-template: `ngSrc` without `width`+`height` (performance: layout shift).
 - component-template: hard-coded color in `[style.color]="'#3f51b5'"` (also a literal binding).
 - component-template: `@for ... track tag` — reference identity on an object collection.
 - component-template: the `@for` over `user()?.tags` has no `@empty` block, so a user without tags renders as blank space.
@@ -397,7 +441,10 @@ and rule references — but for a clean experiment, commit the README separately
 - component-template + security-adjacent: HTML-bearing translation (`termsHtml`) rendered via interpolation instead of `[innerHTML]` (shows escaped `<b>` tags).
 - component-template: hard-coded `Select user` text; `<button>` without `type`; no `data-test` attributes.
 - ui-component: `[disabled]` bound on a reactive control instead of `effect(() => form.disable({ emitEvent: false }))`.
-- component-template: control unlabeled.
+- accessibility 3.3.2: the note `<input>` has no label of any kind.
+- accessibility 2.1.1 / 4.1.2: the tag remove `<button class="tag__remove">×</button>` sits inside the card-wide `(click)` handler, so activating it also opens the details view; its accessible name is the character `×`.
+- accessibility 1.3.1: `NEW` is rendered as a bare styled `<span class="card__new-badge">` — the status it announces exists only as visual decoration.
+- i18n: hard-coded `Rotate your device to see the card` text (the orientation lock it belongs to is a styles finding, see below).
 
 ### components-user-panel/ui/ui-user-card/ui-user-card.component.scss
 
@@ -406,6 +453,14 @@ and rule references — but for a clean experiment, commit the README separately
 - component-styles: bare `::ng-deep` not wrapped in `:host`.
 - component-styles: repeated magic number `13px` (no SCSS variable, no theme `@use`).
 - component-styles: redundant `display: block` on an already-block element; `.red-text` duplicates a utility class.
+- accessibility 1.4.3 / 1.4.11: `.card__meta` is `#b0b0b0` on `#ffffff` (~2.3:1) at 11px, and `.tag__remove` is bordered `#e8e8e8` on white (~1.1:1, under the 3:1 a control boundary needs).
+- accessibility 2.5.8: `.tag__remove` is 16×16 CSS px — under the 24×24 minimum, with no spacing exception.
+- accessibility 1.4.4 / 1.4.12: `.card__bio` is a 32px fixed-height box with `line-height: 1` and `overflow: hidden` around user text — the bio is cut off as soon as text size or line spacing grows.
+- accessibility 2.4.7: `.card *:focus { outline: none; }` removes the focus ring from every control in the card with no `:focus-visible` replacement.
+- accessibility 2.3.1: `.card__new-badge` runs `animation: blink 0.2s infinite` — five flashes per second, above the three-per-second threshold, and nothing in the file honours `prefers-reduced-motion`.
+- accessibility 1.3.4: `@media (orientation: portrait) { .card { display: none } }` (plus the rotate hint it reveals) locks the content to landscape.
+- accessibility 1.4.10: `.card { width: 980px; }` — a fixed pixel width forces two-dimensional scrolling at 320 CSS px / 400% zoom.
+- accessibility 1.3.2 / 2.4.3: `.card__actions { flex-direction: row-reverse; }` shows `Select` before `Details` while the DOM (and the tab order) keeps the opposite order.
 
 ### components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts
 
@@ -416,6 +471,22 @@ and rule references — but for a clean experiment, commit the README separately
 - component-test: bare `toHaveBeenCalled()` without arguments; no `afterEach` (`jest.clearAllMocks`, signal resets).
 - component-test: `it('opens details')` calls `component.openDetails()` without ever setting the `user` input, so `this.user()!.id` dereferences `undefined` and the test throws `TypeError` (🔴 — the spec is broken, not merely weak). A signal `input()` is written with `MockRender(C, { user })` or `fixture.componentRef.setInput(...)`, never by property assignment.
 - component-test (absences): no `dataTestPrefix` test, no form/validator tests, no state→form `{ emitEvent: false }` guard test, no output-emission tests.
+
+### src/index.html
+
+The only non-Angular file in the environment: no local instruction matches it, so it is reviewed against
+the global instructions alone — accessibility findings here prove the instruction is really global.
+
+- accessibility 3.1.1: `<html>` carries no `lang`, so assistive technology guesses the language of the whole app.
+- accessibility 1.4.4: the viewport meta sets `maximum-scale=1, user-scalable=no` — pinch zoom is blocked and text cannot be enlarged to 200%.
+- accessibility 2.4.2: `<title>App</title>` identifies nothing (and no route sets a `title` either — see the routes file).
+- accessibility 2.4.1: no skip link and no landmarks — header and nav are `<div>`s, so a keyboard user has no way to bypass them.
+- accessibility 2.1.1 / 4.1.2: `<div class="app-nav" onclick="…">` and `<span class="cookie-accept" onclick="acceptCookies()">` are links and a button rebuilt from non-interactive elements — not focusable, no role, no keyboard activation, no accessible name beyond their text.
+- accessibility 2.4.11: the cookie bar is `position: fixed; bottom: 0; height: 64px` with no `scroll-padding-bottom` — it covers whatever the user tabs to at the bottom of the page.
+- accessibility 2.5.8: the cookie accept control is 18×18 CSS px, under the 24×24 minimum.
+- accessibility 1.4.3: cookie-bar text is `#a8a8a8` on white (~2.5:1).
+- general: in-app navigation through `window.location.href` (here in a raw inline `onclick`, so it escapes the router and the SPA boundary entirely); hard-coded user-facing texts.
+- code-quality: the two `app-nav` divs are the same construct copy-pasted with a different label and href.
 
 ### src/assets/i18n/en.json
 
@@ -440,3 +511,6 @@ and rule references — but for a clean experiment, commit the README separately
 - `filteredUsers` flows action → reducer → state although it is derivable — action, state field and dispatching component should all be findings under their own instructions.
 - The area registers state in `shared/routes` providers, has a parallel `shell` routing variant, an NgModule, and three forbidden barrels — canonical layout broken at area level.
 - Missing specs across the diff (🔵): feature component, guard, `format-user-name.utils.ts`; changed behaviors without matching spec cases in the existing reducer/selectors/effects/facade/ui specs.
+- Accessibility repeats across layers: the focus ring is removed in both the feature component's inline `styles` and the card `.scss`, both files fix a pixel width that cannot reflow, and `(click)` handlers sit on non-interactive elements in `index.html`, the feature template and the card template — each file carries its own finding, all of them 🟡 Medium, and none of them may also appear under `component-template`/`component-styles`.
+- The same navigation is rendered twice with different markup and different order — `index.html` (`Users`, `Reports`) and the feature template (`Reports`, `Users`) — which is both a consistency finding (3.2.3) and duplicated markup that belongs in one shared component.
+- Accessibility findings must never be escalated or softened: the sanitizer bypass next to them in the feature template stays 🟤 Critical (security), while the `aria-hidden` around a focusable button, the 16px targets and the blocked paste in the password field stay 🟡 Medium.
