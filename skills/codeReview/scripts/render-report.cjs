@@ -36,6 +36,9 @@ const reHeader = /^#\s+(.+?)\s+\|\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*$/;
 const reSection = /^##\s+(.+?)\s*$/;
 const reSeverity = /^(?:-\s+)?(⚪|🟡|🔴|🟤|🔵)\uFE0F?\s*\*\*(.+?)\*\*\s*$/;
 const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result):\*\*\s?(.*)$/;
+// Per-file coverage proof written by the reviewer: how many checklist items of
+// that file's rulebook actually got a verdict, against how many exist.
+const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(\d+)\s*\/\s*(\d+)\s*-->$/;
 // What a bare instruction reference - or the violated point's name, which Step 4
 // allows instead - may consist of. Quotes, backticks and brackets, or anything
 // longer than a name, mean the arrow belongs to quoted rule text.
@@ -140,7 +143,7 @@ function findingId(filePath, finding) {
 }
 
 function parseReport(markdown) {
-  const report = { title: '', datetime: '', skipped: [], emptyState: null, files: [], warnings: [] };
+  const report = { title: '', datetime: '', skipped: [], emptyState: null, files: [], coverage: [], warnings: [] };
   const lines = String(markdown).split(/\r?\n/);
   let section = null;
   let finding = null;
@@ -176,6 +179,23 @@ function parseReport(markdown) {
       } else {
         report.warnings.push(`Linia ${lineNo}: nierozpoznany nagłówek raportu.`);
         report.title = line.replace(/^#\s*/, '');
+      }
+      continue;
+    }
+
+    // Comment lines carry the run's metadata (per-file coverage proof, the
+    // since-last note) and never reach the HTML. They are matched before the
+    // field/wrapped-value branches below, which would otherwise swallow a
+    // marker written right after a finding.
+    if (line.startsWith('<!--')) {
+      const coverageMatch = line.match(reCoverage);
+      if (coverageMatch) {
+        const checked = Number(coverageMatch[2]);
+        const total = Number(coverageMatch[3]);
+        report.coverage.push({ path: coverageMatch[1], checked, total });
+        if (checked < total) {
+          report.warnings.push(`${coverageMatch[1]}: sprawdzono ${checked}/${total} pozycji checklist - plik nie przeszedł pełnego przeglądu.`);
+        }
       }
       continue;
     }
@@ -1632,6 +1652,11 @@ function main(argv) {
   // Not a parser warning: it says nothing about the report format, so it never
   // makes the Markdown below stay behind.
   if (pullRequest.warning) process.stderr.write(`${pullRequest.warning}\n`);
+  // Also not a parser warning: an older report simply has no markers, so this
+  // says the coverage could not be confirmed - it never keeps the Markdown.
+  if (report.coverage.length === 0 && !report.emptyState) {
+    process.stderr.write('Raport nie zawiera znaczników coverage - nie potwierdzono pełnego przejścia checklist.\n');
+  }
   for (const warning of report.warnings) process.stderr.write(`Ostrzeżenie parsera: ${warning}\n`);
   // The Markdown is only discarded when it was understood completely: a kept
   // source file is the signal that the report format drifted.

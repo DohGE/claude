@@ -436,15 +436,25 @@ test('main writes the html next to the report and removes the source', (t) => {
   const dir = tempDir(t, 'cr-render-');
   const md = path.join(dir, 'branch-2026-08-06-09-00.md');
   const html = path.join(dir, 'branch-2026-08-06-09-00.html');
-  fs.writeFileSync(md, REPORT, 'utf8');
+  fs.writeFileSync(md, `${REPORT}\n<!-- coverage: src/app/user.service.ts 11/11 -->\n`, 'utf8');
 
   const result = runMain([`--report=${md}`]);
   assert.strictEqual(result.code, 0);
-  assert.strictEqual(result.err, '', 'a clean parse is silent');
+  assert.strictEqual(result.err, '', 'a clean parse with coverage proof is silent');
   assert.strictEqual(result.out.trim(), html);
   assert.ok(fs.existsSync(html));
   assert.ok(!fs.existsSync(md), 'the Markdown is only an intermediate in html mode');
   assert.ok(fs.readFileSync(html, 'utf8').startsWith('<!doctype html>'));
+});
+
+test('main says so when a report carries no coverage proof', (t) => {
+  const dir = tempDir(t, 'cr-render-nocov-');
+  const md = path.join(dir, 'branch-2026-08-06-09-00.md');
+  fs.writeFileSync(md, REPORT, 'utf8');
+  const result = runMain([`--report=${md}`]);
+  assert.strictEqual(result.code, 0);
+  assert.match(result.err, /coverage/);
+  assert.ok(!fs.existsSync(md), 'a missing marker is not a format deviation, so the Markdown still goes');
 });
 
 test('main keeps the source when the parser warned', (t) => {
@@ -980,4 +990,26 @@ test('renderHtml offers the PR button only when a pull request was found', () =>
   assert.match(html, /id="pr-comments">Dodaj komentarze do PR #7</);
   assert.match(embeddedPayload(html).postCommand, /post-pr-comments\.cjs/);
   assert.deepStrictEqual(embeddedPayload(html).pr, { number: 7, url: 'https://example.test/pull/7' });
+});
+
+test('parseReport reads coverage markers without letting them into a finding', () => {
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '',
+    findingOf({ expected: 'Naprawić.' }),
+    '<!-- coverage: src/a.ts 12/12 -->',
+    '<!-- coverage: src/b.ts 9/9 -->',
+  ));
+  assert.deepStrictEqual(report.warnings, []);
+  assert.deepStrictEqual(report.coverage, [
+    { path: 'src/a.ts', checked: 12, total: 12 },
+    { path: 'src/b.ts', checked: 9, total: 9 },
+  ]);
+  assert.strictEqual(report.files.length, 1);
+  assert.strictEqual(report.files[0].findings[0].expected, 'Naprawić.');
+});
+
+test('parseReport warns when a file did not walk its whole checklist', () => {
+  const report = rr.parseReport(reportOf('<!-- coverage: src/a.ts 7/12 -->'));
+  assert.ok(report.warnings.some((w) => w.includes('7/12')), 'the gap is reported');
 });

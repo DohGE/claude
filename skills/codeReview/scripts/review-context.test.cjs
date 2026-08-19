@@ -14,9 +14,11 @@ const { tempDir } = require('./test-helpers.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html' },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false },
   );
   assert.strictEqual(rc.parseArgs([]).mode, 'auto');
+  assert.strictEqual(rc.parseArgs(['--since-last']).sinceLast, true);
+  assert.strictEqual(rc.parseArgs([]).sinceLast, false);
   assert.strictEqual(rc.parseArgs(['--mode=branches', '--branches=a,b;c']).branches, 'a,b;c');
   assert.strictEqual(rc.parseArgs(['--mode=folder', '--path=src/app']).path, 'src/app');
   assert.throws(() => rc.parseArgs(['--mode=nope']), /Unknown --mode/);
@@ -269,15 +271,55 @@ test('detectForkBase ignores the branch itself under either name', (t) => {
   assert.strictEqual(rc.detectForkBase(dir, 'feature/pushed', 'feature/pushed'), 'main');
 });
 
-test('parseNameStatus parses statuses and rename targets', () => {
-  const out = 'M\tsrc/a.ts\nA\tdocs/new.md\nR100\told.ts\tnew.ts\nD\tgone.css';
-  assert.deepStrictEqual(rc.parseNameStatus(out), [
-    { path: 'src/a.ts', status: 'M' },
-    { path: 'docs/new.md', status: 'A' },
-    { path: 'new.ts', status: 'R' },
-    { path: 'gone.css', status: 'D' },
+test('parseRawDiff parses status, path and post-image blob', () => {
+  const out = [
+    ':100644 100644 1111111 2222222 M\tsrc/a.ts',
+    ':000000 100644 0000000 3333333 A\tdocs/new.md',
+    ':100644 100644 4444444 5555555 R100\told.ts\tnew.ts',
+    ':100644 000000 6666666 0000000 D\tgone.css',
+  ].join('\n');
+  assert.deepStrictEqual(rc.parseRawDiff(out), [
+    { path: 'src/a.ts', status: 'M', blob: '2222222' },
+    { path: 'docs/new.md', status: 'A', blob: '3333333' },
+    { path: 'new.ts', status: 'R', blob: '5555555' },
+    { path: 'gone.css', status: 'D', blob: '0000000' },
   ]);
-  assert.deepStrictEqual(rc.parseNameStatus(''), []);
+  assert.deepStrictEqual(rc.parseRawDiff(''), []);
+});
+
+test('parseDiffRangesByPath splits one -U0 diff into per-file ranges', () => {
+  const diff = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    'index 1111..2222 100644',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -3,0 +4,2 @@',
+    '+a',
+    '+b',
+    'diff --git a/src/b.ts b/src/b.ts',
+    '--- a/src/b.ts',
+    '+++ b/src/b.ts',
+    '@@ -10 +11 @@',
+    '+c',
+    'diff --git a/gone.css b/gone.css',
+    '--- a/gone.css',
+    '+++ /dev/null',
+    '@@ -1,3 +0,0 @@',
+    '-x',
+  ].join('\n');
+  const ranges = rc.parseDiffRangesByPath(diff);
+  assert.strictEqual(ranges.get('src/a.ts'), '4-5');
+  assert.strictEqual(ranges.get('src/b.ts'), '11');
+  assert.ok(!ranges.has('gone.css'), 'a deleted file has no new-file lines');
+  assert.strictEqual(rc.parseDiffRangesByPath('').size, 0);
+});
+
+test('countChecklistItems counts the top-level bullets of an instruction body', (t) => {
+  const dir = tempDir(t, 'cr-count-');
+  const file = path.join(dir, 'rules.md');
+  fs.writeFileSync(file, '---\nname: Rules\napplies-to:\n  - "**/*.ts"\n---\n## Checklist\n- one\n- two\n  - nested note\ntext\n- three\n');
+  assert.strictEqual(rc.countChecklistItems(file), 3);
+  assert.strictEqual(rc.countChecklistItems(path.join(dir, 'missing.md')), 0);
 });
 
 test('parseHunkRanges extracts new-file line ranges from -U0 hunks', () => {
@@ -384,6 +426,62 @@ test('loadInstructions filters by audience and warns on unknown values', (t) => 
   const unfiltered = rc.loadInstructions(dir);
   assert.strictEqual(unfiltered.globals.length, 3);
   assert.strictEqual(unfiltered.locals.length, 1);
+});
+
+function makeProjectInstructions(t, root) {
+  const dir = root || tempDir(t, 'cr-proj-instr-');
+  return {
+    dir,
+    write: (rel, content) => {
+      const file = path.join(dir, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    },
+  };
+}
+
+test('loadInstructions layers a project rulebook over the skill tree', (t) => {
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION }, { 'naming.md': '---\nname: Naming\n---\n- skill rule\n' });
+  const project = makeProjectInstructions(t);
+  project.write('global/naming.md', '---\nname: Naming\n---\n- project rule\n');
+  project.write('global/domain.md', '---\nname: Domain\n---\n- rule\n');
+  project.write('local/scss.md', '---\nname: SCSS\napplies-to:\n  - "**/*.scss"\n---\n- rule\n');
+  const res = rc.loadInstructions([path.join(skillDir, 'instructions'), project.dir]);
+  assert.deepStrictEqual(res.globals.map((f) => path.basename(f)), ['domain.md', 'naming.md']);
+  assert.ok(
+    res.globals.find((f) => f.endsWith('naming.md')).startsWith(project.dir),
+    'a project file at the same relative path replaces the skill file',
+  );
+  assert.deepStrictEqual(res.locals.map((l) => path.basename(l.file)), ['scss.md', 'ts.md']);
+  assert.deepStrictEqual(res.warnings, []);
+});
+
+test('loadInstructions ignores a project layer that does not exist', (t) => {
+  const skillDir = makeSkillDir(t, {}, { 'naming.md': '---\nname: Naming\n---\n- rule\n' });
+  const res = rc.loadInstructions([path.join(skillDir, 'instructions'), null], 'review');
+  assert.deepStrictEqual(res.globals.map((f) => path.basename(f)), ['naming.md']);
+});
+
+test('pruneReports never touches instructions or session artifacts', (t) => {
+  const dir = tempDir(t, 'cr-reports-instr-');
+  fs.mkdirSync(path.join(dir, 'instructions', 'global'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'instructions', 'house-style.md'), '- rule\n');
+  fs.writeFileSync(path.join(dir, 'instructions', 'global', 'naming.md'), '- rule\n');
+  // implementNewFeature keeps its sessions in the same folder
+  fs.mkdirSync(path.join(dir, '20260708-1000'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '20260708-1000', 'plan.md'), 'x');
+  for (let i = 1; i <= 3; i++) {
+    const file = path.join(dir, `feature-x-2026-01-0${i}-10-00.md`);
+    fs.writeFileSync(file, 'x');
+    const time = new Date(2026, 0, i);
+    fs.utimesSync(file, time, time);
+  }
+  rc.pruneReports(dir, 1);
+  assert.deepStrictEqual(
+    fs.readdirSync(dir).filter((n) => n.endsWith('.md')), ['feature-x-2026-01-03-10-00.md']);
+  assert.ok(fs.existsSync(path.join(dir, 'instructions', 'house-style.md')));
+  assert.ok(fs.existsSync(path.join(dir, 'instructions', 'global', 'naming.md')));
+  assert.ok(fs.existsSync(path.join(dir, '20260708-1000', 'plan.md')), 'a session artifact is not a report');
 });
 
 test('auto mode reviews the current branch against its detected base', (t) => {
@@ -554,6 +652,68 @@ test('generated and binary files are skipped and listed per target', (t) => {
   assert.deepStrictEqual(t0.skipped.sort(), ['dist/bundle.js', 'package-lock.json']);
 });
 
+test('buildContext layers the project rulebook and keeps it committable', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/rules']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const projectInstructions = path.join(dir, '.claude', 'doh', 'instructions');
+  fs.mkdirSync(path.join(projectInstructions, 'global'), { recursive: true });
+  fs.writeFileSync(path.join(projectInstructions, 'global', 'house-style.md'), '---\nname: House\n---\n- rule\n');
+  const skillDir = makeSkillDir(t, {}, { 'naming.md': '---\nname: Naming\n---\n- rule\n' });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.errors, []);
+  assert.strictEqual(ctx.projectInstructionsDir, projectInstructions);
+  assert.deepStrictEqual(ctx.globalInstructions.map((f) => path.basename(f)), ['house-style.md', 'naming.md']);
+  const ignored = (rel) => spawnSync('git', ['-C', dir, 'check-ignore', '-q', rel]).status === 0;
+  assert.ok(ignored('.claude/doh/20260708-1000/plan.md'), 'run artifacts stay out of git');
+  assert.ok(!ignored('.claude/doh/instructions/global/house-style.md'), 'the rulebook stays committable');
+  assert.ok(!ignored('.claude/doh/.gitignore'));
+});
+
+test('every file carries the checklist size it must be walked against', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/counts']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const skillDir = makeSkillDir(
+    t,
+    { 'ts.md': '---\nname: TS\napplies-to:\n  - "**/*.ts"\n---\n## Checklist\n- one\n- two\n' },
+    { 'naming.md': '---\nname: Naming\n---\n- g1\n- g2\n- g3\n' },
+  );
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const file = ctx.targets[0].files.find((f) => f.path === 'src/a.ts');
+  assert.strictEqual(file.checklistTotal, 5, '3 global + 2 local checklist items');
+});
+
+test('--since-last reviews only the files whose content moved', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/incremental']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat a');
+  commitFile(dir, 'src/b.ts', 'const b = 1;\n', 'feat b');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const first = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(first.targets[0].files.map((f) => f.path), ['src/a.ts', 'src/b.ts']);
+  assert.ok(fs.existsSync(path.join(path.dirname(first.targets[0].reportPath), '.last-review-branch.json')));
+
+  commitFile(dir, 'src/b.ts', 'const b = 2;\n', 'fix b');
+  const second = rc.buildContext({ mode: 'auto', project: dir, skillDir, sinceLast: true, now: new Date(2026, 6, 8, 10, 5) });
+  const target = second.targets[0];
+  assert.deepStrictEqual(target.files.map((f) => f.path), ['src/b.ts']);
+  assert.deepStrictEqual(target.unchangedSinceLastReview, ['src/a.ts']);
+  assert.ok(String(target.previousReportPath).endsWith('-2026-07-08-10-00.md'));
+  assert.ok(second.warnings.some((w) => /unchanged since the previous review/.test(w)));
+});
+
+test('--since-last with no snapshot yet reviews every file', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/first-run']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, sinceLast: true, now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.targets[0].files.map((f) => f.path), ['src/a.ts']);
+  assert.ok(!('unchangedSinceLastReview' in ctx.targets[0]));
+  assert.ok(ctx.warnings.some((w) => /no previous review recorded/.test(w)));
+});
+
 test('reports are grouped in a folder named after the branch', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/grouped']);
@@ -593,18 +753,24 @@ test('each branch of a multi-branch run gets its own folder', (t) => {
   assert.deepStrictEqual(fs.readdirSync(reportsDir).sort(), ['feature-a', 'feature-b']);
 });
 
-test('pruneReports keeps only the newest N reports', (t) => {
+test('pruneReports keeps only the newest N run-stamped reports', (t) => {
   const dir = tempDir(t, 'cr-reports-');
-  for (let i = 0; i < 8; i++) {
-    const file = path.join(dir, `branch-${i}.md`);
+  for (let i = 1; i <= 8; i++) {
+    const file = path.join(dir, `feature-x-2026-01-0${i}-10-00.md`);
     fs.writeFileSync(file, 'x');
-    const time = new Date(2026, 0, 1 + i);
+    const time = new Date(2026, 0, i);
     fs.utimesSync(file, time, time);
   }
   fs.writeFileSync(path.join(dir, 'notes.txt'), 'not a report');
+  fs.writeFileSync(path.join(dir, 'plan.md'), 'a session artifact, not a report');
   rc.pruneReports(dir, 3);
   const left = fs.readdirSync(dir).filter((n) => n.endsWith('.md')).sort();
-  assert.deepStrictEqual(left, ['branch-5.md', 'branch-6.md', 'branch-7.md']);
+  assert.deepStrictEqual(left, [
+    'feature-x-2026-01-06-10-00.md',
+    'feature-x-2026-01-07-10-00.md',
+    'feature-x-2026-01-08-10-00.md',
+    'plan.md',
+  ], 'only run-stamped names count as reports');
   assert.ok(fs.existsSync(path.join(dir, 'notes.txt')), 'non-md files are untouched');
 });
 
@@ -616,13 +782,14 @@ test('pruneReports counts html reports toward the same cap', (t) => {
     const time = new Date(2026, 0, day);
     fs.utimesSync(file, time, time);
   };
-  stamp('branch-0.html', 1);
-  stamp('branch-1.md', 2);
-  stamp('branch-2.html', 3);
-  stamp('branch-3.md', 4);
-  stamp('branch-4.html', 5);
+  stamp('feature-x-2026-01-01-10-00.html', 1);
+  stamp('feature-x-2026-01-02-10-00.md', 2);
+  stamp('feature-x-2026-01-03-10-00.html', 3);
+  stamp('feature-x-2026-01-04-10-00.md', 4);
+  stamp('feature-x-2026-01-05-10-00.html', 5);
   rc.pruneReports(dir, 2);
-  assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['branch-3.md', 'branch-4.html']);
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(),
+    ['feature-x-2026-01-04-10-00.md', 'feature-x-2026-01-05-10-00.html']);
 });
 
 test('pruneReports caps reports across branch folders and drops emptied ones', (t) => {
@@ -634,19 +801,20 @@ test('pruneReports caps reports across branch folders and drops emptied ones', (
     const time = new Date(2026, 0, day);
     fs.utimesSync(file, time, time);
   };
-  stamp('feature-a/feature-a-1.html', 1);
-  stamp('feature-a/feature-a-2.md', 2);
-  stamp('feature-b/feature-b-3.md', 3);
-  stamp('feature-b/feature-b-4.html', 4);
+  stamp('feature-a/feature-a-2026-01-01-10-00.html', 1);
+  stamp('feature-a/feature-a-2026-01-02-10-00.md', 2);
+  stamp('feature-b/feature-b-2026-01-03-10-00.md', 3);
+  stamp('feature-b/feature-b-2026-01-04-10-00.html', 4);
   rc.pruneReports(dir, 2);
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['feature-b'], 'the emptied branch folder goes with its reports');
-  assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'feature-b')).sort(), ['feature-b-3.md', 'feature-b-4.html']);
+  assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'feature-b')).sort(),
+    ['feature-b-2026-01-03-10-00.md', 'feature-b-2026-01-04-10-00.html']);
 });
 
 test('pruneReports keeps a branch folder that still holds something', (t) => {
   const dir = tempDir(t, 'cr-reports-keep-');
   fs.mkdirSync(path.join(dir, 'feature-a'));
-  fs.writeFileSync(path.join(dir, 'feature-a', 'old.md'), 'x');
+  fs.writeFileSync(path.join(dir, 'feature-a', 'feature-a-2026-01-01-10-00.md'), 'x');
   fs.writeFileSync(path.join(dir, 'feature-a', 'notes.txt'), 'not a report');
   rc.pruneReports(dir, 0);
   assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'feature-a')), ['notes.txt'], 'non-report files are untouched');
