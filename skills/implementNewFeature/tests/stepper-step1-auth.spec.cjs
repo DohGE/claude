@@ -30,6 +30,12 @@ async function fillRequired(page) {
   await page.fill('#biz', 'Wymagania biznesowe');
 }
 
+// Submit w krokach 1-3 przechodzi przez własny dialog potwierdzenia (stepper-confirm.spec.cjs).
+async function submit(page, sel) {
+  await page.click(sel);
+  await page.click('#confirmOk');
+}
+
 test('krok 1 zawiera sekcję Authorization z polami login i maskowanym hasłem', async ({ page }) => {
   await expect(page.getByText('Authorization (optional)')).toBeVisible();
   await expect(page.locator('#authLogin')).toBeVisible();
@@ -76,7 +82,7 @@ test('submit z credentials zapisuje auth.json, a odpowiedź step1 nie zawiera ha
   await fillRequired(page);
   await page.fill('#authLogin', 'qa@example.com');
   await page.fill('#authPassword', 'S3kret!');
-  await page.click('#next');
+  await submit(page, '#next');
   const got = await (await fetch(`${base}/api/answer?wait=10`)).json();
   expect(got.answer.kind).toBe('step1');
   expect(got.answer.authProvided).toBe(true);
@@ -87,7 +93,7 @@ test('submit z credentials zapisuje auth.json, a odpowiedź step1 nie zawiera ha
 
 test('submit bez credentials wysyła authProvided:false i nie tworzy auth.json', async ({ page }) => {
   await fillRequired(page);
-  await page.click('#next');
+  await submit(page, '#next');
   const got = await (await fetch(`${base}/api/answer?wait=10`)).json();
   expect(got.answer.kind).toBe('step1');
   expect(got.answer.authProvided).toBe(false);

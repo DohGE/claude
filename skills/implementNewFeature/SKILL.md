@@ -22,13 +22,15 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 1. `SKILL_DIR` = this skill's base directory (given in the skill header). `PROJECT` = current working directory.
 2. Pick the session root by whether the project already has a `.claude/` folder:
    - `PROJECT/.claude/` exists → `SESSION = <PROJECT>/.claude/doh/<yyyyMMdd-HHmmss>`, and ensure
-     `<PROJECT>/.claude/doh/.gitignore` exists holding a single `*` line, so the run's artifacts
-     (reports, plan, screenshots, `auth.json`, `pipeline-state.json`) stay out of git and the final
-     `git add -A` never stages them.
+     `<PROJECT>/.claude/doh/.gitignore` exists holding `*`, `!.gitignore`, `!instructions/` and
+     `!instructions/**`, so the run's artifacts (reports, plan, screenshots, `auth.json`,
+     `pipeline-state.json`) stay out of git and the final `git add -A` never stages them, while the
+     project's own `doh/instructions/` rulebook stays committable.
    - otherwise → `SESSION = <SKILL_DIR>/.implementNewFeature/<yyyyMMdd-HHmmss>` (the skill's own
      `.gitignore` already covers it).
-   Create `SESSION`. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`,
-   never in the target project.
+   Create `SESSION`. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`:
+   the `doh` plugin's own Playwright is the only runner the pipeline ever uses — never the
+   project's copy, never a fresh install in the target project.
 3. Start the server (pick the script for the OS) and capture the port:
    - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
    - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`
@@ -73,6 +75,10 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
    ## Business requirements
    <businessRequirements>
 
+   ## Additional materials (hints for refinement and mockups)
+   Files: <hints list or "—">
+   Note: <hintsNote or "—">
+
    ## Contracts (pasted)
    <contractsText or "—">
 
@@ -86,7 +92,7 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
    <"Enabled — step 3 designs the screens" if generateMockups, else "Disabled">
    ```
 
-   (Uploads already sit in `<SESSION>/mockups/` and `<SESSION>/contracts/`.)
+   (Uploads already sit in `<SESSION>/mockups/`, `<SESSION>/contracts/` and `<SESSION>/hints/`.)
 4. Remember `MOCKUPS = answer.generateMockups` — it decides whether step 3 runs after step 2.
    When `MOCKUPS`, POST `{"step":3,"enabled":true}` first (`enabled` binds to the body's `step`,
    so it cannot ride along with the step-1 update).
@@ -137,24 +143,38 @@ leaves the panel locked on the previous answer.
 3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder substitution). It reports progress itself via POST /api/state and writes code against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
 4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"step":4,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
 
-## Step 5 — Validation & E2E (view-only)
+## Step 5 — Validation & E2E (view-only, except the Chrome-extension prompt)
 
 1. POST `{"step":5,"status":"in_progress","activeStep":5,"progress":0}`.
-2. Spawn the validation agent from `references/validation-agent.md`. It runs the test suite in
-   Playwright and, when the Claude Chrome extension is available, uses the user's own Chrome for
-   discovery, failure debugging and a UX pass — expect a tab to open there during this step. If the
-   extension is missing it degrades to Playwright-only by itself; never intervene.
-3. `{"type":"result","compliance":NN,"testsSummary","mockupSummary","uxSummary"}` with `compliance>=99` → POST completed. `{"type":"error","report"}` (e.g. <99% after 3 cycles) → failure protocol.
+2. Spawn the validation agent from `references/validation-agent.md`. It runs the project's own unit
+   suite, then writes and runs the E2E suite on the plugin's own Playwright, and uses the user's
+   Chrome (Claude in Chrome extension) for discovery, failure debugging and a UX pass — expect a
+   tab to open there during this step.
+3. Loop on the agent's final JSON:
+   - `{"type":"question","id","text","options"?}` → the extension is unavailable, and it is
+     REQUIRED: the agent is blocked until the user installs/enables it. POST `{"question":{...}}`,
+     poll answers until `kind=="answer"`, then **immediately** (before contacting the agent) POST
+     `{"question":null,"step":5,"currentOperation":"Retrying the Chrome extension…","logEntry":"<id>: <answer, shortened>"}`
+     so the UI reacts to the click at once, then SendMessage the answer text to the agent. Never
+     tell it to continue without the extension, and never re-spawn it with that requirement waived.
+   - `{"type":"result","compliance":NN,"testsSummary","unitSummary","mockupSummary","uxSummary"}`
+     with `compliance>=99` → POST completed.
+   - `{"type":"error","report"}` (<99% after 3 cycles, a unit suite that stayed red, or an
+     extension that never became available) → failure protocol.
 
 ## Step 6 — Code Review (view-only)
 
 1. POST `{"step":6,"status":"in_progress","activeStep":6,"progress":0}`.
 2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method).
-3. `{"type":"result","findingsFixed":N,"reviewSummary"}` → POST completed. `error` → failure protocol.
+3. `{"type":"result","findingsFixed":N,"reviewSummary"}` → delete `<SESSION>/auth.json` if it exists
+   (step 6's regression run is its last consumer, so the credentials die with the step, not with the
+   pipeline), then POST completed. `error` → failure protocol.
 
 ## Failure protocol (any step)
 
-1. POST `{"step":N,"status":"failed","report":"<report>"}`.
+1. POST `{"step":N,"status":"failed","report":"<report>","question":null}` — clearing the question
+   matters: a step that failed while waiting for an answer would otherwise re-show that stale
+   question the moment a retry flips the status back to in_progress.
 2. Poll answers until `kind=="decision"`:
    - `retry` → POST `{"step":N,"status":"in_progress","report":null}`; re-spawn that step's agent **fresh** (new Agent call, same prompt + note about the previous failure report path).
    - `finish` → write the final summary (below, including the `auth.json` cleanup) with
@@ -162,11 +182,11 @@ leaves the panel locked on the previous answer.
 
 ## Final summary
 
-1. Delete `<SESSION>/auth.json` if it exists (credentials must not outlive the pipeline; the
-   server also wipes it on shutdown as a backstop). Do this on BOTH outcomes — success and
-   `finish` after a failure.
-2. Collect from step results only (no file contents): changes, features, tests, mockup comparison, UX findings, review results.
-3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`uxReview` = the validation agent's `uxSummary`).
+1. Delete `<SESSION>/auth.json` if it still exists — step 6 normally already did, so this is the
+   backstop for runs that never got there (the server also wipes it on shutdown). Do this on BOTH
+   outcomes — success and `finish` after a failure.
+2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), mockup comparison, UX findings, review results.
+3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `uxReview` = its `uxSummary`).
 4. Print the same summary in the terminal (user's language).
 5. Stage everything: `git add -A` (already done by the step-6 agent; verify with `git status --short`).
 6. Suggest `superpowers:finishing-a-development-branch` for commit/merge/PR.

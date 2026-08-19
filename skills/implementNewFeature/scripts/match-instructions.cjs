@@ -20,7 +20,7 @@ try {
 }
 
 function parseArgs(argv) {
-  const args = { files: [], instructionsDir: DEFAULT_INSTRUCTIONS_DIR };
+  const args = { files: [], instructionsDir: DEFAULT_INSTRUCTIONS_DIR, project: process.cwd() };
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
     if (!m) continue;
@@ -28,6 +28,8 @@ function parseArgs(argv) {
       args.files = [...new Set(m[2].split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
     } else if (m[1] === 'instructions-dir') {
       args.instructionsDir = m[2];
+    } else if (m[1] === 'project') {
+      args.project = m[2];
     }
   }
   return args;
@@ -49,7 +51,15 @@ function buildOutput(options) {
     return out;
   }
 
-  const { globals, locals, warnings } = reviewContext.loadInstructions(dir, 'implement');
+  // The reviewed project may carry its own rules in `.claude/doh/instructions/`;
+  // the review in step 6 layers them the same way, so the code written in step 4
+  // must follow them too.
+  const projectInstructionsDir = path.join(
+    path.resolve(options.project || process.cwd()), '.claude', 'doh', 'instructions');
+  const hasProjectInstructions = fs.existsSync(projectInstructionsDir);
+  out.projectInstructionsDir = hasProjectInstructions ? projectInstructionsDir : null;
+  const { globals, locals, warnings } = reviewContext.loadInstructions(
+    hasProjectInstructions ? [dir, projectInstructionsDir] : dir, 'implement');
   out.warnings = warnings;
   if (globals.length === 0 && locals.length === 0) {
     out.warnings.push('instructions/global and instructions/local are empty - nothing to follow beyond the plan and project conventions.');

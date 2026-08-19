@@ -12,6 +12,8 @@ const postState = body => fetch(`${base}/api/state`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
 });
 const takeAnswer = async () => (await (await fetch(`${base}/api/answer?wait=10`)).json()).answer;
+// Submit w krokach 1-3 przechodzi przez własny dialog potwierdzenia (stepper-confirm.spec.cjs).
+const submit = async (page, sel) => { await page.click(sel); await page.click('#confirmOk'); };
 
 test.beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inf-mock-'));
@@ -69,14 +71,14 @@ test('stepper ukrywa krok Mockups, dopóki toggle go nie włączy', async ({ pag
 test('toggle Generate mockups jest domyślnie wyłączony', async ({ page }) => {
   await openStep1(page);
   await expect(page.locator('#genMockups')).not.toBeChecked();
-  await page.click('#next');
+  await submit(page, '#next');
   expect((await takeAnswer()).generateMockups).toBe(false);
 });
 
 test('zaznaczony toggle trafia do odpowiedzi kroku 1', async ({ page }) => {
   await openStep1(page);
   await page.check('#genMockups');
-  await page.click('#next');
+  await submit(page, '#next');
   expect((await takeAnswer()).generateMockups).toBe(true);
 });
 
@@ -112,6 +114,6 @@ test('Send wysyła feedback i blokuje panel do kolejnej rundy agenta', async ({ 
 
 test('Approve zatwierdza makiety', async ({ page }) => {
   await openMockupPanel(page);
-  await page.click('#approveMockup');
+  await submit(page, '#approveMockup');
   expect(await takeAnswer()).toMatchObject({ kind: 'mockup', decision: 'approve' });
 });

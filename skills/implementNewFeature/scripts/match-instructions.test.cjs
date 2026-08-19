@@ -150,3 +150,26 @@ test('CLI prints JSON and uses exit codes', (t) => {
   assert.strictEqual(bad.status, 1);
   assert.strictEqual(JSON.parse(bad.stdout).errors.length, 1);
 });
+
+test('parseArgs takes the project root whose local rulebook is layered in', () => {
+  assert.strictEqual(mi.parseArgs(['--project=/tmp/app']).project, '/tmp/app');
+  assert.strictEqual(mi.parseArgs([]).project, process.cwd());
+});
+
+test('buildOutput layers the project rulebook from .claude/doh/instructions', (t) => {
+  const dir = makeInstructionsDir(t);
+  const project = tempDir(t, 'mi-project-');
+  const projectInstructions = path.join(project, '.claude', 'doh', 'instructions');
+  writeFile(projectInstructions, path.join('global', 'general.md'), '---\nname: Project general\n---\n- project rule\n');
+  writeFile(projectInstructions, path.join('global', 'project-only.md'), '---\nname: Only here\n---\n- rule\n');
+  writeFile(projectInstructions, path.join('local', 'styles.md'),
+    '---\nname: Styles\napplies-to:\n  - "**/*.scss"\n---\n- rule\n');
+  const out = mi.buildOutput({ instructionsDir: dir, project, files: [] });
+  assert.strictEqual(out.projectInstructionsDir, projectInstructions);
+  assert.deepStrictEqual(out.globals.map((f) => path.basename(f)),
+    ['general.md', 'extra.md', 'project-only.md']);
+  assert.ok(out.globals[0].startsWith(projectInstructions),
+    'a project file at the same relative path replaces the skill file');
+  const matched = mi.buildOutput({ instructionsDir: dir, project, files: ['src/app/a.scss'] });
+  assert.deepStrictEqual(matched.files[0].localInstructions.map((f) => path.basename(f)), ['styles.md']);
+});

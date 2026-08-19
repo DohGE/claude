@@ -11,10 +11,47 @@ Session dir: `{{SESSION}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT
 Read first: `{{SESSION}}/spec.md`, `{{SESSION}}/plan.md`, `{{SESSION}}/checklist.md`, and every
 image in `{{SESSION}}/mockups/` (Read renders them) — those are the user's own references, the
 starting point for your design, not something to ignore or reproduce pixel-for-pixel.
+Also read every file in `{{SESSION}}/hints/` together with the "Additional materials" note in
+`{{SESSION}}/requirements.md`: they say what the user wants taken from those materials (a layout,
+a component, a tone) and what to leave behind — design direction that ranks below spec.md and
+above your own taste.
 Then explore `{{PROJECT}}` for the real design language: global stylesheets, design tokens/theme
 files, component library, an existing screen closest to the feature. The mockup must look like it
 already belongs to this application — matching type scale, spacing, radii, palette and component
 shapes — not like a generic template.
+
+## Naming and copy rulebook (MANDATORY)
+
+Every string you draw ends up as a translation entry written in step 4 and reviewed against the
+`doh:codeReview` rulebook in step 6, and every name you pick propagates into spec.md, the components
+and the translation keys. So the copy is final copy, and the names are the app's names.
+
+1. Run the matcher twice — once bare for the rules that bind everything, once for the files this
+   feature will create:
+   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` → read the
+     `globals` it lists; the naming and consistency rules live there.
+   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<the project's base i18n file>,<one template path from plan.md>"`
+     → read every file under `localInstructions`; the Translations and template checklists are
+     exactly what step 6 will judge the result by.
+   Both runs layer the project's OWN rulebook from `{{PROJECT}}/.claude/doh/instructions/` on top of
+   the skill's (reported as `projectInstructionsDir`): when it is not null those files are in the
+   lists you just read, and a project file replaces the skill file of the same name — a repo that
+   wrote down its own naming or copy conventions outranks the defaults.
+   Matcher missing or exiting non-zero → note it in your summary and fall back to the conventions
+   you can read from the project itself.
+2. Read the project's base translation file (`**/assets/i18n/en.json` or its equivalent) before
+   writing any label. Reuse the wording that already exists for the same meaning — an action the app
+   calls "Save changes" is never "Apply" or "Confirm" on your screen, and reuse the existing key's
+   text instead of inventing a synonym. New copy follows the same conventions: labels in sentence
+   case with no trailing period, headings in Title Case, messages as full sentences, dynamic values
+   as `{{paramName}}` placeholders, wording chosen by control type (hint, tooltip, error, confirmation).
+   No translation file in the project → take the voice from the templates closest to the feature.
+3. One concept keeps one name — across screens, `manifest.json` ids and titles, and what you write to
+   the user. Use the term the application already uses (`users`, not `accounts`, when the app says
+   users); a synonym per screen turns into two names in the code and a finding in step 6.
+4. Two languages, never mixed: the copy INSIDE a screen is in the application's UI language (the one
+   its base translation file uses), while the manifest `title` and everything you say to the user
+   stay in {{LANGUAGE}}. No lorem ipsum, no `TODO`, no filler — what you draw is what the app ships.
 
 ## Output contract
 

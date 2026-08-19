@@ -369,3 +369,19 @@ test('GET / serves the stepper UI', async t => {
   assert.match(res.headers.get('content-type'), /text\/html/);
   assert.match(await res.text(), /Requirements/);
 });
+
+test('POST /api/state bumps questionSeq even when the question id repeats', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const post = (body) => fetch(`${base}/api/state`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const seq = async () => (await (await fetch(`${base}/api/state`)).json()).questionSeq;
+  assert.strictEqual(await seq(), 0);
+  await post({ question: { id: 'q1', text: 'first' } });
+  assert.strictEqual(await seq(), 1);
+  await post({ question: null });
+  await post({ question: { id: 'q1', text: 'second' } });
+  assert.strictEqual(await seq(), 3, 'every question POST moves the counter the UI re-renders on');
+});
