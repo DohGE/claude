@@ -5,26 +5,30 @@ description: Use when the user wants an instruction-driven code review of git ch
 
 # codeReview — deterministic instruction-driven review
 
-You produce review REPORTS only.
-Never fix code, never commit, never checkout, never edit the reviewed project's files.
-Staged mode is the one exception to touching the repo at all: its context script runs `git add .`
-to stage every pending change before reviewing — the index only, never a commit or a file edit.
+You produce review REPORTS only: never fix code, commit, checkout or edit the reviewed project's
+files. Staged mode is the single exception — its context script runs `git add .` to stage every
+pending change before reviewing, the index only.
 
-Execute EVERY step of this skill yourself, in the current conversation.
-Never dispatch sub-agents (Agent/Task/Explore tools) for any part of the run — not one per branch, not one per file, not for large diffs, not to save context or time.
-Multiple targets are reviewed by you sequentially, one after another.
+Execute EVERY step yourself, in the current conversation, targets sequentially — never dispatch
+sub-agents (Agent/Task/Explore) for any part of a run: not per branch, not per file, not for a large
+diff, not to save context or time.
 
-Coverage is non-negotiable: every file of every target and every checklist item of every applicable
-instruction gets evaluated, on every run. Violating the letter of these steps is violating their spirit.
-Coverage and reporting scope are two different things: everything is evaluated, but only violations the
-diff itself touched are reported (Step 3 scope gate).
+Coverage is non-negotiable: every file of every target, every checklist item of every applicable
+instruction, on every run — violating the letter of these steps violates their spirit. Coverage and
+reporting scope differ: everything is evaluated, only what the diff touched is reported (Step 3
+scope gate).
 
 ## Step 1 — Build the review context
 
 1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = current working directory.
-2. If the arguments contain the exact token `--only-md`, remove it and set `OUTPUT=md`; otherwise
-   `OUTPUT=html`. Do this FIRST and on the whole argument list, wherever the flag sits — an
-   unstripped `--only-md` would be mapped below as a branch name.
+2. Strip the flags FIRST, from the whole argument list, wherever they sit — an unstripped flag would
+   be mapped below as a branch name:
+   - `--only-md` → `OUTPUT=md`; otherwise `OUTPUT=html`.
+   - `--since-last` → pass it through to the context script (`INCREMENTAL`). It reviews only the
+     files whose content moved since the previous review of that target, using the snapshot the
+     script keeps next to the report. Meant for a RE-review of a target already reviewed (the
+     implementNewFeature review loop uses it from cycle 2 on); on a first review it warns and
+     reviews everything.
 3. Map the REMAINING arguments to the context script EXACTLY like this:
    - no arguments → `--mode=auto`
    - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review
@@ -32,7 +36,7 @@ diff itself touched are reported (Step 3 scope gate).
    - the word `folder` followed by one path → `--mode=folder --path="<path>"` (reviews every
      file currently in that folder of the working tree, no diff needed)
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] --output=<OUTPUT> --project="<PROJECT>"`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last]`
 5. Parse the JSON from stdout:
    - Report every `errors[]` entry to the user immediately, in Polish.
    - No targets / exit code 1 → stop after reporting the errors.
@@ -48,8 +52,13 @@ diff itself touched are reported (Step 3 scope gate).
    loads in a single turn, never one file per turn.
 5. Precedence when rules conflict: project `CLAUDE.md` > local instruction > global instruction.
    Apply only the winning rule; never report a violation of the overridden rule.
+6. Some of those paths may sit under `projectInstructionsDir` (`<project>/.claude/doh/instructions/`)
+   — the reviewed repo's own rulebook. It binds exactly like the skill's: a project file replaces the
+   skill file of the same relative path, the rest are extra instructions.
 
 Never skip or skim any of these files — they are the review rulebook.
+Each file of a target carries `checklistTotal`: how many checklist items (global + its matched
+locals) it must be walked against. Step 3 point 4 reports back how many you actually walked.
 
 ## Step 3 — Analyze (per target, per file) and write findings as you go
 
@@ -184,6 +193,13 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    the batch, in listed order — as the next sequential part file
    (`<reportPath minus .md>.part<NN>.md`, zero-padded, next to the report) with ONE Write call.
    Findings never wait beyond their own batch; earlier parts are never edited.
+   Every file of the batch also contributes ONE coverage marker as the last line of its block —
+   files with no findings contribute the marker alone:
+   `<!-- coverage: <file.path> <checked>/<file.checklistTotal> -->`
+   `<checked>` is how many checklist items you actually reached a verdict on, counted as you go and
+   never reconstructed afterwards; `checklistTotal` is copied from the context JSON. The two match on
+   a file you finished — a smaller `<checked>` makes the renderer warn and keeps the Markdown, which
+   is the honest outcome of an interrupted pass, not something to paper over by writing equal numbers.
 
 After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as the
 final part file. Answer each of these four questions explicitly, against the diff as a whole:
@@ -247,6 +263,11 @@ unanalyzed file is not done, regardless of diff size or session length.
 - Take the header date and time from the trailing `-YYYY-MM-DD-HH-mm` of `reportPath`, replacing the final dash of the time with `:` (e.g. `14-30` → `14:30`), so the header always matches the file name.
 - If `target.skipped` is non-empty, add directly under the header the single line:
   `Pominięto pliki wygenerowane/binarne: <paths, comma-separated>`.
+- The `<!-- coverage: ... -->` lines of Step 3 point 4 are part of this format: one per analyzed
+  file, anywhere in its block. They are HTML comments, so they never reach the rendered page.
+- When `target.unchangedSinceLastReview` is non-empty (a `--since-last` run), add one comment line
+  under the header:
+  `<!-- since-last: <N> unchanged file(s) skipped; previous report: <target.previousReportPath> -->`
 - Severity emoji, exactly: ⚪ **Low**, 🟡 **Medium**, 🔴 **High**, 🟤 **Critical**, 🔵 **Missing Unit Test**.
 - Assign severity by these criteria, picking the highest that applies:
   - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
@@ -257,13 +278,9 @@ unanalyzed file is not done, regardless of diff size or session length.
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
   (infinite dispatch loop, race condition, subscription leak, crash on null, stale UI) — and
   severity is picked from that consequence, not from the rule's category.
-- One finding = one such block = one rule in one file (Step 3 point 3): every
-  same-consequence occurrence of that rule shares the block through the `**Linia:**` list;
-  a different rule — even on the same line — is its own block, as is an occurrence with a
-  different consequence or severity.
+- One finding = one such block = one rule in one file (the splitting rules are Step 3 point 3).
   Separate every block from the next with exactly one blank line, and put one blank line before AND
-  after every `##` header. The severity lead line below is what makes those blank lines render as
-  real vertical spacing in a preview, so each finding shows up as its own visually separated section.
+  after every `##` header — that is what makes each finding render as its own section.
 - The severity is a bold lead line — `<emoji> **<Severity>**` with NO leading `- ` — that opens the
   block; the other four fields follow it as `- ` bullet lines in the order shown. Each field is its
   own line and never continues on the previous field's line. `**Linia:**` holds a comma-separated
@@ -278,6 +295,7 @@ unanalyzed file is not done, regardless of diff size or session length.
 ## Step 5 — Terminal summary (Polish)
 
 After writing all reports print, in Polish: each report path (`target.htmlReportPath` when the renderer ran, otherwise `target.reportPath`) + finding counts per severity, plus any errors/warnings from Step 1 and any warning the renderer printed.
+For a `--since-last` run also say how many files were skipped as unchanged and where the previous report is (`target.unchangedSinceLastReview`, `target.previousReportPath`) — the reader must know the report covers only what moved.
 For a branch target also name the base it was reviewed against — `target.baseBranch` plus where that base came from, read off `target.baseSource`: `pr` = the target branch of PR #`target.prNumber`, `fork` = the branch it was created from, `candidate` = the default `main`/`master`/`develop`/`dev` detection. Staged and folder targets have no base (`baseSource` is null): a staged review covers the uncommitted changes themselves.
 Nothing else.
 
@@ -287,14 +305,11 @@ Catching yourself thinking any of these means STOP and return to the file or che
 
 | Excuse | Reality |
 |---|---|
-| "Diff too large / too many files" | Scope never shrinks with size. Continue sequentially until the list is exhausted. |
-| "Trivial / generated / config / test-only file" | The script already removed skippable files; everything in `target.files` gets the full pass. |
-| "Rename or formatting-only change" | Moved code is re-reviewed at its new location — structure, naming and import rules break exactly there. |
-| "A similar file already passed" | Every file gets its own per-item verdicts; similarity is not compliance. |
+| "Too large / trivial / renamed / similar to a file that passed" | Scope never shrinks: the script already removed skippable files, moved code breaks structure and import rules exactly at its new location, and similarity is not compliance. |
 | "This rule is pedantic here" | Rule weight is expressed through severity, never through omission. |
 | "I remember the instructions" | Verdicts come from the instruction files read this run, item by item — not from memory. |
 | "This file already has plenty of findings" | Findings per file are unlimited. Stopping a checklist partway is skipping items. |
 | "This line already has a finding" | Findings are per rule, not per line. A cited line goes back through the remaining checklist items (Step 3 point 3, line sweep) — one line commonly breaks three or four rules. |
 | "I already reported this rule here" | You reported its first occurrence. The occurrence sweep (Step 3 point 3) searches the whole file for the rest and puts every one into `**Linia:**`. |
 | "No local instruction matched this file" | Global checklists apply to every file; zero local matches often means the file sits outside every dedicated location — itself a violation. |
-| "Context/time is running low" | Coverage outranks speed. Keep going file by file. |
+| "Context/time is running low" | Coverage outranks speed, and the coverage marker records what you actually walked. Keep going file by file. |

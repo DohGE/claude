@@ -25,10 +25,13 @@ Step 6 reviews every change with the `doh:codeReview` skill against its instruct
 write code that already complies. The matcher below reuses the review-time matching logic, so its
 output is authoritative.
 
-1. Once, before the first task, run `node "{{SKILL_DIR}}/scripts/match-instructions.cjs"` and read
-   EVERY file listed in `globals` — those rules bind all code you write.
+1. Once, before the first task, run
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` and read
+   EVERY file listed in `globals` — those rules bind all code you write. When `projectInstructionsDir`
+   is not null the list also carries the project's own rules from `<PROJECT>/.claude/doh/instructions/`;
+   they bind exactly like the skill's.
 2. Before writing or editing any file, run it again with every file the task touches:
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --files="<project-relative paths, comma-separated>"`
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<project-relative paths, comma-separated>"`
    and read each returned `localInstructions` file (skip ones you already read — they stay binding).
    Files you only discover mid-task get the same treatment before you write them.
 3. Write the code to satisfy EVERY checklist item of the global + matched local instructions.

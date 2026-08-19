@@ -27,7 +27,7 @@ function initialState() {
       enabled: !OPTIONAL_STEPS.includes(i + 1),
       currentOperation: '', report: null, log: []
     })),
-    activeStep: 1, question: null, reviewSummary: null, mockupReview: null, summary: null
+    activeStep: 1, question: null, questionSeq: 0, reviewSummary: null, mockupReview: null, summary: null
   };
 }
 
@@ -108,7 +108,12 @@ function createApp(sessionDir, opts = {}) {
       }
     }
     if (body.activeStep !== undefined) state.activeStep = body.activeStep;
-    if (body.question !== undefined) state.question = body.question;
+    if (body.question !== undefined) {
+      state.question = body.question;
+      // Monotonic, server-owned: the UI keys its re-render on this counter, so a
+      // sub-agent that reuses a question id still gets a fresh, unlocked panel.
+      state.questionSeq = (state.questionSeq || 0) + 1;
+    }
     if (body.reviewSummary !== undefined) state.reviewSummary = body.reviewSummary;
     if (body.mockupReview !== undefined) state.mockupReview = body.mockupReview;
     if (body.summary !== undefined) state.summary = body.summary;
@@ -167,7 +172,7 @@ function createApp(sessionDir, opts = {}) {
       }
       if (req.method === 'POST' && url.pathname === '/api/upload') {
         const body = JSON.parse(await readBody(req) || '{}');
-        if (!['mockups', 'contracts'].includes(body.category)) {
+        if (!['mockups', 'contracts', 'hints'].includes(body.category)) {
           return sendJson(res, 400, { error: 'bad category' });
         }
         const name = path.basename(String(body.filename || '').replace(/\\/g, '/'));

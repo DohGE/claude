@@ -25,6 +25,12 @@ A multi-branch run writes one folder per reviewed branch. The branch stays in th
 When the reviewed project has its own `.claude/` folder, reports go to `<project>/.claude/doh/{branch}/` instead.
 Branch names are sanitized for file and folder names (any character outside `A-Z a-z 0-9 . _ -` becomes `-`); the time uses `HH-mm` because `:` is not allowed in Windows file names.
 Only the 30 newest reports are kept — older ones (either format, in any branch folder) are pruned automatically at the start of a run, and a branch folder emptied by that pruning is removed with them.
+Pruning counts only run-stamped report names (`…-YYYY-MM-DD-HH-mm.md|html`), so it shares `.claude/doh/` with implementNewFeature's session folders and the project's `instructions/` without ever touching them.
+
+`--since-last` turns a run into a re-review: every run records the post-image blob of each reviewed file in `.last-review-<kind>.json` next to the report, and the next incremental run drops the files whose blob has not moved (they are listed in a warning, and the previous report stays the reference for them).
+It is meant for a target already reviewed in this session — the implementNewFeature review loop uses it from cycle 2 on; on a first review it warns and reviews everything.
+
+Each analyzed file ends its block with a coverage marker — `<!-- coverage: <path> <checked>/<total> -->`, `<total>` being the number of checklist items the context script counted for that file. The renderer keeps the marker out of the HTML, warns when `<checked>` is smaller, and says so when a report carries no markers at all.
 Generated and binary files (lockfiles, `*.min.*`, source maps, `dist/`/`build/`/`coverage/` output, images, fonts, media, executables) are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report.
 
 ## Instructions
@@ -33,6 +39,10 @@ Review rules live in two folders inside this skill (they start empty — add you
 
 - `instructions/global/**/*.md` — apply to every reviewed file (subfolders are scanned recursively; `applies-to` frontmatter is ignored here and reported as a warning).
 - `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
+
+A reviewed project can also carry its own rules in `<project>/.claude/doh/instructions/`, with the same `global/` + `local/` layout.
+That folder is layered on top of the skill's tree: a file at the same relative path (`global/security.md`) replaces the skill's version, any other file is one more instruction.
+It is reported as `projectInstructionsDir` in the context JSON, the implementNewFeature coding rulebook layers it the same way, and the `.claude/doh/.gitignore` written for run artifacts explicitly un-ignores it so the rulebook can be committed and shared.
 
 The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
 Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, narrating comments, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.

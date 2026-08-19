@@ -39,8 +39,11 @@ function isSkippedPath(filePath) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html' };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false };
   for (const arg of argv) {
+    // Incremental review: only the files whose content moved since the previous
+    // review of this target (see the snapshot written next to the report).
+    if (arg === '--since-last') { args.sinceLast = true; continue; }
     const m = arg.match(/^--([a-z]+)=(.*)$/);
     if (!m) continue;
     if (m[1] === 'mode') args.mode = m[2];
@@ -244,14 +247,6 @@ function detectBaseBranch(project, branchRef, branchName, findPr = github.findOp
   return { ref: candidate, source: candidate ? 'candidate' : null, ...rest };
 }
 
-function parseNameStatus(output) {
-  if (!output) return [];
-  return output.split('\n').filter(Boolean).map((line) => {
-    const parts = line.split('\t');
-    return { path: parts[parts.length - 1], status: parts[0][0] };
-  });
-}
-
 function q(s) {
   return `"${s}"`;
 }
@@ -289,10 +284,69 @@ function parseHunkRanges(diffOutput) {
   return ranges.join(', ');
 }
 
+// One `git diff -U0` per target is split into per-file line ranges here, so a
+// 150-file diff spawns one git process instead of 150 (each costs ~50-100 ms
+// on Windows). Sections come from the `diff --git` headers; the new path is
+// read off `+++ b/<path>` (`/dev/null` marks a deletion, which has no new
+// lines). Run git with `core.quotepath=false` so this path matches the one
+// `--name-status` reported.
+function parseDiffRangesByPath(diffOutput) {
+  const byPath = new Map();
+  for (const section of String(diffOutput || '').split(/^diff --git /m).slice(1)) {
+    const m = section.match(/^\+\+\+ (.*)$/m);
+    if (!m) continue;
+    let target = m[1].trim();
+    if (target === '/dev/null') continue;
+    if (target.startsWith('"') && target.endsWith('"')) {
+      target = target.slice(1, -1).replace(/\\(.)/g, '$1');
+    }
+    byPath.set(target.replace(/^b\//, ''), parseHunkRanges(section));
+  }
+  return byPath;
+}
+
+// `git diff --raw` carries status, path AND the post-image blob id in one line,
+// so a single call replaces `--name-status` and hands `--since-last` its content
+// fingerprint: `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\t<path>`.
+// Renames carry old and new path; the new one is last, like in --name-status.
+function parseRawDiff(output) {
+  const files = [];
+  for (const line of String(output || '').split('\n')) {
+    if (!line.startsWith(':')) continue;
+    const [meta, ...names] = line.split('\t');
+    const parts = meta.slice(1).trim().split(/\s+/);
+    const target = names[names.length - 1];
+    if (!target) continue;
+    files.push({ path: target, status: parts[4] ? parts[4][0] : 'M', blob: parts[3] || '' });
+  }
+  return files;
+}
+
+// How many checklist items an instruction carries: the top-level `- ` bullets
+// of its body. The reviewer reports its per-file coverage against this number,
+// which turns "I walked every item" from a promise into a checkable figure.
+function countChecklistItems(file) {
+  let body;
+  try {
+    body = fs.readFileSync(file, 'utf8');
+  } catch {
+    return 0;
+  }
+  body = body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
+  return body.split('\n').filter((line) => /^- \S/.test(line)).length;
+}
+
 // audience: 'review' | 'implement' | undefined (no filtering). An instruction
 // declares `audience: implement|review|both` in its frontmatter (default both)
 // to control which consumer loads it — e.g. a coding persona is implement-only.
-function loadInstructions(instructionsDir, audience) {
+// `instructionsDirs` is one directory or a layered list, lowest priority first:
+// the skill's own tree plus, when the reviewed project has one, its
+// `.claude/doh/instructions/`. A project file at the same relative path
+// (`global/security.md`) REPLACES the skill's file — a project may restate a
+// rule its own way — and every other project file is one more instruction.
+function loadInstructions(instructionsDirs, audience) {
+  const dirs = (Array.isArray(instructionsDirs) ? instructionsDirs : [instructionsDirs])
+    .filter(Boolean);
   const warnings = [];
   const list = (dir) => {
     if (!fs.existsSync(dir)) return [];
@@ -315,8 +369,20 @@ function loadInstructions(instructionsDir, audience) {
     }
     return !audience || declared === 'both' || declared === audience;
   };
+  // Layered by path relative to the bucket, so the order stays alphabetical by
+  // instruction name instead of following whichever layer supplied the file.
+  const collect = (bucket) => {
+    const byRelative = new Map();
+    for (const dir of dirs) {
+      const root = path.join(dir, bucket);
+      for (const file of list(root)) {
+        byRelative.set(path.relative(root, file).split(path.sep).join('/'), file);
+      }
+    }
+    return [...byRelative.keys()].sort().map((rel) => byRelative.get(rel));
+  };
   const globals = [];
-  for (const file of list(path.join(instructionsDir, 'global'))) {
+  for (const file of collect('global')) {
     const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
     if (!keep(file, fm)) continue;
     if (fm.appliesTo.length > 0) {
@@ -325,7 +391,7 @@ function loadInstructions(instructionsDir, audience) {
     globals.push(file);
   }
   const locals = [];
-  for (const file of list(path.join(instructionsDir, 'local'))) {
+  for (const file of collect('local')) {
     const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
     if (!keep(file, fm)) continue;
     if (fm.appliesTo.length === 0) {
@@ -350,7 +416,11 @@ function matchLocalInstructions(locals, filePath) {
 // in reportsDir are still counted, so folders written before the per-branch
 // grouping stay capped too. Best-effort: failures never break a review.
 function pruneReports(reportsDir, retain = reportsRetain) {
-  const isReport = (name) => name.endsWith('.md') || name.endsWith('.html');
+  // A report always ends with the run stamp (`-YYYY-MM-DD-HH-mm.md|html`), so
+  // pruning can share a folder with other artifacts — implementNewFeature's
+  // session dirs (`plan.md`, `spec.md`, …) and the project's own
+  // `instructions/` — without ever counting or deleting one of them.
+  const isReport = (name) => /-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.(?:md|html)$/.test(name);
   let entries;
   try {
     entries = fs.readdirSync(reportsDir, { withFileTypes: true });
@@ -360,6 +430,9 @@ function pruneReports(reportsDir, retain = reportsRetain) {
   const branchDirs = [];
   const files = [];
   for (const entry of entries) {
+    // `instructions/` is the project's own rulebook living next to the reports:
+    // its .md files are not reports and the folder is not a branch folder.
+    if (entry.name === 'instructions') continue;
     if (entry.isDirectory()) branchDirs.push(path.join(reportsDir, entry.name));
     else if (isReport(entry.name)) files.push(path.join(reportsDir, entry.name));
   }
@@ -401,13 +474,17 @@ function isDirectory(p) {
 
 // In project mode reports live inside the reviewed repo's `.claude/doh/`, a
 // folder also shared with the implementNewFeature skill (plans, screenshots,
-// auth.json, pipeline-state.json). Keep the whole folder out of git with a
-// catch-all .gitignore so nothing there is ever committed. Best-effort; a
-// pre-existing .gitignore is left untouched.
+// auth.json, pipeline-state.json). Keep those run artifacts out of git with a
+// catch-all .gitignore — but not `instructions/`: the project's own rulebook is
+// meant to be versioned and shared like any other source file, and the
+// .gitignore itself is committed so every clone behaves the same.
+// Best-effort; a pre-existing .gitignore is left untouched.
+const DOH_GITIGNORE = '*\n!.gitignore\n!instructions/\n!instructions/**\n';
+
 function ensureDohGitignore(dohDir) {
   const gi = path.join(dohDir, '.gitignore');
   try {
-    if (!fs.existsSync(gi)) fs.writeFileSync(gi, '*\n');
+    if (!fs.existsSync(gi)) fs.writeFileSync(gi, DOH_GITIGNORE);
   } catch {}
 }
 
@@ -424,6 +501,7 @@ function buildContext(options) {
     outputFormat: wantsHtml ? 'html' : 'md',
     globalInstructions: [],
     localInstructionsCatalog: [],
+    projectInstructionsDir: null,
     claudeMd: null,
     warnings: [],
     targets: [],
@@ -439,7 +517,15 @@ function buildContext(options) {
     return result;
   }
 
-  const instructions = loadInstructions(path.join(skillDir, 'instructions'), 'review');
+  // The project may extend or override the skill's rulebook from its own
+  // `.claude/doh/instructions/` (same `global/` + `local/` layout), so a repo
+  // carries its conventions next to its code instead of in the shared skill.
+  const projectInstructionsDir = path.join(project, '.claude', 'doh', 'instructions');
+  const hasProjectInstructions = isDirectory(projectInstructionsDir);
+  const instructions = loadInstructions(
+    [path.join(skillDir, 'instructions'), hasProjectInstructions ? projectInstructionsDir : null],
+    'review',
+  );
   const ts = formatTimestamp(now);
   // When the reviewed project already has a `.claude/` folder, write reports
   // into `<project>/.claude/doh/` (created on demand) instead of the skill's
@@ -464,12 +550,58 @@ function buildContext(options) {
   };
   const claudeMdPath = path.join(project, 'CLAUDE.md');
   result.globalInstructions = instructions.globals;
+  result.projectInstructionsDir = hasProjectInstructions ? projectInstructionsDir : null;
   result.claudeMd = fs.existsSync(claudeMdPath) ? claudeMdPath : null;
   result.warnings = [...instructions.warnings];
   if (instructions.globals.length === 0 && instructions.locals.length === 0) {
     result.warnings.push('instructions/global and instructions/local are empty - review uses only the project CLAUDE.md and the universal points (cross-file consistency, regressions, readability).');
   }
 
+  // Checklist sizes are read once per run and turned into a per-file total, so
+  // the reviewer can state coverage as `<checked>/<total>` per file.
+  const itemCache = new Map();
+  const itemsOf = (file) => {
+    if (!itemCache.has(file)) itemCache.set(file, countChecklistItems(file));
+    return itemCache.get(file);
+  };
+  const globalChecklistItems = instructions.globals.reduce((n, f) => n + itemsOf(f), 0);
+
+  // Every run records the post-image blob of each reviewed file next to the
+  // report, so the next `--since-last` run can drop files whose content never
+  // moved. Written even when the flag is off — the first incremental run needs
+  // something to compare against — and trusted only as far as the previous run
+  // got: a review that died half-way still recorded the whole file list.
+  const pendingSnapshots = new Map();
+  const snapshotPathOf = (target) =>
+    path.join(path.dirname(target.reportPath), `.last-review-${target.kind}.json`);
+  const registerTarget = (target, currentBlobs) => {
+    if (currentBlobs) pendingSnapshots.set(target, currentBlobs);
+    if (options.sinceLast && !currentBlobs) {
+      result.warnings.push(`[${target.branch}] --since-last has no effect in folder mode - every file is reviewed.`);
+    } else if (options.sinceLast) {
+      let previous = null;
+      try {
+        previous = JSON.parse(fs.readFileSync(snapshotPathOf(target), 'utf8'));
+      } catch {}
+      if (!previous || !previous.files) {
+        result.warnings.push(`[${target.branch}] --since-last: no previous review recorded for this target - reviewing every file.`);
+      } else {
+        const unchanged = target.files
+          .filter((f) => previous.files[f.path] && previous.files[f.path] === currentBlobs.get(f.path))
+          .map((f) => f.path);
+        if (unchanged.length > 0) {
+          const shown = unchanged.slice(0, 10).join(', ');
+          result.warnings.push(`[${target.branch}] --since-last: ${unchanged.length} file(s) unchanged since the previous review and skipped: ${shown}${unchanged.length > 10 ? `, (+${unchanged.length - 10} more)` : ''}`);
+          target.unchangedSinceLastReview = unchanged;
+          target.previousReportPath = previous.reportPath || null;
+          target.files = target.files.filter((f) => !unchanged.includes(f.path));
+        }
+      }
+    }
+    result.targets.push(target);
+  };
+
+  const quiet = ['-c', 'core.quotepath=false'];
   const gitc = (args) => `git -C ${q(project)} ${args}`;
   // Commands are emitted ONCE per target as templates with a `<path>`
   // placeholder (`target.commands.diff` / `.show`) instead of two full command
@@ -480,14 +612,20 @@ function buildContext(options) {
   // changedLines: new-file line ranges precomputed from `git diff -U0`
   // (rangesArgsFor), so the reviewer never derives them from hunks itself;
   // null for added (every line is new) and deleted (no new file) files.
-  const makeFiles = (rawFiles, rangesArgsFor) => rawFiles.map((f) => ({
-    path: f.path,
-    status: f.status,
-    localInstructions: matchLocalInstructions(instructions.locals, f.path),
-    changedLines: f.status === 'A' || f.status === 'D'
-      ? null
-      : parseHunkRanges(tryGit(project, rangesArgsFor(f)) || ''),
-  }));
+  const makeFiles = (rawFiles, rangesByPath) => rawFiles.map((f) => {
+    const locals = matchLocalInstructions(instructions.locals, f.path);
+    return {
+      path: f.path,
+      status: f.status,
+      localInstructions: locals,
+      // Global + matched local checklist items this file must be walked
+      // against; the reviewer reports `<checked>/<checklistTotal>` per file.
+      checklistTotal: globalChecklistItems + locals.reduce((n, p) => n + itemsOf(p), 0),
+      changedLines: f.status === 'A' || f.status === 'D'
+        ? null
+        : (rangesByPath.get(f.path) || ''),
+    };
+  });
   const partition = (rawFiles) => {
     const kept = [];
     const skipped = [];
@@ -515,8 +653,10 @@ function buildContext(options) {
       result.errors.push(`Cannot detect base branch for: ${branchName} (no open PR, no branch it forked from, and no origin/HEAD, main, master, develop or dev candidate found)`);
       return;
     }
-    const { kept, skipped } = partition(parseNameStatus(tryGit(project, ['diff', '--name-status', `${baseRef}...${branchRef}`]) || ''));
-    result.targets.push({
+    const range = `${baseRef}...${branchRef}`;
+    const raw = parseRawDiff(tryGit(project, [...quiet, 'diff', '--raw', range]) || '');
+    const { kept, skipped } = partition(raw);
+    registerTarget({
       kind: 'branch',
       branch: branchName,
       baseBranch: baseRef,
@@ -524,12 +664,12 @@ function buildContext(options) {
       prNumber: base.source === 'pr' ? base.prNumber : null,
       ...reportPaths(branchName),
       commands: {
-        diff: gitc(`diff ${baseRef}...${branchRef} -- ${q('<path>')}`),
+        diff: gitc(`diff ${range} -- ${q('<path>')}`),
         show: `${gitc(`show ${q(`${branchRef}:<path>`)}`)} | cat -n`,
       },
-      files: makeFiles(kept, (f) => ['diff', '-U0', `${baseRef}...${branchRef}`, '--', f.path]),
+      files: makeFiles(kept, parseDiffRangesByPath(tryGit(project, [...quiet, 'diff', '-U0', range]) || '')),
       skipped,
-    });
+    }, new Map(raw.map((f) => [f.path, f.blob])));
   };
 
   if (options.mode === 'staged') {
@@ -542,8 +682,9 @@ function buildContext(options) {
     if (tryGit(project, ['add', '.']) === null) {
       result.warnings.push('Could not run `git add .`; the staged review covers only changes already in the index.');
     }
-    const { kept, skipped } = partition(parseNameStatus(tryGit(project, ['diff', '--cached', '--name-status']) || ''));
-    result.targets.push({
+    const raw = parseRawDiff(tryGit(project, [...quiet, 'diff', '--cached', '--raw']) || '');
+    const { kept, skipped } = partition(raw);
+    registerTarget({
       kind: 'staged',
       branch: branchName,
       // No base: staged reviews the uncommitted changes themselves (the index
@@ -556,9 +697,9 @@ function buildContext(options) {
         diff: gitc(`diff --cached -- ${q('<path>')}`),
         show: `${gitc(`show ${q(':<path>')}`)} | cat -n`,
       },
-      files: makeFiles(kept, (f) => ['diff', '-U0', '--cached', '--', f.path]),
+      files: makeFiles(kept, parseDiffRangesByPath(tryGit(project, [...quiet, 'diff', '-U0', '--cached']) || '')),
       skipped,
-    });
+    }, new Map(raw.map((f) => [f.path, f.blob])));
   } else if (options.mode === 'branches') {
     const names = [...new Set(String(options.branches || '').split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
     if (names.length === 0) result.errors.push('No branches given (expected --branches="a,b;c").');
@@ -576,7 +717,7 @@ function buildContext(options) {
     } else {
       const branchName = tryGit(project, ['rev-parse', '--abbrev-ref', 'HEAD']) || 'HEAD';
       const { kept, skipped } = partition(listFolderFiles(project, abs).map((p) => ({ path: p, status: 'A' })));
-      result.targets.push({
+      registerTarget({
         kind: 'folder',
         branch: branchName,
         baseBranch: null,
@@ -588,9 +729,9 @@ function buildContext(options) {
           diff: null,
           show: `cat ${q(`${project.replace(/\\/g, '/')}/<path>`)} | cat -n`,
         },
-        files: makeFiles(kept, () => []),
+        files: makeFiles(kept, new Map()),
         skipped,
-      });
+      }, null);
     }
   } else {
     const branchName = tryGit(project, ['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -606,7 +747,11 @@ function buildContext(options) {
   for (const target of result.targets) {
     const noLocal = target.files.filter((f) => f.localInstructions.length === 0).map((f) => f.path);
     if (noLocal.length > 0) {
-      result.warnings.push(`[${target.branch}] Files matching no local instruction (global checklists still apply): ${noLocal.join(', ')}`);
+      // Capped: a 200-file diff would otherwise spend thousands of tokens on one
+      // warning line the reviewer has to read and translate.
+      const shown = noLocal.slice(0, 10).join(', ');
+      const rest = noLocal.length > 10 ? `, (+${noLocal.length - 10} more)` : '';
+      result.warnings.push(`[${target.branch}] ${noLocal.length} file(s) match no local instruction (global checklists still apply): ${shown}${rest}`);
     }
   }
 
@@ -626,13 +771,25 @@ function buildContext(options) {
 
   if (result.targets.length > 0) {
     fs.mkdirSync(reportsDir, { recursive: true });
-    // The project's own `.claude/doh/` is the user's to manage (and is shared
-    // with other artifacts) — never prune it; only cap the skill-local folder.
     if (useProjectDoh) ensureDohGitignore(reportsDir);
-    else pruneReports(reportsDir);
+    // Pruning runs in both locations: the project's `.claude/doh/` is shared
+    // with other artifacts, but only run-stamped report names are ever counted
+    // or deleted (see pruneReports), so nothing else there is at risk.
+    pruneReports(reportsDir);
     // After the pruning, so an emptied branch folder is not removed right after
     // being created for this run.
-    for (const target of result.targets) fs.mkdirSync(path.dirname(target.reportPath), { recursive: true });
+    for (const target of result.targets) {
+      fs.mkdirSync(path.dirname(target.reportPath), { recursive: true });
+      const blobs = pendingSnapshots.get(target);
+      if (!blobs) continue;
+      try {
+        fs.writeFileSync(snapshotPathOf(target), JSON.stringify({
+          at: now.toISOString(),
+          reportPath: target.reportPath,
+          files: Object.fromEntries(blobs),
+        }));
+      } catch {}
+    }
   }
   return result;
 }
@@ -648,6 +805,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseNameStatus, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

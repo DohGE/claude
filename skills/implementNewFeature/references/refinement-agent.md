@@ -7,7 +7,10 @@ Session dir: `{{SESSION}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT
 
 ## Inputs
 
-Read first: `{{SESSION}}/requirements.md`, every image in `{{SESSION}}/mockups/` (Read tool renders them), every file in `{{SESSION}}/contracts/`.
+Read first: `{{SESSION}}/requirements.md`, every image in `{{SESSION}}/mockups/` (Read tool renders them), every file in `{{SESSION}}/contracts/`, and every file in `{{SESSION}}/hints/`.
+The `hints/` files and the "Additional materials" note in requirements.md are the user's guidance,
+not scope: mine them for what to imitate, reuse or avoid, let them shape your questions and the
+decisions you record — never copy them into spec.md as if they were requirements.
 Then explore `{{PROJECT}}` (structure, conventions, existing modules the feature touches).
 
 ## Question protocol (MANDATORY)
@@ -30,6 +33,7 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
 5. Apply the `superpowers:writing-plans` methodology to write `{{SESSION}}/plan.md`: bite-sized TDD tasks with exact paths into `{{PROJECT}}`, complete code, run commands, no placeholders. NO git commit steps — the pipeline never commits.
 6. Write `{{SESSION}}/checklist.md` — every verifiable requirement from spec.md, one line each:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`
+   (step 5 ticks these and appends `| evidence: <what proves it>` to each one it ticks)
 7. Report progress at MILESTONES only — after reading inputs, after exploring the project, and
    after each artifact is written:
    `curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":2,\"progress\":<N>,\"currentOperation\":\"<phase>\",\"logEntry\":\"<event>\"}"`

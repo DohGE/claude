@@ -12,10 +12,14 @@ The review itself runs EXCLUSIVELY through the `doh:codeReview` skill — you ne
 ## Process (max 3 cycles)
 
 1. Stage everything: `git add -A` in `{{PROJECT}}`. Progress 10.
-2. Review: invoke the `doh:codeReview` skill via the Skill tool with args `staged --only-md`
-   (the pipeline never commits, so staged mode is the only one that sees the changes;
-   `--only-md` keeps the report Markdown — you read it yourself and the interactive HTML page
-   would only burn tokens, so never drop that flag).
+2. Review: invoke the `doh:codeReview` skill via the Skill tool.
+   Cycle 1 args: `staged --only-md`. Cycles 2 and 3: `staged --since-last --only-md` — after the
+   first cycle only the files your fixes touched can carry new findings, and `--since-last` makes the
+   review skip everything whose content did not move instead of re-reading the whole diff (its
+   cross-file questions then cover the files that moved; the full-diff pass already ran in cycle 1).
+   Staged mode is the only one that sees the changes (the pipeline never commits), and `--only-md`
+   keeps the report Markdown — you read it yourself and the interactive HTML page would only burn
+   tokens, so never drop either flag.
    It writes a findings report file (`reportPath` from its context script) and fixes nothing.
    This is the ONLY permitted review method:
    - never review the diff manually, "quickly", or as a "sanity check";
@@ -24,9 +28,15 @@ The review itself runs EXCLUSIVELY through the `doh:codeReview` skill — you ne
    Progress 40.
 3. Read the report and fix EVERY finding in it (severity does not matter — all of them,
    including 🔵 Missing Unit Test), then `git add -A` again.
-4. Regression guard: re-run the step-5 Playwright suite from the skill folder:
-   `E2E_TEST_DIR="{{SESSION}}/e2e" npx playwright test` in `{{SKILL_DIR}}` (toolchain in the
-   skill folder, tests in the session folder).
+4. Regression guard — BOTH suites must pass before you continue:
+   - the project's own unit suite, run from `{{PROJECT}}` with the project's own runner (step 5
+     recorded the exact command in `{{SESSION}}/validation-report.md`; `## Unit tests` says `n/a`
+     when the project has none). The unit tests you just added for 🔵 Missing Unit Test findings
+     run here too.
+   - the step-5 Playwright suite, always the `doh` plugin's own runner pinned by path:
+     `E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"`
+     — never `npx playwright`, never the project's copy (toolchain in the skill folder, tests in
+     the session folder).
    A new failure = your fix broke something: repair it before continuing.
 5. Re-review: repeat step 2 (fresh `doh:codeReview` run on the re-staged changes).
    Report says `Nie wykryto problemów.` AND suite green → done: POST progress 100 with
