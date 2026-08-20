@@ -257,6 +257,8 @@ unanalyzed file is not done, regardless of diff size or session length.
     - **Problem:** <description of this single violation>
     - **Reguła:** <instruction file → checklist item, or the violated point name>
     - **Expected Result:** <correct code state + concrete implementation proposal>
+    - **PR Problem:** <ENGLISH, one short sentence: why this needs fixing>
+    - **PR Expected:** <ENGLISH, one short sentence: the expected result>
 
 - Staged header instead: `# Code Review: staged (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Folder header instead: `# Code Review: folder <target.folder> (<branch>) | <YYYY-MM-DD> <HH:mm>`.
@@ -281,8 +283,13 @@ unanalyzed file is not done, regardless of diff size or session length.
 - One finding = one such block = one rule in one file (the splitting rules are Step 3 point 3).
   Separate every block from the next with exactly one blank line, and put one blank line before AND
   after every `##` header — that is what makes each finding render as its own section.
+- `PR Problem` and `PR Expected` are the text of the pull request comment, so they are the only two
+  fields written in ENGLISH — no Polish words, ever. One short sentence each: `PR Problem` says why
+  the code needs fixing, `PR Expected` says what the result should be. No severity, no rule name, no
+  restatement of the Polish fields, no multi-sentence prose. Everything the reader needs beyond that
+  stays in the Polish fields, which never appear on the pull request.
 - The severity is a bold lead line — `<emoji> **<Severity>**` with NO leading `- ` — that opens the
-  block; the other four fields follow it as `- ` bullet lines in the order shown. Each field is its
+  block; the other six fields follow it as `- ` bullet lines in the order shown. Each field is its
   own line and never continues on the previous field's line. `**Linia:**` holds a comma-separated
   list of numbers and/or `<start>-<end>` spans — one entry per occurrence.
 - Group findings under one `## <file path>` section per file; omit files without findings.

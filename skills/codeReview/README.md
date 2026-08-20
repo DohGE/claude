@@ -119,13 +119,15 @@ The value is never logged and never passed on a command line: it reaches the req
 ## HTML report
 
 The default output is one self-contained page — inline CSS and JS, no fonts, images or CDN requests — so it opens straight from disk over `file://` and survives being copied or attached somewhere else.
-It follows the reader's light/dark theme.
+It follows the reader's light/dark theme, and a button in the top right corner of the header switches between the two by hand — the pick lands in `localStorage` under one key shared by every report, and is applied before the first paint so a remembered theme never flashes the other one.
 
 - **Code snippet** — every finding carries a collapsible view of the cited lines with three lines of context. When those lines changed, it is a side-by-side diff like GitHub's split view: the file before the change on the left under its own line numbers, after it on the right, the k-th removal facing the k-th addition inside a change block and a blank cell facing whatever has no counterpart. Each side scrolls horizontally on its own. A snippet with nothing changed in it (a folder review, or a finding on a line the diff left alone) stays a single column. A switch in the snippet header swaps between the cited lines and the whole file; the full view renders under the same rules — split diff when the file changed, single column when it did not — highlights the cited lines, scrolls inside its own box and opens on the first highlight. Files over 3000 lines are not embedded, and their switch says so.
 - **Severity filter** — one toggle chip per severity present in the report, with a count.
 - **Rule filter** — a two-level checkbox tree: instruction file, expanding to its concrete rules. Toggling the file toggles all of its rules; a partial selection shows an indeterminate parent. A finding stays visible while at least one of its rules is selected, so a finding citing two rules survives either way.
 - **Grouping** — `Pliki` (one collapsible section per file, in report order) or `Globalnie` (one flat list sorted by severity, then path); the flat list labels each finding with its file.
+- **Accepting** — `Akceptuj` collapses a finding to its head line, marks it as belonging to the pool that goes to the PR (`✓ W puli komentarzy PR`) and turns itself into `Cofnij akceptację`, which restores the previous state. The toolbar shows `Zaakceptowane: N`; the accepted ids live in `localStorage` next to the ignored ones. That pool is the only thing **Dodaj komentarze do PR** sends — nothing accepted means no comment is posted.
 - **Ignoring** — `Ukryj` hides one finding and updates every count; the toolbar shows `Zignorowane: N` and `Przywróć` brings them all back. Ignored ids are stored in `localStorage` under a key namespaced by the report's file name, so they survive a reload and never leak between reports.
+- **Context menu** — right-clicking anywhere in the report opens a one-item menu, `Przywróć ostatnio ukryte znalezisko`, which does what the toolbar's `Przywróć` does without aiming at it; the item is disabled while nothing is hidden. Escape, a click elsewhere, scrolling or resizing closes it, and Shift+right-click still opens the browser's own menu.
 - `Wyczyść filtry` re-checks every facet without touching what is ignored. Severity and rule counts are totals over everything not ignored — they react to hiding, not to filtering, and `Widoczne: X z Y` is what tracks the active filters.
 
 Report text reaches the page as JSON data and is written into the DOM with `textContent`, so a finding quoting markup can never become markup; backtick spans render as `<code>`.
@@ -138,13 +140,17 @@ Always Polish, findings only — no intros, summaries or closing remarks.
 Header line: `# Code Review: <branch> → <base> | <YYYY-MM-DD> <HH:mm>` (staged variant: `# Code Review: staged (<branch>) | ...`).
 One `## <file path>` section per file with findings.
 Each finding is one block describing exactly one violation of one rule at one location — several violations never share a block.
-The severity is a bold lead line; the other four fields follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
+The severity is a bold lead line; the other six fields follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
 
     🔴 **High**
     - **Linia:** 87
     - **Problem:** Brak obsługi błędu HTTP w subskrypcji
     - **Reguła:** instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"
     - **Expected Result:** `catchError` z mapowaniem na stan błędu komponentu
+    - **PR Problem:** An HTTP failure here leaves the component stuck on the loading state.
+    - **PR Expected:** Handle the error with `catchError` and map it to the component error state.
+
+`PR Problem` and `PR Expected` are the only English fields — one short sentence each, written for the PR comment and used nowhere else on the page.
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
 Line numbers refer to the file's real content (read off the line-numbered `git show … | cat -n` output), never to diff hunk numbering.
@@ -169,10 +175,12 @@ It accepts the severity lead line with and without a leading `- ` (reports writt
 `scripts/github.cjs` (Node, no dependencies) is the only place that talks to GitHub: the owner/repo read off the remote URL, the token lookup, and the three calls the skill needs (find the open PR, read its diff, post the review).
 `fetch` is asynchronous while every script around it is not, so the request runs in a child copy of that file — the parent hands it a JSON request on stdin and reads the JSON response off stdout, which keeps the calling scripts synchronous.
 
-`scripts/post-pr-comments.cjs` (Node, no dependencies) posts the findings of a rendered HTML report as a PR review.
-The report page cannot do it itself — a `file://` page has no GitHub credentials — so when an open PR exists for the reviewed branch the renderer adds a **Dodaj komentarze do PR #n** button that hands over the ready command, carrying the findings hidden in that browser as `--exclude=<ids>`.
+`scripts/post-pr-comments.cjs` (Node, no dependencies) posts the *accepted* findings of a rendered HTML report as a PR review.
+The report page cannot do it itself — a `file://` page has no GitHub credentials — so when an open PR exists for the reviewed branch the renderer adds a **Dodaj komentarze do PR #n** button that hands over the ready command, carrying the accepted pool of that browser as `--include=<ids>` — those findings, and only those, are posted.
 Finding the PR needs no credentials on a public repository; a private one needs a token for the lookup as well, and posting the review always does (see [GitHub access](#github-access)). When the lookup cannot run, the reason is printed to stderr *and* shown on the report page itself, so a missing button is never left unexplained.
-Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> [--project=<repo root>] [--pr=<number>] [--exclude=<ids>] [--dry-run]`.
+Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> --include=<ids> [--project=<repo root>] [--pr=<number>] [--dry-run]`.
+`--include` is the accepted pool and the only thing that ever reaches GitHub: a finding nobody accepted is never posted, and a command without `--include` refuses to run. `--all` is the deliberate way past that for a command run by hand with no page to accept anything in, and only then does `--exclude=<ids>` mean anything.
+A comment body carries only the finding's English `PR Problem` and `PR Expected` wording (`**Expected result:** …`) — no severity, no violated rule, no Polish; the Polish report keeps all of that for the reader.
 Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments.
 
 Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs`
