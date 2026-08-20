@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// Posts the findings of a rendered codeReview HTML report as a PR review.
+// Posts the accepted findings of a rendered codeReview HTML report as a PR
+// review - accepted meaning the ids `--include` names, which is the pool the
+// reader assembled with the report page's `Akceptuj` buttons.
 // The report page cannot talk to GitHub itself (a file:// page has no
 // credentials), so the button there only assembles the command that runs this
 // script - which reads the very same payload the page renders from.
@@ -15,10 +17,14 @@ const { parseLineRanges } = require('./render-report.cjs');
 const maxCommentsPerReview = 50;
 
 function parseArgs(argv) {
-  const args = { report: '', project: '', pr: '', exclude: [], dryRun: false };
+  const args = { report: '', project: '', pr: '', include: [], exclude: [], all: false, dryRun: false };
   for (const arg of argv) {
     if (arg === '--dry-run') {
       args.dryRun = true;
+      continue;
+    }
+    if (arg === '--all') {
+      args.all = true;
       continue;
     }
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -26,6 +32,7 @@ function parseArgs(argv) {
     if (m[1] === 'report') args.report = m[2];
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'pr') args.pr = m[2];
+    else if (m[1] === 'include') args.include = m[2].split(',').map((x) => x.trim()).filter(Boolean);
     else if (m[1] === 'exclude') args.exclude = m[2].split(',').map((s) => s.trim()).filter(Boolean);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.html").');
@@ -69,13 +76,14 @@ function commentableLines(diffText) {
   return byPath;
 }
 
-function renderBody(finding, severityLabel) {
+// The report is Polish, the pull request is not: a comment carries only the
+// English `PR Problem` / `PR Expected` wording of the finding - no severity, no
+// violated rule, no long description.
+function renderBody(finding) {
   return [
-    `${severityLabel} — ${finding.problem}`,
+    finding.prProblem,
     '',
-    `**Reguła:** ${finding.rule}`,
-    '',
-    `**Oczekiwany stan:** ${finding.expected}`,
+    `**Expected result:** ${finding.prExpected}`,
   ].join('\n');
 }
 
@@ -96,12 +104,12 @@ function anchorFor(finding, lines) {
   return null;
 }
 
-function buildComments(findings, commentable, severityLabels) {
+function buildComments(findings, commentable) {
   const comments = [];
   const leftovers = [];
   for (const finding of findings) {
     const anchor = anchorFor(finding, commentable.get(finding.path));
-    const body = renderBody(finding, severityLabels[finding.severity] || finding.severity);
+    const body = renderBody(finding);
     if (!anchor) {
       leftovers.push(finding);
       continue;
@@ -111,16 +119,16 @@ function buildComments(findings, commentable, severityLabels) {
   return { comments, leftovers };
 }
 
-function summaryBody(payload, comments, leftovers, severityLabels) {
+function summaryBody(payload, comments, leftovers) {
   const head = [
     `## Code review — ${payload.title}`,
     '',
-    `Komentarzy w kodzie: **${comments.length}**.`,
+    `Inline comments: **${comments.length}**.`,
   ];
   if (!leftovers.length) return head.join('\n');
   head.push(
     '',
-    `Poniższe znaleziska dotyczą linii spoza diffu PR-a, więc nie dało się ich przypiąć do kodu (**${leftovers.length}**):`,
+    `These findings point at lines outside the PR diff, so they could not be pinned to the code (**${leftovers.length}**):`,
     '',
   );
   let lastPath = '';
@@ -129,7 +137,7 @@ function summaryBody(payload, comments, leftovers, severityLabels) {
       head.push('', `**${finding.path}**`);
       lastPath = finding.path;
     }
-    head.push(`- \`${finding.lines}\` ${severityLabels[finding.severity] || finding.severity} — ${finding.problem}`);
+    head.push(`- \`${finding.lines}\` ${finding.prProblem} **Expected result:** ${finding.prExpected}`);
   }
   return head.join('\n');
 }
@@ -159,18 +167,25 @@ function main(argv, api = github) {
     return 1;
   }
 
-  const severityLabels = {};
-  (payload.severities || []).forEach((s) => { severityLabels[s.key] = `${s.emoji} **${s.label}**`; });
+  // `--include` is the pool accepted in the report page, and it is the only
+  // thing that ever reaches the PR: nothing is posted for a finding the reader
+  // did not accept. `--all` is the deliberate way past that, for a command run
+  // by hand with no page to accept anything in.
+  if (!args.include.length && !args.all) {
+    process.stderr.write('Brak zaakceptowanych znalezisk (podaj --include=<id,...> albo --all).\n');
+    return 1;
+  }
+  const included = args.all ? null : new Set(args.include);
   const excluded = new Set(args.exclude);
   const findings = [];
   for (const file of payload.files || []) {
     for (const finding of file.findings || []) {
-      if (excluded.has(finding.id)) continue;
+      if (included ? !included.has(finding.id) : excluded.has(finding.id)) continue;
       findings.push(Object.assign({ path: file.path }, finding));
     }
   }
   if (!findings.length) {
-    process.stderr.write('Brak znalezisk do wysłania (wszystkie ukryte?).\n');
+    process.stderr.write('Brak znalezisk do wysłania (żadne nie zostało zaakceptowane?).\n');
     return 1;
   }
 
@@ -192,12 +207,12 @@ function main(argv, api = github) {
     return 1;
   }
 
-  const { comments, leftovers } = buildComments(findings, commentableLines(diff), severityLabels);
+  const { comments, leftovers } = buildComments(findings, commentableLines(diff));
   const batches = chunk(comments, maxCommentsPerReview);
   const bodies = batches.length ? batches.map((_, i) => (i === 0
-    ? summaryBody(payload, comments, leftovers, severityLabels)
-    : `Code review — ciąg dalszy (${i + 1}/${batches.length}).`))
-    : [summaryBody(payload, comments, leftovers, severityLabels)];
+    ? summaryBody(payload, comments, leftovers)
+    : `Code review — continued (${i + 1}/${batches.length}).`))
+    : [summaryBody(payload, comments, leftovers)];
 
   if (args.dryRun) {
     process.stdout.write(`${repo} PR #${number}: ${comments.length} komentarzy w kodzie, ${leftovers.length} w podsumowaniu, ${batches.length || 1} review.\n`);

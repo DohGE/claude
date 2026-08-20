@@ -27,7 +27,11 @@ const severityByEmoji = new Map(severities.map((s) => [s.emoji, s]));
 const emptyBodies = ['Nie wykryto problemów.', 'Nie wykryto zmian do analizy.'];
 const skippedPrefix = 'Pominięto pliki wygenerowane/binarne:';
 const noFileLabel = '(bez pliku)';
-const fields = { 'Linia': 'lines', 'Problem': 'problem', 'Reguła': 'rule', 'Expected Result': 'expected' };
+const fields = {
+  'Linia': 'lines', 'Problem': 'problem', 'Reguła': 'rule', 'Expected Result': 'expected',
+  // English wording used only for the PR comment - the report itself stays Polish.
+  'PR Problem': 'prProblem', 'PR Expected': 'prExpected',
+};
 
 // The severity lead line is accepted with and without a leading `- `: the
 // no-dash form is the current Step 4 rule, the dashed form is what every report
@@ -35,7 +39,7 @@ const fields = { 'Linia': 'lines', 'Problem': 'problem', 'Reguła': 'rule', 'Exp
 const reHeader = /^#\s+(.+?)\s+\|\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*$/;
 const reSection = /^##\s+(.+?)\s*$/;
 const reSeverity = /^(?:-\s+)?(⚪|🟡|🔴|🟤|🔵)\uFE0F?\s*\*\*(.+?)\*\*\s*$/;
-const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result):\*\*\s?(.*)$/;
+const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result|PR Problem|PR Expected):\*\*\s?(.*)$/;
 // Per-file coverage proof written by the reviewer: how many checklist items of
 // that file's rulebook actually got a verdict, against how many exist.
 const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(\d+)\s*\/\s*(\d+)\s*-->$/;
@@ -226,7 +230,7 @@ function parseReport(markdown) {
       }
       finding = {
         severity: severityByEmoji.get(severityMatch[1]).key,
-        lines: '', problem: '', rule: '', expected: '',
+        lines: '', problem: '', rule: '', expected: '', prProblem: '', prExpected: '',
       };
       continue;
     }
@@ -595,12 +599,23 @@ function buildPayload(report, reportName) {
         problem: finding.problem,
         rule: finding.rule,
         expected: finding.expected,
+        prProblem: finding.prProblem || '',
+        prExpected: finding.prExpected || '',
         snippet: finding.snippet || null,
         tagKeys: finding.tags.map((tag) => keyOf.get(`${tag.file}\n${tag.rule}`)),
       })),
     })),
   };
 }
+
+// One dark palette, used by the media query and by the toggle alike.
+const darkTokens = `
+  --bg:#141619;--panel:#1c1f24;--panel-2:#22262c;--text:#e5e8ec;--muted:#98a1ac;--border:#2f343b;
+  --accent:#6ea8fe;--code-bg:#282d34;--shadow:none;
+  --sev-critical:#c58f59;--sev-high:#f0736a;--sev-medium:#e0b341;--sev-low:#98a2b0;--sev-missing-unit-test:#6ea8fe;
+  --snip-bg:#181b1f;--snip-gutter:#1f2329;--hit-bg:#3a3320;--hit-gutter:#463c22;
+  --add-bg:#12261e;--add-fg:#3fb950;--del-bg:#2d1618;--del-fg:#f85149;
+  --accepted-bg:#16241b;--accepted-line:#3fb950`;
 
 const pageCss = `
 *,*::before,*::after{box-sizing:border-box}
@@ -609,13 +624,13 @@ const pageCss = `
   --accent:#2563eb;--code-bg:#eceff3;--shadow:0 1px 2px rgba(16,22,32,.06);
   --sev-critical:#8a5a2b;--sev-high:#c0392b;--sev-medium:#b0761a;--sev-low:#78808d;--sev-missing-unit-test:#2563eb;
   --snip-bg:#fbfcfd;--snip-gutter:#f1f3f6;--hit-bg:#fff6d9;--hit-gutter:#ffeeb8;
-  --add-bg:#e6ffec;--add-fg:#1a7f37;--del-bg:#ffebe9;--del-fg:#cf222e}
-@media (prefers-color-scheme:dark){:root{
-  --bg:#141619;--panel:#1c1f24;--panel-2:#22262c;--text:#e5e8ec;--muted:#98a1ac;--border:#2f343b;
-  --accent:#6ea8fe;--code-bg:#282d34;--shadow:none;
-  --sev-critical:#c58f59;--sev-high:#f0736a;--sev-medium:#e0b341;--sev-low:#98a2b0;--sev-missing-unit-test:#6ea8fe;
-  --snip-bg:#181b1f;--snip-gutter:#1f2329;--hit-bg:#3a3320;--hit-gutter:#463c22;
-  --add-bg:#12261e;--add-fg:#3fb950;--del-bg:#2d1618;--del-fg:#f85149}}
+  --add-bg:#e6ffec;--add-fg:#1a7f37;--del-bg:#ffebe9;--del-fg:#cf222e;
+  --accepted-bg:#eef8f0;--accepted-line:#1a7f37}
+/* The system preference rules until the reader picks a side; that pick is
+   \`data-theme\` on the root and it wins in both directions. */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){${darkTokens}}}
+:root[data-theme="dark"]{color-scheme:dark;${darkTokens}}
+:root[data-theme="light"]{color-scheme:light}
 body{margin:0;background:var(--bg);color:var(--text);
   font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
 .wrap{max-width:1600px;margin:0 auto;padding:0 20px 72px}
@@ -625,8 +640,18 @@ code{font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
   background:var(--code-bg);border-radius:4px;padding:.1em .35em;overflow-wrap:anywhere}
 button{font:inherit;color:inherit}
 
-.head{padding:26px 0 14px}
-.head h1{margin:0;font-size:20px;font-weight:650;letter-spacing:-.01em;overflow-wrap:anywhere}
+.head{position:relative;padding:26px 0 14px}
+.head h1{margin:0;font-size:20px;font-weight:650;letter-spacing:-.01em;overflow-wrap:anywhere;padding-right:150px}
+/* Top right of the content column, out of the title's way at any width. */
+.theme-toggle{position:absolute;top:24px;right:0;display:inline-flex;align-items:center;gap:6px}
+
+.ctxmenu{position:fixed;z-index:50;min-width:270px;padding:4px;border:1px solid var(--border);
+  border-radius:9px;background:var(--panel);box-shadow:var(--shadow)}
+.ctxmenu[hidden]{display:none}
+.ctxmenu button{display:block;width:100%;padding:7px 10px;border:0;border-radius:6px;
+  background:none;text-align:left;font-size:13px;cursor:pointer}
+.ctxmenu button:hover:not(:disabled),.ctxmenu button:focus-visible{background:var(--panel-2)}
+.ctxmenu button:disabled{color:var(--muted);cursor:default}
 .head .meta{margin-top:6px;color:var(--muted);font-size:13.5px}
 .head .skipped{margin-top:8px;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
 /* Louder than .skipped: this one is not a note about the review, it is the
@@ -737,8 +762,16 @@ button{font:inherit;color:inherit}
 .f-lines{display:flex;flex-wrap:wrap;gap:4px}
 .f-path{width:100%;margin-top:2px;color:var(--muted);overflow-wrap:anywhere;
   font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12px}
-.f-hide{margin-left:auto}
+.f-hide{margin-left:0}
+.f-accept{margin-left:auto}
 .f-problem{margin-top:8px;overflow-wrap:anywhere}
+/* Accepted = in the pool that goes to the PR: collapsed to its head line and
+   marked well enough to be spotted while scrolling past the rest. */
+.finding.accepted{background:var(--accepted-bg);border-color:var(--accepted-line);box-shadow:none}
+.finding.accepted .f-body{display:none}
+.accepted-count{font-weight:650;color:var(--accepted-line)}
+.f-accepted-tag{font-size:12px;font-weight:650;color:var(--accepted-line)}
+.finding.accepted .f-accept{border-color:var(--accepted-line);color:var(--accepted-line)}
 
 .snipbox{margin-top:10px;border:1px solid var(--border);border-radius:8px;background:var(--snip-bg);overflow:hidden}
 .snipbox>summary{cursor:pointer;list-style:none;padding:5px 11px;font-size:12.5px;color:var(--muted);
@@ -824,6 +857,33 @@ const pageJs = `
     return frag;
   }
 
+  // The theme is one attribute on the root element. The pick is remembered for
+  // every report, not just this one, and it is wired up before the empty-state
+  // exit below so the toggle works on a report with no findings too.
+  var themeKey = 'doh-code-review:theme';
+  var themeToggle = byId('theme-toggle');
+  function storedTheme() {
+    try { var v = localStorage.getItem(themeKey); return v === 'dark' || v === 'light' ? v : ''; } catch (e) { return ''; }
+  }
+  function systemTheme() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light';
+  }
+  function currentTheme() {
+    return document.documentElement.getAttribute('data-theme') || storedTheme() || systemTheme();
+  }
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    themeToggle.textContent = theme === 'dark' ? '☀️ Tryb jasny' : '🌙 Tryb ciemny';
+    themeToggle.title = theme === 'dark' ? 'Przełącz na tryb jasny' : 'Przełącz na tryb ciemny';
+  }
+  applyTheme(currentTheme());
+  themeToggle.addEventListener('click', function () {
+    var next = currentTheme() === 'dark' ? 'light' : 'dark';
+    // Private mode refuses storage; the switch still works for this session.
+    try { localStorage.setItem(themeKey, next); } catch (e) {}
+    applyTheme(next);
+  });
+
   if (reportData.emptyState) { host.appendChild(note(reportData.emptyState)); return; }
 
   var severityByKey = {};
@@ -849,6 +909,14 @@ const pageJs = `
   function saveIgnored() {
     try { localStorage.setItem(storeKey, JSON.stringify(Array.from(state.ignored))); } catch (e) {}
   }
+  // The accepted pool - the findings that, and only those, become PR comments.
+  var acceptedKey = storeKey + ':accepted';
+  function loadAccepted() {
+    try { return new Set(JSON.parse(localStorage.getItem(acceptedKey)) || []); } catch (e) { return new Set(); }
+  }
+  function saveAccepted() {
+    try { localStorage.setItem(acceptedKey, JSON.stringify(Array.from(state.accepted))); } catch (e) {}
+  }
 
   var state = {
     // Severity chips include instead of exclude: an empty set means "no severity
@@ -856,7 +924,8 @@ const pageJs = `
     selectedSeverities: new Set(),
     selectedRules: new Set(),
     group: 'files',
-    ignored: loadIgnored()
+    ignored: loadIgnored(),
+    accepted: loadAccepted()
   };
   reportData.ruleGroups.forEach(function (g) { g.rules.forEach(function (r) { state.selectedRules.add(r.key); }); });
 
@@ -1030,28 +1099,64 @@ const pageJs = `
 
   // A Set keeps insertion order and so does the stored array, which makes the
   // last entry the last thing hidden - even after a reload.
-  byId('restore').addEventListener('click', function () {
+  function restoreLast() {
     var hidden = Array.from(state.ignored);
     if (!hidden.length) return;
     state.ignored['delete'](hidden[hidden.length - 1]);
     saveIgnored();
     refresh();
+  }
+  byId('restore').addEventListener('click', restoreLast);
+
+  // Undoing a hide is the one thing worth reaching for far from the toolbar -
+  // right-clicking anywhere in the report offers it where the reader is
+  // already looking. Shift+right-click still opens the browser's own menu.
+  var ctxMenu = byId('ctxmenu');
+  var ctxRestore = byId('ctx-restore');
+  function closeCtxMenu() { ctxMenu.hidden = true; }
+  function openCtxMenu(x, y) {
+    ctxRestore.disabled = state.ignored.size === 0;
+    ctxMenu.hidden = false;
+    // Measured while visible, so a click near an edge cannot push the menu off
+    // screen.
+    var rect = ctxMenu.getBoundingClientRect();
+    ctxMenu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 4)) + 'px';
+    ctxMenu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 4)) + 'px';
+    if (!ctxRestore.disabled) ctxRestore.focus();
+  }
+  document.addEventListener('contextmenu', function (event) {
+    if (event.shiftKey) return;
+    event.preventDefault();
+    openCtxMenu(event.clientX, event.clientY);
   });
+  ctxRestore.addEventListener('click', function () {
+    restoreLast();
+    closeCtxMenu();
+  });
+  document.addEventListener('click', closeCtxMenu);
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeCtxMenu(); });
+  document.addEventListener('scroll', closeCtxMenu, true);
+  window.addEventListener('resize', closeCtxMenu);
+  window.addEventListener('blur', closeCtxMenu);
 
   // The page cannot post to GitHub itself, so the button hands over the exact
-  // command that does - carrying the ids hidden in this browser as exclusions.
+  // command that does - carrying the accepted pool as the list of ids to post.
   if (byId('pr-comments')) {
     byId('pr-comments').addEventListener('click', function () {
-      var hiddenIds = Array.from(state.ignored);
-      var command = reportData.postCommand + (hiddenIds.length ? ' --exclude="' + hiddenIds.join(',') + '"' : '');
+      var acceptedIds = allFindings.filter(function (f) { return state.accepted.has(f.id); })
+        .map(function (f) { return f.id; });
+      var command = reportData.postCommand + ' --include="' + acceptedIds.join(',') + '"';
       var box = byId('cmdbox');
       box.textContent = '';
       box.hidden = false;
 
       var info = el('p', 'cmd-info');
-      info.textContent = 'Do PR #' + reportData.pr.number + ' trafi ' + (allFindings.length - hiddenIds.length)
-        + ' z ' + allFindings.length + ' znalezisk — pomijane są tylko te ukryte przyciskiem „Ukryj",'
-        + ' filtry widoku nie mają na to wpływu. Uruchom w terminalu:';
+      info.textContent = acceptedIds.length
+        ? 'Do PR #' + reportData.pr.number + ' trafi ' + acceptedIds.length + ' z ' + allFindings.length
+          + ' znalezisk — dokładnie te zaakceptowane przyciskiem „Akceptuj",'
+          + ' filtry widoku nie mają na to wpływu. Uruchom w terminalu:'
+        : 'Żadne znalezisko nie zostało zaakceptowane, więc do PR #' + reportData.pr.number
+          + ' nie trafi żaden komentarz. Zaakceptuj wybrane znaleziska przyciskiem „Akceptuj".';
       var code = el('pre', 'cmd');
       code.textContent = command;
       var actions = el('div', 'cmd-actions');
@@ -1072,8 +1177,12 @@ const pageJs = `
       actions.appendChild(copy);
       actions.appendChild(link);
       box.appendChild(info);
-      box.appendChild(code);
-      box.appendChild(actions);
+      // With an empty pool there is nothing to run, so the command is not
+      // offered at all - only the note saying why.
+      if (acceptedIds.length) {
+        box.appendChild(code);
+        box.appendChild(actions);
+      }
     });
   }
 
@@ -1410,13 +1519,39 @@ const pageJs = `
     });
     head.appendChild(lines);
 
+    var isAccepted = state.accepted.has(f.id);
+    if (isAccepted) {
+      node.classList.add('accepted');
+      var tag = el('span', 'f-accepted-tag');
+      tag.textContent = '✓ W puli komentarzy PR';
+      head.appendChild(tag);
+    }
+
+    var accept = el('button', 'act f-accept');
+    accept.type = 'button';
+    accept.textContent = isAccepted ? 'Cofnij akceptację' : 'Akceptuj';
+    accept.title = isAccepted
+      ? 'Usuń to znalezisko z puli komentarzy wysyłanych do PR-a'
+      : 'Zwiń to znalezisko i dodaj je do puli komentarzy wysyłanych do PR-a';
+    accept.setAttribute('aria-pressed', isAccepted ? 'true' : 'false');
+    accept.addEventListener('click', function () {
+      if (isAccepted) state.accepted['delete'](f.id); else state.accepted.add(f.id);
+      saveAccepted();
+      refresh();
+    });
+    head.appendChild(accept);
+
     var hide = el('button', 'act f-hide');
     hide.type = 'button';
     hide.textContent = 'Ukryj';
     hide.title = 'Ukryj to znalezisko';
     hide.addEventListener('click', function () {
       state.ignored.add(f.id);
+      // A hidden finding cannot stay in the pool: nothing on the page would
+      // show that it is still on its way to the PR.
+      state.accepted['delete'](f.id);
       saveIgnored();
+      saveAccepted();
       refresh();
     });
     head.appendChild(hide);
@@ -1428,9 +1563,12 @@ const pageJs = `
     }
     node.appendChild(head);
 
+    // Everything below the head line lives in one wrapper, so accepting a
+    // finding collapses it to that line with a single class.
+    var body = el('div', 'f-body');
     var problem = el('div', 'f-problem');
     problem.appendChild(rich(f.problem));
-    node.appendChild(problem);
+    body.appendChild(problem);
 
     var grid = el('dl', 'f-grid');
     [['Reguła', f.rule], ['Oczekiwany stan', f.expected]].forEach(function (pair) {
@@ -1441,8 +1579,9 @@ const pageJs = `
       grid.appendChild(dt);
       grid.appendChild(dd);
     });
-    node.appendChild(grid);
-    if (f.snippet && f.snippet.hunks.length) node.appendChild(snippet(f, color, reportData.files[f.fileIndex]));
+    body.appendChild(grid);
+    if (f.snippet && f.snippet.hunks.length) body.appendChild(snippet(f, color, reportData.files[f.fileIndex]));
+    node.appendChild(body);
     return node;
   }
 
@@ -1518,6 +1657,7 @@ const pageJs = `
       : 'wybrane ' + selected + ' z ' + allRules;
     var ignored = state.ignored.size;
     byId('ignored-count').textContent = 'Zignorowane: ' + ignored;
+    byId('accepted-count').textContent = 'Zaakceptowane: ' + state.accepted.size;
     byId('restore').disabled = ignored === 0;
     byId('restore-all').disabled = ignored === 0;
     renderList(counts);
@@ -1577,6 +1717,7 @@ function renderHtml(report, reportName) {
       <div class="row status">
         <span id="visible-count"></span>
         <span class="grow"></span>
+        <span id="accepted-count" class="accepted-count"></span>
         <span id="ignored-count"></span>
         <button type="button" class="act" id="restore" title="Przywróć ostatnio ukryte znalezisko" disabled>Przywróć</button>
         <button type="button" class="act" id="restore-all" disabled>Przywróć wszystkie</button>
@@ -1584,6 +1725,9 @@ function renderHtml(report, reportName) {
       </div>
       <div class="cmdbox" id="cmdbox" hidden></div>
     </section>
+    <div class="ctxmenu" id="ctxmenu" role="menu" hidden>
+      <button type="button" role="menuitem" id="ctx-restore">Przywróć ostatnio ukryte znalezisko</button>
+    </div>
 `;
 
   const sidebar = report.emptyState ? '' : `
@@ -1602,10 +1746,13 @@ function renderHtml(report, reportName) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(report.title || 'Code Review')}</title>
 <style>${pageCss}</style>
+<script>/* Before the first paint, so a remembered theme never flashes the other one. */
+try{var t=localStorage.getItem('doh-code-review:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
 </head>
 <body>
   <div class="wrap">
     <header class="head">
+      <button type="button" class="act theme-toggle" id="theme-toggle">Tryb ciemny</button>
       <h1>${escapeHtml(report.title || 'Code Review')}</h1>
       <p class="meta">${meta}</p>${skipped}${prWarning}
     </header>

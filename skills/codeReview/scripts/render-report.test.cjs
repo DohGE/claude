@@ -47,6 +47,8 @@ function findingOf(overrides = {}) {
     problem: 'Coś.',
     rule: 'general.md → coś',
     expected: 'Naprawić.',
+    prProblem: 'Something is wrong.',
+    prExpected: 'Fix it.',
     ...overrides,
   };
   return [
@@ -55,6 +57,8 @@ function findingOf(overrides = {}) {
     `- **Problem:** ${finding.problem}`,
     `- **Reguła:** ${finding.rule}`,
     `- **Expected Result:** ${finding.expected}`,
+    `- **PR Problem:** ${finding.prProblem}`,
+    `- **PR Expected:** ${finding.prExpected}`,
     '',
   ];
 }
@@ -71,12 +75,16 @@ const REPORT = [
   '- **Problem:** Klucz API (`sk_live_...`) zaszyty na stałe.',
   '- **Reguła:** security.md → brak sekretów w diffie (API keys/tokens)',
   '- **Expected Result:** Usunąć sekret z kodu.',
+  '- **PR Problem:** A live API key is committed in the source.',
+  '- **PR Expected:** Read the key from configuration and revoke the leaked one.',
   '',
   '🔴 **High**',
   '- **Linia:** 3, 23',
   '- **Problem:** Serwis HTTP wstrzykuje `Store`.',
   '- **Reguła:** http-service.md → forbidden: injecting the store',
   '- **Expected Result:** Usunąć zależność `Store`.',
+  '- **PR Problem:** An HTTP service reaching for the store mixes two layers.',
+  '- **PR Expected:** Keep the service free of store dependencies.',
   '',
   '## src/app/user.component.html',
   '',
@@ -85,18 +93,24 @@ const REPORT = [
   '- **Problem:** `(click)` na `<div>` bez `role`.',
   '- **Reguła:** component-template.md → interakcje na elementach natywnych; general.md → ARIA wiązane do sygnału',
   '- **Expected Result:** Użyć `<button>`.',
+  '- **PR Problem:** A click handler on a div is unreachable by keyboard.',
+  '- **PR Expected:** Use a native button element.',
   '',
   '⚪ **Low**',
   '- **Linia:** 2',
   '- **Problem:** Tekst zaszyty na stałe.',
   '- **Reguła:** general.md → każdy tekst przez klucz i18n',
   '- **Expected Result:** Klucz i18n przez `| translate`.',
+  '- **PR Problem:** The text is hardcoded and cannot be translated.',
+  '- **PR Expected:** Move the text to an i18n key used with the translate pipe.',
   '',
   '🔵 **Missing Unit Test**',
   '- **Linia:** 1',
   '- **Problem:** Brak speca komponentu.',
   '- **Reguła:** test-coverage.md → zmieniony plik ma matching spec',
   '- **Expected Result:** Dodać `tests/user.component.spec.ts`.',
+  '- **PR Problem:** The changed component has no spec covering it.',
+  '- **PR Expected:** Add the matching component spec.',
   '',
 ].join('\n');
 
@@ -261,6 +275,8 @@ test('parseReport joins a wrapped field value instead of dropping it', () => {
     '  i jego dalszy ciąg.',
     '- **Reguła:** general.md → spójność',
     '- **Expected Result:** Poprawić.',
+    '- **PR Problem:** Inconsistent wording.',
+    '- **PR Expected:** Use one wording.',
   ));
   assert.deepStrictEqual(report.warnings, []);
   assert.strictEqual(report.files[0].findings[0].problem, 'Pierwsza część zdania i jego dalszy ciąg.');
@@ -324,9 +340,13 @@ test('parseReport treats a line after the last field as that field continuing', 
     '- **Reguła:** general.md → coś',
     '- **Expected Result:** Naprawić',
     'i sprawdzić.',
+    '- **PR Problem:** It breaks.',
+    '- **PR Expected:** Fix it',
+    'and cover it.',
   ));
   assert.deepStrictEqual(report.warnings, []);
   assert.strictEqual(report.files[0].findings[0].expected, 'Naprawić i sprawdzić.');
+  assert.strictEqual(report.files[0].findings[0].prExpected, 'Fix it and cover it.');
 });
 
 test('findingId is content-derived, stable and unique within a report', () => {
@@ -405,7 +425,7 @@ test('renderHtml keeps report text as data and cannot be broken out of', () => {
   ));
   const html = rr.renderHtml(report, 'r.html');
 
-  assert.strictEqual(html.match(/<\/script>/g).length, 2, 'only the two real script tags close');
+  assert.strictEqual(html.match(/<\/script>/g).length, 3, 'only the three real script tags close');
   assert.ok(!html.includes('<user-card>'), 'report markup never reaches the document as markup');
   const payload = embeddedPayload(html);
   assert.strictEqual(

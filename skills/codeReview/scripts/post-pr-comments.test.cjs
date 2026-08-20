@@ -9,8 +9,6 @@ const path = require('node:path');
 const pr = require('./post-pr-comments.cjs');
 const { tempDir } = require('./test-helpers.cjs');
 
-const severityLabels = { high: '🔴 **High**', medium: '🟡 **Medium**' };
-
 const DIFF = [
   'diff --git a/src/a.ts b/src/a.ts',
   'index 1111111..2222222 100644',
@@ -40,12 +38,16 @@ function findingOf(overrides = {}) {
     problem: 'Coś.',
     rule: 'general.md → coś',
     expected: 'Naprawić.',
+    prProblem: 'The call has no error handling.',
+    prExpected: 'Handle the error and surface it to the user.',
   }, overrides);
 }
 
-test('parseArgs reads the report, the exclusions and the dry run', () => {
-  const args = pr.parseArgs(['--report=r.html', '--project=/repo', '--pr=7', '--exclude=a1, b2 ,', '--dry-run']);
-  assert.deepStrictEqual(args, { report: 'r.html', project: '/repo', pr: '7', exclude: ['a1', 'b2'], dryRun: true });
+test('parseArgs reads the report, the accepted pool, the exclusions and the dry run', () => {
+  const args = pr.parseArgs(['--report=r.html', '--project=/repo', '--pr=7', '--include=c3 ,d4', '--exclude=a1, b2 ,', '--all', '--dry-run']);
+  assert.deepStrictEqual(args, {
+    report: 'r.html', project: '/repo', pr: '7', include: ['c3', 'd4'], exclude: ['a1', 'b2'], all: true, dryRun: true,
+  });
   assert.throws(() => pr.parseArgs([]), /No report given/);
 });
 
@@ -77,25 +79,29 @@ test('buildComments splits findings into inline comments and leftovers', () => {
     findingOf({ id: 'out', lines: '99', severity: 'medium' }),
     findingOf({ id: 'other-file', path: 'src/b.ts', lines: '1' }),
   ];
-  const { comments, leftovers } = pr.buildComments(findings, commentable, severityLabels);
+  const { comments, leftovers } = pr.buildComments(findings, commentable);
   assert.deepStrictEqual(comments.map((c) => [c.path, c.line, c.side]), [['src/a.ts', 2, 'RIGHT']]);
-  assert.match(comments[0].body, /^🔴 \*\*High\*\* — Coś\./);
-  assert.match(comments[0].body, /\*\*Reguła:\*\* general\.md → coś/);
+  assert.strictEqual(
+    comments[0].body,
+    'The call has no error handling.\n\n**Expected result:** Handle the error and surface it to the user.',
+    'the comment is the English wording alone - no severity, no rule, no Polish',
+  );
   assert.deepStrictEqual(leftovers.map((f) => f.id), ['out', 'other-file']);
 });
 
 test('summaryBody lists the leftovers grouped by file', () => {
   const payload = { title: 'Code Review: x' };
   const leftovers = [
-    findingOf({ lines: '99', problem: 'Poza diffem.' }),
-    findingOf({ path: 'src/b.ts', lines: '1', severity: 'medium', problem: 'Inny plik.' }),
+    findingOf({ lines: '99', prProblem: 'Outside the diff.' }),
+    findingOf({ path: 'src/b.ts', lines: '1', severity: 'medium', prProblem: 'Another file.' }),
   ];
-  const body = pr.summaryBody(payload, [{}], leftovers, severityLabels);
-  assert.match(body, /Komentarzy w kodzie: \*\*1\*\*/);
-  assert.match(body, /\*\*src\/a\.ts\*\*\n- `99` 🔴 \*\*High\*\* — Poza diffem\./);
-  assert.match(body, /\*\*src\/b\.ts\*\*\n- `1` 🟡 \*\*Medium\*\* — Inny plik\./);
+  const body = pr.summaryBody(payload, [{}], leftovers);
+  assert.match(body, /Inline comments: \*\*1\*\*/);
+  assert.match(body, /\*\*src\/a\.ts\*\*\n- `99` Outside the diff\. \*\*Expected result:\*\* Handle the error/);
+  assert.match(body, /\*\*src\/b\.ts\*\*\n- `1` Another file\. \*\*Expected result:\*\* Handle the error/);
+  assert.ok(!/High|Medium|Reguła/.test(body), 'no severity and no rule ever reach the pull request');
 
-  assert.ok(!pr.summaryBody(payload, [], [], severityLabels).includes('spoza diffu'));
+  assert.ok(!pr.summaryBody(payload, [], []).includes('outside the PR diff'));
 });
 
 test('chunk splits a review into postable batches', () => {
@@ -146,39 +152,52 @@ const PAYLOAD = {
   title: 'Code Review: feature/x → main',
   pr: { number: 7, url: 'https://github.com/acme/repo/pull/7' },
   severities: [{ key: 'high', emoji: '🔴', label: 'High' }],
-  files: [{ path: 'src/a.ts', findings: [findingOf(), findingOf({ id: 'bbbb2222', lines: '99', problem: 'Poza diffem.' })] }],
+  files: [{ path: 'src/a.ts', findings: [findingOf(), findingOf({ id: 'bbbb2222', lines: '99', prProblem: 'Outside the diff.' })] }],
 };
 
 test('main posts one review through the injected client', (t) => {
   const api = apiStub();
-  const result = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--project=/repo'], api));
+  const result = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--project=/repo', '--all'], api));
   assert.strictEqual(result.code, 0, result.err);
   assert.strictEqual(api.posted.length, 1);
   assert.strictEqual(api.posted[0].number, 7, 'the PR number comes from the report payload');
   assert.strictEqual(api.posted[0].review.event, 'COMMENT');
   assert.deepStrictEqual(api.posted[0].review.comments.map((c) => [c.path, c.line]), [['src/a.ts', 2]]);
-  assert.match(api.posted[0].review.body, /Poza diffem\./, 'the finding outside the diff travels in the body');
+  assert.match(api.posted[0].review.body, /Outside the diff\./, 'the finding outside the diff travels in the body');
   assert.match(result.out, /Wysłano do acme\/repo PR #7/);
+});
+
+test('main posts the accepted pool alone and refuses to post without one', (t) => {
+  const api = apiStub();
+  const accepted = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--include=bbbb2222'], api));
+  assert.strictEqual(accepted.code, 0, accepted.err);
+  assert.deepStrictEqual(api.posted[0].review.comments, [], 'the finding nobody accepted is not commented on');
+  assert.match(api.posted[0].review.body, /Outside the diff\./, 'only the accepted finding reaches the PR');
+
+  const none = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`], apiStub()));
+  assert.strictEqual(none.code, 1);
+  assert.match(none.err, /Brak zaakceptowanych znalezisk/);
+  assert.strictEqual(api.posted.length, 1, 'an empty pool posts nothing at all');
 });
 
 test('main skips excluded findings and honours --dry-run', (t) => {
   const api = apiStub();
-  const result = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--exclude=bbbb2222', '--dry-run'], api));
+  const result = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all', '--exclude=bbbb2222', '--dry-run'], api));
   assert.strictEqual(result.code, 0, result.err);
   assert.deepStrictEqual(api.posted, [], 'a dry run posts nothing');
   assert.match(result.out, /acme\/repo PR #7: 1 komentarzy w kodzie, 0 w podsumowaniu/);
 });
 
 test('main reports a repository or an API that will not answer', (t) => {
-  const noRepo = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`], apiStub({ repoSlug: () => null })));
+  const noRepo = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], apiStub({ repoSlug: () => null })));
   assert.strictEqual(noRepo.code, 1);
   assert.match(noRepo.err, /remote'a GitHuba/);
 
-  const noDiff = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`], apiStub({ pullRequestDiff: () => ({ diff: null, error: 'Bad credentials' }) })));
+  const noDiff = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], apiStub({ pullRequestDiff: () => ({ diff: null, error: 'Bad credentials' }) })));
   assert.strictEqual(noDiff.code, 1);
   assert.match(noDiff.err, /Bad credentials/);
 
-  const refused = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`], apiStub({ postReview: () => ({ error: 'HTTP 422' }) })));
+  const refused = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], apiStub({ postReview: () => ({ error: 'HTTP 422' }) })));
   assert.strictEqual(refused.code, 1);
   assert.match(refused.err, /partia 1.*HTTP 422/);
 });
