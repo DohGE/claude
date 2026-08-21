@@ -317,7 +317,15 @@ function parseRawDiff(output) {
     const parts = meta.slice(1).trim().split(/\s+/);
     const target = names[names.length - 1];
     if (!target) continue;
-    files.push({ path: target, status: parts[4] ? parts[4][0] : 'M', blob: parts[3] || '' });
+    // A rename/copy carries the source path first. A path-limited diff shows a
+    // renamed file as brand-new, so this pair is the only place the reviewer
+    // can see what the file used to be called.
+    files.push({
+      path: target,
+      status: parts[4] ? parts[4][0] : 'M',
+      oldPath: names.length > 1 ? names[0] : '',
+      blob: parts[3] || '',
+    });
   }
   return files;
 }
@@ -617,6 +625,9 @@ function buildContext(options) {
     return {
       path: f.path,
       status: f.status,
+      // Only a rename/copy has one; the mechanical-change gate compares the two
+      // names (and their folders) against the naming instructions.
+      oldPath: f.oldPath || null,
       localInstructions: locals,
       // Global + matched local checklist items this file must be walked
       // against; the reviewer reports `<checked>/<checklistTotal>` per file.

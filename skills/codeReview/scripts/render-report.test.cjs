@@ -49,6 +49,7 @@ function findingOf(overrides = {}) {
     expected: 'Naprawić.',
     prProblem: 'Something is wrong.',
     prExpected: 'Fix it.',
+    prLocations: '`src/a.ts` → `load()`',
     ...overrides,
   };
   return [
@@ -59,6 +60,7 @@ function findingOf(overrides = {}) {
     `- **Expected Result:** ${finding.expected}`,
     `- **PR Problem:** ${finding.prProblem}`,
     `- **PR Expected:** ${finding.prExpected}`,
+    `- **PR Locations:** ${finding.prLocations}`,
     '',
   ];
 }
@@ -77,6 +79,7 @@ const REPORT = [
   '- **Expected Result:** Usunąć sekret z kodu.',
   '- **PR Problem:** A live API key is committed in the source.',
   '- **PR Expected:** Read the key from configuration and revoke the leaked one.',
+  '- **PR Locations:** `src/x.ts`',
   '',
   '🔴 **High**',
   '- **Linia:** 3, 23',
@@ -85,6 +88,7 @@ const REPORT = [
   '- **Expected Result:** Usunąć zależność `Store`.',
   '- **PR Problem:** An HTTP service reaching for the store mixes two layers.',
   '- **PR Expected:** Keep the service free of store dependencies.',
+  '- **PR Locations:** `src/x.ts`',
   '',
   '## src/app/user.component.html',
   '',
@@ -95,6 +99,7 @@ const REPORT = [
   '- **Expected Result:** Użyć `<button>`.',
   '- **PR Problem:** A click handler on a div is unreachable by keyboard.',
   '- **PR Expected:** Use a native button element.',
+  '- **PR Locations:** `src/x.ts`',
   '',
   '⚪ **Low**',
   '- **Linia:** 2',
@@ -103,6 +108,7 @@ const REPORT = [
   '- **Expected Result:** Klucz i18n przez `| translate`.',
   '- **PR Problem:** The text is hardcoded and cannot be translated.',
   '- **PR Expected:** Move the text to an i18n key used with the translate pipe.',
+  '- **PR Locations:** `src/x.ts`',
   '',
   '🔵 **Missing Unit Test**',
   '- **Linia:** 1',
@@ -111,6 +117,7 @@ const REPORT = [
   '- **Expected Result:** Dodać `tests/user.component.spec.ts`.',
   '- **PR Problem:** The changed component has no spec covering it.',
   '- **PR Expected:** Add the matching component spec.',
+  '- **PR Locations:** `src/x.ts`',
   '',
 ].join('\n');
 
@@ -277,6 +284,7 @@ test('parseReport joins a wrapped field value instead of dropping it', () => {
     '- **Expected Result:** Poprawić.',
     '- **PR Problem:** Inconsistent wording.',
     '- **PR Expected:** Use one wording.',
+    '- **PR Locations:** `src/x.ts`',
   ));
   assert.deepStrictEqual(report.warnings, []);
   assert.strictEqual(report.files[0].findings[0].problem, 'Pierwsza część zdania i jego dalszy ciąg.');
@@ -343,6 +351,7 @@ test('parseReport treats a line after the last field as that field continuing', 
     '- **PR Problem:** It breaks.',
     '- **PR Expected:** Fix it',
     'and cover it.',
+    '- **PR Locations:** `src/x.ts`',
   ));
   assert.deepStrictEqual(report.warnings, []);
   assert.strictEqual(report.files[0].findings[0].expected, 'Naprawić i sprawdzić.');
@@ -1022,8 +1031,8 @@ test('parseReport reads coverage markers without letting them into a finding', (
   ));
   assert.deepStrictEqual(report.warnings, []);
   assert.deepStrictEqual(report.coverage, [
-    { path: 'src/a.ts', checked: 12, total: 12 },
-    { path: 'src/b.ts', checked: 9, total: 9 },
+    { path: 'src/a.ts', checked: 12, total: 12, mechanical: false },
+    { path: 'src/b.ts', checked: 9, total: 9, mechanical: false },
   ]);
   assert.strictEqual(report.files.length, 1);
   assert.strictEqual(report.files[0].findings[0].expected, 'Naprawić.');
@@ -1032,4 +1041,10 @@ test('parseReport reads coverage markers without letting them into a finding', (
 test('parseReport warns when a file did not walk its whole checklist', () => {
   const report = rr.parseReport(reportOf('<!-- coverage: src/a.ts 7/12 -->'));
   assert.ok(report.warnings.some((w) => w.includes('7/12')), 'the gap is reported');
+});
+
+test('a mechanical-only file proves its narrowed walk without a coverage gap', () => {
+  const report = rr.parseReport(reportOf('<!-- coverage: src/a.ts mechanical -->'));
+  assert.deepStrictEqual(report.warnings, [], 'the gate narrowed the walk on purpose');
+  assert.deepStrictEqual(report.coverage, [{ path: 'src/a.ts', checked: null, total: null, mechanical: true }]);
 });

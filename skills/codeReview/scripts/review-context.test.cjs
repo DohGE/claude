@@ -271,7 +271,7 @@ test('detectForkBase ignores the branch itself under either name', (t) => {
   assert.strictEqual(rc.detectForkBase(dir, 'feature/pushed', 'feature/pushed'), 'main');
 });
 
-test('parseRawDiff parses status, path and post-image blob', () => {
+test('parseRawDiff parses status, path, the source path of a rename and the post-image blob', () => {
   const out = [
     ':100644 100644 1111111 2222222 M\tsrc/a.ts',
     ':000000 100644 0000000 3333333 A\tdocs/new.md',
@@ -279,10 +279,10 @@ test('parseRawDiff parses status, path and post-image blob', () => {
     ':100644 000000 6666666 0000000 D\tgone.css',
   ].join('\n');
   assert.deepStrictEqual(rc.parseRawDiff(out), [
-    { path: 'src/a.ts', status: 'M', blob: '2222222' },
-    { path: 'docs/new.md', status: 'A', blob: '3333333' },
-    { path: 'new.ts', status: 'R', blob: '5555555' },
-    { path: 'gone.css', status: 'D', blob: '0000000' },
+    { path: 'src/a.ts', status: 'M', oldPath: '', blob: '2222222' },
+    { path: 'docs/new.md', status: 'A', oldPath: '', blob: '3333333' },
+    { path: 'new.ts', status: 'R', oldPath: 'old.ts', blob: '5555555' },
+    { path: 'gone.css', status: 'D', oldPath: '', blob: '0000000' },
   ]);
   assert.deepStrictEqual(rc.parseRawDiff(''), []);
 });
@@ -615,6 +615,24 @@ test('staged mode lists index files with index show commands', (t) => {
   assert.strictEqual(staged.status, 'M');
   assert.strictEqual(staged.changedLines, '2', 'staged ranges come from git diff --cached -U0');
   assert.strictEqual(ctx.claudeMd, path.join(dir, 'CLAUDE.md'));
+});
+
+test('a renamed file carries the name it used to have', (t) => {
+  const dir = makeRepo(t);
+  // Enough shared content that git still calls it a rename: a low-similarity
+  // move is reported as an addition plus a deletion, never as `R`.
+  const body = ['  private readonly store = inject(Store);', '', '  load(): void {', '    this.store.dispatch(load());', '  }'].join('\n');
+  commitFile(dir, 'src/old-name.component.ts', `export class OldNameComponent {\n${body}\n}\n`, 'add component');
+  run(dir, ['mv', 'src/old-name.component.ts', 'src/new-name.component.ts']);
+  fs.writeFileSync(path.join(dir, 'src/new-name.component.ts'), `export class NewNameComponent {\n${body}\n}\n`);
+  run(dir, ['add', '-A']);
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({ mode: 'staged', project: dir, skillDir, now: new Date(2026, 6, 8, 14, 30) });
+  const renamed = ctx.targets[0].files.find((f) => f.path === 'src/new-name.component.ts');
+  assert.strictEqual(renamed.status, 'R');
+  assert.strictEqual(renamed.oldPath, 'src/old-name.component.ts', 'the rename pair is what the naming check compares');
+  const untouched = ctx.targets[0].files.find((f) => f.path !== 'src/new-name.component.ts');
+  if (untouched) assert.strictEqual(untouched.oldPath, null, 'only a rename has an old path');
 });
 
 test('staged mode runs git add . so pending changes are staged and reviewed', (t) => {

@@ -77,6 +77,41 @@ Four narrow carve-outs, each of which must state its link to the diff in `**Prob
   guard something still relies on) — cited at the untouched line, naming the change that breaks it;
 - a deletion-only diff (`changedLines` is `""`, or status `D`) — only consequences of the removal itself.
 
+**Mechanical-change gate — a reformatted or renamed line is not a reviewed line.** A change is
+MECHANICAL when it cannot alter runtime behaviour: an import added, removed, reordered or repointed;
+an identifier renamed (variable, field, method, class, component, interface, constant, action,
+translation key, test description); a file or folder renamed or moved; a component/directive selector
+renamed; pure formatting (indentation, wrapping, quotes, semicolons, trailing commas, blank lines,
+member order with no code change). Anything that changes what the code DOES is not mechanical, however
+small it looks — a changed condition, argument, operator, default, lifecycle hook or pipe never is.
+- A line whose ONLY change is mechanical counts as UNTOUCHED for reporting, exactly like a line the
+  diff never touched: no finding may cite it for a rule it was already breaking before the diff, at
+  any severity, however clearly the rule is broken. Renaming or reformatting code is not adopting it.
+- A file whose WHOLE diff is mechanical gets no logic pass at all: do not evaluate its behaviour,
+  error handling, performance, state usage, template semantics or test assertions. Its checklist walk
+  narrows to the two questions below, and its coverage marker records that narrowed walk.
+- Exactly two things ARE reported on a mechanical change, and `**Problem:**` names the change each
+  one comes from:
+  1. **the change broke something** — a reference still using the old name, path, selector, key or
+     import (template, spec, barrel `index.ts`, route, style, translation file, mock, DI token, lazy
+     import), a symbol left unresolved by a removed import, an import still pointing at a file that
+     moved, a public member renamed out from under its callers;
+  2. **the change itself violates an instruction** — the new name breaks a naming rule; a renamed
+     component whose selector, folder name, file name and sibling files (`.html`, `.scss`, `.spec.ts`,
+     snapshot) were not renamed to match; a moved file now sitting in the wrong layer or outside its
+     canonical location; an import edge whose direction or form (barrel vs concrete path) now breaks
+     the architecture instruction; a reformat that leaves the file against the style rules.
+- The rename pair is `oldPath → path` on the file entry (`status: 'R'`; `oldPath` is `null` for every
+  other status) — that pair, not the diff, is what the naming and location checks compare. A
+  path-limited diff renders any rename as a brand-new file, so "the diff shows the whole file as new"
+  never means "review the whole file as new" when `status` is `R`. A pure rename changes no content at
+  all: `changedLines` is `""` while `status` is `R`, which is a rename, not the deletion-only case
+  above.
+- Git only calls a move a rename when the content stayed similar enough; a heavily edited move arrives
+  as an added file (`A`) plus a deleted one (`D`). When an added file is recognizably the moved content
+  of a file deleted in the same target, treat the unchanged parts as mechanical and review only what
+  the move actually changed.
+
 **Endpoint names are out of scope.** Never report the wording, spelling, casing, versioning, path
 segments, leading/trailing slashes, key names or CHANGES of REST endpoint paths and their `endpoints`
 constants — the backend contract decides them, not this review. The one exception is an absolute URL
@@ -88,7 +123,8 @@ Write the report header (Step 4 format) to `target.reportPath` first. Then proce
 `target.files`, one at a time, in the listed order. The script has already excluded everything
 skippable (generated/binary → `target.skipped`), so `target.files` contains no file you may skip:
 no exceptions for renames, formatting-only diffs, tests, configs, file size, diff size, or how many
-files remain. A file whose `localInstructions` is empty still gets the complete global pass — zero
+files remain — the mechanical-change gate narrows what a renamed or reformatted file may REPORT,
+never whether it is processed. A file whose `localInstructions` is empty still gets the complete global pass — zero
 local matches usually means the file sits outside every dedicated location (the script surfaces
 these files in `warnings[]`), not that the file may be skimmed. For each file:
 
@@ -200,6 +236,10 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    never reconstructed afterwards; `checklistTotal` is copied from the context JSON. The two match on
    a file you finished — a smaller `<checked>` makes the renderer warn and keeps the Markdown, which
    is the honest outcome of an interrupted pass, not something to paper over by writing equal numbers.
+   A file the mechanical-change gate narrowed writes `<!-- coverage: <file.path> mechanical -->`
+   instead — its walk was two questions, not the checklist, and that marker is its complete proof.
+   It is for a WHOLE-diff mechanical file only; a file with even one behavioural change counts its
+   items like any other.
 
 After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as the
 final part file. Answer each of these four questions explicitly, against the diff as a whole:
@@ -240,8 +280,9 @@ is the report then. Otherwise the renderer replaces it with `target.htmlReportPa
 warnings it keeps the Markdown too, which means the report drifted from the Step 4 format.
 
 Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
-had its commands run and all five points evaluated; analyze any missed file now. A target with an
-unanalyzed file is not done, regardless of diff size or session length.
+had its commands run and either all five points evaluated or — for a whole-diff mechanical file —
+the gate's two questions answered; analyze any missed file now. A target with an unanalyzed file is
+not done, regardless of diff size or session length.
 
 ## Step 4 — Report format (one file per target, ALWAYS in Polish)
 
@@ -257,8 +298,9 @@ unanalyzed file is not done, regardless of diff size or session length.
     - **Problem:** <description of this single violation>
     - **Reguła:** <instruction file → checklist item, or the violated point name>
     - **Expected Result:** <correct code state + concrete implementation proposal>
-    - **PR Problem:** <ENGLISH, one short sentence: why this needs fixing>
-    - **PR Expected:** <ENGLISH, one short sentence: the expected result>
+    - **PR Problem:** <ENGLISH, two sentences: what is wrong at these lines + the concrete consequence>
+    - **PR Expected:** <ENGLISH, two to three sentences: the expected state + the concrete way to reach it>
+    - **PR Locations:** <ENGLISH, comma-separated: every file and symbol the fix has to touch>
 
 - Staged header instead: `# Code Review: staged (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Folder header instead: `# Code Review: folder <target.folder> (<branch>) | <YYYY-MM-DD> <HH:mm>`.
@@ -283,13 +325,30 @@ unanalyzed file is not done, regardless of diff size or session length.
 - One finding = one such block = one rule in one file (the splitting rules are Step 3 point 3).
   Separate every block from the next with exactly one blank line, and put one blank line before AND
   after every `##` header — that is what makes each finding render as its own section.
-- `PR Problem` and `PR Expected` are the text of the pull request comment, so they are the only two
-  fields written in ENGLISH — no Polish words, ever. One short sentence each: `PR Problem` says why
-  the code needs fixing, `PR Expected` says what the result should be. No severity, no rule name, no
-  restatement of the Polish fields, no multi-sentence prose. Everything the reader needs beyond that
-  stays in the Polish fields, which never appear on the pull request.
+- `PR Problem`, `PR Expected` and `PR Locations` are the text of the pull request comment, so they
+  are the only fields written in ENGLISH — no Polish words, ever. Write them for a reviewer who sees
+  the comment on GitHub and never opens the report: everything needed to act on the finding has to
+  be in those three fields, and every concrete name the Polish `Problem` and `Expected Result` use
+  has to appear there too, in backticks.
+  - `PR Problem` — two sentences. The first says what is wrong at the cited lines, naming the
+    symbols involved (`method`, `field`, `selector`, `effect`, template element, style rule). The
+    second states the concrete consequence: the runtime behaviour, the regression risk, the leak or
+    the maintenance cost that makes it worth fixing.
+  - `PR Expected` — two to three sentences. The first is the state the code should be in; the rest
+    is the concrete way to get there — the operator, API, pattern, structure or test to use, and
+    where it goes. Carry over every concrete name the Polish `Expected Result` proposes (method,
+    field, action, selector, component, style class, translation key, spec file), so no part of the
+    proposal is left behind in the Polish report.
+  - `PR Locations` — a comma-separated list of every place the change has to be made, in the order
+    the work would be done. Write `` `<path or file name>` `` when the file itself is the target and
+    `` `<file>` → `<symbol>` `` when a specific method, effect, selector, template block, style rule
+    or key is. List the reported file first, then every other file the fix reaches (actions,
+    reducer, facade, template, styles, translations, spec). It is never empty — with nothing else to
+    name, it is the reported file alone.
+  Still no severity, no rule name, no Polish, and no sentence that only restates the Polish fields
+  without adding the English detail above.
 - The severity is a bold lead line — `<emoji> **<Severity>**` with NO leading `- ` — that opens the
-  block; the other six fields follow it as `- ` bullet lines in the order shown. Each field is its
+  block; the other seven fields follow it as `- ` bullet lines in the order shown. Each field is its
   own line and never continues on the previous field's line. `**Linia:**` holds a comma-separated
   list of numbers and/or `<start>-<end>` spans — one entry per occurrence.
 - Group findings under one `## <file path>` section per file; omit files without findings.
@@ -312,7 +371,8 @@ Catching yourself thinking any of these means STOP and return to the file or che
 
 | Excuse | Reality |
 |---|---|
-| "Too large / trivial / renamed / similar to a file that passed" | Scope never shrinks: the script already removed skippable files, moved code breaks structure and import rules exactly at its new location, and similarity is not compliance. |
+| "Too large / trivial / renamed / similar to a file that passed" | Coverage never shrinks: the script already removed skippable files, moved code breaks structure and import rules exactly at its new location, and similarity is not compliance. A mechanical-only diff narrows what the file may REPORT to the gate's two questions — it never drops the file from the pass. |
+| "This rename/reformat drags in badly written code" | The mechanical-change gate: a renamed or reformatted line counts as untouched. Report only what the change BROKE and what the change ITSELF violates — never a violation that was already sitting there. |
 | "This rule is pedantic here" | Rule weight is expressed through severity, never through omission. |
 | "I remember the instructions" | Verdicts come from the instruction files read this run, item by item — not from memory. |
 | "This file already has plenty of findings" | Findings per file are unlimited. Stopping a checklist partway is skipping items. |
