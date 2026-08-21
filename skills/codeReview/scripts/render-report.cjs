@@ -30,7 +30,7 @@ const noFileLabel = '(bez pliku)';
 const fields = {
   'Linia': 'lines', 'Problem': 'problem', 'Reguła': 'rule', 'Expected Result': 'expected',
   // English wording used only for the PR comment - the report itself stays Polish.
-  'PR Problem': 'prProblem', 'PR Expected': 'prExpected',
+  'PR Problem': 'prProblem', 'PR Expected': 'prExpected', 'PR Locations': 'prLocations',
 };
 
 // The severity lead line is accepted with and without a leading `- `: the
@@ -39,10 +39,12 @@ const fields = {
 const reHeader = /^#\s+(.+?)\s+\|\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*$/;
 const reSection = /^##\s+(.+?)\s*$/;
 const reSeverity = /^(?:-\s+)?(⚪|🟡|🔴|🟤|🔵)\uFE0F?\s*\*\*(.+?)\*\*\s*$/;
-const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result|PR Problem|PR Expected):\*\*\s?(.*)$/;
+const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result|PR Problem|PR Expected|PR Locations):\*\*\s?(.*)$/;
 // Per-file coverage proof written by the reviewer: how many checklist items of
-// that file's rulebook actually got a verdict, against how many exist.
-const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(\d+)\s*\/\s*(\d+)\s*-->$/;
+// that file's rulebook actually got a verdict, against how many exist - or
+// `mechanical` for a file the mechanical-change gate narrowed to its two
+// questions, which by design never walks the full checklist.
+const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(mechanical|\d+\s*\/\s*\d+)\s*-->$/;
 // What a bare instruction reference - or the violated point's name, which Step 4
 // allows instead - may consist of. Quotes, backticks and brackets, or anything
 // longer than a name, mean the arrow belongs to quoted rule text.
@@ -194,11 +196,15 @@ function parseReport(markdown) {
     if (line.startsWith('<!--')) {
       const coverageMatch = line.match(reCoverage);
       if (coverageMatch) {
-        const checked = Number(coverageMatch[2]);
-        const total = Number(coverageMatch[3]);
-        report.coverage.push({ path: coverageMatch[1], checked, total });
-        if (checked < total) {
-          report.warnings.push(`${coverageMatch[1]}: sprawdzono ${checked}/${total} pozycji checklist - plik nie przeszedł pełnego przeglądu.`);
+        if (coverageMatch[2] === 'mechanical') {
+          // A narrowed walk is the complete proof for such a file, not a gap.
+          report.coverage.push({ path: coverageMatch[1], checked: null, total: null, mechanical: true });
+        } else {
+          const [checked, total] = coverageMatch[2].split('/').map((n) => Number(n.trim()));
+          report.coverage.push({ path: coverageMatch[1], checked, total, mechanical: false });
+          if (checked < total) {
+            report.warnings.push(`${coverageMatch[1]}: sprawdzono ${checked}/${total} pozycji checklist - plik nie przeszedł pełnego przeglądu.`);
+          }
         }
       }
       continue;
@@ -231,6 +237,7 @@ function parseReport(markdown) {
       finding = {
         severity: severityByEmoji.get(severityMatch[1]).key,
         lines: '', problem: '', rule: '', expected: '', prProblem: '', prExpected: '',
+        prLocations: '',
       };
       continue;
     }
@@ -601,6 +608,7 @@ function buildPayload(report, reportName) {
         expected: finding.expected,
         prProblem: finding.prProblem || '',
         prExpected: finding.prExpected || '',
+        prLocations: finding.prLocations || '',
         snippet: finding.snippet || null,
         tagKeys: finding.tags.map((tag) => keyOf.get(`${tag.file}\n${tag.rule}`)),
       })),

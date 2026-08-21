@@ -40,6 +40,7 @@ function findingOf(overrides = {}) {
     expected: 'Naprawić.',
     prProblem: 'The call has no error handling.',
     prExpected: 'Handle the error and surface it to the user.',
+    prLocations: '`src/a.ts` → `load()`, `src/a.spec.ts`',
   }, overrides);
 }
 
@@ -83,10 +84,17 @@ test('buildComments splits findings into inline comments and leftovers', () => {
   assert.deepStrictEqual(comments.map((c) => [c.path, c.line, c.side]), [['src/a.ts', 2, 'RIGHT']]);
   assert.strictEqual(
     comments[0].body,
-    'The call has no error handling.\n\n**Expected result:** Handle the error and surface it to the user.',
-    'the comment is the English wording alone - no severity, no rule, no Polish',
+    'The call has no error handling.\n\n**Expected result:** Handle the error and surface it to the user.'
+      + '\n\n**Where to change:** `src/a.ts` → `load()`, `src/a.spec.ts`',
+    'the comment is the English wording plus the places to change - no severity, no rule, no Polish',
   );
   assert.deepStrictEqual(leftovers.map((f) => f.id), ['out', 'other-file']);
+});
+
+test('a finding without PR Locations still renders a comment, just without the places', () => {
+  const body = pr.renderBody(findingOf({ prLocations: '' }));
+  assert.strictEqual(body, 'The call has no error handling.\n\n**Expected result:** Handle the error and surface it to the user.');
+  assert.ok(!body.includes('Where to change'));
 });
 
 test('summaryBody lists the leftovers grouped by file', () => {
@@ -97,8 +105,9 @@ test('summaryBody lists the leftovers grouped by file', () => {
   ];
   const body = pr.summaryBody(payload, [{}], leftovers);
   assert.match(body, /Inline comments: \*\*1\*\*/);
-  assert.match(body, /\*\*src\/a\.ts\*\*\n- `99` Outside the diff\. \*\*Expected result:\*\* Handle the error/);
-  assert.match(body, /\*\*src\/b\.ts\*\*\n- `1` Another file\. \*\*Expected result:\*\* Handle the error/);
+  assert.match(body, /\*\*src\/a\.ts\*\*\n\n- \*\*Line\(s\) `99`\*\* — Outside the diff\.\n\n {2}\*\*Expected result:\*\* Handle the error/);
+  assert.match(body, /\*\*src\/b\.ts\*\*\n\n- \*\*Line\(s\) `1`\*\* — Another file\.\n\n {2}\*\*Expected result:\*\* Handle the error/);
+  assert.match(body, / {2}\*\*Where to change:\*\* `src\/a\.ts` → `load\(\)`, `src\/a\.spec\.ts`/, 'the places to change travel with the leftovers too');
   assert.ok(!/High|Medium|Reguła/.test(body), 'no severity and no rule ever reach the pull request');
 
   assert.ok(!pr.summaryBody(payload, [], []).includes('outside the PR diff'));

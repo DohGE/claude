@@ -76,15 +76,18 @@ function commentableLines(diffText) {
   return byPath;
 }
 
-// The report is Polish, the pull request is not: a comment carries only the
-// English `PR Problem` / `PR Expected` wording of the finding - no severity, no
-// violated rule, no long description.
+// The report is Polish, the pull request is not: a comment carries the English
+// `PR Problem` / `PR Expected` wording of the finding plus `PR Locations` - the
+// concrete files and symbols the fix has to touch - and nothing else: no
+// severity, no violated rule, nothing Polish.
 function renderBody(finding) {
-  return [
+  const body = [
     finding.prProblem,
     '',
     `**Expected result:** ${finding.prExpected}`,
-  ].join('\n');
+  ];
+  if (finding.prLocations) body.push('', `**Where to change:** ${finding.prLocations}`);
+  return body.join('\n');
 }
 
 // An inline comment needs a concrete anchor: the whole first cited range when
@@ -137,7 +140,11 @@ function summaryBody(payload, comments, leftovers) {
       head.push('', `**${finding.path}**`);
       lastPath = finding.path;
     }
-    head.push(`- \`${finding.lines}\` ${finding.prProblem} **Expected result:** ${finding.prExpected}`);
+    // Blank lines between the parts keep them separate paragraphs of the same
+    // list item instead of one run-on line.
+    head.push('', `- **Line(s) \`${finding.lines}\`** — ${finding.prProblem}`);
+    head.push('', `  **Expected result:** ${finding.prExpected}`);
+    if (finding.prLocations) head.push('', `  **Where to change:** ${finding.prLocations}`);
   }
   return head.join('\n');
 }

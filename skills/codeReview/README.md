@@ -80,6 +80,7 @@ Everything is evaluated, but only what the change touched is reported:
 - Added files (and every file in folder mode) have no diff, so their whole content is in scope.
 - Four carve-outs, each stating its link to the diff in `**Problem:**`: a file with no diff at all (`changedLines: null` — an added file, or any file in folder mode), an obligation the changed lines create (missing spec case, missing teardown, missing required attribute), a regression the diff causes in untouched code, and the consequences of a deletion-only diff.
 - REST endpoint paths and their `endpoints` keys are out of scope — their wording, casing, versioning, segments, slashes and changes are never reported. The one exception is an absolute URL inside the value (protocol + domain, `localhost`, IP with a port), reported as a hard-coded base URL.
+- A line whose only change is mechanical — an import, a renamed identifier, a renamed file, folder or selector, pure formatting — counts as untouched, so a violation that was already sitting there stays unreported. A file whose whole diff is mechanical gets no logic pass at all; it is reviewed for two things only: what the change **broke** (a template, spec, barrel, route, style, translation or import still using the old name or path) and how the change itself **breaks an instruction** (a name against the naming rules, a renamed component whose selector, folder, file name and `.html`/`.scss`/`.spec.ts` siblings did not follow, a moved file in the wrong layer). The rename pair is on the file entry as `oldPath → path`, because a path-limited diff renders every rename as a brand-new file.
 
 ## Base branch detection
 
@@ -140,21 +141,23 @@ Always Polish, findings only — no intros, summaries or closing remarks.
 Header line: `# Code Review: <branch> → <base> | <YYYY-MM-DD> <HH:mm>` (staged variant: `# Code Review: staged (<branch>) | ...`).
 One `## <file path>` section per file with findings.
 Each finding is one block describing exactly one violation of one rule at one location — several violations never share a block.
-The severity is a bold lead line; the other six fields follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
+The severity is a bold lead line; the other seven fields follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
 
     🔴 **High**
     - **Linia:** 87
     - **Problem:** Brak obsługi błędu HTTP w subskrypcji
     - **Reguła:** instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"
     - **Expected Result:** `catchError` z mapowaniem na stan błędu komponentu
-    - **PR Problem:** An HTTP failure here leaves the component stuck on the loading state.
-    - **PR Expected:** Handle the error with `catchError` and map it to the component error state.
+    - **PR Problem:** The `loadUsers()` subscription passes no error callback, so a failing HTTP call never reaches the component. The view stays on the loading spinner for good and the user is given no way to retry.
+    - **PR Expected:** A failed request should leave the component in its error state instead of loading. Pipe `catchError` into the `loadUsers()` stream, map the failure to the component's `error` field and clear `loading`, then render it through the existing error branch of the template.
+    - **PR Locations:** `user-panel.component.ts` → `loadUsers()`, `user-panel.component.html` → error branch, `user-panel.component.spec.ts` → failing-request case
 
-`PR Problem` and `PR Expected` are the only English fields — one short sentence each, written for the PR comment and used nowhere else on the page.
+`PR Problem`, `PR Expected` and `PR Locations` are the only English fields, written for the PR comment and used nowhere else on the page.
+They are written for a reviewer who never opens the report: `PR Problem` gets two sentences (what is wrong + the consequence), `PR Expected` two to three (the target state + how to reach it), and `PR Locations` lists every file and symbol the fix touches — every concrete name the Polish fields propose has to appear in them.
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
 Line numbers refer to the file's real content (read off the line-numbered `git show … | cat -n` output), never to diff hunk numbering.
-The context script additionally precomputes each file's changed-line ranges (`changedLines`, from `git diff -U0`) as the authoritative list of lines the diff touched.
+The context script additionally precomputes each file's changed-line ranges (`changedLines`, from `git diff -U0`) as the authoritative list of lines the diff touched, and carries the source path of a renamed file (`oldPath`, from the rename pair `git diff --raw` reports) so the rename can be checked against the naming rules.
 No findings → the report is the single line `Nie wykryto problemów.`; empty diff → `Nie wykryto zmian do analizy.`
 
 ## Mechanics
@@ -164,6 +167,7 @@ Branch reviews never touch the working tree (`git diff base...branch`, `git show
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
 Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source]`.
+It reads the per-file coverage markers too: `<!-- coverage: <path> <checked>/<total> -->` warns (and keeps the Markdown) when the walk fell short, while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions.
 Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
 `--mode` decides what the snippet is: `branch` reads `git show <branch>:<path>` plus `git diff -U0 <base>...<branch>`, `staged` reads the index plus `git diff -U0 --cached`, and both render a real before/after split diff; `folder` (and a missing `--mode`) renders the working-tree file with no diff markers.
 The old-file line numbers the left side prints are derived from the `-U0` hunk headers, which state how far the old numbering runs ahead of the new one from each hunk on.
@@ -180,7 +184,7 @@ The report page cannot do it itself — a `file://` page has no GitHub credentia
 Finding the PR needs no credentials on a public repository; a private one needs a token for the lookup as well, and posting the review always does (see [GitHub access](#github-access)). When the lookup cannot run, the reason is printed to stderr *and* shown on the report page itself, so a missing button is never left unexplained.
 Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> --include=<ids> [--project=<repo root>] [--pr=<number>] [--dry-run]`.
 `--include` is the accepted pool and the only thing that ever reaches GitHub: a finding nobody accepted is never posted, and a command without `--include` refuses to run. `--all` is the deliberate way past that for a command run by hand with no page to accept anything in, and only then does `--exclude=<ids>` mean anything.
-A comment body carries only the finding's English `PR Problem` and `PR Expected` wording (`**Expected result:** …`) — no severity, no violated rule, no Polish; the Polish report keeps all of that for the reader.
+A comment body carries the finding's English `PR Problem` and `PR Expected` wording (`**Expected result:** …`) plus its `PR Locations` list (`**Where to change:** …`), so the reviewer sees what is wrong, what the result should be and which files and symbols the fix touches — but no severity, no violated rule and no Polish; the Polish report keeps all of that for the reader.
 Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments.
 
 Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs`
