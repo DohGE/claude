@@ -54,15 +54,16 @@ async function openMockupPanel(page) {
 
 test('stepper ukrywa krok Mockups, dopóki toggle go nie włączy', async ({ page }) => {
   await page.goto(base);
-  await expect(page.locator('.step')).toHaveCount(5);
-  await expect(page.locator('.step .name')).toHaveText(
-    ['Requirements', 'Feature Refinement', 'Implementation', 'Validation & E2E', 'Code Review']);
-  await postState({ step: 3, enabled: true });
   await expect(page.locator('.step')).toHaveCount(6);
+  await expect(page.locator('.step .name')).toHaveText(
+    ['Requirements', 'Feature Refinement', 'Implementation', 'Validation & E2E', 'Code Review',
+      'Mockoon Mocks']);
+  await postState({ step: 3, enabled: true });
+  await expect(page.locator('.step')).toHaveCount(7);
   await expect(page.locator('.step').nth(2).locator('.name')).toHaveText('Mockups');
   // numeracja kafelków zostaje ciągła mimo stałych id kroków
-  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6']);
-  // sześć kafelków musi zmieścić się w jednym rzędzie — inaczej ostatni ląduje sam pod spodem
+  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6', '7']);
+  // siedem kafelków musi zmieścić się w jednym rzędzie — inaczej ostatni ląduje sam pod spodem
   const rows = await page.locator('.step').evaluateAll(els =>
     [...new Set(els.map(el => Math.round(el.getBoundingClientRect().top)))]);
   expect(rows).toHaveLength(1);

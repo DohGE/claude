@@ -5,12 +5,13 @@ const fs = require('fs');
 const path = require('path');
 
 const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-  'Validation & E2E', 'Code Review'];
+  'Validation & E2E', 'Code Review', 'Mockoon Mocks'];
 // Ids stay fixed so agent prompts can hardcode their step number; opt-in steps
 // start disabled and the orchestrator enables them from the step-1 answer.
 const OPTIONAL_STEPS = [3];
 const STATUSES = ['waiting', 'in_progress', 'completed', 'failed'];
 const MOCKUP_DIR = 'generated-mockups';
+const MOCKOON_FILE = 'mockoon.json';
 const MOCKUP_TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8',
@@ -209,6 +210,22 @@ function createApp(sessionDir, opts = {}) {
           if (server.closeAllConnections) server.closeAllConnections();
         }));
         return sendJson(res, 200, { ok: true });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/mockoon') {
+        // Read-only window onto <SESSION>/mockoon.json, served verbatim: the step-7
+        // agent writes the environment to disk and the browser copies it from here,
+        // so the JSON never passes through the orchestrator's context.
+        let data;
+        try {
+          data = fs.readFileSync(path.join(sessionDir, MOCKOON_FILE));
+        } catch (_e) {
+          return sendJson(res, 404, { error: 'not found' });
+        }
+        // no-store: a regenerated environment must never be served from cache.
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'
+        });
+        return res.end(data);
       }
       if (req.method === 'GET' && url.pathname.startsWith(`/${MOCKUP_DIR}/`)) {
         // Read-only window into <SESSION>/generated-mockups for the review iframe.

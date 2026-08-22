@@ -1,6 +1,6 @@
 ---
 name: implementNewFeature
-description: Use when the user wants a complete feature implemented end-to-end - runs a 5-step pipeline (Requirements, Feature Refinement, Implementation, Validation & E2E, Code Review) plus an optional Mockups step, with a browser stepper UI; the orchestrator coordinates sub-agents and keeps the main context clean
+description: Use when the user wants a complete feature implemented end-to-end - runs a 5-step pipeline (Requirements, Feature Refinement, Implementation, Validation & E2E, Code Review) plus an optional Mockups step and an on-demand Mockoon mocks step, with a browser stepper UI; the orchestrator coordinates sub-agents and keeps the main context clean
 ---
 
 # implementNewFeature — pipeline orchestrator
@@ -42,8 +42,10 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Fields: `{"step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"summary":{...}}`
   Step ids are fixed (1 Requirements, 2 Feature Refinement, 3 Mockups, 4 Implementation,
-  5 Validation & E2E, 6 Code Review). Step 3 ships `enabled:false` and the stepper hides it, so a
-  run without mockups shows the usual five tiles numbered 1-5.
+  5 Validation & E2E, 6 Code Review, 7 Mockoon Mocks). Step 3 ships `enabled:false` and the stepper
+  hides it, so a run without mockups shows five tiles numbered 1-5 plus the Mockoon one. Step 7 is
+  always visible and stays `waiting` through the whole run — it only moves when the user asks for
+  mocks on the summary screen.
   Merge consecutive updates into ONE POST whenever nothing (user interaction, agent work) happens
   between them — e.g. completing a step and activating the next is a single body, never two calls.
 - Wait for a user answer (long-poll, repeat until non-null):
@@ -170,6 +172,25 @@ leaves the panel locked on the previous answer.
    (step 6's regression run is its last consumer, so the credentials die with the step, not with the
    pipeline), then POST completed. `error` → failure protocol.
 
+## Step 7 — Mockoon mocks (on demand, view-only)
+
+Never part of the pipeline run: the tile waits until the user clicks "Generate Mockoon mocks" on the
+summary screen, which reaches you through the wait loop below. It can run any number of times
+("Regenerate" is the same step over the same file).
+
+1. POST `{"step":7,"status":"in_progress","activeStep":7,"progress":0}` — this also pulls the browser
+   off the summary and onto the step's panel.
+2. Spawn the mockoon agent from `references/mockoon-agent.md` (same placeholder substitution). It
+   reads spec/plan, the contracts and the implemented code, and writes `<SESSION>/mockoon.json`
+   (one environment on `localhost:3000`). The browser fetches that file itself from `/api/mockoon` —
+   NEVER read it, never paste it into a message or into `/api/state`.
+3. `{"type":"result","routes":N,"summary"}` → POST `{"step":7,"status":"completed","progress":100}`;
+   the panel then shows the JSON with a Copy button. Keep the route count and the summary only.
+4. `{"type":"error","report"}` → POST `{"step":7,"status":"failed","report":"<report>"}`, then poll
+   answers until `kind=="decision"`: `retry` → POST `{"step":7,"status":"in_progress","report":null}`
+   and re-spawn the agent **fresh**; `finish` → the user went back to the summary, so leave the step
+   failed and return to the wait loop.
+
 ## Failure protocol (any step)
 
 1. POST `{"step":N,"status":"failed","report":"<report>","question":null}` — clearing the question
@@ -190,4 +211,16 @@ leaves the panel locked on the previous answer.
 4. Print the same summary in the terminal (user's language).
 5. Stage everything: `git add -A` (already done by the step-6 agent; verify with `git status --short`).
 6. Suggest `superpowers:finishing-a-development-branch` for commit/merge/PR.
-7. Leave the server running — the summary screen shows a "Shut down server" button; the user stops the server by clicking it (POST `/api/shutdown`). Do NOT kill the PID yourself.
+7. Leave the server running and enter the wait loop below. Do NOT kill the PID yourself.
+
+## After the summary (wait loop)
+
+The pipeline is done, but the summary screen still offers "Generate Mockoon mocks", so the run ends
+only when the user says so. Loop:
+
+1. Poll `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` (Bash tool `timeout: 320000`), repeating
+   while `answer` is null.
+2. `{"kind":"summary","decision":"mockoon"}` → run step 7 above, then keep looping.
+3. `{"kind":"summary","decision":"shutdown"}` → the user pressed "Shut down server": stop looping and
+   end your turn.
+4. curl cannot connect → the server is already gone: stop looping and end your turn.
