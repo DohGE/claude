@@ -15,7 +15,7 @@ async function listen(app) {
   return `http://127.0.0.1:${app.server.address().port}`;
 }
 
-test('GET /api/state returns the 6-step pipeline with Mockups opt-in', async t => {
+test('GET /api/state returns the 7-step pipeline with Mockups opt-in', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);
   t.after(() => app.server.close());
@@ -24,7 +24,7 @@ test('GET /api/state returns the 6-step pipeline with Mockups opt-in', async t =
   const state = await res.json();
   assert.deepEqual(state.steps.map(s => s.name),
     ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-      'Validation & E2E', 'Code Review']);
+      'Validation & E2E', 'Code Review', 'Mockoon Mocks']);
   assert.ok(state.steps.every(s => s.status === 'waiting'));
   // Mockups is the only step the stepper hides until the step-1 toggle enables it.
   assert.deepEqual(state.steps.filter(s => s.enabled === false).map(s => s.id), [3]);
@@ -292,6 +292,28 @@ test('POST /api/shutdown deletes auth.json from the session dir', async t => {
   await closed;
   assert.ok(!fs.existsSync(path.join(dir, 'auth.json')),
     'auth.json must be wiped on shutdown');
+});
+
+test('GET /api/mockoon serves the environment file the step-7 agent wrote', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const env = JSON.stringify({ name: 'Feature mocks', port: 3000, hostname: 'localhost' }, null, 2);
+  fs.writeFileSync(path.join(dir, 'mockoon.json'), env, 'utf8');
+  const res = await fetch(`${base}/api/mockoon`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/json/);
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  // Byte-for-byte: the user copies exactly what the agent formatted.
+  assert.equal(await res.text(), env);
+});
+
+test('GET /api/mockoon returns 404 before the mocks are generated', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.equal((await fetch(`${base}/api/mockoon`)).status, 404);
 });
 
 // PowerShell re-encodes curl args / temp files to the Windows ANSI codepage

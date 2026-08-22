@@ -22,7 +22,7 @@
        background:linear-gradient(90deg,var(--accent),var(--accent-2));
        -webkit-background-clip:text; background-clip:text; color:transparent; }
   .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
-  /* 120px basis keeps all six tiles (Mockups enabled) on a single row at 940px. */
+  /* 120px basis keeps all seven tiles (Mockups enabled) on a single row at 940px. */
   .step { flex:1 1 120px; background:var(--card); border:1px solid var(--border); border-radius:14px;
           padding:14px 10px; text-align:center; transition:border-color .25s, box-shadow .25s;
           box-shadow:0 12px 28px -18px rgba(0,0,0,.9); }
@@ -127,6 +127,10 @@
   pre.report, pre.summary-text { white-space:pre-wrap; background:var(--card-2);
           border:1px solid var(--border); border-radius:10px; padding:14px; font-size:13px;
           color:#c3c9d6; }
+  /* A Mockoon environment is hundreds of lines — cap it so the copy button stays on screen. */
+  pre#mockoonJson { max-height:45vh; overflow:auto; overflow-wrap:anywhere; }
+  code { font-family:ui-monospace,Consolas,monospace; font-size:12.5px; padding:1px 6px;
+          background:var(--card-2); border:1px solid var(--border); border-radius:6px; }
   .muted { color:var(--muted); font-size:13px; }
   a { color:var(--accent); }
   .notice { display:flex; align-items:center; gap:10px; margin-top:16px; padding:12px 14px;
@@ -166,7 +170,8 @@
 <script>
 'use strict';
 const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-  'Validation & E2E', 'Code Review'];
+  'Validation & E2E', 'Code Review', 'Mockoon Mocks'];
+const MOCKOON_STEP = 7;
 const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
   completed: 'Completed', failed: 'Failed' };
 const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
@@ -182,6 +187,9 @@ let lastSig = null;
 let serverDown = false; // set when the user shuts the server down from the summary
 let mockupScreen = 0;   // preview selection survives re-renders of the mockup panel
 let mockupViewport = 'Desktop';
+// Step 7 runs on demand once the summary exists, so which of the two screens is
+// visible is the user's choice, not a pipeline state — it lives here, in the page.
+let showSummary = false;
 
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s == null ? '' : s)
@@ -293,16 +301,24 @@ const activeStepOf = state =>
 
 function sig(state) {
   const step = activeStepOf(state);
+  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP);
   return [state.activeStep, step.status,
     state.question ? `q${state.questionSeq || 0}` : '',
     state.reviewSummary ? '1' : '',
     // rev changes on every agent round, which re-renders the mockup panel and
     // clears the lock left by the previous Send.
     state.mockupReview ? `m${state.mockupReview.rev || 0}` : '',
-    state.summary ? '1' : ''].join('|');
+    state.summary ? '1' : '',
+    // The Mockoon step changes status while the summary is the visible screen,
+    // and the switch between the two screens is local — both must re-render.
+    mockoon ? mockoon.status : '', showSummary ? 'S' : ''].join('|');
 }
 
 function renderPanel(state) {
+  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP);
+  // A fresh Mockoon run always pulls the user back onto its panel, whatever they
+  // were looking at when they asked for it.
+  if (mockoon && mockoon.status === 'in_progress') showSummary = false;
   const s = sig(state);
   const step = activeStepOf(state);
   if (s === lastSig) { updateDynamic(step); return; }
@@ -312,7 +328,12 @@ function renderPanel(state) {
 }
 
 function renderActive(state, step) {
-  if (state.summary) return renderSummary(state.summary);
+  // Mockoon mocks are generated after the pipeline is over, so while step 7 is the
+  // active one its panel outranks the summary — until the user asks to go back.
+  if (state.activeStep === MOCKOON_STEP && !showSummary) {
+    return step.status === 'failed' ? renderFailed(step) : renderMockoon(step);
+  }
+  if (state.summary) return renderSummary(state);
   if (step.status === 'failed') return renderFailed(step);
   // Any step may ask: the refinement Q&A in step 2, the required Chrome extension in step 5.
   if (state.question) return renderQuestion(state.question, step);
@@ -589,22 +610,88 @@ function updateDynamic(step) {
 }
 
 function renderFailed(step) {
+  // Step 7 runs after the pipeline is already finished, so declining its retry drops
+  // the user back on the summary instead of ending the run.
+  const isMockoon = step.id === MOCKOON_STEP;
   $('#panel').innerHTML = `
     <h2>${esc(step.name)} — failed</h2>
     <pre class="report">${esc(step.report || 'No report provided.')}</pre>
     <button id="retry" class="danger">Retry step</button>
-    <button id="finish" class="secondary">Finish</button>`;
+    <button id="${isMockoon ? 'backToSummary' : 'finish'}" class="secondary">${
+      isMockoon ? 'Back to summary' : 'Finish'}</button>`;
   $('#retry').addEventListener('click', () => {
     lockPanel('Retrying the step…');
     sendAnswer({ kind: 'decision', decision: 'retry' });
   });
+  if (isMockoon) {
+    // The decision still goes out — it is what releases the orchestrator's failure gate.
+    $('#backToSummary').addEventListener('click', () => {
+      sendAnswer({ kind: 'decision', decision: 'finish' });
+      backToSummary();
+    });
+    return;
+  }
   $('#finish').addEventListener('click', () => {
     lockPanel('Finishing the pipeline…');
     sendAnswer({ kind: 'decision', decision: 'finish' });
   });
 }
 
-function renderSummary(sum) {
+function backToSummary() {
+  showSummary = true;
+  tick();
+}
+
+// navigator.clipboard works on 127.0.0.1 (a secure context), but a denied permission
+// or an older browser must still copy — hence the hidden-textarea fallback.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch (_e) { /* fall through to the legacy path */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  ta.remove();
+}
+
+function renderMockoon(step) {
+  if (step.status !== 'completed') return renderProgress(step);
+  $('#panel').innerHTML = `
+    <h2>${esc(step.name)}</h2>
+    <p class="muted">Import it in Mockoon (Import/export → Mockoon's format → from clipboard).
+      The environment listens on <code>http://localhost:3000</code>.</p>
+    <pre class="report" id="mockoonJson">Loading…</pre>
+    <button id="copyMockoon" disabled>Copy JSON</button>
+    <button id="backToSummary" class="secondary">Back to summary</button>`;
+  $('#backToSummary').addEventListener('click', backToSummary);
+  const copy = $('#copyMockoon');
+  // The environment is fetched straight from the session dir, so nothing renders
+  // it into the orchestrator's context on the way here.
+  fetch('/api/mockoon')
+    .then(r => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+    .then(text => {
+      $('#mockoonJson').textContent = text;
+      copy.disabled = false;
+      copy.addEventListener('click', async () => {
+        await copyText(text);
+        copy.textContent = 'Copied';
+        setTimeout(() => { copy.textContent = 'Copy JSON'; }, 2000);
+      });
+    })
+    .catch(() => {
+      $('#mockoonJson').textContent = 'mockoon.json is missing — regenerate the mocks.';
+    });
+}
+
+function renderSummary(state) {
+  const sum = state.summary;
+  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP) || {};
+  const hasMocks = mockoon.status === 'completed';
   const list = items => `<ul>${(items || []).map(i => `<li>${esc(i)}</li>`).join('')}</ul>`;
   const block = text => `<pre class="summary-text">${esc(text || '—')}</pre>`;
   $('#panel').innerHTML = `<div class="summary">
@@ -617,13 +704,28 @@ function renderSummary(sum) {
     <section><h3>Mockup comparison</h3>${block(sum.mockupComparison)}</section>
     <section><h3>UX review</h3>${block(sum.uxReview)}</section>
     <section><h3>Code review</h3>${block(sum.codeReview)}</section>
+    <section id="mockoon-section"><h3>Mockoon mocks</h3>
+      <p class="muted">A ready-to-import Mockoon environment for the feature's API,
+        listening on <code>http://localhost:3000</code>.</p>
+      ${hasMocks ? '<button id="showMockoon">Show Mockoon JSON</button>' : ''}
+      <button id="generateMockoon"${hasMocks ? ' class="secondary"' : ''}>${
+        hasMocks ? 'Regenerate' : 'Generate Mockoon mocks'}</button>
+    </section>
     <section id="shutdown-section">
-      <button id="shutdown">Shut down server</button>
+      <button id="shutdown" class="secondary">Shut down server</button>
     </section>
   </div>`;
+  // Already generated: the JSON is one local switch away, no agent needed.
+  if (hasMocks) $('#showMockoon').addEventListener('click', () => { showSummary = false; tick(); });
+  $('#generateMockoon').addEventListener('click', () => {
+    lockPanel('Requested — the agent is building the Mockoon environment…');
+    sendAnswer({ kind: 'summary', decision: 'mockoon' });
+  });
   $('#shutdown').addEventListener('click', async () => {
     serverDown = true;
     $('#shutdown').disabled = true;
+    // Ends the orchestrator's post-summary poll before the socket dies under it.
+    try { await sendAnswer({ kind: 'summary', decision: 'shutdown' }); } catch (_e) { /* gone */ }
     try { await postJson('/api/shutdown', {}); } catch (_e) { /* server exits mid-response */ }
     $('#shutdown-section').innerHTML =
       '<p class="muted">Server stopped — you can close this tab.</p>';
