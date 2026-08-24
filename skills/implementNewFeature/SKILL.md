@@ -151,7 +151,9 @@ leaves the panel locked on the previous answer.
 2. Spawn the validation agent from `references/validation-agent.md`. It runs the project's own unit
    suite, then writes and runs the E2E suite on the plugin's own Playwright, and uses the user's
    Chrome (Claude in Chrome extension) for discovery, failure debugging and a UX pass — expect a
-   tab to open there during this step.
+   tab to open there during this step. Endpoints the backend does not serve yet are faked in the
+   app's code for the length of the step and removed before it ends (archived to `<SESSION>/mocks/`),
+   so step 6 and the commit never see them.
 3. Loop on the agent's final JSON:
    - `{"type":"question","id","text","options"?}` → the extension is unavailable, and it is
      REQUIRED: the agent is blocked until the user installs/enables it. POST `{"question":{...}}`,
@@ -159,8 +161,9 @@ leaves the panel locked on the previous answer.
      `{"question":null,"step":5,"currentOperation":"Retrying the Chrome extension…","logEntry":"<id>: <answer, shortened>"}`
      so the UI reacts to the click at once, then SendMessage the answer text to the agent. Never
      tell it to continue without the extension, and never re-spawn it with that requirement waived.
-   - `{"type":"result","compliance":NN,"testsSummary","unitSummary","mockupSummary","uxSummary"}`
-     with `compliance>=99` → POST completed.
+   - `{"type":"result","compliance":NN,"testsSummary","unitSummary","mockupSummary","uxSummary","apiMockSummary"}`
+     with `compliance>=99` → POST completed. Keep `apiMockSummary` for the final summary — it says
+     which endpoints were faked, so the user knows what was never proven against a real API.
    - `{"type":"error","report"}` (<99% after 3 cycles, a unit suite that stayed red, or an
      extension that never became available) → failure protocol.
 
@@ -206,8 +209,8 @@ summary screen, which reaches you through the wait loop below. It can run any nu
 1. Delete `<SESSION>/auth.json` if it still exists — step 6 normally already did, so this is the
    backstop for runs that never got there (the server also wipes it on shutdown). Do this on BOTH
    outcomes — success and `finish` after a failure.
-2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), mockup comparison, UX findings, review results.
-3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `uxReview` = its `uxSummary`).
+2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), API mocks, mockup comparison, UX findings, review results.
+3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `uxReview` = its `uxSummary`).
 4. Print the same summary in the terminal (user's language).
 5. Stage everything: `git add -A` (already done by the step-6 agent; verify with `git status --short`).
 6. Suggest `superpowers:finishing-a-development-branch` for commit/merge/PR.
