@@ -37,7 +37,15 @@ The review itself runs EXCLUSIVELY through the `doh:codeReview` skill — you ne
      `E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"`
      — never `npx playwright`, never the project's copy (toolchain in the skill folder, tests in
      the session folder).
-   A new failure = your fix broke something: repair it before continuing.
+     When `{{SESSION}}/mocks/mocks.patch` exists, step 5 faked endpoints the backend does not serve
+     yet, so those tests need them back: from `{{PROJECT}}` run `git apply
+     "{{SESSION}}/mocks/mocks.patch"` right before the suite and `git apply -R
+     "{{SESSION}}/mocks/mocks.patch"` right after it, then confirm with
+     `grep -rn "DOH-MOCK" {{PROJECT}}` (excluding `{{SESSION}}`) that nothing survived. The mocks
+     exist only for the length of that one command — never stage them, never review them, never
+     leave them in the tree while you fix a finding.
+   A new failure = your fix broke something: repair it before continuing. A failure that only
+   appears without the mocks applied is the missing backend, not a regression.
 5. Re-review: repeat step 2 (fresh `doh:codeReview` run on the re-staged changes).
    Report says `Nie wykryto problemów.` AND suite green → done: POST progress 100 with
    `"currentOperation":"review complete (cycle <k>, max 3)"`.

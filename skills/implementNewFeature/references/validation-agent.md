@@ -13,6 +13,10 @@ Playwright E2E tests cover the checklist (always Playwright, regardless of exist
 screens match the visual baseline when one exists, and a hands-on UX pass in the user's Chrome
 judges what an assertion cannot.
 
+The backend is usually behind the frontend, so some of the feature's endpoints answer 404 or nothing
+at all. You fake exactly those routes in the app's own code for the length of this step and take
+them out again before it ends — see "Mocks for endpoints the backend does not serve yet".
+
 ## Playwright toolchain (the `doh` plugin's own — never any other)
 
 The runner ALWAYS comes from this skill folder inside the `doh` plugin, pinned by absolute path so
@@ -95,6 +99,88 @@ Playwright-only, never skip the UX pass, never work around it:
 - No manifest → the images in `{{SESSION}}/mockups/` are the baseline (read them directly).
 - Neither → no visual comparison; report `mockupSummary` as `n/a`.
 
+## Mocks for endpoints the backend does not serve yet
+
+A route the backend does not serve yet answers 404 or nothing at all, and without a stand-in neither
+the E2E suite nor the UX pass can reach the screens behind it. The stand-ins are scaffolding, never
+part of the feature: no commit may ever carry them, and step 6 sees them only while its own
+regression run needs them.
+
+### 1. Probe — mock only what is genuinely missing
+
+Collect the endpoints the feature talks to: the call sites in the code this run changed
+(`git status --porcelain` lists every touched file — read the api clients, services, hooks and the
+`fetch` / `axios` / `HttpClient` calls), plus the contracts in `{{SESSION}}/contracts/` and the
+"Contracts (pasted)" section of `requirements.md`. Resolve the API base URL from the app's proxy or
+environment config, so you probe what the app actually calls, not what the contract wishes it called.
+
+Start the app first, the way the project starts it — dev server, `docker compose`, whatever the
+README prescribes — the backend included when the repo runs one, and probe only after that. A
+backend that is merely not started yet gets started, never mocked: faking a whole API because
+nothing happened to be listening is how a run ends up proving nothing.
+
+Ask each endpoint whether it exists WITHOUT changing any data:
+
+- `GET` / `HEAD` routes: request them directly.
+- `POST` / `PUT` / `PATCH` / `DELETE`: `OPTIONS` only — never fire the real verb at a real backend.
+- `OPTIONS` unanswered (plenty of backends 404 it): the route inherits the verdict of a `GET` on the
+  same resource path; with no such `GET`, treat it as missing.
+
+Missing = connection refused, 404, 501, 502, 503. Present = anything else, 401/403 included — an
+endpoint that demands authorization exists. Mock ONLY the missing ones and keep every verdict for
+the report: an endpoint the real backend serves stays real, or you hide the integration bug this
+step exists to catch. Nothing missing → no module, no cleanup, `apiMockSummary` is `n/a`.
+
+### 2. The module — one file, one wiring line, both marked
+
+- ONE file in the project's source tree, next to the network layer it fakes, named
+  `doh-mock-endpoints.<ext>`, plus ONE line wiring it into the app's entry point / dev bootstrap.
+  Every line you add carries `DOH-MOCK` in a comment — the wiring line included — so removal is
+  mechanical and provable by grep.
+- Zero dependencies: never install `msw`, `nock` or anything else (the no-install rule below has no
+  exception). Hand-write the interception over whatever the app already uses — `window.fetch`,
+  `XMLHttpRequest`, the axios instance, an Angular `HttpInterceptor` registered from that same file.
+- Pass through by default: a request that is not on the mocked list goes to the real network
+  untouched, so a backend that partly works keeps working.
+- Dev only: guard the wiring with the project's own dev flag (`import.meta.env.DEV`,
+  `process.env.NODE_ENV !== 'production'`, the environment file), so a production build is
+  unaffected even for the minutes the module lives.
+- Payloads: the contract decides path, method, status codes and shape wherever one covers the route;
+  otherwise the field names the UI actually reads. Realistic domain data, never `{"foo":"bar"}` —
+  ISO-8601 dates, ids in the project's own format, collections of 3-5 varied items carrying the
+  paging/envelope fields the code unwraps, labels from the app's own i18n or fixtures. A mock whose
+  field names differ from what the screen reads is worse than no mock.
+- Scenarios: the happy 2xx is the default; expose `window.__dohMock.scenario = 'ok' | 'empty' |
+  'error'` so the empty and error states the spec and checklist ask for are reachable both from
+  Playwright (`addInitScript` / `evaluate`) and by hand in your Chrome tab — never build a second
+  mechanism for them.
+- Touch nothing else. If a call site genuinely cannot be intercepted from the module, that change is
+  one marked line too, and it is archived and reverted with the rest.
+
+### 3. While the mocks are up
+
+Log which routes you faked (`logEntry`), and append `(mock: <METHOD /path>)` to the evidence of
+every checklist item ticked on a mocked route, so the compliance number stays honest about what was
+never seen against a real API.
+
+### 4. Cleanup — mandatory, after the last cycle, before the report
+
+a. Archive: create `{{SESSION}}/mocks/`, then from `{{PROJECT}}` run `git add -N <module>` (so the
+   new file shows up in a diff) and `git diff -- <module> <wiring file> >
+   {{SESSION}}/mocks/mocks.patch`, and copy the module itself into `{{SESSION}}/mocks/` verbatim.
+   The patch is not a souvenir: step 6 re-applies it around its own Playwright re-run, so a patch
+   that does not apply cleanly from `{{PROJECT}}` is a broken step.
+b. Remove the module and every marked line, then `git reset -- <module>` to drop the intent-to-add
+   entry — otherwise `git status` keeps a phantom deletion and step 6's `git add -A` stages it.
+c. Prove it: `grep -rn "DOH-MOCK" {{PROJECT}}` (excluding `{{SESSION}}`) prints nothing, and
+   `git status --porcelain` no longer lists the module. A leftover marker fails the step; it is
+   never just a line in the report.
+d. Re-run the project's unit suite and its build/typecheck script if it has one — removal must not
+   leave a dangling import for step 6 to trip over. Fix what the removal broke by finishing the
+   removal, never by putting a mock back.
+e. Do NOT re-run the E2E suite: with the backend still missing it would fail by design. The report
+   says plainly which results came from mocked endpoints.
+
 ## Process
 
 1. Read `spec.md` and `checklist.md`. Work out how to launch the app and how it runs its unit tests
@@ -116,16 +202,19 @@ Playwright-only, never skip the UX pass, never work around it:
    - No unit suite in the project → `unitSummary` is `n/a`; never invent one (missing unit tests are
      step 6's business).
    Progress 15.
-5. Discovery (extension) — with the app running, walk the feature's screens once in your tab and
+5. Mocks — probe the feature's endpoints and fake the missing ones, per "Mocks for endpoints the
+   backend does not serve yet". This comes before discovery deliberately: on a screen whose data
+   call 404s you would harvest selectors for elements that never render. Progress 20.
+6. Discovery (extension) — with the app running, walk the feature's screens once in your tab and
    `read_page` each. Harvest the real routes, roles, accessible names and test ids, and the actual
    order of the flow. Write the suite's selectors from what you saw, not from what you assumed;
    this pass exists to stop you burning cycles on selectors that never matched. One pass, no
    screenshots. Progress 25.
-6. Write a COMPLETE E2E suite covering every checklist item marked `verify: e2e`.
+7. Write a COMPLETE E2E suite covering every checklist item marked `verify: e2e`.
    If `{{SESSION}}/auth.json` exists (`{"login","password"}` entered by the user), use those
    credentials wherever the app requires signing in: export them as `E2E_LOGIN` / `E2E_PASSWORD`
    env vars when launching Playwright and read `process.env` inside the tests. Progress 40.
-7. Cycle (max 3 full cycles):
+8. Cycle (max 3 full cycles):
    a. Run the suite. Fix application bugs the failures reveal — fix the app, never weaken a test
       to make it pass (unless the test itself is wrong against spec.md).
       When a failure's cause is not obvious from the assertion, first read what the run already
@@ -169,34 +258,47 @@ Playwright-only, never skip the UX pass, never work around it:
       `| evidence: <screenshot pair>` for `visual`, `| evidence: <one sentence from the walk>` for
       `manual`. An item you cannot back with evidence stays unticked; compliance counts ticks, so
       the number stays honest.
-8. Compliance = floor(100 × ticked / all checklist items). The loop ends when compliance ≥ 99 AND
-   the unit suite is green (pre-existing failures aside), or after 3 cycles.
+9. Mock cleanup — run "Cleanup" from the mocks section above (archive, remove, prove, re-run unit
+   tests and build). It happens on EVERY exit from the cycle, the ones that end below 99 included:
+   an error report never leaves mocks behind in the project.
+10. Compliance = floor(100 × ticked / all checklist items). The loop ends when compliance ≥ 99 AND
+    the unit suite is green (pre-existing failures aside), or after 3 cycles.
 
 ## Progress reporting (after every run/fix/comparison/UX pass)
 
-`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":5,\"progress\":<milestone or compliance>,\"currentOperation\":\"<setup | waiting for extension | unit tests | discovery | cycle k/3: phase>\",\"logEntry\":\"<event>\"}"`
-Use the fixed milestones from the Process (5, 10, 15, 25, 40) before the first cycle, compliance
+`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":5,\"progress\":<milestone or compliance>,\"currentOperation\":\"<setup | waiting for extension | unit tests | mocks | discovery | cycle k/3: phase | removing mocks>\",\"logEntry\":\"<event>\"}"`
+Use the fixed milestones from the Process (5, 10, 15, 20, 25, 40) before the first cycle, compliance
 afterwards. Encoding: run curl from a POSIX shell (Bash tool). Never pass non-ASCII JSON inline
 through PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `--data-binary "@file"`.
 
 ## Rules
 
-- NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `screenshots/`, `checklist.md` and report files. `generated-mockups/` is read-only for you — it is the approved baseline, never "fix" it to match the app.
+- NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `screenshots/`, `mocks/`, `checklist.md` and report files. `generated-mockups/` is read-only for you — it is the approved baseline, never "fix" it to match the app.
 - Never install anything into `{{PROJECT}}` — not Playwright, not a test runner, not a helper
-  package. The only toolchain you install is the plugin's own, inside `{{SKILL_DIR}}`.
+  package, and not a mocking library either. The only toolchain you install is the plugin's own,
+  inside `{{SKILL_DIR}}`.
+- The only files you may ADD to `{{PROJECT}}` are the mock module and its wiring line, and only
+  until this step's cleanup. The step is not finished while a `DOH-MOCK` marker survives anywhere in
+  the project — not when compliance is 100, not when you are out of cycles, not when you are about
+  to report an error.
 - Credentials from `auth.json` stay secret: never hardcode them in test files (a session folder is
   copied and pasted around far too easily), never print them in logs, reports or your final
   message — pass them only via env vars, set for the single test-run command (never exported into
   the persistent shell profile or written to `.env`/config files). Leave `auth.json` in place — the
   review agent's regression run still needs it; the orchestrator deletes it when step 6 ends.
 - Write `{{SESSION}}/validation-report.md`: the raw test output of the final Playwright run, then a
-  `## Unit tests` section (command used, result, any pre-existing failures left alone) and a
-  `## UX` section (findings fixed, findings left as suggestions).
+  `## Unit tests` section (command used, result, any pre-existing failures left alone), a
+  `## UX` section (findings fixed, findings left as suggestions) and a `## Mocks` section — every
+  probed endpoint with its verdict, which ones were faked and therefore never met a real API, that
+  the module is gone, and that `git apply {{SESSION}}/mocks/mocks.patch` from `{{PROJECT}}` brings
+  it back for manual click-through.
 
 ## Final message
 
 - `compliance >= 99`:
-  `{"type":"result","compliance":<NN>,"testsSummary":"<X passed / Y total, in {{LANGUAGE}}>","unitSummary":"<project unit suite result or 'n/a', in {{LANGUAGE}}>","mockupSummary":"<result or 'n/a', in {{LANGUAGE}}>","uxSummary":"<what the UX pass found and fixed, in {{LANGUAGE}}>"}`
+  `{"type":"result","compliance":<NN>,"testsSummary":"<X passed / Y total, in {{LANGUAGE}}>","unitSummary":"<project unit suite result or 'n/a', in {{LANGUAGE}}>","mockupSummary":"<result or 'n/a', in {{LANGUAGE}}>","uxSummary":"<what the UX pass found and fixed, in {{LANGUAGE}}>","apiMockSummary":"<which endpoints were faked and thus never met a real API, that they are gone from the code, and the git apply path — or 'n/a', in {{LANGUAGE}}>"}`
+  (`apiMockSummary` is about the endpoint mocks; `mockupSummary` is the visual comparison — never
+  fold one into the other.)
 - After 3 cycles below 99, a unit suite you could not get green, or an extension that never became
   available:
-  `{"type":"error","report":"<unmet checklist items / failing unit tests / missing extension + why, in {{LANGUAGE}}>"}`
+  `{"type":"error","report":"<unmet checklist items / failing unit tests / missing extension + why, and confirmation that the mocks were removed, in {{LANGUAGE}}>"}`
