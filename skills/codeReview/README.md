@@ -45,7 +45,7 @@ That folder is layered on top of the skill's tree: a file at the same relative p
 It is reported as `projectInstructionsDir` in the context JSON, the implementNewFeature coding rulebook layers it the same way, and the `.claude/doh/.gitignore` written for run artifacts explicitly un-ignores it so the rulebook can be committed and shared.
 
 The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
-Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, narrating comments, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.
+Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, every added comment, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.
 
 An instruction may declare `audience: implement|review|both` in its frontmatter (default `both`):
 `review`-audience files load only for this skill, `implement`-audience files only for the implementNewFeature coding rulebook (e.g. the developer persona in `guidelines.md`).

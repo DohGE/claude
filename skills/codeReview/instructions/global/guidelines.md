@@ -21,8 +21,9 @@ import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 })
 export class {{ClassName}}Component {
   protected readonly isServerRunning = signal(true);
+  protected readonly dataTestPrefix = 'server-status-';
 
-  toggleServerStatus(): void {
+  protected toggleServerStatus(): void {
     this.isServerRunning.update((isServerRunning) => !isServerRunning);
   }
 }

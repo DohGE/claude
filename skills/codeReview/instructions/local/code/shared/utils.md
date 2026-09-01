@@ -12,6 +12,6 @@ applies-to:
 - Summary/flow builders: branching flags live in well-named local variables; conditional entries are `push`ed into an explicitly typed accumulator array; displayed labels and yes/no-style values are i18n keys; null-safety with `?.`/`?? ''`.
 - Aggregation utils deduplicate with a `Map` keyed by the identifier, use `reduce<ReturnType>` with an explicit accumulator type, and delegate to shared builders instead of re-implementing them.
 - ID formats and shared builders are defined once and reused everywhere — never duplicated inline in reducers, selectors or components.
-- Only logic that is reused (≥2 consumers) or complex enough to deserve a test lives here; trivial single-consumer logic stays inline at its call site.
+- A `.util.ts` exists for logic with ≥2 real consumers. A small function that will be called from ONE place is never extracted: it stays inline at its call site — a module-level function in that file, a `computed()`, a private method — and a new util file created to hold it is a finding even when the function is pure, typed and specced. The single exception is genuinely complex single-consumer logic (branching a spec has to pin down) that would bury its call site.
 - Utils are never exported through a barrel — consumers import the concrete `*.util.ts` file (relative within the area, alias from outside).
 - Every util file has a spec in the sibling `tests/` folder, covering every function the file exports (one `describe` per exported function).

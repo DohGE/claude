@@ -2,7 +2,7 @@
 name: Security
 ---
 ## Checklist
-- No `DomSanitizer.bypassSecurityTrust*` calls without a written justification and a provably static, developer-controlled value — never on user-, API- or URL-derived data.
+- No `DomSanitizer.bypassSecurityTrust*` calls without a justification in the PR description and a provably static, developer-controlled value — never on user-, API- or URL-derived data.
 - `[innerHTML]` is bound only to trusted i18n translation values (`'key' | translate`); never to user input, API responses, query params or string-concatenated/interpolated HTML.
 - No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings.
 - No `eval`, `new Function(...)`, or string arguments to `setTimeout`/`setInterval`.

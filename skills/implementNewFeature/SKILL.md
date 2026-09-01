@@ -170,8 +170,8 @@ leaves the panel locked on the previous answer.
 ## Step 6 — Code Review (view-only)
 
 1. POST `{"step":6,"status":"in_progress","activeStep":6,"progress":0}`.
-2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method).
-3. `{"type":"result","findingsFixed":N,"reviewSummary"}` → delete `<SESSION>/auth.json` if it exists
+2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method, and it always runs TWO rounds of `1 full review + up to 2 --since-last re-reviews`, fixing every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
+3. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/auth.json` if it exists
    (step 6's regression run is its last consumer, so the credentials die with the step, not with the
    pipeline), then POST completed. `error` → failure protocol.
 
@@ -210,7 +210,7 @@ summary screen, which reaches you through the wait loop below. It can run any nu
    backstop for runs that never got there (the server also wipes it on shutdown). Do this on BOTH
    outcomes — success and `finish` after a failure.
 2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), API mocks, mockup comparison, UX findings, review results.
-3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `uxReview` = its `uxSummary`).
+3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `uxReview` = its `uxSummary`; `codeReview` = the review agent's `reviewSummary`, which also names every finding it rejected and on what ground).
 4. Print the same summary in the terminal (user's language).
 5. Stage everything: `git add -A` (already done by the step-6 agent; verify with `git status --short`).
 6. Suggest `superpowers:finishing-a-development-branch` for commit/merge/PR.
