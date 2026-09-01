@@ -60,6 +60,7 @@ and rule references — but for a clean experiment, commit the README separately
 ### models/interfaces/user-dto.interface.ts
 
 - models: helper interface used only internally but exported (`ApiEnvelope`).
+- models: `Dto` vocabulary in the type and file name (`UserDto`, `user-dto.interface.ts`) — every consumer inherits it.
 - models: DTO with mixed camelCase/snake_case fields (`firstName` vs `last_name`) — API contract is snake_case.
 - models: domain/UI type with snake_case fields (`UserVm`).
 - general: type access through string index (`UserDto['user_status']`).
@@ -188,7 +189,7 @@ and rule references — but for a clean experiment, commit the README separately
 - http-service: local interface declared in the service (`SearchResponse`).
 - http-service: `@Injectable()` without `providedIn: 'root'` (inverse of the facade rule).
 - http-service + best-practices: constructor injection in a new service; store injected into an HTTP service.
-- http-service: `Observable<any>` (+ `get<any>`) — no honest DTO generic; `pageSize ?? 25` instead of a default parameter value.
+- http-service: `Observable<any>` (+ `get<any>`) — no honest response generic; `pageSize ?? 25` instead of a default parameter value.
 - http-service: `.pipe(map, catchError, tap)` inside the service — mapping/error handling belong to reducer/effects; `catchError(() => of([]))` swallows failures (general); `tap` + `console.log` logging.
 - best-practices: operators imported from `rxjs/operators` (deprecated since RxJS 7.2 — import from `rxjs`).
 - http-service: method names `getUsers`/`deleteUser` instead of `loadUsers`/`removeUser`; `firstValueFrom` forbidden.

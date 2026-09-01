@@ -3,7 +3,7 @@ name: Performance & change detection
 ---
 ## Checklist
 - Every value read by a template is a signal (`signal`/`computed`/`input`/facade signal) — a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).
-- Template expressions are cheap: no non-trivial method calls and no objects/arrays/`new Date()` rebuilt on every check inside bindings; derivations go through `computed()`, selectors or pure pipes.
+- Template expressions are cheap: no objects/arrays/`new Date()` rebuilt on every check inside bindings; derivations go through `computed()`, selectors or pure pipes (method calls inside bindings are owned by the component-template instruction and reported there).
 - `toSignal()`/`toObservable()` are called once, as field initializers — never inside methods, getters, `computed()` or `effect()` (every call creates a new subscription).
 - No `ngDoCheck`, `ngAfterContentChecked` or `ngAfterViewChecked` hooks (they run on every change-detection cycle); no state mutation inside `ngAfterViewInit`/`ngAfterContentInit` (ExpressionChangedAfterItHasBeenChecked).
 - `effect()` never writes signals to emulate derivation — derived state is `computed()`; dependent-but-locally-resettable state is `linkedSignal()`.
@@ -18,6 +18,8 @@ name: Performance & change detection
 - `@defer`: `viewport`/`interaction`/`hover` triggers declare a `@placeholder` with a single root element (the trigger needs exactly one element to observe).
 - Images: the LCP/hero image is marked `priority`; every `ngSrc` image declares `width` + `height` (or `fill` with a positioned parent) so it cannot shift layout.
 - Long-lived async work is bounded: polling/intervals take their period from the central app config and are explicitly stopped — no unbounded `setInterval`/`timer` outliving its view or effect.
+- Render-phase work that must re-run when a signal changes is `afterRenderEffect()` (v19+), not an `effect()` reading the DOM: a plain `effect()` runs before the DOM is updated, so it measures the previous frame; the one-shot case stays `afterNextRender`.
+- SSR only: with `withIncrementalHydration()` enabled, every server-rendered `@defer` block declares its `hydrate` trigger (`hydrate on viewport`/`on interaction`/`hydrate never`) — a block left without one falls back to the non-incremental path and the client re-renders markup the server already produced.
 - SSR only: no `window`/`document`/`navigator`/browser globals in constructors or field initializers — browser-only work runs in `afterNextRender`/`afterEveryRender`.
 - SSR only: the document comes from `inject(DOCUMENT)`, never from the global.
 - SSR only: server and client render identical markup — an `isPlatformBrowser` branch in a template is a hydration mismatch.

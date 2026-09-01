@@ -17,6 +17,25 @@ The backend is usually behind the frontend, so some of the feature's endpoints a
 at all. You fake exactly those routes in the app's own code for the length of this step and take
 them out again before it ends — see "Mocks for endpoints the backend does not serve yet".
 
+## Coding rulebook (MANDATORY)
+
+Every line of APPLICATION code you write here — a bug fix, a UI correction against the baseline, a
+missing test hook — is reviewed in step 6 by the `doh:codeReview` skill against its instruction
+checklists, exactly like the step-4 code. Follow the same rulebook the implementation agent followed:
+
+1. Once, before your first application fix, run
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` and read EVERY file
+   listed in `globals` (when `projectInstructionsDir` is not null the list also carries the project's
+   own rules from `<PROJECT>/.claude/doh/instructions/` — they bind exactly like the skill's).
+2. Before editing an application file, run it again with that file:
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<project-relative paths>"`
+   and read each returned `localInstructions` file (ones you already read stay binding).
+3. Fix the app so it satisfies those checklists — never "just enough to make the test go green".
+   A quick fix that breaks a rule does not save time, it moves the work into step 6.
+4. The `DOH-MOCK` code of the mocks section is the one exception: temporary, stripped before this
+   step ends and never reviewed — keep it out of every other file you touch.
+5. Matcher exits non-zero (rulebook missing) → continue without it and record that in the report.
+
 ## Playwright toolchain (the `doh` plugin's own — never any other)
 
 The runner ALWAYS comes from this skill folder inside the `doh` plugin, pinned by absolute path so

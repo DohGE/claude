@@ -7,7 +7,7 @@ the SHAPE of a spec (location, setup, naming, assertion style). A gap is reporte
 as a unit-tests finding.
 
 ## Checklist
-- Every new or behavior-changing source file in the diff ships the matching spec change in the same diff; a missing or untouched spec for changed behavior is a 🔵 Missing Unit Test finding.
+- Every new or behavior-changing source file in the diff ships the matching spec change in the same diff; a missing or untouched spec for changed behavior is a 🔵 Missing Unit Test finding. The file types their own instructions exempt are never such a finding: `models/` declarations, route files, i18n JSON, barrels, templates and styles — their behavior is covered by the specs of the code that consumes them.
 - Do not assume coverage from the spec's mere existence — enumerate the behavioral cases the changed lines introduce and cross-check each one against the spec's actual test cases.
 - Every conditional branch introduced or modified by the diff is tested for BOTH outcomes: each `if`/`else`, ternary, `switch` case (including `default`), guard clause, early return and short-circuit path (`&&`, `||`, `??`, `?.`).
 - Every failure path is tested, not only the happy path: rejected promises, erroring observables/HTTP calls, thrown exceptions, `catch`/`catchError` blocks, timeout/retry logic and fallback values.

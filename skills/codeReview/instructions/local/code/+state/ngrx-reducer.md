@@ -16,9 +16,9 @@ applies-to:
 - Default selections use a fallback chain: `state.selectedX ?? list[0] ?? null` (preserve the user/edit-mode choice first, `null` last — never `undefined`).
 - The start handler of an operation that replaces a previous result also clears that result (`previousResponse: null`) so the UI never shows stale data while reloading.
 - A derived value that must be persisted in state is recomputed (through a pure util) in **every** handler that changes any of its inputs; read-only derivations stay in selectors.
-- DTO→domain mapping uses dedicated utils and `Record` mappers from `models/` — no inline id concatenation and no `switch` mapping inside the reducer.
+- API→domain mapping — where the domain shape genuinely differs from the response, field casing alone never counting as a difference (models instruction) — uses dedicated utils and `Record` mappers from `models/`; no inline id concatenation and no `switch` mapping inside the reducer.
 - Reset/clear handlers list the cleared fields explicitly, one per line (spreading the whole initial state is reserved for an intentional full reset action).
 - An emptied collection that the UI treats as "none" is stored as `null`, not `[]`, when the state models it that way.
-- Complex domain logic is extracted to `shared/utils/` (one large, commented mapping handler per reducer is the tolerated exception); use `map`/`filter`/`reduce`, not `for` loops; no `as any`.
+- Complex domain logic is extracted to `shared/utils/` (one large mapping handler per reducer is the tolerated exception); use `map`/`filter`/`reduce`, not `for` loops; no `as any`.
 - Handler order mirrors the actions file (trios together, one concern per block).
 - Allowed imports: `createReducer`/`on`, pure utils, models (types, mappers, initial state), the local actions file; forbidden: selectors, effects, facade, HTTP services, components.

@@ -182,7 +182,7 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
    - naming rules (general instruction) plus naming consistency across the diff;
    - code-quality rules (code-quality instruction): duplicated, unnecessary, unused and boilerplate
-     code, functionality-narrating comments, inconsistency — full 🟡 Medium findings, never nits to skip;
+     code, every comment the diff adds, inconsistency — full 🟡 Medium findings, never nits to skip;
    - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction);
    - test scaffolding rules (unit-tests instruction plus the matching per-type test instruction):
      spec and snapshot location, the prescribed setup instead of TestBed/MockStore, `ngMocks.faster()`
@@ -316,7 +316,7 @@ not done, regardless of diff size or session length.
 - Assign severity by these criteria, picking the highest that applies:
   - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
   - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification).
-  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every code-quality finding (duplicated, unnecessary, unused or boilerplate code, functionality-narrating comment, inconsistency) — those stay Medium however cosmetic they look.
+  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every code-quality finding (duplicated, unnecessary, unused or boilerplate code, an added comment, inconsistency) — those stay Medium however cosmetic they look.
   - ⚪ **Low** — readability, naming-convention or style drift with no behavioral impact and not covered by the code-quality instruction.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
