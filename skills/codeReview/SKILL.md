@@ -120,6 +120,15 @@ small it looks — a changed condition, argument, operator, default, lifecycle h
   of a file deleted in the same target, treat the unchanged parts as mechanical and review only what
   the move actually changed.
 
+**Prettier formatting is out of scope.** Never report anything Prettier owns and rewrites on save:
+indentation, line width and wrapping, line breaks inside calls/objects/arrays/templates, quote style,
+semicolons, trailing commas, spacing around operators/braces/attributes, blank-line count, and the
+physical placement of Angular template attributes or class lists. No finding of ANY severity is
+written about such a line, and no report ever says "run Prettier" or "format this" — the formatter
+settles it mechanically and a review comment about it is noise. Import ORDER stays reviewable (the
+general instruction owns it) because it expresses layering, and so does everything about the code
+itself: naming, structure, duplication, typing, logic.
+
 **Endpoint names are out of scope.** Never report the wording, spelling, casing, versioning, path
 segments, leading/trailing slashes, key names or CHANGES of REST endpoint paths and their `endpoints`
 constants — the backend contract decides them, not this review. The one exception is an absolute URL

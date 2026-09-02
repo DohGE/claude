@@ -19,6 +19,6 @@ applies-to:
 - API→domain mapping — where the domain shape genuinely differs from the response, field casing alone never counting as a difference (models instruction) — uses dedicated utils and `Record` mappers from `models/`; no inline id concatenation and no `switch` mapping inside the reducer.
 - Reset/clear handlers list the cleared fields explicitly, one per line (spreading the whole initial state is reserved for an intentional full reset action).
 - An emptied collection that the UI treats as "none" is stored as `null`, not `[]`, when the state models it that way.
-- Complex domain logic is extracted to `shared/utils/` (one large mapping handler per reducer is the tolerated exception); use `map`/`filter`/`reduce`, not `for` loops; no `as any`.
+- Complex domain logic is extracted to `shared/utils/` ONLY when a second consumer exists or the body is long (~10+ lines) and genuinely complex; a reducer handler is allowed to hold its own logic — mapping, merging, branching, computing a derived field — inline, and demanding a util per case is a finding, not a review comment. Use `map`/`filter`/`reduce`, not `for` loops; no `as any`.
 - Handler order mirrors the actions file (trios together, one concern per block).
 - Allowed imports: `createReducer`/`on`, pure utils, models (types, mappers, initial state), the local actions file; forbidden: selectors, effects, facade, HTTP services, components.
