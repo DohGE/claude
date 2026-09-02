@@ -31,6 +31,9 @@ after round 2.
    keeps the report Markdown — you read it yourself and the interactive HTML page would only burn
    tokens, so never drop either flag.
    It writes a findings report file (`reportPath` from its context script) and fixes nothing.
+   That report also carries one HTML-comment checklist block per reviewed file — the ticked proof of
+   what the review walked, never feedback for you. Read the report through
+   `sed "/<!-- checklist:/,/-->/d" "<reportPath>"` so the blocks never reach your context.
    This is the ONLY permitted review method:
    - never review the diff manually, "quickly", or as a "sanity check";
    - never use any other review skill or tool;

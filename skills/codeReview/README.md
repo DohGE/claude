@@ -30,7 +30,7 @@ Pruning counts only run-stamped report names (`…-YYYY-MM-DD-HH-mm.md|html`), s
 `--since-last` turns a run into a re-review: every run records the post-image blob of each reviewed file in `.last-review-<kind>.json` next to the report, and the next incremental run drops the files whose blob has not moved (they are listed in a warning, and the previous report stays the reference for them).
 It is meant for a target already reviewed in this session — the implementNewFeature review loop uses it from cycle 2 on; on a first review it warns and reviews everything.
 
-Each analyzed file ends its block with a coverage marker — `<!-- coverage: <path> <checked>/<total> -->`, `<total>` being the number of checklist items the context script counted for that file. The renderer keeps the marker out of the HTML, warns when `<checked>` is smaller, and says so when a report carries no markers at all.
+Each analyzed file ends its block with the checklist it was walked against — one ticked line per item — and a coverage marker, `<!-- coverage: <path> <checked>/<total> -->`, `<total>` being the number of checklist items the context script counted for that file. See [Checklist coverage](#checklist-coverage).
 Generated and binary files (lockfiles, `*.min.*`, source maps, `dist/`/`build/`/`coverage/` output, images, fonts, media, executables) are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report.
 
 ## Instructions
@@ -71,6 +71,26 @@ A local instruction without any `applies-to` pattern never matches and is report
 `**` matches any number of directories, `*` matches within one path segment, `?` matches a single character.
 Matching is case-sensitive, against `/`-separated paths relative to the repo root.
 Everything else is matched literally.
+
+## Checklist coverage
+
+The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for.
+Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under.
+
+The reviewer walks that list item by item and writes the result next to the file's findings, as one HTML comment block per file:
+
+    <!-- checklist: src/app/user.component.ts
+    [x] general#1 nazwy const camelCase — OK (L12, L18)
+    [x] component#1 OnPush — NARUSZENIE (L4)
+    [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
+    -->
+    <!-- coverage: src/app/user.component.ts 184/185 -->
+
+`[x]` is set only for an item checked 100%: `OK (<lines or "brak wystąpień">)` when the file complies, `NARUSZENIE (<lines>)` when the item produced the finding above it.
+Anything the reviewer could not verify stays `[ ]` with the reason — an honest gap, not a rounding error.
+A file whose whole diff is mechanical writes `<!-- coverage: <path> mechanical -->` and no block: its walk was the gate's two questions, not the checklist.
+
+The renderer recounts the ticks instead of trusting the marker: a missing block, a block shorter than `<total>`, a marker the ticks do not back up and an unticked item all become warnings (which keep the Markdown next to the HTML), and the ticked lines become the page's **Pokrycie checklist** section.
 
 ## Review scope
 
@@ -123,6 +143,7 @@ The default output is one self-contained page — inline CSS and JS, no fonts, i
 It follows the reader's light/dark theme, and a button in the top right corner of the header switches between the two by hand — the pick lands in `localStorage` under one key shared by every report, and is applied before the first paint so a remembered theme never flashes the other one.
 
 - **Code snippet** — every finding carries a collapsible view of the cited lines with three lines of context. When those lines changed, it is a side-by-side diff like GitHub's split view: the file before the change on the left under its own line numbers, after it on the right, the k-th removal facing the k-th addition inside a change block and a blank cell facing whatever has no counterpart. Each side scrolls horizontally on its own. A snippet with nothing changed in it (a folder review, or a finding on a line the diff left alone) stays a single column. A switch in the snippet header swaps between the cited lines and the whole file; the full view renders under the same rules — split diff when the file changed, single column when it did not — highlights the cited lines, scrolls inside its own box and opens on the first highlight. Files over 3000 lines are not embedded, and their switch says so.
+- **Pokrycie checklist** — a collapsed section under the findings: one row per analyzed file with its `<checked>/<total>`, opening to every checklist item the reviewer walked, marked ✓ compliant, ✗ reported or ○ unverified. A file that did not finish its walk shows its count in the High colour. It is the one part of the page no filter touches, and a report with no findings still carries it.
 - **Severity filter** — one toggle chip per severity present in the report, with a count.
 - **Rule filter** — a two-level checkbox tree: instruction file, expanding to its concrete rules. Toggling the file toggles all of its rules; a partial selection shows an indeterminate parent. A finding stays visible while at least one of its rules is selected, so a finding citing two rules survives either way.
 - **Grouping** — `Pliki` (one collapsible section per file, in report order) or `Globalnie` (one flat list sorted by severity, then path); the flat list labels each finding with its file.
@@ -156,6 +177,7 @@ The severity is a bold lead line; the other seven fields follow as bullets, each
 They are written for a reviewer who never opens the report: `PR Problem` gets two sentences (what is wrong + the consequence), `PR Expected` two to three (the target state + how to reach it), and `PR Locations` lists every file and symbol the fix touches — every concrete name the Polish fields propose has to appear in them.
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
+Every file also carries its ticked checklist and coverage marker as HTML comments — see [Checklist coverage](#checklist-coverage).
 Line numbers refer to the file's real content (read off the line-numbered `git show … | cat -n` output), never to diff hunk numbering.
 The context script additionally precomputes each file's changed-line ranges (`changedLines`, from `git diff -U0`) as the authoritative list of lines the diff touched, and carries the source path of a renamed file (`oldPath`, from the rename pair `git diff --raw` reports) so the rename can be checked against the naming rules.
 No findings → the report is the single line `Nie wykryto problemów.`; empty diff → `Nie wykryto zmian do analizy.`
@@ -167,7 +189,7 @@ Branch reviews never touch the working tree (`git diff base...branch`, `git show
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
 Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source]`.
-It reads the per-file coverage markers too: `<!-- coverage: <path> <checked>/<total> -->` warns (and keeps the Markdown) when the walk fell short, while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions.
+It reads the per-file checklist blocks and coverage markers too, and reconciles them: the ticks are recounted, and a short walk, a missing or malformed block or a marker the ticks contradict warns (and keeps the Markdown), while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions. Any other multi-line HTML comment in the report is swallowed whole instead of being read as findings.
 Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
 `--mode` decides what the snippet is: `branch` reads `git show <branch>:<path>` plus `git diff -U0 <base>...<branch>`, `staged` reads the index plus `git diff -U0 --cached`, and both render a real before/after split diff; `folder` (and a missing `--mode`) renders the working-tree file with no diff markers.
 The old-file line numbers the left side prints are derived from the `-U0` hunk headers, which state how far the old numbering runs ahead of the new one from each hunk on.

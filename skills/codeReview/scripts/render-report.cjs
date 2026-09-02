@@ -45,6 +45,13 @@ const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result|PR Problem|PR E
 // `mechanical` for a file the mechanical-change gate narrowed to its two
 // questions, which by design never walks the full checklist.
 const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(mechanical|\d+\s*\/\s*\d+)\s*-->$/;
+// The ticked checklist behind that marker: one multi-line comment per analyzed
+// file, opened by `<!-- checklist: <path>`, one item line each, closed by `-->`.
+// `[x]` is an item the reviewer reached a verdict on, `[ ]` one it could not
+// verify; the verdict word is what separates a clean item from a reported one.
+const reChecklistOpen = /^<!--\s*checklist:\s*(\S+)\s*$/;
+const reChecklistItem = /^\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)#(\d+)\s+(.+)$/;
+const reViolationVerdict = /(^|[^\p{L}])NARUSZENIE([^\p{L}]|$)/u;
 // What a bare instruction reference - or the violated point's name, which Step 4
 // allows instead - may consist of. Quotes, backticks and brackets, or anything
 // longer than a name, mean the arrow belongs to quoted rule text.
@@ -148,13 +155,58 @@ function findingId(filePath, finding) {
   return fnv1a(`${filePath}|${finding.severity}|${finding.lines}|${finding.rule}|${finding.problem}`);
 }
 
+// The coverage marker is a claim, the ticked checklist is the evidence behind
+// it: every number the page shows is recounted from the ticks, and a marker the
+// ticks do not back up becomes a warning - which keeps the Markdown next to the
+// HTML, exactly like any other format drift.
+function reconcileCoverage(report) {
+  const blockOf = new Map();
+  for (const entry of report.checklists) if (!blockOf.has(entry.path)) blockOf.set(entry.path, entry);
+  const covered = new Set();
+  for (const entry of report.coverage) {
+    covered.add(entry.path);
+    const block = blockOf.get(entry.path);
+    entry.items = block ? block.items : [];
+    entry.ticked = entry.items.filter((item) => item.ok).length;
+    if (entry.mechanical) {
+      if (block) report.warnings.push(`${entry.path}: plik oznaczony jako mechaniczny nie powinien mieć bloku checklisty.`);
+      continue;
+    }
+    if (!block) {
+      report.warnings.push(`${entry.path}: brak bloku checklisty - marker coverage nie ma pokrycia w odchaczonych pozycjach.`);
+      continue;
+    }
+    if (entry.items.length !== entry.total) {
+      report.warnings.push(`${entry.path}: checklista ma ${entry.items.length} z ${entry.total} pozycji - brakujące pozycje nie zostały przejrzane.`);
+    }
+    if (entry.ticked !== entry.checked) {
+      report.warnings.push(`${entry.path}: marker coverage mówi o ${entry.checked} sprawdzonych pozycjach, a odchaczono ${entry.ticked}.`);
+    }
+  }
+  for (const block of report.checklists) {
+    if (covered.has(block.path)) continue;
+    report.warnings.push(`${block.path}: checklista bez markera coverage.`);
+    report.coverage.push({
+      path: block.path,
+      checked: block.items.filter((item) => item.ok).length,
+      total: block.items.length,
+      mechanical: false,
+      items: block.items,
+      ticked: block.items.filter((item) => item.ok).length,
+    });
+  }
+}
+
 function parseReport(markdown) {
-  const report = { title: '', datetime: '', skipped: [], emptyState: null, files: [], coverage: [], warnings: [] };
+  const report = { title: '', datetime: '', skipped: [], emptyState: null, files: [], coverage: [], checklists: [], warnings: [] };
   const lines = String(markdown).split(/\r?\n/);
   let section = null;
   let finding = null;
   let field = null;
   let headerSeen = false;
+  // The multi-line comment currently being consumed: a checklist block when it
+  // has a `path`, any other multi-line comment when it does not.
+  let block = null;
 
   const openSection = (sectionPath) => {
     section = { path: sectionPath, findings: [] };
@@ -174,6 +226,30 @@ function parseReport(markdown) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     const lineNo = i + 1;
+
+    // Inside a multi-line comment nothing is report content: the block runs to
+    // the line carrying `-->`, and only a checklist block keeps what it holds.
+    if (block) {
+      const end = line.indexOf('-->');
+      const content = (end === -1 ? line : line.slice(0, end)).trim();
+      if (content && block.path) {
+        const item = content.match(reChecklistItem);
+        if (item) {
+          const text = item[4].trim();
+          const ok = item[1] !== ' ';
+          block.items.push({
+            id: `${item[2]}#${item[3]}`,
+            ok,
+            text,
+            state: !ok ? 'open' : (reViolationVerdict.test(text) ? 'violation' : 'ok'),
+          });
+        } else {
+          report.warnings.push(`${block.path}: nierozpoznana pozycja checklisty w linii ${lineNo}: "${content}".`);
+        }
+      }
+      if (end !== -1) block = null;
+      continue;
+    }
     if (!line) continue;
 
     if (!headerSeen) {
@@ -194,6 +270,20 @@ function parseReport(markdown) {
     // field/wrapped-value branches below, which would otherwise swallow a
     // marker written right after a finding.
     if (line.startsWith('<!--')) {
+      const openMatch = line.match(reChecklistOpen);
+      if (openMatch) {
+        if (report.checklists.some((c) => c.path === openMatch[1])) {
+          report.warnings.push(`${openMatch[1]}: drugi blok checklisty dla tego samego pliku (linia ${lineNo}).`);
+        }
+        block = { path: openMatch[1], items: [] };
+        report.checklists.push(block);
+        continue;
+      }
+      if (/^<!--\s*checklist:/.test(line)) {
+        report.warnings.push(`Linia ${lineNo}: nierozpoznany otwierający blok checklisty - oczekiwano "<!-- checklist: <ścieżka>" i pozycji w kolejnych liniach.`);
+        if (!line.includes('-->')) block = { path: null, items: [] };
+        continue;
+      }
       const coverageMatch = line.match(reCoverage);
       if (coverageMatch) {
         if (coverageMatch[2] === 'mechanical') {
@@ -207,6 +297,9 @@ function parseReport(markdown) {
           }
         }
       }
+      // Any other multi-line comment is swallowed whole, so its inner lines are
+      // never read as findings.
+      if (!line.includes('-->')) block = { path: null, items: [] };
       continue;
     }
 
@@ -262,6 +355,10 @@ function parseReport(markdown) {
     report.warnings.push(`Linia ${lineNo}: nierozpoznana treść: ${line.slice(0, 60)}`);
   }
   closeFinding();
+  if (block) {
+    report.warnings.push(`${block.path || '(blok komentarza)'}: niezamknięty blok checklisty - brakuje linii "-->".`);
+  }
+  reconcileCoverage(report);
 
   const seen = new Map();
   for (const file of report.files) {
@@ -595,6 +692,15 @@ function buildPayload(report, reportName) {
       .filter((s) => allFindings.some((f) => f.severity === s.key))
       .map(({ key, label, emoji }) => ({ key, label, emoji })),
     ruleGroups,
+    // The walked checklists, in the order the files were analyzed: what the
+    // page shows under "Pokrycie checklist".
+    coverage: report.coverage.map((entry) => ({
+      path: entry.path,
+      mechanical: !!entry.mechanical,
+      total: entry.total,
+      checked: entry.mechanical ? null : (entry.items || []).filter((item) => item.ok).length,
+      items: (entry.items || []).map((item) => ({ id: item.id, state: item.state, text: item.text })),
+    })),
     files: report.files.map((file) => ({
       path: file.path,
       full: file.full || null,
@@ -840,6 +946,39 @@ button{font:inherit;color:inherit}
 
 .note{background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:22px;
   text-align:center;color:var(--muted)}
+
+/* Pokrycie checklist: the proof of what was walked, one collapsed row per file.
+   It sits below the findings and opens on demand, so it never competes with
+   them for the first screen. */
+.coverage[hidden]{display:none}
+.coverage{margin-top:26px;background:var(--panel);border:1px solid var(--border);
+  border-radius:10px;box-shadow:var(--shadow)}
+.coverage>summary{cursor:pointer;display:flex;align-items:baseline;gap:10px;padding:11px 14px;
+  list-style:none;font-size:14px;font-weight:600}
+.coverage>summary::-webkit-details-marker{display:none}
+.coverage>summary::before{content:"▸";color:var(--muted);font-weight:400}
+.coverage[open]>summary::before{content:"▾"}
+.coverage>summary .cov-meta{margin-left:auto;color:var(--muted);font-size:12.5px;font-weight:400;
+  font-variant-numeric:tabular-nums}
+.cov-body{padding:0 14px 12px}
+.cov-file{border-top:1px solid var(--border)}
+.cov-file>summary{cursor:pointer;display:flex;align-items:center;gap:10px;padding:7px 2px;list-style:none;
+  font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12.5px;overflow-wrap:anywhere}
+.cov-file>summary::-webkit-details-marker{display:none}
+.cov-file>summary::before{content:"▸";color:var(--muted);flex:0 0 auto}
+.cov-file[open]>summary::before{content:"▾"}
+.cov-file>summary .n{margin-left:auto;flex:0 0 auto;color:var(--muted);font-variant-numeric:tabular-nums}
+/* A file that did not finish its walk is the one thing this section has to make
+   impossible to miss. */
+.cov-file.short>summary .n{color:var(--sev-high);font-weight:600}
+.cov-items{margin:2px 0 10px;padding:0 0 0 18px;list-style:none;font-size:12.5px}
+.cov-item{display:flex;gap:8px;padding:1.5px 0;overflow-wrap:anywhere}
+.cov-item::before{content:"✓";flex:0 0 auto;color:var(--add-fg);font-family:ui-monospace,monospace}
+.cov-item.violation::before{content:"✗";color:var(--sev-high)}
+.cov-item.open::before{content:"○";color:var(--sev-medium)}
+.cov-item.open{color:var(--sev-medium)}
+.cov-id{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
+  color:var(--muted)}
 `;
 
 const pageJs = `
@@ -891,6 +1030,52 @@ const pageJs = `
     try { localStorage.setItem(themeKey, next); } catch (e) {}
     applyTheme(next);
   });
+
+  // "Pokrycie checklist" - the ticked checklist of every analyzed file, which is
+  // what the coverage numbers in the header of each row are counted from. No
+  // filter reaches it, so it is built once and never touched by refresh().
+  (function coverageSection() {
+    var data = reportData.coverage || [];
+    var box = byId('coverage');
+    if (!box || !data.length) return;
+    var body = byId('cov-body');
+    data.forEach(function (file) {
+      var short = !file.mechanical && file.checked < file.total;
+      var sec = el('details', short ? 'cov-file short' : 'cov-file');
+      var summary = el('summary');
+      var label = el('span');
+      label.textContent = file.path;
+      var n = el('span', 'n');
+      n.textContent = file.mechanical ? 'zmiana mechaniczna' : file.checked + '/' + file.total;
+      summary.appendChild(label);
+      summary.appendChild(n);
+      sec.appendChild(summary);
+      if (file.items.length) {
+        var list = el('ul', 'cov-items');
+        file.items.forEach(function (item) {
+          var row = el('li', item.state === 'ok' ? 'cov-item' : 'cov-item ' + item.state);
+          var id = el('span', 'cov-id');
+          id.textContent = item.id;
+          var text = el('span');
+          text.appendChild(rich(item.text));
+          row.appendChild(id);
+          row.appendChild(text);
+          list.appendChild(row);
+        });
+        sec.appendChild(list);
+      } else {
+        var empty = el('ul', 'cov-items');
+        var only = el('li', 'cov-item open');
+        only.appendChild(document.createTextNode(file.mechanical
+          ? 'Zmiana mechaniczna: przejście zawężone do dwóch pytań bramki.'
+          : 'Brak odchaczonych pozycji.'));
+        empty.appendChild(only);
+        sec.appendChild(empty);
+      }
+      body.appendChild(sec);
+    });
+    box.hidden = false;
+  }());
 
   if (reportData.emptyState) { host.appendChild(note(reportData.emptyState)); return; }
 
@@ -1738,6 +1923,23 @@ function renderHtml(report, reportName) {
     </div>
 `;
 
+  // The coverage row of a mechanical file has no items to count, so it is left
+  // out of the totals and only counted as one more walked file.
+  const walked = payload.coverage.filter((entry) => !entry.mechanical);
+  const covChecked = walked.reduce((sum, entry) => sum + entry.checked, 0);
+  const covTotal = walked.reduce((sum, entry) => sum + entry.total, 0);
+  const covShort = walked.filter((entry) => entry.checked < entry.total).length;
+  const covFiles = payload.coverage.length;
+  const covMeta = `${covFiles} ${plural(covFiles, 'plik', 'pliki', 'plików')}`
+    + ` · ${covChecked}/${covTotal} ${plural(covTotal, 'pozycja', 'pozycje', 'pozycji')}`
+    + (covShort ? ` · ${covShort} ${plural(covShort, 'plik bez pełnego przejścia', 'pliki bez pełnego przejścia', 'plików bez pełnego przejścia')}` : '');
+  const coverage = covFiles === 0 ? '' : `
+    <details class="coverage" id="coverage" hidden>
+      <summary><span>Pokrycie checklist</span><span class="cov-meta">${escapeHtml(covMeta)}</span></summary>
+      <div class="cov-body" id="cov-body"></div>
+    </details>
+`;
+
   const sidebar = report.emptyState ? '' : `
       <aside class="sidebar">
         <div class="sidebar-head">
@@ -1768,7 +1970,7 @@ ${toolbar}    <noscript><div class="note">Ten raport wymaga włączonego JavaScr
     <div class="cols${report.emptyState ? ' cols-plain' : ''}">${sidebar}
       <main id="findings"></main>
     </div>
-  </div>
+${coverage}  </div>
 <script id="report-data" type="application/json">${json}</script>
 <script>${pageJs}</script>
 </body>
