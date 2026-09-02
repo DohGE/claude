@@ -344,6 +344,24 @@ function countChecklistItems(file) {
   return body.split('\n').filter((line) => /^- \S/.test(line)).length;
 }
 
+// How the reviewer cites one checklist item while ticking it off: `<id>#<n>`,
+// n being the n-th top-level `- ` bullet of that instruction. The id is the
+// instruction's file name, so a tick line stays readable next to the report.
+// `taken` holds the ids already handed out: a collision (a project rulebook
+// adding its own `security.md` under `local/`) falls back to the parent folder
+// as a prefix and then to a numeric suffix, so ids stay unique and deterministic.
+function checklistIdOf(file, taken = new Set()) {
+  const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const base = slug(path.basename(file, '.md')) || 'instruction';
+  const parent = slug(path.basename(path.dirname(file)));
+  for (const candidate of [base, parent ? `${parent}-${base}` : '']) {
+    if (candidate && !taken.has(candidate)) return candidate;
+  }
+  let n = 2;
+  while (taken.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
 // audience: 'review' | 'implement' | undefined (no filtering). An instruction
 // declares `audience: implement|review|both` in its frontmatter (default both)
 // to control which consumer loads it — e.g. a coding persona is implement-only.
@@ -509,6 +527,7 @@ function buildContext(options) {
     outputFormat: wantsHtml ? 'html' : 'md',
     globalInstructions: [],
     localInstructionsCatalog: [],
+    checklistIds: {},
     projectInstructionsDir: null,
     claudeMd: null,
     warnings: [],
@@ -574,6 +593,22 @@ function buildContext(options) {
   };
   const globalChecklistItems = instructions.globals.reduce((n, f) => n + itemsOf(f), 0);
 
+  // Ids are handed out over EVERY loaded instruction, matched or not, so the
+  // same instruction keeps the same id no matter what a given diff touches.
+  const idOf = new Map();
+  const takenIds = new Set();
+  for (const file of [...instructions.globals, ...instructions.locals.map((l) => l.file)]) {
+    if (idOf.has(file)) continue;
+    const id = checklistIdOf(file, takenIds);
+    takenIds.add(id);
+    idOf.set(file, id);
+  }
+  // The ticking plan of one file: `general:13` means items general#1..general#13
+  // of that instruction. An instruction with no checklist items is left out —
+  // there is nothing to tick in it.
+  const planOf = (files) => files.filter((f) => itemsOf(f) > 0).map((f) => `${idOf.get(f)}:${itemsOf(f)}`);
+  const globalPlan = planOf(instructions.globals);
+
   // Every run records the post-image blob of each reviewed file next to the
   // report, so the next `--since-last` run can drop files whose content never
   // moved. Written even when the flag is off — the first incremental run needs
@@ -629,6 +664,10 @@ function buildContext(options) {
       // names (and their folders) against the naming instructions.
       oldPath: f.oldPath || null,
       localInstructions: locals,
+      // The instructions of this file turned into a ticking plan: one
+      // `<id>:<items>` entry per instruction, globals first, then the matched
+      // locals — the reviewer walks it item by item and ticks each one off.
+      checklist: [...globalPlan, ...planOf(locals)],
       // Global + matched local checklist items this file must be walked
       // against; the reviewer reports `<checked>/<checklistTotal>` per file.
       checklistTotal: globalChecklistItems + locals.reduce((n, p) => n + itemsOf(p), 0),
@@ -773,6 +812,13 @@ function buildContext(options) {
     for (const file of target.files) for (const p of file.localInstructions) catalog.add(p);
   }
   result.localInstructionsCatalog = [...catalog].sort();
+  // Which instruction each checklist id stands for — only the instructions this
+  // run actually loads, so the dictionary matches the rulebook of Step 2.
+  result.checklistIds = Object.fromEntries(
+    [...instructions.globals, ...result.localInstructionsCatalog]
+      .filter((f) => itemsOf(f) > 0)
+      .map((f) => [idOf.get(f), f]),
+  );
   const indexOf = new Map(result.localInstructionsCatalog.map((p, i) => [p, i]));
   for (const target of result.targets) {
     for (const file of target.files) {
@@ -816,6 +862,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, checklistIdOf, parseHunkRanges, loadInstructions, matchLocalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

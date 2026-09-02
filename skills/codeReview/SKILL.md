@@ -57,8 +57,16 @@ scope gate).
    skill file of the same relative path, the rest are extra instructions.
 
 Never skip or skim any of these files — they are the review rulebook.
-Each file of a target carries `checklistTotal`: how many checklist items (global + its matched
-locals) it must be walked against. Step 3 point 4 reports back how many you actually walked.
+
+Every checklist item has an address, and Step 3 ticks the items off one by one under it:
+`<id>#<n>` is the n-th top-level `- ` bullet of that instruction's body, counted from 1 in file
+order — the only numbering there is. `checklistIds` (top level of the context JSON) says which
+instruction file each `<id>` stands for; number the bullets of every instruction as you read it.
+Each file of a target carries its own plan: `checklist` lists one `<id>:<items>` entry per
+instruction that applies to that file — the globals first, then its matched locals — and
+`checklistTotal` is their sum, the number of items the file must be walked against.
+The project `CLAUDE.md` is a rulebook, not a numbered checklist: its rules decide verdicts and
+override conflicting instruction items, but they get no `<id>#<n>` line of their own.
 
 ## Step 3 — Analyze (per target, per file) and write findings as you go
 
@@ -146,14 +154,17 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    While the file's content is open, append its import lines to a running import ledger
    (`importing file → imported module`, one entry per import) — the cross-file layering question
    consumes this ledger after the per-file pass.
+   With the file's diff and content in front of you, turn its `checklist` into the ticking list of
+   this file: every instruction of the plan, in plan order, item `#1` through `#<items>` — that
+   list, and nothing shorter, is what point 2 walks and what point 4 writes down.
 2. Evaluate the file against every point below, checklist-driven — never holistically. For points
-   1 and 2, take each instruction file in turn and walk its checklist top-to-bottom: read an item,
-   check the file's code against that one item, reach an explicit pass/violation verdict, record
-   the finding(s) on violation, then move to the next item. The checklist drives the pass — never
-   scan the file first and recall rules from memory afterwards. Reason through items SILENTLY — do
-   not print per-point notes or progress commentary; the only text a file produces is its findings
-   (or nothing). Sampling checklists, skipping items, or abandoning a checklist partway through a
-   file is forbidden:
+   1 and 2, walk that ticking list top-to-bottom: read an item, check the file's code against that
+   one item, reach an explicit pass/violation verdict, record the finding(s) on violation, tick the
+   item off, then move to the next item. The checklist drives the pass — never scan the file first
+   and recall rules from memory afterwards. Reason through items SILENTLY — do not print per-point
+   notes or progress commentary; a file's verdicts go into its checklist block (point 4) and its
+   findings into the report, never into the terminal. Sampling checklists, skipping items, or
+   abandoning a checklist partway through a file is forbidden:
    1. Compliance with every global instruction, checklist item by item.
    2. Compliance with every matched local instruction (its `localInstructions` indexes into
       `localInstructionsCatalog`), checklist item by item.
@@ -164,6 +175,14 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    instruction checklists in point 1 — do not invent extra criteria beyond the instructions.
    An item counts as evaluated only after you checked the file's code against it and reached an
    explicit pass/violation verdict — "nothing jumped out at a glance" is not a verdict.
+   **A tick is earned, never assumed.** `[x]` goes on an item ONLY when it was checked 100%: you
+   read the item, looked at this file's code for it, and can say where you saw the answer — the
+   lines that satisfy a requirement, the lines you cleared for a prohibition, or the lines that
+   violate it. Everything short of that — the rule's subject lives in code this run never opened,
+   the item needs a build/runtime answer, you are guessing, you ran out of room — stays `[ ]` with
+   the reason written next to it. An unticked item is an honest gap the report carries on; a tick
+   that was not earned is a false claim about the review and the one thing this checklist exists to
+   prevent. Neither the size of the file nor the number of items already walked changes this.
    Checklist items come in two shapes, and both get real verdicts:
    - prohibitions — code that must not appear; scanning the file finds these;
    - requirements — something that MUST be present (`ChangeDetectionStrategy.OnPush`, a route
@@ -224,22 +243,47 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      line marks that ONE rule handled — never the line.
    Both sweeps run on every file, and most of all on files that already produced many findings: that
    is where further occurrences hide, not where they run out.
-4. Persist findings per fetch batch, not per file and never all at the end: when the last file of
-   the current batch (point 1) is analyzed, write the batch's findings sections — every file of
-   the batch, in listed order — as the next sequential part file
-   (`<reportPath minus .md>.part<NN>.md`, zero-padded, next to the report) with ONE Write call.
-   Findings never wait beyond their own batch; earlier parts are never edited.
-   Every file of the batch also contributes ONE coverage marker as the last line of its block —
-   files with no findings contribute the marker alone:
+4. Persist per FILE, never all at the end and never later than the file's own walk: the moment a
+   file's walk is finished, write ONE part file for it — `<reportPath minus .md>.part<NN>.md`,
+   `<NN>` zero-padded and running in `target.files` order — with ONE Write call, holding, in this
+   order: the file's findings sections, its ticked checklist block, its coverage marker. A file with
+   no findings still gets its part file — the block and the marker alone. Earlier parts are never
+   edited, and the next file is not analyzed before the current one's part file is written (the
+   fetching of point 1 stays batched; only the analysis and this write are per file).
+   The checklist block is the file's walk, written down:
+
+       <!-- checklist: <file.path>
+       [x] general#1 nazwy const camelCase — OK (L12, L18)
+       [x] component#1 OnPush — NARUSZENIE (L4)
+       [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
+       -->
+
+   - One line per item of the file's ticking list (point 1), in plan order, `<id>#<n>` first, then a
+     2–6 word label of the item in your own words, then ` — ` and the verdict. No item is merged
+     with another, none is left out: the block has exactly `checklistTotal` lines, or the renderer
+     says so.
+   - `[x] … — OK (<where>)` — checked and compliant. `<where>` is where you saw the answer: the
+     `cat -n` line numbers you verified (`L12, L18`), or `brak wystąpień` when the rule's subject
+     does not occur in the file at all. `brak wystąpień` is a verdict for a PROHIBITION only — for a
+     requirement, a missing subject is a finding, never an absence to wave through.
+   - `[x] … — NARUSZENIE (L<n>, …)` — checked and broken; the lines are the ones the finding's
+     `**Linia:**` carries, and that finding is in this same part file. (Findings from the cross-file
+     pass or from the universal points 3–5 belong to no item and appear only as findings.)
+   - `[ ] … — NIEZWERYFIKOWANE: <reason>` — anything you could not check 100% (point 2). The reason
+     is concrete: what was missing, not "no time".
+   - Each line is written when its verdict is reached, so the block is the running record of the
+     walk — never a list reconstructed from memory once the file is done.
+   The coverage marker closes the block and states the same walk as numbers:
    `<!-- coverage: <file.path> <checked>/<file.checklistTotal> -->`
-   `<checked>` is how many checklist items you actually reached a verdict on, counted as you go and
-   never reconstructed afterwards; `checklistTotal` is copied from the context JSON. The two match on
-   a file you finished — a smaller `<checked>` makes the renderer warn and keeps the Markdown, which
-   is the honest outcome of an interrupted pass, not something to paper over by writing equal numbers.
+   `<checked>` is how many lines of the block carry `[x]`, counted from the block you just wrote;
+   `checklistTotal` is copied from the context JSON. The two match on a file you finished — a
+   smaller `<checked>` makes the renderer warn and keeps the Markdown, which is the honest outcome
+   of an interrupted pass, not something to paper over with an unearned tick. The renderer recounts
+   the ticks and warns when the marker, the block and `checklistTotal` disagree.
    A file the mechanical-change gate narrowed writes `<!-- coverage: <file.path> mechanical -->`
-   instead — its walk was two questions, not the checklist, and that marker is its complete proof.
-   It is for a WHOLE-diff mechanical file only; a file with even one behavioural change counts its
-   items like any other.
+   and NO checklist block — its walk was two questions, not the checklist, and that marker is its
+   complete proof. It is for a WHOLE-diff mechanical file only; a file with even one behavioural
+   change walks and ticks its items like any other.
 
 After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as the
 final part file. Answer each of these four questions explicitly, against the diff as a whole:
@@ -260,9 +304,11 @@ final part file. Answer each of these four questions explicitly, against the dif
    reused for different concepts; reported under the code-quality instruction (🟡 Medium), while a
    plain naming-convention breach stays a general-instruction finding.
 
-A target with no findings still gets a part file: write `Nie wykryto problemów.` (or
-`Nie wykryto zmian do analizy.` for an empty diff) as `part01`, so the assembly below always has
-something to concatenate.
+A target whose whole review produced no finding closes with one more part file after the cross-file
+one, holding the single line `Nie wykryto problemów.` — the per-file parts before it still carry
+every checklist block and coverage marker, which is what the report then shows. A target with an
+empty diff (`files` empty) has no per-file parts at all: `Nie wykryto zmian do analizy.` is its
+`part01`, so the assembly below always has something to concatenate.
 
 Assemble the report in ONE Bash call: append every part file to `target.reportPath` (which already
 holds the header), remove the parts, and — when `target.htmlReportPath` is not null — render the
@@ -280,13 +326,13 @@ is the report then. Otherwise the renderer replaces it with `target.htmlReportPa
 warnings it keeps the Markdown too, which means the report drifted from the Step 4 format.
 
 Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
-had its commands run and either all five points evaluated or — for a whole-diff mechanical file —
-the gate's two questions answered; analyze any missed file now. A target with an unanalyzed file is
-not done, regardless of diff size or session length.
+had its commands run, its part file written, and either all five points evaluated or — for a
+whole-diff mechanical file — the gate's two questions answered; analyze any missed file now. A
+target with an unanalyzed file is not done, regardless of diff size or session length.
 
 ## Step 4 — Report format (one file per target, ALWAYS in Polish)
 
-`target.reportPath` (UTF-8) is assembled during Step 3 (header written first, findings as part files per batch, one concatenation at the end), with this structure and nothing else.
+`target.reportPath` (UTF-8) is assembled during Step 3 (header written first, one part file per analyzed file, one concatenation at the end), with this structure and nothing else.
 `render-report.cjs` parses exactly this structure to build the HTML report, so it is a contract, not a suggestion — every deviation degrades the HTML and makes the renderer keep the Markdown:
 
     # Code Review: <branch> → <baseBranch> | <YYYY-MM-DD> <HH:mm>
@@ -302,13 +348,22 @@ not done, regardless of diff size or session length.
     - **PR Expected:** <ENGLISH, two to three sentences: the expected state + the concrete way to reach it>
     - **PR Locations:** <ENGLISH, comma-separated: every file and symbol the fix has to touch>
 
+    <!-- checklist: <file path>
+    [x] <id>#<n> <short item label> — OK (<lines | brak wystąpień>)
+    [ ] <id>#<n> <short item label> — NIEZWERYFIKOWANE: <reason>
+    -->
+    <!-- coverage: <file path> <checked>/<total> -->
+
 - Staged header instead: `# Code Review: staged (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Folder header instead: `# Code Review: folder <target.folder> (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Take the header date and time from the trailing `-YYYY-MM-DD-HH-mm` of `reportPath`, replacing the final dash of the time with `:` (e.g. `14-30` → `14:30`), so the header always matches the file name.
 - If `target.skipped` is non-empty, add directly under the header the single line:
   `Pominięto pliki wygenerowane/binarne: <paths, comma-separated>`.
-- The `<!-- coverage: ... -->` lines of Step 3 point 4 are part of this format: one per analyzed
-  file, anywhere in its block. They are HTML comments, so they never reach the rendered page.
+- The checklist block and the `<!-- coverage: ... -->` line of Step 3 point 4 are part of this
+  format: one of each per analyzed file (the marker alone for a whole-diff mechanical one), written
+  after that file's findings. They are HTML comments, so their text never reaches the rendered page —
+  the renderer reads the ticks, checks them against the marker and shows them as the page's
+  "Pokrycie checklist" section.
 - When `target.unchangedSinceLastReview` is non-empty (a `--since-last` run), add one comment line
   under the header:
   `<!-- since-last: <N> unchanged file(s) skipped; previous report: <target.previousReportPath> -->`
@@ -361,6 +416,7 @@ not done, regardless of diff size or session length.
 ## Step 5 — Terminal summary (Polish)
 
 After writing all reports print, in Polish: each report path (`target.htmlReportPath` when the renderer ran, otherwise `target.reportPath`) + finding counts per severity, plus any errors/warnings from Step 1 and any warning the renderer printed.
+Also state the checklist coverage of the target: how many files walked their whole checklist, and — when any did not — every such file with its `<checked>/<total>`, so an unticked item is read as the gap it is instead of disappearing into the report.
 For a `--since-last` run also say how many files were skipped as unchanged and where the previous report is (`target.unchangedSinceLastReview`, `target.previousReportPath`) — the reader must know the report covers only what moved.
 For a branch target also name the base it was reviewed against — `target.baseBranch` plus where that base came from, read off `target.baseSource`: `pr` = the target branch of PR #`target.prNumber`, `fork` = the branch it was created from, `candidate` = the default `main`/`master`/`develop`/`dev` detection. Staged and folder targets have no base (`baseSource` is null): a staged review covers the uncommitted changes themselves.
 Nothing else.
@@ -380,3 +436,6 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "I already reported this rule here" | You reported its first occurrence. The occurrence sweep (Step 3 point 3) searches the whole file for the rest and puts every one into `**Linia:**`. |
 | "No local instruction matched this file" | Global checklists apply to every file; zero local matches often means the file sits outside every dedicated location — itself a violation. |
 | "Context/time is running low" | Coverage outranks speed, and the coverage marker records what you actually walked. Keep going file by file. |
+| "This item is obviously fine, tick it" | A tick states you checked THIS file against THAT item and can name where you saw the answer. Obvious-looking is what unchecked items look like; check it, then tick it. |
+| "I will write the checklist once the file is done" | The block is the record of the walk: each line is written as its verdict is reached, and the file's part file is written before the next file is opened. A block composed afterwards is a summary of what you remember, which is what the ticks exist to replace. |
+| "Ticking every item keeps the numbers clean" | The numbers are not the point; what was actually checked is. An unticked item with its reason is a finished, honest walk — an unearned tick is a false claim in a report someone will act on. |

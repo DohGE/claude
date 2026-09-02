@@ -702,6 +702,54 @@ test('every file carries the checklist size it must be walked against', (t) => {
   assert.strictEqual(file.checklistTotal, 5, '3 global + 2 local checklist items');
 });
 
+test('every file carries its ticking plan: instruction id + item count, globals first', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/plan']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  commitFile(dir, 'README.md', 'doc\n', 'doc');
+  const skillDir = makeSkillDir(
+    t,
+    {
+      'ts.md': '---\nname: TS\napplies-to:\n  - "**/*.ts"\n---\n## Checklist\n- one\n- two\n',
+      'empty.md': '---\nname: Empty\napplies-to:\n  - "**/*.ts"\n---\nNo checklist here.\n',
+    },
+    { 'naming.md': '---\nname: Naming\n---\n- g1\n- g2\n- g3\n' },
+  );
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const files = ctx.targets[0].files;
+  const code = files.find((f) => f.path === 'src/a.ts');
+  assert.deepStrictEqual(code.checklist, ['naming:3', 'ts:2'], 'globals first, then the matched locals');
+  const doc = files.find((f) => f.path === 'README.md');
+  assert.deepStrictEqual(doc.checklist, ['naming:3'], 'a file with no local match still walks the globals');
+  assert.strictEqual(
+    code.checklist.reduce((n, entry) => n + Number(entry.split(':')[1]), 0),
+    code.checklistTotal,
+    'the plan sums to the checklist total',
+  );
+  assert.deepStrictEqual(
+    Object.fromEntries(Object.entries(ctx.checklistIds).map(([id, file]) => [id, path.basename(file)])),
+    { naming: 'naming.md', ts: 'ts.md' },
+    'an instruction with no checklist items is left out of the plan and the dictionary',
+  );
+});
+
+test('checklistIdOf keeps ids short, unique and deterministic', () => {
+  const taken = new Set();
+  const next = (file) => {
+    const id = rc.checklistIdOf(file, taken);
+    taken.add(id);
+    return id;
+  };
+  assert.strictEqual(next('/skill/instructions/global/general.md'), 'general');
+  assert.strictEqual(next('/skill/instructions/local/code/components/component.md'), 'component');
+  assert.strictEqual(next('/skill/instructions/local/unit-tests/component-unit-test.md'), 'component-unit-test');
+  // A project rulebook adding its own security.md next to the skill's one.
+  assert.strictEqual(next('/skill/instructions/global/security.md'), 'security');
+  assert.strictEqual(next('/project/.claude/doh/instructions/local/api/security.md'), 'api-security');
+  assert.strictEqual(next('/other/api/security.md'), 'security-2');
+  assert.strictEqual(rc.checklistIdOf('/skill/instructions/global/Best Practices.md'), 'best-practices');
+});
+
 test('--since-last reviews only the files whose content moved', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/incremental']);

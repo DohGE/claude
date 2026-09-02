@@ -40,6 +40,15 @@ function reportOf(...blocks) {
   return ['# Code Review: x → y | 2026-08-06 09:00', '', ...blocks.flat()].join('\n');
 }
 
+// The ticked checklist Step 3 writes for a file: the proof behind its coverage
+// marker. `items` are ready lines; a number means that many plain ticked ones.
+function checklistOf(filePath, items) {
+  const lines = typeof items === 'number'
+    ? Array.from({ length: items }, (_, i) => `[x] general#${i + 1} reguła ${i + 1} — OK (L${i + 1})`)
+    : items;
+  return [`<!-- checklist: ${filePath}`, ...lines, '-->'];
+}
+
 function findingOf(overrides = {}) {
   const finding = {
     severity: '🔴 **High**',
@@ -461,11 +470,55 @@ test('renderHtml drops the toolbar for an empty state', () => {
   assert.strictEqual(embeddedPayload(html).emptyState, 'Nie wykryto problemów.');
 });
 
+test('renderHtml carries the walked checklists into the Pokrycie section', () => {
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '',
+    findingOf({}),
+    checklistOf('src/a.ts', [
+      '[x] general#1 nazwy — OK (L1)',
+      '[x] general#2 i18n — NARUSZENIE (L4)',
+      '[ ] general#3 formularze — NIEZWERYFIKOWANE: klasa bazowa',
+    ]),
+    '<!-- coverage: src/a.ts 2/3 -->',
+    '<!-- coverage: src/b.ts mechanical -->',
+  ));
+  const html = rr.renderHtml(report, 'r.html');
+  assert.match(html, /id="coverage"/);
+  assert.match(html, /Pokrycie checklist/);
+  assert.match(html, /2 pliki · 2\/3 pozycje · 1 plik bez pełnego przejścia/);
+  const coverage = embeddedPayload(html).coverage;
+  assert.deepStrictEqual(coverage.map((c) => [c.path, c.checked, c.total, c.mechanical]), [
+    ['src/a.ts', 2, 3, false],
+    ['src/b.ts', null, null, true],
+  ]);
+  assert.deepStrictEqual(coverage[0].items.map((i) => i.state), ['ok', 'violation', 'open']);
+  assert.deepStrictEqual(coverage[1].items, [], 'a mechanical file has no items to show');
+});
+
+test('a report with no findings still shows what was walked', () => {
+  const report = rr.parseReport(reportOf(
+    checklistOf('src/a.ts', 3),
+    '<!-- coverage: src/a.ts 3/3 -->',
+    'Nie wykryto problemów.',
+  ));
+  assert.strictEqual(report.emptyState, 'Nie wykryto problemów.');
+  const html = rr.renderHtml(report, 'r.html');
+  assert.match(html, /id="coverage"/, 'the checklist proof is the whole content of a clean report');
+  assert.strictEqual(embeddedPayload(html).coverage[0].checked, 3);
+});
+
+test('renderHtml leaves the Pokrycie section out when nothing was walked', () => {
+  const html = rr.renderHtml(rr.parseReport(reportOf('## src/a.ts', '', findingOf({}))), 'r.html');
+  assert.ok(!html.includes('id="coverage"'), 'no proof, no section');
+});
+
 test('main writes the html next to the report and removes the source', (t) => {
   const dir = tempDir(t, 'cr-render-');
   const md = path.join(dir, 'branch-2026-08-06-09-00.md');
   const html = path.join(dir, 'branch-2026-08-06-09-00.html');
-  fs.writeFileSync(md, `${REPORT}\n<!-- coverage: src/app/user.service.ts 11/11 -->\n`, 'utf8');
+  const proof = [...checklistOf('src/app/user.service.ts', 11), '<!-- coverage: src/app/user.service.ts 11/11 -->'];
+  fs.writeFileSync(md, `${REPORT}\n${proof.join('\n')}\n`, 'utf8');
 
   const result = runMain([`--report=${md}`]);
   assert.strictEqual(result.code, 0);
@@ -1026,25 +1079,94 @@ test('parseReport reads coverage markers without letting them into a finding', (
     '## src/a.ts',
     '',
     findingOf({ expected: 'Naprawić.' }),
+    checklistOf('src/a.ts', 12),
     '<!-- coverage: src/a.ts 12/12 -->',
+    checklistOf('src/b.ts', 9),
     '<!-- coverage: src/b.ts 9/9 -->',
   ));
   assert.deepStrictEqual(report.warnings, []);
-  assert.deepStrictEqual(report.coverage, [
-    { path: 'src/a.ts', checked: 12, total: 12, mechanical: false },
-    { path: 'src/b.ts', checked: 9, total: 9, mechanical: false },
-  ]);
+  assert.deepStrictEqual(
+    report.coverage.map(({ path, checked, total, mechanical, ticked }) => ({ path, checked, total, mechanical, ticked })),
+    [
+      { path: 'src/a.ts', checked: 12, total: 12, mechanical: false, ticked: 12 },
+      { path: 'src/b.ts', checked: 9, total: 9, mechanical: false, ticked: 9 },
+    ],
+  );
   assert.strictEqual(report.files.length, 1);
   assert.strictEqual(report.files[0].findings[0].expected, 'Naprawić.');
 });
 
 test('parseReport warns when a file did not walk its whole checklist', () => {
-  const report = rr.parseReport(reportOf('<!-- coverage: src/a.ts 7/12 -->'));
+  const items = Array.from({ length: 12 }, (_, i) => (i < 7
+    ? `[x] general#${i + 1} reguła ${i + 1} — OK`
+    : `[ ] general#${i + 1} reguła ${i + 1} — NIEZWERYFIKOWANE: kod poza diffem`));
+  const report = rr.parseReport(reportOf(checklistOf('src/a.ts', items), '<!-- coverage: src/a.ts 7/12 -->'));
   assert.ok(report.warnings.some((w) => w.includes('7/12')), 'the gap is reported');
+  assert.strictEqual(report.coverage[0].ticked, 7, 'the ticks back the marker up');
 });
 
 test('a mechanical-only file proves its narrowed walk without a coverage gap', () => {
   const report = rr.parseReport(reportOf('<!-- coverage: src/a.ts mechanical -->'));
   assert.deepStrictEqual(report.warnings, [], 'the gate narrowed the walk on purpose');
-  assert.deepStrictEqual(report.coverage, [{ path: 'src/a.ts', checked: null, total: null, mechanical: true }]);
+  assert.deepStrictEqual(
+    report.coverage,
+    [{ path: 'src/a.ts', checked: null, total: null, mechanical: true, items: [], ticked: 0 }],
+  );
+});
+
+test('parseReport keeps the ticked checklist out of the findings and reads every verdict', () => {
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '',
+    findingOf({}),
+    checklistOf('src/a.ts', [
+      '[x] general#1 nazwy const camelCase — OK (L12, L18)',
+      '[x] component#1 `OnPush` — NARUSZENIE (L4)',
+      '[ ] component#15 walidatory — NIEZWERYFIKOWANE: formularz w klasie bazowej',
+    ]),
+    '<!-- coverage: src/a.ts 2/3 -->',
+  ));
+  assert.deepStrictEqual(report.checklists.map((c) => c.path), ['src/a.ts']);
+  assert.deepStrictEqual(
+    report.checklists[0].items.map((i) => [i.id, i.state]),
+    [['general#1', 'ok'], ['component#1', 'violation'], ['component#15', 'open']],
+  );
+  assert.strictEqual(report.files[0].findings.length, 1, 'the block never becomes a finding');
+  assert.ok(
+    report.warnings.every((w) => !w.includes('nierozpoznana')),
+    `no line of the block reached the finding parser: ${report.warnings.join(' | ')}`,
+  );
+});
+
+test('a coverage marker the ticks do not back up is a warning', () => {
+  const short = rr.parseReport(reportOf(checklistOf('src/a.ts', 4), '<!-- coverage: src/a.ts 5/5 -->'));
+  assert.ok(short.warnings.some((w) => w.includes('4 z 5')), `missing items are named: ${short.warnings.join(' | ')}`);
+
+  const lying = rr.parseReport(reportOf(
+    checklistOf('src/a.ts', ['[x] general#1 a — OK', '[ ] general#2 b — NIEZWERYFIKOWANE: brak danych']),
+    '<!-- coverage: src/a.ts 2/2 -->',
+  ));
+  assert.ok(lying.warnings.some((w) => w.includes('odchaczono 1')), `the tick count wins: ${lying.warnings.join(' | ')}`);
+
+  const missing = rr.parseReport(reportOf('<!-- coverage: src/a.ts 5/5 -->'));
+  assert.ok(missing.warnings.some((w) => w.includes('brak bloku checklisty')), 'a marker with no proof warns');
+
+  const orphan = rr.parseReport(reportOf(checklistOf('src/a.ts', 2)));
+  assert.ok(orphan.warnings.some((w) => w.includes('bez markera coverage')), 'a block with no marker warns');
+  assert.strictEqual(orphan.coverage.length, 1, 'the page still shows what was walked');
+});
+
+test('a malformed or unterminated checklist block warns instead of leaking into the report', () => {
+  const broken = rr.parseReport(reportOf(checklistOf('src/a.ts', ['[x] general#1 ok', 'przypadkowa linia'])));
+  assert.ok(broken.warnings.some((w) => w.includes('nierozpoznana pozycja checklisty')), 'the bad line is named');
+  assert.strictEqual(broken.checklists[0].items.length, 1);
+
+  const unterminated = rr.parseReport(reportOf(['<!-- checklist: src/a.ts', '[x] general#1 a — OK']));
+  assert.ok(unterminated.warnings.some((w) => w.includes('niezamknięty blok')), 'the missing --> is named');
+});
+
+test('any other multi-line comment is swallowed whole', () => {
+  const report = rr.parseReport(reportOf('## src/a.ts', '', findingOf({}), '<!-- notatka', 'druga linia', '-->'));
+  assert.deepStrictEqual(report.warnings, [], 'the comment body never reaches the finding parser');
+  assert.strictEqual(report.files[0].findings.length, 1);
 });
