@@ -120,6 +120,27 @@ small it looks — a changed condition, argument, operator, default, lifecycle h
   of a file deleted in the same target, treat the unchanged parts as mechanical and review only what
   the move actually changed.
 
+**Behaviour-preserving gate — a review never asks for a functional or visual change.** Every finding
+must be fixable without changing what the working code DOES or how it LOOKS. Drop the finding, at any
+severity, when applying it would: break or regress functionality that currently works; change runtime
+behaviour into something other than what the task plan, ticket or PR description specifies; or change
+the rendered UI (layout, spacing, colours, copy, states, flow) into something other than the mockups.
+That includes "while you are here" improvements — a different algorithm, a stricter validation, an added
+guard or default, a removed branch, a renamed public contract, a restyled template — whenever the change
+is not required by an instruction AND provably behaviour-neutral. Findings stay on the axis this review
+owns: structure, naming, typing, duplication, layering, tests, security and real defects, where the fix
+is a refactor the user cannot see. When the code contradicts the plan or the mockups, report THAT as the
+finding (the code is wrong), never a change that would make working code deviate from them.
+
+**Prettier formatting is out of scope.** Never report anything Prettier owns and rewrites on save:
+indentation, line width and wrapping, line breaks inside calls/objects/arrays/templates, quote style,
+semicolons, trailing commas, spacing around operators/braces/attributes, blank-line count, and the
+physical placement of Angular template attributes or class lists. No finding of ANY severity is
+written about such a line, and no report ever says "run Prettier" or "format this" — the formatter
+settles it mechanically and a review comment about it is noise. Import ORDER stays reviewable (the
+general instruction owns it) because it expresses layering, and so does everything about the code
+itself: naming, structure, duplication, typing, logic.
+
 **Endpoint names are out of scope.** Never report the wording, spelling, casing, versioning, path
 segments, leading/trailing slashes, key names or CHANGES of REST endpoint paths and their `endpoints`
 constants — the backend contract decides them, not this review. The one exception is an absolute URL
@@ -431,6 +452,7 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "This rename/reformat drags in badly written code" | The mechanical-change gate: a renamed or reformatted line counts as untouched. Report only what the change BROKE and what the change ITSELF violates — never a violation that was already sitting there. |
 | "This rule is pedantic here" | Rule weight is expressed through severity, never through omission. |
 | "I remember the instructions" | Verdicts come from the instruction files read this run, item by item — not from memory. |
+| "This would work better a different way" | The behaviour-preserving gate: if the fix changes what working code does, how it flows, or how it looks versus the plan and the mockups, it is not a finding. Report only fixes the user cannot see. |
 | "This file already has plenty of findings" | Findings per file are unlimited. Stopping a checklist partway is skipping items. |
 | "This line already has a finding" | Findings are per rule, not per line. A cited line goes back through the remaining checklist items (Step 3 point 3, line sweep) — one line commonly breaks three or four rules. |
 | "I already reported this rule here" | You reported its first occurrence. The occurrence sweep (Step 3 point 3) searches the whole file for the rest and puts every one into `**Linia:**`. |

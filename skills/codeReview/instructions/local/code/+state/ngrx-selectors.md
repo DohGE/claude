@@ -16,7 +16,7 @@ applies-to:
 - Wizard step gates are named `selectCanGoToNextStep<Step>`, composed exclusively from existing flag selectors, and return an explicitly typed `boolean`.
 - A parameterized (higher-order) selector is used only for a value genuinely unavailable in the store at dispatch time; anything obtainable by selector composition is not passed as a parameter.
 - Selectors building UI data delegate to shared `form*`/`generate*` utils; the selector itself only picks inputs and delegates.
-- Complex payload builders are private module-level functions prefixed `_` at the bottom of the file; once used by more than one selector they move to `shared/utils/` with their own spec; literal objects shared by several selectors are declared once at the top of the file.
+- Complex payload builders are private module-level functions prefixed `_` at the bottom of the file; they move to `shared/utils/` with their own spec only once a second selector (or another consumer) uses them — a single-consumer builder, and short derivation logic written inline in the selector body, stays in this file and is never reported as "should be a util"; literal objects shared by several selectors are declared once at the top of the file.
 - A selector of one thematic query may compose a selector from another query object of the same file through the object reference; the referenced query export is defined above the usage.
 - Query export order is thematic, not alphabetical: UI flags → payload builders → input collections → derived UI state → per-wizard-step → cross-step derivations → summary → edit mode.
 - Allowed imports: `createFeatureSelector`/`createSelector`, models, pure shared utils; forbidden: actions, effects, facade, reducer, components, HTTP services.
