@@ -1,10 +1,13 @@
 import { inject, Injectable } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
+import { MatSnackBar } from '@angular/material/snack-bar';
 import { Actions, createEffect, ofType } from '@ngrx/effects';
+import { mapResponse } from '@ngrx/operators';
 import { Store } from '@ngrx/store';
-import { EMPTY, forkJoin, of, timer } from 'rxjs';
+import { EMPTY, forkJoin, merge, of, timer } from 'rxjs';
 import { catchError, filter, map, mergeMap, switchMap, tap, withLatestFrom } from 'rxjs/operators';
 
+import { layoutActions } from '../../../layout/data-access/+state/layout.actions';
 import { UserDto } from '../../models';
 import { UserCardComponent } from '../../components-user-panel/ui';
 import { UserPanelService } from '../services/user-panel.service';
@@ -19,6 +22,7 @@ export class UserPanelEffects {
   private store = inject(Store);
   private facade = inject(UserPanelFacade);
   private dialog = inject(MatDialog);
+  private snackBar = inject(MatSnackBar);
 
   loadUsers = createEffect(() =>
     this.actions.pipe(
@@ -43,9 +47,44 @@ export class UserPanelEffects {
           map((data) =>
             UserPanelActions.searchUsersSuccess({ data, receivedAt: Date.now() } as any),
           ),
-          catchError((error) => of(UserPanelActions.searchUsersFail({ error }))),
+          catchError((error) => {
+            this.snackBar.open('Users could not be loaded');
+            return of(UserPanelActions.searchUsersFail({ error }));
+          }),
         ),
       ),
+    ),
+  );
+
+  refreshUsers$ = createEffect(() =>
+    this.actions.pipe(
+      ofType(UserPanelActions.setFilteredUsers),
+      switchMap(() =>
+        this.svc.getUsers().pipe(
+          mapResponse({
+            next: (data: UserDto[]) => UserPanelActions.loadUsersSuccess({ data }),
+            error: () => {
+              console.log('refresh failed');
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
+  reloadOnStepChange$ = createEffect(() =>
+    this.actions.pipe(
+      ofType(layoutActions.setActiveStep),
+      switchMap(() => this.svc.getUsers()),
+      map((data) => UserPanelActions.loadUsersSuccess({ data })),
+    ),
+  );
+
+  reloadOnNavigationReset$ = createEffect(() =>
+    this.actions.pipe(
+      ofType(layoutActions.resetNavigation),
+      switchMap(() => this.svc.getUsers()),
+      map((data) => UserPanelActions.loadUsersSuccess({ data })),
     ),
   );
 
@@ -69,16 +108,22 @@ export class UserPanelEffects {
   confirmDetails$ = createEffect(() =>
     this.actions.pipe(
       ofType(UserPanelActions.fetchUserDetails),
-      switchMap(() =>
-        this.dialog
-          .open(UserCardComponent)
-          .afterClosed()
-          .pipe(
-            map((result) =>
-              UserPanelActions.setConfirmationDialogResult({ dialogResult: result as string }),
-            ),
+      switchMap(() => {
+        const dialogRef = this.dialog.open(UserCardComponent);
+
+        return merge(
+          dialogRef.componentInstance.selected.pipe(
+            map((user) => UserPanelActions.setFilteredUsers({ filteredUsers: [user] })),
           ),
-      ),
+          dialogRef
+            .afterClosed()
+            .pipe(
+              map((result) =>
+                UserPanelActions.setConfirmationDialogResult({ dialogResult: result as string }),
+              ),
+            ),
+        );
+      }),
     ),
   );
 
@@ -90,6 +135,16 @@ export class UserPanelEffects {
           map(([users]) => UserPanelActions.loadUsersSuccess({ data: users })),
         ),
       ),
+    ),
+  );
+
+  searchAfterDialog$ = createEffect(() =>
+    this.actions.pipe(
+      ofType(UserPanelActions.setConfirmationDialogResult),
+      switchMap(() => [
+        UserPanelActions.loadUsers({ pageSize: 25 }),
+        UserPanelActions.searchUsers({ query: '' }),
+      ]),
     ),
   );
 

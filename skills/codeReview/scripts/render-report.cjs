@@ -46,16 +46,39 @@ const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result|PR Problem|PR E
 // questions, which by design never walks the full checklist.
 const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(mechanical|\d+\s*\/\s*\d+)\s*-->$/;
 // The ticked checklist behind that marker: one multi-line comment per analyzed
-// file, opened by `<!-- checklist: <path>`, one item line each, closed by `-->`.
-// `[x]` is an item the reviewer reached a verdict on, `[ ]` one it could not
-// verify; the verdict word is what separates a clean item from a reported one.
+// file, opened by `<!-- checklist: <path>`, one line per verdict, closed by
+// `-->`. `[x]` is an item the reviewer reached a verdict on, `[ ]` one it could
+// not verify; the verdict word is what separates a clean item from a reported one.
+// One line may carry a RANGE of items (`accessibility#1-6,#8-30`): items that
+// share one verdict are collapsed into a single line, so a clean instruction
+// costs one line instead of thirty. Ranges are expanded here, which keeps every
+// count downstream - ticked, total, per-item state - working per item.
 const reChecklistOpen = /^<!--\s*checklist:\s*(\S+)\s*$/;
-const reChecklistItem = /^\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)#(\d+)\s+(.+)$/;
+const reChecklistItem = /^\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)#(\d+(?:-\d+)?(?:\s*,\s*#?\d+(?:-\d+)?)*)\s+(.+)$/;
+// Widest range a single line may collapse: a guard against `#1-99999` silently
+// inflating a block into a million items.
+const maxItemSpan = 500;
 const reViolationVerdict = /(^|[^\p{L}])NARUSZENIE([^\p{L}]|$)/u;
 // What a bare instruction reference - or the violated point's name, which Step 4
 // allows instead - may consist of. Quotes, backticks and brackets, or anything
 // longer than a name, mean the arrow belongs to quoted rule text.
 const reInstructionName = /^[\p{L}\p{N} ,._/-]{1,40}$/u;
+
+// `1-6,#8-30` -> [1,2,3,4,5,6,8,...,30]. Returns null for anything malformed
+// (a reversed range, an absurd span), which the caller turns into a warning
+// instead of guessing what the reviewer meant.
+function expandItemSpec(spec) {
+  const numbers = [];
+  for (const part of String(spec).split(',')) {
+    const m = part.trim().replace(/^#/, '').match(/^(\d+)(?:-(\d+))?$/);
+    if (!m) return null;
+    const from = Number(m[1]);
+    const to = m[2] === undefined ? from : Number(m[2]);
+    if (from < 1 || to < from || to - from >= maxItemSpan) return null;
+    for (let n = from; n <= to; n++) numbers.push(n);
+  }
+  return numbers;
+}
 
 function parseArgs(argv) {
   const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false };
@@ -234,15 +257,25 @@ function parseReport(markdown) {
       const content = (end === -1 ? line : line.slice(0, end)).trim();
       if (content && block.path) {
         const item = content.match(reChecklistItem);
-        if (item) {
+        const numbers = item ? expandItemSpec(item[3]) : null;
+        if (item && numbers) {
           const text = item[4].trim();
           const ok = item[1] !== ' ';
-          block.items.push({
-            id: `${item[2]}#${item[3]}`,
-            ok,
-            text,
-            state: !ok ? 'open' : (reViolationVerdict.test(text) ? 'violation' : 'ok'),
-          });
+          const state = !ok ? 'open' : (reViolationVerdict.test(text) ? 'violation' : 'ok');
+          for (const n of numbers) {
+            const id = `${item[2]}#${n}`;
+            // A collapsed range that overlaps another line would inflate the
+            // tick count without anyone noticing - the one thing ranges make
+            // easy to get wrong, so it is caught where it happens.
+            if (block.seen && block.seen.has(id)) {
+              report.warnings.push(`${block.path}: pozycja ${id} odchaczona dwa razy (linia ${lineNo}).`);
+              continue;
+            }
+            if (block.seen) block.seen.add(id);
+            block.items.push({ id, ok, text, state });
+          }
+        } else if (item) {
+          report.warnings.push(`${block.path}: nieczytelny zakres pozycji w linii ${lineNo}: "${item[2]}#${item[3]}".`);
         } else {
           report.warnings.push(`${block.path}: nierozpoznana pozycja checklisty w linii ${lineNo}: "${content}".`);
         }
@@ -275,7 +308,7 @@ function parseReport(markdown) {
         if (report.checklists.some((c) => c.path === openMatch[1])) {
           report.warnings.push(`${openMatch[1]}: drugi blok checklisty dla tego samego pliku (linia ${lineNo}).`);
         }
-        block = { path: openMatch[1], items: [] };
+        block = { path: openMatch[1], items: [], seen: new Set() };
         report.checklists.push(block);
         continue;
       }

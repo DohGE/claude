@@ -27,4 +27,15 @@ describe('userPanelReducer', () => {
     const state = reducer(STATE, UserPanelActions.searchUsersSuccess({ data: [] }));
     expect(state.isLoading).toBe(false);
   });
+
+  it('keeps the filtered users', () => {
+    const users = [{ id: '1' } as UserDto];
+    const state = reducer(STATE, UserPanelActions.setFilteredUsers({ filteredUsers: users }));
+    expect(state.filteredUsers.length).toBe(1);
+  });
+
+  xit('clears the users', () => {
+    const state = reducer(STATE, UserPanelActions.clearUsers({}));
+    expect(state.users).toEqual([]);
+  });
 });

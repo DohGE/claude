@@ -37,4 +37,11 @@ describe('UserPanelEffects', () => {
     expect(svc.getUsers).toHaveBeenCalled();
     expect(result).toBeDefined();
   }));
+
+  it('reloads after the dialog', (done) => {
+    effects.searchAfterDialog$.subscribe((action) => {
+      expect(action).toEqual(UserPanelActions.loadUsers({ pageSize: 25 }));
+      done();
+    });
+  });
 });

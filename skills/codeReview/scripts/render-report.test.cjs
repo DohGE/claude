@@ -1138,6 +1138,54 @@ test('parseReport keeps the ticked checklist out of the findings and reads every
   );
 });
 
+test('one line may collapse a run of items sharing a verdict', () => {
+  const report = rr.parseReport(reportOf(
+    checklistOf('src/a.ts', [
+      '[x] accessibility#1-6,#8-30 — OK (brak wystąpień)',
+      '[x] accessibility#7 kontrast — NARUSZENIE (L41)',
+      '[ ] general#1-2 — NIEZWERYFIKOWANE: reguła żyje w klasie bazowej',
+    ]),
+    '<!-- coverage: src/a.ts 30/32 -->',
+  ));
+  const items = report.checklists[0].items;
+  assert.strictEqual(items.length, 32, 'a range counts as its items, not as one line');
+  assert.deepStrictEqual(
+    items.filter((i) => i.state === 'ok').map((i) => i.id).slice(0, 3),
+    ['accessibility#1', 'accessibility#2', 'accessibility#3'],
+  );
+  assert.deepStrictEqual(items.filter((i) => i.state === 'violation').map((i) => i.id), ['accessibility#7']);
+  assert.deepStrictEqual(items.filter((i) => i.state === 'open').map((i) => i.id), ['general#1', 'general#2']);
+  assert.deepStrictEqual(
+    report.warnings,
+    ['src/a.ts: sprawdzono 30/32 pozycji checklist - plik nie przeszedł pełnego przeglądu.'],
+    'the only warning is the honest one about the two unverified items',
+  );
+});
+
+test('overlapping or malformed ranges warn instead of inflating the tick count', () => {
+  const overlap = rr.parseReport(reportOf(
+    checklistOf('src/a.ts', ['[x] general#1-5 — OK', '[x] general#3 — NARUSZENIE (L9)']),
+    '<!-- coverage: src/a.ts 5/5 -->',
+  ));
+  assert.strictEqual(overlap.checklists[0].items.length, 5, 'the duplicate is dropped, not counted twice');
+  assert.ok(
+    overlap.warnings.some((w) => w.includes('general#3') && w.includes('dwa razy')),
+    `the double tick is named: ${overlap.warnings.join(' | ')}`,
+  );
+
+  const reversed = rr.parseReport(reportOf(checklistOf('src/a.ts', ['[x] general#9-2 — OK'])));
+  assert.ok(
+    reversed.warnings.some((w) => w.includes('nieczytelny zakres')),
+    `a reversed range is refused: ${reversed.warnings.join(' | ')}`,
+  );
+
+  const huge = rr.parseReport(reportOf(checklistOf('src/a.ts', ['[x] general#1-9999 — OK'])));
+  assert.ok(
+    huge.warnings.some((w) => w.includes('nieczytelny zakres')),
+    'an absurd span cannot inflate a block',
+  );
+});
+
 test('a coverage marker the ticks do not back up is a warning', () => {
   const short = rr.parseReport(reportOf(checklistOf('src/a.ts', 4), '<!-- coverage: src/a.ts 5/5 -->'));
   assert.ok(short.warnings.some((w) => w.includes('4 z 5')), `missing items are named: ${short.warnings.join(' | ')}`);

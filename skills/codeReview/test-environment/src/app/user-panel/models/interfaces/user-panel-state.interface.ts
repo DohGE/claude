@@ -10,4 +10,8 @@ export interface UserPanelState {
   dialogResult?: string;
   formatDisplayName: (user: UserDto) => string;
   lastError?: unknown;
+  selectedUserFirstName: string;
+  selectedUserEmail: string;
+  selectedUserCreatedAt: string;
+  searchResults: UserDto[] | null;
 }

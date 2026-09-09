@@ -33,6 +33,7 @@ export const reducer = createReducer(
     for (let i = 0; i < data.length; i++) {
       mapped.push({ ...data[i], id: data[i].firstName + '-' + data[i].last_name });
     }
+    state.filteredUsers.push(...mapped);
     let resultLabel = '';
     switch (mapped.length) {
       case 0:
@@ -41,7 +42,7 @@ export const reducer = createReducer(
       default:
         resultLabel = mapped.length + ' results';
     }
-    return { ...state, users: mapped, isLoading: false, resultLabel };
+    return { ...state, users: mapped, isLoading: false, resultLabel, searchResults: [] };
   }),
   on(UserPanelActions.searchUsersFail, (state) => ({ ...state, isLoading: false })),
   on(UserPanelActions.setFilteredUsers, (state, { filteredUsers }) => ({ ...state, filteredUsers })),
@@ -49,6 +50,9 @@ export const reducer = createReducer(
     ...state,
     dialogResult,
     selectedUserName: state.selectedUser.firstName,
+    selectedUserFirstName: state.selectedUser.firstName,
+    selectedUserEmail: state.selectedUser.email,
+    selectedUserCreatedAt: state.selectedUser.created_at,
   })),
   // on(UserPanelActions.toggleDebugPanel, (state) => ({ ...state, debug: !state.debug })),
   on(UserPanelActions.clearUsers, () => ({ ...initialState })),

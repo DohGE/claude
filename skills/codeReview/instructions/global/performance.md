@@ -1,5 +1,10 @@
 ---
 name: Performance & change detection
+applies-to:
+  - "**/*.ts"
+  - "**/*.html"
+  - "!**/models/**"
+gate: the file holds Angular runtime code or a template - a component, directive, pipe, service, effect, store, config or bindings, not only type/const declarations or re-exports
 ---
 ## Checklist
 - Every value read by a template is a signal (`signal`/`computed`/`input`/facade signal) — a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).
@@ -19,9 +24,3 @@ name: Performance & change detection
 - Images: the LCP/hero image is marked `priority`; every `ngSrc` image declares `width` + `height` (or `fill` with a positioned parent) so it cannot shift layout.
 - Long-lived async work is bounded: polling/intervals take their period from the central app config and are explicitly stopped — no unbounded `setInterval`/`timer` outliving its view or effect.
 - Render-phase work that must re-run when a signal changes is `afterRenderEffect()` (v19+), not an `effect()` reading the DOM: a plain `effect()` runs before the DOM is updated, so it measures the previous frame; the one-shot case stays `afterNextRender`.
-- SSR only: with `withIncrementalHydration()` enabled, every server-rendered `@defer` block declares its `hydrate` trigger (`hydrate on viewport`/`on interaction`/`hydrate never`) — a block left without one falls back to the non-incremental path and the client re-renders markup the server already produced.
-- SSR only: no `window`/`document`/`navigator`/browser globals in constructors or field initializers — browser-only work runs in `afterNextRender`/`afterEveryRender`.
-- SSR only: the document comes from `inject(DOCUMENT)`, never from the global.
-- SSR only: server and client render identical markup — an `isPlatformBrowser` branch in a template is a hydration mismatch.
-- SSR only: markup stays hydration-valid — explicit `<tbody>` in tables, no `<div>` inside `<p>`, no nested `<a>`.
-- SSR only: `ngSkipHydration` is a justified last resort, never a way to silence a mismatch.

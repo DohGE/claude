@@ -65,6 +65,13 @@ instruction file each `<id>` stands for; number the bullets of every instruction
 Each file of a target carries its own plan: `checklist` lists one `<id>:<items>` entry per
 instruction that applies to that file — the globals first, then its matched locals — and
 `checklistTotal` is their sum, the number of items the file must be walked against.
+A global instruction may declare `applies-to` and is then narrowed by path exactly like a local one;
+one that declares none still applies to every file. A pattern starting with `!` excludes what it matches
+and always wins over an include. The plan already reflects that, so a plan shorter
+than the rulebook is a decision, not an omission — `globalInstructionsSkipped` names the globals this
+file's path took it out of, and an instruction that is not in the plan is never walked or ticked.
+`checklistGates` (top level of the context JSON) holds the `gate:` sentence of every instruction that
+declares one — a precondition answered per file, in Step 3 point 2, before that instruction is walked.
 The project `CLAUDE.md` is a rulebook, not a numbered checklist: its rules decide verdicts and
 override conflicting instruction items, but they get no `<id>#<n>` line of their own.
 
@@ -204,6 +211,16 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    the reason written next to it. An unticked item is an honest gap the report carries on; a tick
    that was not earned is a false claim about the review and the one thing this checklist exists to
    prevent. Neither the size of the file nor the number of items already walked changes this.
+   **Gates come first, and only where the instruction declares one.** For each instruction of the
+   plan whose `<id>` appears in `checklistGates`, answer that one sentence against the file's content
+   BEFORE walking its items. A gate that holds changes nothing — walk the items one by one as always.
+   A gate that fails is a verdict for the whole instruction: its items are collapsed into ONE ticked
+   range line naming what is absent (`[x] accessibility#1-30 — BRAMKA: plik nie zawiera markupu,
+   stylów ani pracy z DOM`), and they count as checked, because the gate answered every one of them.
+   A gate is answered from what the file HOLDS, never from its name or its size: a `.component.ts`
+   with inline `styles`, a `host: {}` binding, a timer or a `document` call renders UI, and a gate
+   waved through on "this looks like a plain class" is the unearned tick the ticking exists to
+   prevent. When the answer is not obvious, the gate HOLDS and the items are walked.
    Checklist items come in two shapes, and both get real verdicts:
    - prohibitions — code that must not appear; scanning the file finds these;
    - requirements — something that MUST be present (`ChangeDetectionStrategy.OnPush`, a route
@@ -274,29 +291,45 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    The checklist block is the file's walk, written down:
 
        <!-- checklist: <file.path>
-       [x] general#1 nazwy const camelCase — OK (L12, L18)
+       [x] accessibility#1-30 — BRAMKA: plik nie zawiera markupu ani stylów
+       [x] general#1-5,#7-13 — OK (brak wystąpień)
+       [x] general#6 nazwy const camelCase — NARUSZENIE (L12, L18)
        [x] component#1 OnPush — NARUSZENIE (L4)
+       [x] component#2-14,#16-27 — OK (brak wystąpień)
        [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
        -->
 
-   - One line per item of the file's ticking list (point 1), in plan order, `<id>#<n>` first, then a
-     2–6 word label of the item in your own words, then ` — ` and the verdict. No item is merged
-     with another, none is left out: the block has exactly `checklistTotal` lines, or the renderer
-     says so.
+   - The block covers every item of the file's ticking list (point 1), in plan order. It does NOT
+     spend a line per item: **items of one instruction that share a verdict are collapsed into one
+     line** whose address is a range or a list of ranges (`general#1-5,#7-13`). Every item still
+     appears exactly once — the ranges of one instruction never overlap and never skip a number, or
+     the renderer says so. Expanded, the block has exactly `checklistTotal` items.
+   - Collapse only what genuinely shares a verdict. `NARUSZENIE` and `NIEZWERYFIKOWANE` lines carry
+     their own reason, so they stay separate — a range is for the OK run around them and for a
+     gated-out instruction, never a way to sweep a violation into a neighbour's range.
+   - The 2–6 word label in your own words belongs on the lines that need it: `NARUSZENIE`,
+     `NIEZWERYFIKOWANE`, and a single-item `OK` worth naming. On a collapsed OK or BRAMKA range the
+     address IS the reference — do not spell out thirty rules to say the file has none of them.
    - `[x] … — OK (<where>)` — checked and compliant. `<where>` is where you saw the answer: the
      `cat -n` line numbers you verified (`L12, L18`), or `brak wystąpień` when the rule's subject
      does not occur in the file at all. `brak wystąpień` is a verdict for a PROHIBITION only — for a
      requirement, a missing subject is a finding, never an absence to wave through.
+   - `[x] … — BRAMKA: <what is absent>` — the instruction's `gate` failed for this file (point 2),
+     so its whole range is ticked in one line. Only an instruction listed in `checklistGates` may
+     produce such a line, and the reason names what the file does not contain.
    - `[x] … — NARUSZENIE (L<n>, …)` — checked and broken; the lines are the ones the finding's
      `**Linia:**` carries, and that finding is in this same part file. (Findings from the cross-file
      pass or from the universal points 3–5 belong to no item and appear only as findings.)
    - `[ ] … — NIEZWERYFIKOWANE: <reason>` — anything you could not check 100% (point 2). The reason
      is concrete: what was missing, not "no time".
-   - Each line is written when its verdict is reached, so the block is the running record of the
-     walk — never a list reconstructed from memory once the file is done.
+   - Each verdict is written when it is reached, so the block is the running record of the walk —
+     never a list reconstructed from memory once the file is done. Collapsing is how a reached
+     verdict is WRITTEN, not permission to reach one for thirty items at once: an OK range means you
+     walked each of those items and each came back clean.
    The coverage marker closes the block and states the same walk as numbers:
    `<!-- coverage: <file.path> <checked>/<file.checklistTotal> -->`
-   `<checked>` is how many lines of the block carry `[x]`, counted from the block you just wrote;
+   `<checked>` is how many ITEMS of the block carry `[x]` — a range line contributes every number it
+   spans, not one — counted from the block you just wrote;
    `checklistTotal` is copied from the context JSON. The two match on a file you finished — a
    smaller `<checked>` makes the renderer warn and keeps the Markdown, which is the honest outcome
    of an interrupted pass, not something to paper over with an unearned tick. The renderer recounts
@@ -370,7 +403,9 @@ target with an unanalyzed file is not done, regardless of diff size or session l
     - **PR Locations:** <ENGLISH, comma-separated: every file and symbol the fix has to touch>
 
     <!-- checklist: <file path>
-    [x] <id>#<n> <short item label> — OK (<lines | brak wystąpień>)
+    [x] <id>#<from>-<to>[,#<from>-<to>] — OK (brak wystąpień)
+    [x] <id>#<n> <short item label> — NARUSZENIE (<lines>)
+    [x] <id>#<from>-<to> — BRAMKA: <what the file does not contain>
     [ ] <id>#<n> <short item label> — NIEZWERYFIKOWANE: <reason>
     -->
     <!-- coverage: <file path> <checked>/<total> -->
@@ -456,7 +491,9 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "This file already has plenty of findings" | Findings per file are unlimited. Stopping a checklist partway is skipping items. |
 | "This line already has a finding" | Findings are per rule, not per line. A cited line goes back through the remaining checklist items (Step 3 point 3, line sweep) — one line commonly breaks three or four rules. |
 | "I already reported this rule here" | You reported its first occurrence. The occurrence sweep (Step 3 point 3) searches the whole file for the rest and puts every one into `**Linia:**`. |
-| "No local instruction matched this file" | Global checklists apply to every file; zero local matches often means the file sits outside every dedicated location — itself a violation. |
+| "No local instruction matched this file" | The globals in its plan still apply, and zero local matches often means the file sits outside every dedicated location — itself a violation. |
+| "The gate probably fails, collapse the instruction" | A gate is answered from what the file HOLDS, and an unclear answer means the gate HOLDS. A wrongly failed gate silently drops a whole instruction — the widest unearned tick there is. |
+| "One big range is faster to write" | A range is a way to write verdicts you already reached, one per item. Ranging over items you did not walk is thirty unearned ticks on one line. |
 | "Context/time is running low" | Coverage outranks speed, and the coverage marker records what you actually walked. Keep going file by file. |
 | "This item is obviously fine, tick it" | A tick states you checked THIS file against THAT item and can name where you saw the answer. Obvious-looking is what unchecked items look like; check it, then tick it. |
 | "I will write the checklist once the file is done" | The block is the record of the walk: each line is written as its verdict is reached, and the file's part file is written before the next file is opened. A block composed afterwards is a summary of what you remember, which is what the ticks exist to replace. |

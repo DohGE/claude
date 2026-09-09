@@ -102,6 +102,9 @@ function makeRepo(t) {
   run(dir, ['config', 'user.name', 'Test']);
   run(dir, ['config', 'commit.gpgsign', 'false']);
   commitFile(dir, 'README.md', '# repo\n', 'initial');
+  // A reviewable non-code seed file: prose is skipped by skipGlobs, so tests
+  // that need "a changed file with no local instruction" modify this one.
+  commitFile(dir, 'config/app.json', '{\n  "a": 1\n}\n', 'seed config');
   return dir;
 }
 
@@ -396,13 +399,75 @@ test('loadInstructions walks nested folders and warns on missing applies-to', (t
   assert.match(res.warnings[0], /broken\.md/);
 });
 
-test('loadInstructions warns when a global instruction declares applies-to', (t) => {
-  const skillDir = makeSkillDir(t, {}, { 'misplaced.md': TS_INSTRUCTION });
+test('a global instruction narrows itself with applies-to, silence means everywhere', (t) => {
+  const skillDir = makeSkillDir(t, {}, {
+    'scoped.md': TS_INSTRUCTION,
+    'everywhere.md': '---\nname: Everywhere\n---\n- rule\n',
+  });
   const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
-  assert.deepStrictEqual(res.globals.map((f) => path.basename(f)), ['misplaced.md']);
+  assert.deepStrictEqual(res.globals.map((f) => path.basename(f)).sort(), ['everywhere.md', 'scoped.md']);
+  assert.deepStrictEqual(res.warnings, [], 'narrowing a global is a supported declaration, not a mistake');
+
+  const named = (p) => rc.matchGlobalInstructions(res.globals, res.scopes, p).map((f) => path.basename(f)).sort();
+  assert.deepStrictEqual(named('src/a.component.ts'), ['everywhere.md', 'scoped.md']);
+  assert.deepStrictEqual(named('src/assets/i18n/en.json'), ['everywhere.md'], 'the scoped global drops out');
+});
+
+test('an applies-to entry starting with ! excludes what it matches', () => {
+  assert.deepStrictEqual(
+    rc.splitPatterns(['**/*.ts', '!**/models/**', ' !**/x/** ']),
+    { include: ['**/*.ts'], exclude: ['**/models/**', '**/x/**'] },
+  );
+
+  const patterns = ['**/*.ts', '!**/models/**'];
+  assert.ok(rc.matchesScope(patterns, 'src/app/a.service.ts', true));
+  assert.ok(!rc.matchesScope(patterns, 'src/app/models/user.interface.ts', true), 'the exclude wins over the include');
+  assert.ok(!rc.matchesScope(patterns, 'src/app/models/tests/user.spec.ts', true), 'the whole subtree is excluded');
+  assert.ok(!rc.matchesScope(patterns, 'src/app/a.html', true), 'still needs to match an include');
+
+  // exclude-only: everything except, for a global; nothing at all, for a local
+  assert.ok(rc.matchesScope(['!**/models/**'], 'src/app/a.json', true));
+  assert.ok(!rc.matchesScope(['!**/models/**'], 'src/app/models/a.ts', true));
+  assert.ok(!rc.matchesScope(['!**/models/**'], 'src/app/a.json', false), 'a local must say what it covers');
+});
+
+test('a local instruction with only excluding patterns warns and never matches', (t) => {
+  const skillDir = makeSkillDir(t, { 'weird.md': '---\nname: Weird\napplies-to:\n  - "!**/models/**"\n---\n- rule\n' });
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
   assert.strictEqual(res.warnings.length, 1);
-  assert.match(res.warnings[0], /misplaced\.md/);
-  assert.match(res.warnings[0], /ignored for global instructions/);
+  assert.match(res.warnings[0], /no including applies-to pattern/);
+  assert.deepStrictEqual(rc.matchLocalInstructions(res.locals, 'src/a.ts'), []);
+});
+
+test('a global excludes a folder it has nothing to say about', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/exclude']);
+  commitFile(dir, 'src/a.service.ts', 'const a = 1;\n', 'code');
+  commitFile(dir, 'src/models/user.interface.ts', 'export interface U { id: string }\n', 'model');
+  const skillDir = makeSkillDir(t, {}, {
+    'coverage.md': '---\nname: Coverage\napplies-to:\n  - "**/*.ts"\n  - "!**/models/**"\n---\n- c1\n- c2\n',
+    'naming.md': '---\nname: Naming\n---\n- g1\n',
+  });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const files = ctx.targets[0].files;
+  const code = files.find((f) => f.path === 'src/a.service.ts');
+  const model = files.find((f) => f.path === 'src/models/user.interface.ts');
+  assert.deepStrictEqual(code.checklist, ['coverage:2', 'naming:1']);
+  assert.deepStrictEqual(model.checklist, ['naming:1'], 'the excluded global is out of the plan');
+  assert.strictEqual(model.checklistTotal, 1);
+  assert.deepStrictEqual(model.globalInstructionsSkipped.map((f) => path.basename(f)), ['coverage.md']);
+});
+
+test('a gate sentence reaches the context under the instruction id', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/gate']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const skillDir = makeSkillDir(t, {}, {
+    'gated.md': '---\nname: Gated\ngate: the file renders UI\n---\n- one\n- two\n',
+    'plain.md': '---\nname: Plain\n---\n- rule\n',
+  });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.checklistGates, { gated: 'the file renders UI' });
 });
 
 test('loadInstructions filters by audience and warns on unknown values', (t) => {
@@ -488,6 +553,7 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/auto']);
   commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  commitFile(dir, 'config/app.json', '{\n  "a": 2\n}\n', 'config');
   commitFile(dir, 'README.md', '# repo\nupdated\n', 'docs');
   const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
@@ -500,7 +566,8 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.strictEqual(t0.baseSource, 'fork');
   assert.strictEqual(t0.prNumber, null);
   assert.ok(t0.reportPath.endsWith('feature-auto-2026-07-08-10-00.md'));
-  assert.deepStrictEqual(t0.files.map((f) => f.path), ['README.md', 'src/a.ts']);
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['config/app.json', 'src/a.ts']);
+  assert.deepStrictEqual(t0.skipped, ['README.md'], 'prose is skipped, not reviewed');
   const added = t0.files.find((f) => f.path === 'src/a.ts');
   assert.strictEqual(added.status, 'A');
   assert.strictEqual(added.changedLines, null, 'added files: every line is new');
@@ -510,7 +577,7 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.ok(t0.commands.show.endsWith('| cat -n'), 'show output is line-numbered');
   assert.ok(t0.commands.diff.includes('diff main...feature/auto'));
   assert.ok(t0.commands.diff.includes('"<path>"'), 'templates carry the <path> placeholder');
-  const modified = t0.files.find((f) => f.path === 'README.md');
+  const modified = t0.files.find((f) => f.path === 'config/app.json');
   assert.strictEqual(modified.status, 'M');
   assert.strictEqual(modified.changedLines, '2', 'script precomputes new-file changed lines');
   assert.deepStrictEqual(ctx.localInstructionsCatalog.map((f) => path.basename(f)), ['ts.md']);
@@ -524,7 +591,7 @@ test('auto mode diffs against the open PR base and names its source', (t) => {
   const dir = makeRepo(t);
   withGitHubRemote(dir);
   run(dir, ['checkout', '-q', '-b', 'develop']);
-  commitFile(dir, 'd.txt', 'd', 'develop work');
+  commitFile(dir, 'd.json', '{}\n', 'develop work');
   run(dir, ['checkout', '-q', '-b', 'feature/pr-target']);
   commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
   const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
@@ -537,7 +604,7 @@ test('auto mode diffs against the open PR base and names its source', (t) => {
   assert.strictEqual(t0.baseSource, 'pr');
   assert.strictEqual(t0.prNumber, 42);
   assert.ok(t0.commands.diff.includes('diff main...feature/pr-target'));
-  assert.deepStrictEqual(t0.files.map((f) => f.path), ['d.txt', 'src/a.ts'], 'develop`s commit is part of the PR diff');
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['d.json', 'src/a.ts'], 'develop`s commit is part of the PR diff');
 });
 
 test('buildContext warns once when the GitHub lookup fails', (t) => {
@@ -591,8 +658,8 @@ test('staged mode lists index files with index show commands', (t) => {
   fs.writeFileSync(path.join(dir, 'app.ts'), 'const x = 1;\n');
   run(dir, ['add', 'app.ts']);
   run(dir, ['rm', '-q', 'old.css']);
-  fs.writeFileSync(path.join(dir, 'README.md'), '# repo\nstaged change\n');
-  run(dir, ['add', 'README.md']);
+  fs.writeFileSync(path.join(dir, 'config/app.json'), '{\n  "a": 2\n}\n');
+  run(dir, ['add', 'config/app.json']);
   fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# rules\n');
   const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
   const ctx = rc.buildContext({ mode: 'staged', project: dir, skillDir, now: new Date(2026, 6, 8, 14, 30) });
@@ -611,7 +678,7 @@ test('staged mode lists index files with index show commands', (t) => {
   const del = t0.files.find((f) => f.path === 'old.css');
   assert.strictEqual(del.status, 'D');
   assert.strictEqual(del.changedLines, null, 'deleted files have no new-file lines');
-  const staged = t0.files.find((f) => f.path === 'README.md');
+  const staged = t0.files.find((f) => f.path === 'config/app.json');
   assert.strictEqual(staged.status, 'M');
   assert.strictEqual(staged.changedLines, '2', 'staged ranges come from git diff --cached -U0');
   assert.strictEqual(ctx.claudeMd, path.join(dir, 'CLAUDE.md'));
@@ -640,7 +707,7 @@ test('staged mode runs git add . so pending changes are staged and reviewed', (t
   // untracked file — never `git add`ed by the test
   fs.writeFileSync(path.join(dir, 'untracked.ts'), 'const u = 1;\n');
   // tracked file modified in the working tree only — left unstaged
-  fs.writeFileSync(path.join(dir, 'README.md'), '# repo\nunstaged edit\n');
+  fs.writeFileSync(path.join(dir, 'config/app.json'), '{\n  "a": 3\n}\n');
   const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
   const ctx = rc.buildContext({ mode: 'staged', project: dir, skillDir, now: new Date(2026, 6, 8, 14, 30) });
   assert.strictEqual(ctx.targets.length, 1);
@@ -649,12 +716,12 @@ test('staged mode runs git add . so pending changes are staged and reviewed', (t
   const untracked = t0.files.find((f) => f.path === 'untracked.ts');
   assert.ok(untracked, 'git add . stages untracked files before the review');
   assert.strictEqual(untracked.status, 'A');
-  const readme = t0.files.find((f) => f.path === 'README.md');
-  assert.ok(readme, 'git add . stages working-tree modifications before the review');
-  assert.strictEqual(readme.status, 'M');
+  const tracked = t0.files.find((f) => f.path === 'config/app.json');
+  assert.ok(tracked, 'git add . stages working-tree modifications before the review');
+  assert.strictEqual(tracked.status, 'M');
   // the staging is a real side effect on the repo's index, not just the report
   const indexed = rc.git(dir, ['diff', '--cached', '--name-only']).split('\n').filter(Boolean).sort();
-  assert.deepStrictEqual(indexed, ['README.md', 'untracked.ts']);
+  assert.deepStrictEqual(indexed, ['config/app.json', 'untracked.ts']);
 });
 
 test('generated and binary files are skipped and listed per target', (t) => {
@@ -706,21 +773,31 @@ test('every file carries its ticking plan: instruction id + item count, globals 
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/plan']);
   commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
-  commitFile(dir, 'README.md', 'doc\n', 'doc');
+  commitFile(dir, 'config/app.json', '{\n  "a": 9\n}\n', 'config');
   const skillDir = makeSkillDir(
     t,
     {
       'ts.md': '---\nname: TS\napplies-to:\n  - "**/*.ts"\n---\n## Checklist\n- one\n- two\n',
       'empty.md': '---\nname: Empty\napplies-to:\n  - "**/*.ts"\n---\nNo checklist here.\n',
     },
-    { 'naming.md': '---\nname: Naming\n---\n- g1\n- g2\n- g3\n' },
+    {
+      'naming.md': '---\nname: Naming\n---\n- g1\n- g2\n- g3\n',
+      'runtime.md': '---\nname: Runtime\napplies-to:\n  - "**/*.ts"\n---\n- r1\n- r2\n',
+    },
   );
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   const files = ctx.targets[0].files;
   const code = files.find((f) => f.path === 'src/a.ts');
-  assert.deepStrictEqual(code.checklist, ['naming:3', 'ts:2'], 'globals first, then the matched locals');
-  const doc = files.find((f) => f.path === 'README.md');
-  assert.deepStrictEqual(doc.checklist, ['naming:3'], 'a file with no local match still walks the globals');
+  assert.deepStrictEqual(code.checklist, ['naming:3', 'runtime:2', 'ts:2'], 'globals first, then the matched locals');
+  assert.deepStrictEqual(code.globalInstructionsSkipped, [], 'a .ts file is in scope of both globals');
+  const doc = files.find((f) => f.path === 'config/app.json');
+  assert.deepStrictEqual(doc.checklist, ['naming:3'], 'a scoped global drops out of a file it does not apply to');
+  assert.strictEqual(doc.checklistTotal, 3, 'the total counts only the globals this file is walked against');
+  assert.deepStrictEqual(
+    doc.globalInstructionsSkipped.map((f) => path.basename(f)),
+    ['runtime.md'],
+    'the skipped globals are named, so a shorter plan reads as a decision',
+  );
   assert.strictEqual(
     code.checklist.reduce((n, entry) => n + Number(entry.split(':')[1]), 0),
     code.checklistTotal,
@@ -728,7 +805,7 @@ test('every file carries its ticking plan: instruction id + item count, globals 
   );
   assert.deepStrictEqual(
     Object.fromEntries(Object.entries(ctx.checklistIds).map(([id, file]) => [id, path.basename(file)])),
-    { naming: 'naming.md', ts: 'ts.md' },
+    { naming: 'naming.md', runtime: 'runtime.md', ts: 'ts.md' },
     'an instruction with no checklist items is left out of the plan and the dictionary',
   );
 });

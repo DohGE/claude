@@ -1,4 +1,4 @@
-<div class="panel" id="panel-root" *ngIf="users().length > 0; else empty">
+<div class="panel mt-0 p-0" id="panel-root" #panelRoot ngSkipHydration *ngIf="users().length > 0; else empty">
   <div class="nav">
     <a href="/reports">Reports</a>
     <a href="/users">Users</a>
@@ -10,8 +10,14 @@
 
   <div class="promo">{{ banners[bannerIndex] }}</div>
 
+  <p class="legal">Zgadzam się na przetwarzanie moich danych osobowych.</p>
+
   @defer (on viewport) {
     <img [src]="'/assets/hero-users.png'" alt="hero-users.png" width="1200" />
+
+    @defer (on viewport) {
+      <p>Session expires in {{ secondsLeft }} seconds</p>
+    }
   }
 
   <svg class="logo" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"></path></svg>
@@ -30,7 +36,7 @@
     <span class="tooltip" *ngIf="showTooltip">Only active users are exported</span>
   </span>
 
-  <select class="role-select" (change)="onRoleChange($event)">
+  <select class="role-select" [compareWith]="compareWithId" (change)="onRoleChange($event)">
     <option value="admin">Admin</option>
     <option value="viewer">Viewer</option>
   </select>
@@ -42,6 +48,40 @@
     <div class="tab" role="tab" (click)="activeTab = 'all'">All</div>
     <div class="tab" role="tab" (click)="activeTab = 'active'">Active</div>
   </div>
+
+  @switch (activeTab) {
+    @case ('all') {
+      <p>Showing every user</p>
+    }
+    @case ('active') {
+      <p>Showing active users only</p>
+    }
+  }
+
+  @if (isBrowser) {
+    <p>Rendered in the browser</p>
+  }
+
+  <highlight [color]="'#ffff00'" (highlighted)="onSave()">Highlighted area</highlight>
+
+  <table class="user-table" (touchmove)="onPinchZoom($event)">
+    <tr>
+      <td>#</td>
+      <td>Name</td>
+      <td>Status</td>
+      <td>Actions</td>
+    </tr>
+    @for (user of users(); track user.id) {
+      <tr>
+        <td>{{ rowCounter }}</td>
+        <td>{{ user.firstName }}</td>
+        <td>{{ user.user_status | UserStatusLabel }}</td>
+        <td>
+          <button type="button" aria-label="Erase" (click)="removeUser(user); rowCounter = rowCounter + 1">🗑</button>
+        </td>
+      </tr>
+    }
+  </table>
 
   <ul class="user-list">
     <li
@@ -55,8 +95,8 @@
       <span class="status-dot" [ngStyle]="{ background: user.user_status === 1 ? '#2e7d32' : '#c62828' }"></span>
       {{ formatDate(user.created_at) }} — {{ greet(user) }}
       <span [innerHTML]="trustBio(user.bio)"></span>
-      <a [href]="user.homepage" target="_blank">Homepage</a>
-      <span class="remove" role="presentation" (mousedown)="removeUser(user)">✖</span>
+      <a [href]="user.homepage" target="_blank">Homepage <a href="/docs/profile">docs</a></a>
+      <span class="remove" role="presentation" aria-label="Remove" (mousedown)="removeUser(user)">✖</span>
     </li>
   </ul>
 
@@ -75,6 +115,11 @@
   <span aria-expanded="false" class="chevron" (click)="onSave()">▼</span>
 
   <p>{{ userNames$ | async }}</p>
+
+  <p class="summary">
+    {{ 'page.userPanel.labels.userNameLabel' | translate }}
+    <div class="summary__hint">{{ 'page.userPanel.labels.panelHeading' | translate }}</div>
+  </p>
 
   <div class="error red-text" *ngIf="form.invalid">Email is required</div>
 
@@ -110,6 +155,7 @@
     <button type="button" [disabled]="form.invalid" aria-label="Submit form">Save changes</button>
     <button type="button" class="btn-danger" (click)="deleteAccount()">Delete account</button>
     <button type="button" aria-label="Save changes and close the panel">Save changes</button>
+    <button type="button" (click)="goToNextStep()">Next step</button>
   </div>
 
   <div class="overlay" *ngIf="isOverlayOpen" tabindex="-1">
@@ -118,7 +164,14 @@
   </div>
 
   @defer (on viewport) {
-    <user-card *ngFor="let user of users()" [user]="user" title="User details" data-test="user-card"></user-card>
+    <user-card
+      *ngFor="let user of users()"
+      [user]="{ id: user.id, firstName: user.firstName, last_name: user.last_name }"
+      [index]="rowCounter"
+      (validityChanged)="registerChildForm($event, rowCounter)"
+      title="User details"
+      data-test="user-card"
+    ></user-card>
   }
 </div>
 

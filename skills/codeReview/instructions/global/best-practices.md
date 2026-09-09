@@ -1,5 +1,8 @@
 ---
 name: Angular & TypeScript best practices
+applies-to:
+  - "**/*.ts"
+  - "**/*.html"
 ---
 This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables,
 host bindings, lazy routes, the forms pattern and RxJS usage. File placement, member order and template
