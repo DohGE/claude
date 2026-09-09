@@ -25,7 +25,7 @@ describe('user panel selectors', () => {
   it('allows next step', () => {
     const result = UserPanelSelectors.selectNextStepAllowed.projector({
       ...initialState,
-      users: [{ id: '1' } as UserDto],
+      users: [{ id: '1', firstName: 'Jan', last_name: 'Kowalski' } as UserDto],
       userCount: 1,
     });
     expect(result).toBe(true);
@@ -37,7 +37,12 @@ describe('user panel selectors', () => {
   });
 
   it('sorted users returns the same list', () => {
-    const users = [{ id: '1', last_name: 'a' } as UserDto];
+    const users = [{ id: '1', firstName: 'Jan', last_name: 'Kowalski' } as UserDto];
     expect(UserPanelSelectors.selectSortedUsers.projector(users)).toEqual(users);
+  });
+
+  it('builds the search summary', () => {
+    const users = [{ id: '1', firstName: 'Jan', last_name: 'Kowalski' } as UserDto];
+    expect(UserPanelSelectors.selectSearchSummary.projector(users).total).toBe(1);
   });
 });

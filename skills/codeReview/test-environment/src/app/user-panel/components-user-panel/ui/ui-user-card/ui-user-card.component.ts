@@ -1,4 +1,17 @@
-import { ChangeDetectionStrategy, Component, effect, EventEmitter, inject, Input, input } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  effect,
+  EventEmitter,
+  inject,
+  Input,
+  input,
+  model,
+  OnChanges,
+  output,
+  signal,
+  SimpleChanges,
+} from '@angular/core';
 import { NgOptimizedImage } from '@angular/common';
 import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -21,28 +34,46 @@ export interface CardUser {
   templateUrl: './ui-user-card.component.html',
   styleUrl: './ui-user-card.component.scss',
 })
-export class UserCardComponent {
+export class UserCardComponent implements OnChanges {
   private facade = inject(UserPanelFacade);
   private router = inject(Router);
 
   user = input<CardUser>();
   title = input<string>('');
+  index = input<number>(0);
+  expandedRows = model<number>(0);
+
+  isExpanded = signal(false);
+
   highlighted = false;
   @Input() set highlight(value: boolean) {
     this.highlighted = value;
   }
 
   selected = new EventEmitter<CardUser>();
+  readonly onSelect = output<CardUser>();
+  readonly change = output<void>();
+  readonly validityChanged = output<boolean>();
 
   form = new FormGroup({ note: new FormControl('') });
 
   constructor() {
-    this.form.valueChanges.subscribe((value) => this.selected.emit(value as never));
+    this.form.valueChanges.subscribe((value) => {
+      this.selected.emit(value as never);
+      this.validityChanged.emit(this.form.valid);
+    });
     effect(() => {
       if (this.user()) {
         this.form.patchValue({ note: this.user()!.firstName });
       }
     });
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['user']) {
+      this.isExpanded.set(false);
+      this.expandedRows.set(0);
+    }
   }
 
   openDetails(): void {

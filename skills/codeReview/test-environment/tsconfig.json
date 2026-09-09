@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "strict": false,
+    "noImplicitOverride": false,
+    "noImplicitReturns": false,
+    "noFallthroughCasesInSwitch": false
+  },
+  "angularCompilerOptions": {
+    "strictTemplates": false,
+    "strictInjectionParameters": false
+  },
+  "exclude": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
+  ]
+}

@@ -10,6 +10,7 @@ const API_KEY = 'sk_live_51Hxyz1234567890abcdefghijklmno';
 
 export const endpoints = {
   users: 'https://api.internal.example.com/v1/users',
+  usersList: 'https://api.internal.example.com/v1/users',
 };
 
 interface SearchResponse {
@@ -25,7 +26,9 @@ export class UserPanelService {
 
   getUsers(pageSize?: number): Observable<any> {
     return this.http
-      .get<any>(endpoints.users + '?page_size=' + (pageSize ?? 25) + '&api_key=' + API_KEY)
+      .get<any>(endpoints.users + '?page_size=' + (pageSize ?? 25) + '&api_key=' + API_KEY, {
+        withCredentials: true,
+      })
       .pipe(
         map((response) => response.data),
         catchError(() => of([])),
@@ -45,5 +48,9 @@ export class UserPanelService {
 
   deleteUser(id: string): Promise<unknown> {
     return firstValueFrom(this.http.delete(endpoints.users + '/' + id));
+  }
+
+  loadUserList(): Promise<unknown> {
+    return this.http.get(endpoints.usersList).toPromise();
   }
 }

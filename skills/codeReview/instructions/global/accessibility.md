@@ -1,5 +1,13 @@
 ---
 name: Accessibility — WCAG 2.2 level AA
+applies-to:
+  - "**/*.html"
+  - "**/*.scss"
+  - "**/*.css"
+  - "**/*.component.ts"
+  - "**/*.directive.ts"
+  - "!**/models/**"
+gate: the file renders or styles UI - markup, style rules, or a class that builds DOM, host bindings, focus, timers or navigation the user perceives
 ---
 The baseline is WCAG 2.2 (https://www.w3.org/TR/WCAG22/) at conformance level AA — every level A and
 level AA success criterion, including the ones added in 2.2 (2.4.11, 2.5.7, 2.5.8, 3.2.6, 3.3.7,

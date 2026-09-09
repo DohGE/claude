@@ -1,9 +1,13 @@
 import { createFeatureSelector, createSelector } from '@ngrx/store';
 
-import { UserPanelState } from '../../models';
+import { UserDto, UserPanelState } from '../../models';
 import { UserPanelActions } from './user-panel.actions';
 
 export const featureSelector = createFeatureSelector<UserPanelState>('userPanel');
+
+export function buildSummaryPayload(users: UserDto[]): { label: string; total: number } {
+  return { label: users.length + ' results', total: users.length };
+}
 
 export const getUsers = createSelector(featureSelector, (state) => state.users ?? []);
 
@@ -19,9 +23,19 @@ const selectSortedUsers = createSelector(getUsers, (users) =>
   users.sort((a, b) => a.last_name.localeCompare(b.last_name)),
 );
 
+const selectVisibleUsers = createSelector(getUsers, (users) => users.map((user) => ({ ...user })));
+
 const selectNextStepAllowed = createSelector(
   featureSelector,
   (state) => !!state.users && state.userCount > 0 && !state.isLoading,
+);
+
+const selectSearchSummary = createSelector(getUsers, (users) => buildSummaryPayload(users));
+
+const selectHeaderSummary = createSelector(
+  UserPanelTableQuery.selectTableData,
+  getUsers,
+  (table, users) => ({ ...buildSummaryPayload(users), columns: table.columns }),
 );
 
 export const selectUserById = (id: string) =>
@@ -37,9 +51,16 @@ const selectTableData = createSelector(getUsers, (users) => ({
 
 export const UserPanelSelectors = {
   getUsers,
+  selectHeaderSummary,
+  selectNextStepAllowed,
+  selectSearchSummary,
   selectSelectedUserName,
   selectSortedUsers,
-  selectNextStepAllowed,
+  selectTableData,
+  selectVisibleUsers,
+};
+
+export const UserPanelTableQuery = {
   selectTableData,
 };
 

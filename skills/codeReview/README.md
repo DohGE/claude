@@ -5,7 +5,7 @@ Reviews git changes against instruction checklists and writes one concise report
 Reports are always written in Polish.
 Report-only: the skill writes no code and makes no commits; the sole repo side effect is `git add .` in staged mode, which stages every pending change before reviewing it.
 Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
-Full coverage: every file in the diff and every checklist item of every matched instruction is evaluated on every run — the reviewer never skips files or rules; only the context script excludes generated/binary files.
+Full coverage: every file in the diff and every checklist item of every instruction in that file’s plan is evaluated on every run — the reviewer never skips files or rules; only the context script excludes generated, binary and prose files.
 Reporting scope is narrower than coverage: only violations carried by the lines the diff touched are reported (see [Review scope](#review-scope)).
 
 ## Usage
@@ -37,7 +37,7 @@ Generated and binary files (lockfiles, `*.min.*`, source maps, `dist/`/`build/`/
 
 Review rules live in two folders inside this skill (they start empty — add your own):
 
-- `instructions/global/**/*.md` — apply to every reviewed file (subfolders are scanned recursively; `applies-to` frontmatter is ignored here and reported as a warning).
+- `instructions/global/**/*.md` — apply to every reviewed file, unless the file itself narrows that with `applies-to` globs (subfolders are scanned recursively).
 - `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
 
 A reviewed project can also carry its own rules in `<project>/.claude/doh/instructions/`, with the same `global/` + `local/` layout.
@@ -62,9 +62,11 @@ An instruction may declare `audience: implement|review|both` in its frontmatter 
     - OnPush change detection for presentational components
     - No logic in constructors
 
-A global instruction is the same file without the `applies-to` key.
+A global instruction is the same file placed under `instructions/global/`. It may declare `applies-to` too, and is then narrowed by path exactly like a local one — a global WITHOUT the key applies to every file, so narrowing is opt-in and silence means everywhere (`accessibility.md` limits itself to templates, styles, components and directives this way).
 List items under `applies-to:` must be indented; quotes around patterns are optional.
-A local instruction without any `applies-to` pattern never matches and is reported as a warning.
+A local instruction without any including `applies-to` pattern never matches and is reported as a warning.
+
+Any instruction may also declare a one-line `gate:` — a precondition the reviewer answers from the file’s CONTENT before walking the items, for what a glob cannot see (a `.ts` file holding no markup, a barrel carrying no behaviour). A failed gate collapses the whole instruction into one ticked range line naming what is absent; an unclear answer means the gate holds and the items are walked. Gates reach the reviewer as the top-level `checklistGates` map.
 
 ### Glob subset
 
@@ -72,25 +74,32 @@ A local instruction without any `applies-to` pattern never matches and is report
 Matching is case-sensitive, against `/`-separated paths relative to the repo root.
 Everything else is matched literally.
 
+A pattern starting with `!` EXCLUDES what it matches, and an exclude always wins over an include — which is how a broad instruction carves out a folder it has nothing to say about (`test-coverage`, `performance`, `security` and `accessibility` all declare `"!**/models/**"`, because a folder of consts, interfaces, enums and types has no behaviour to test, no render cost, no attack surface and no UI).
+A global with only excluding patterns covers everything except them; a local still needs at least one INCLUDING pattern, or it never matches and is reported as a warning.
+
 ## Checklist coverage
 
-The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for.
+The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for. Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and `globalInstructionsSkipped` names them per file so a shorter plan reads as a decision rather than an omission.
 Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under.
 
 The reviewer walks that list item by item and writes the result next to the file's findings, as one HTML comment block per file:
 
     <!-- checklist: src/app/user.component.ts
-    [x] general#1 nazwy const camelCase — OK (L12, L18)
+    [x] accessibility#1-30 — BRAMKA: plik nie zawiera markupu ani stylów
+    [x] general#1-5,#7-13 — OK (brak wystąpień)
+    [x] general#6 nazwy const camelCase — NARUSZENIE (L12, L18)
     [x] component#1 OnPush — NARUSZENIE (L4)
+    [x] component#2-14,#16-27 — OK (brak wystąpień)
     [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
     -->
-    <!-- coverage: src/app/user.component.ts 184/185 -->
+    <!-- coverage: src/app/user.component.ts 96/97 -->
 
-`[x]` is set only for an item checked 100%: `OK (<lines or "brak wystąpień">)` when the file complies, `NARUSZENIE (<lines>)` when the item produced the finding above it.
+Items of one instruction that share a verdict are collapsed into ONE line addressed by a range or list of ranges (`general#1-5,#7-13`); expanded, the block still holds exactly `<total>` items, each exactly once. `NARUSZENIE` and `NIEZWERYFIKOWANE` keep their own line and their own short label, while a collapsed OK or BRAMKA range needs none — the address is the reference.
+`[x]` is set only for an item checked 100%: `OK (<lines or "brak wystąpień">)` when the file complies, `NARUSZENIE (<lines>)` when the item produced the finding above it, `BRAMKA: <what is absent>` when the instruction’s gate failed for this file.
 Anything the reviewer could not verify stays `[ ]` with the reason — an honest gap, not a rounding error.
 A file whose whole diff is mechanical writes `<!-- coverage: <path> mechanical -->` and no block: its walk was the gate's two questions, not the checklist.
 
-The renderer recounts the ticks instead of trusting the marker: a missing block, a block shorter than `<total>`, a marker the ticks do not back up and an unticked item all become warnings (which keep the Markdown next to the HTML), and the ticked lines become the page's **Pokrycie checklist** section.
+The renderer expands every range and recounts the ticks instead of trusting the marker: a missing block, a block shorter than `<total>`, a marker the ticks do not back up, an item ticked twice by overlapping ranges, a malformed range and an unticked item all become warnings (which keep the Markdown next to the HTML), and the ticked lines become the page's **Pokrycie checklist** section.
 
 ## Review scope
 

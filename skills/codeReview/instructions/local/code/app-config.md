@@ -17,4 +17,3 @@ applies-to:
 - Unhandled errors reach one place: `provideBrowserGlobalErrorListeners()` (v20+) and/or a project `ErrorHandler` is registered, and it does not log tokens, credentials or PII (security instruction).
 - Animations are provided asynchronously (`provideAnimationsAsync()`) when they are needed at all; new animation work prefers native CSS transitions and view transitions over the `@angular/animations` DSL.
 - Configuration values (API base paths, intervals, debounce times, feature flags) come from the central app config token — no inline URLs, no `process.env` reads, no secrets (security instruction).
-- Server and browser configs share one base config and differ only by the providers that genuinely must differ; a provider duplicated across both files is a finding.

@@ -17,6 +17,10 @@ export class UserPanelGuard implements CanActivate {
   canActivate(): Observable<boolean> {
     return this.store.select(getUsers).pipe(
       map((users) => {
+        if (localStorage.getItem('role') !== 'admin') {
+          this.router.navigate(['/forbidden']);
+          return false;
+        }
         if (users.length === 0) {
           this.service.getUsers().subscribe();
           this.router.navigate(['/users/step-2']);
@@ -26,4 +30,8 @@ export class UserPanelGuard implements CanActivate {
       }),
     );
   }
+}
+
+export function userPanelStepGuardFactory(step: string) {
+  return () => step === 'step-1';
 }

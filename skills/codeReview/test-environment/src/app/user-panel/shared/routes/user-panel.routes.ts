@@ -5,7 +5,7 @@ import { UserPanelComponent } from '../../components-user-panel/feature/feature-
 import { UserPanelEffects } from '../../data-access/+state/user-panel.effects';
 import { UserPanelFacade } from '../../data-access/+state/user-panel.facade';
 import { reducer } from '../../data-access/+state/user-panel.reducer';
-import { UserPanelGuard } from '../guards/user-panel.guard';
+import { UserPanelGuard, userPanelStepGuardFactory } from '../guards/user-panel.guard';
 
 export function buildPath(segment: string): string {
   return segment + '/';
@@ -15,7 +15,8 @@ export const routes = [
   {
     path: buildPath(''),
     component: UserPanelComponent,
-    canActivate: [UserPanelGuard],
+    canActivate: [UserPanelGuard, userPanelStepGuardFactory],
+    data: { config: { showLegend: true, pageSize: 25 } } as Record<string, any>,
     providers: [
       provideState('userPanel', reducer),
       provideEffects([UserPanelEffects]),

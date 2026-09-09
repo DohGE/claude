@@ -48,4 +48,15 @@ describe('UserCardComponent', () => {
     component.openDetails();
     expect(svc.loadUsers).toHaveBeenCalled();
   });
+
+  it('collapses the card', () => {
+    component['isExpanded'].set(true);
+    fixture.componentRef.setInput('user', { id: '1' } as CardUser);
+    expect(component['isExpanded']()).toBe(true);
+  });
+
+  it.only('emits the note', () => {
+    component.form.controls.note.setValue('note');
+    expect(component.form.value).toEqual({ note: 'note' });
+  });
 });

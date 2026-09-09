@@ -1,5 +1,9 @@
 ---
 name: Test coverage — untested cases & edge cases
+applies-to:
+  - "**/*.ts"
+  - "!**/models/**"
+gate: the file carries behaviour a spec could execute - a function, branch, handler, effect or class method, not only declarations, re-exports or route/config literals
 ---
 This instruction OWNS coverage gaps — which behavioral cases, branches, edge cases and state permutations
 the diff leaves untested; every finding here is 🔵 **Missing Unit Test**. The unit-tests instruction owns
