@@ -9,7 +9,8 @@ const { createApp } = require('../scripts/server.cjs');
 let app, base, dir;
 
 const postState = body => fetch(`${base}/api/state`, {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ taskId: 't1', ...body })
 });
 const takeAnswer = async () => (await (await fetch(`${base}/api/answer?wait=10`)).json()).answer;
 // Submit w krokach 1-3 przechodzi przez własny dialog potwierdzenia (stepper-confirm.spec.cjs).
@@ -41,7 +42,7 @@ const SCREENS = [
 ];
 
 async function openMockupPanel(page) {
-  const d = path.join(dir, 'generated-mockups');
+  const d = path.join(dir, 'tasks', 't1', 'generated-mockups');
   fs.mkdirSync(d, { recursive: true });
   fs.writeFileSync(path.join(d, 'login.html'), '<!doctype html><h1 id="mk">Logowanie</h1>');
   fs.writeFileSync(path.join(d, 'list.html'), '<!doctype html><h1 id="mk">Lista</h1>');

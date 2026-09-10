@@ -185,11 +185,16 @@ const EYE_OFF = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" str
   + '<path d="M1 1l22 22"/></svg>';
 let lastSig = null;
 let serverDown = false; // set when the user shuts the server down from the summary
-let mockupScreen = 0;   // preview selection survives re-renders of the mockup panel
-let mockupViewport = 'Desktop';
-// Step 7 runs on demand once the summary exists, so which of the two screens is
-// visible is the user's choice, not a pipeline state — it lives here, in the page.
-let showSummary = false;
+// Which tab is open is page state, never server state: parallel pipelines write
+// to the state concurrently and must not yank the user's view to another task.
+let activeTask = null;
+// Per-task view state, so switching tabs never leaks one task's preview selection
+// or summary toggle into another's. Step 7 runs on demand once the summary exists,
+// so which of the two screens is visible is the user's choice, not a pipeline state.
+const view = {};
+const viewOf = id => (view[id] || (view[id] = {
+  showSummary: false, mockupScreen: 0, mockupViewport: 'Desktop'
+}));
 
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s == null ? '' : s)
@@ -205,10 +210,13 @@ function toB64(file) {
   });
 }
 async function postJson(url, body) {
-  await fetch(url, { method: 'POST',
+  const res = await fetch(url, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  // Create-task needs the new id back; every other caller ignores the result,
+  // and /api/shutdown dies mid-response, hence the catch.
+  return res.json().catch(() => ({}));
 }
-const sendAnswer = payload => postJson('/api/answer', payload);
+const sendAnswer = payload => postJson('/api/answer', { taskId: activeTask, ...payload });
 
 // In-page confirmation modal — never window.confirm(): a native dialog freezes the page
 // (and any browser automation driving it), cannot be styled and cannot be asserted on.
@@ -281,14 +289,19 @@ async function tick() {
     lastSig = null;
     return;
   }
-  renderStepper(state);
-  renderPanel(state);
+  if (!activeTask || !state.tasks.some(t => t.id === activeTask)) {
+    activeTask = state.tasks[0].id;
+    lastSig = null;
+  }
+  const task = state.tasks.find(t => t.id === activeTask);
+  renderStepper(task);
+  renderPanel(state, task);
 }
 
 // Step ids are fixed, but disabled steps (Mockups when the toggle stayed off)
 // are hidden and the visible ones are numbered 1..n so the badges stay contiguous.
-function renderStepper(state) {
-  $('#stepper').innerHTML = state.steps.filter(s => s.enabled !== false).map((s, i) => `
+function renderStepper(task) {
+  $('#stepper').innerHTML = task.steps.filter(s => s.enabled !== false).map((s, i) => `
     <div class="step ${s.status}">
       <span class="num">${i + 1}</span>
       <span class="name">${esc(s.name || STEP_NAMES[s.id - 1])}</span>
@@ -296,56 +309,62 @@ function renderStepper(state) {
     </div>`).join('');
 }
 
-const activeStepOf = state =>
-  state.steps.find(s => s.id === state.activeStep) || state.steps[0];
+const activeStepOf = task =>
+  task.steps.find(s => s.id === task.activeStep) || task.steps[0];
 
-function sig(state) {
-  const step = activeStepOf(state);
-  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP);
-  return [state.activeStep, step.status,
-    state.question ? `q${state.questionSeq || 0}` : '',
-    state.reviewSummary ? '1' : '',
+// A task stopped at a gate, waiting for the user rather than for an agent.
+const pending = task => !!(task.question || task.reviewSummary || task.mockupReview);
+
+function sig(task) {
+  const v = viewOf(task.id);
+  const step = activeStepOf(task);
+  const mockoon = task.steps.find(s => s.id === MOCKOON_STEP);
+  return [task.id, task.activeStep, step.status,
+    task.question ? `q${task.questionSeq || 0}` : '',
+    task.reviewSummary ? '1' : '',
     // rev changes on every agent round, which re-renders the mockup panel and
     // clears the lock left by the previous Send.
-    state.mockupReview ? `m${state.mockupReview.rev || 0}` : '',
-    state.summary ? '1' : '',
+    task.mockupReview ? `m${task.mockupReview.rev || 0}` : '',
+    task.summary ? '1' : '',
     // The Mockoon step changes status while the summary is the visible screen,
     // and the switch between the two screens is local — both must re-render.
-    mockoon ? mockoon.status : '', showSummary ? 'S' : ''].join('|');
+    mockoon ? mockoon.status : '', v.showSummary ? 'S' : ''].join('|');
 }
 
-function renderPanel(state) {
-  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP);
+function renderPanel(state, task) {
+  const v = viewOf(task.id);
+  const mockoon = task.steps.find(s => s.id === MOCKOON_STEP);
   // A fresh Mockoon run always pulls the user back onto its panel, whatever they
   // were looking at when they asked for it.
-  if (mockoon && mockoon.status === 'in_progress') showSummary = false;
-  const s = sig(state);
-  const step = activeStepOf(state);
+  if (mockoon && mockoon.status === 'in_progress') v.showSummary = false;
+  const s = sig(task);
+  const step = activeStepOf(task);
   if (s === lastSig) { updateDynamic(step); return; }
   lastSig = s;
-  renderActive(state, step);
+  renderActive(task, step);
   wireTextareas();
 }
 
-function renderActive(state, step) {
+function renderActive(task, step) {
   // Mockoon mocks are generated after the pipeline is over, so while step 7 is the
   // active one its panel outranks the summary — until the user asks to go back.
-  if (state.activeStep === MOCKOON_STEP && !showSummary) {
+  if (task.activeStep === MOCKOON_STEP && !viewOf(task.id).showSummary) {
     return step.status === 'failed' ? renderFailed(step) : renderMockoon(step);
   }
-  if (state.summary) return renderSummary(state);
+  if (task.summary) return renderSummary(task);
   if (step.status === 'failed') return renderFailed(step);
   // Any step may ask: the refinement Q&A in step 2, the required Chrome extension in step 5.
-  if (state.question) return renderQuestion(state.question, step);
-  if (state.activeStep === 1) return renderStep1(step);
-  if (state.activeStep === 2 && state.reviewSummary) return renderReview(state.reviewSummary);
-  if (state.activeStep === 3 && state.mockupReview) {
-    return renderMockupReview(state.mockupReview);
+  if (task.question) return renderQuestion(task.question, step);
+  if (task.activeStep === 1) return renderStep1(task);
+  if (task.activeStep === 2 && task.reviewSummary) return renderReview(task.reviewSummary);
+  if (task.activeStep === 3 && task.mockupReview) {
+    return renderMockupReview(task.mockupReview);
   }
   renderProgress(step);
 }
 
-function renderStep1(step) {
+function renderStep1(task) {
+  const step = task.steps[0];
   if (step.status !== 'in_progress') {
     $('#panel').innerHTML = '<p class="muted">Waiting for the pipeline…</p>';
     return;
@@ -431,7 +450,7 @@ function renderStep1(step) {
       const names = [];
       for (const f of input.files) {
         await postJson('/api/upload',
-          { category: cat, filename: f.name, dataBase64: await toB64(f) });
+          { taskId: activeTask, category: cat, filename: f.name, dataBase64: await toB64(f) });
         names.push(f.name);
       }
       return names;
@@ -442,7 +461,10 @@ function renderStep1(step) {
     // Credentials go straight to the server (auth.json); the step1 answer
     // only carries a flag so they never reach the orchestrator's context.
     const a = auth();
-    if (a.complete) await postJson('/api/auth', { login: a.login, password: a.password });
+    if (a.complete) {
+      await postJson('/api/auth',
+        { taskId: activeTask, login: a.login, password: a.password });
+    }
     await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
       businessRequirements: $('#biz').value.trim(),
@@ -508,20 +530,21 @@ function renderReview(review) {
 }
 
 function mockupUrl(review, screen) {
-  return `/generated-mockups/${encodeURIComponent(screen.file)}?rev=${review.rev || 0}`;
+  return `/generated-mockups/${encodeURIComponent(activeTask)}/${
+    encodeURIComponent(screen.file)}?rev=${review.rev || 0}`;
 }
 
 // The panel is ~930 px wide, so a 1280 px mockup is scaled down rather than
 // letterboxed — otherwise the preview would misreport the layout.
 function drawPreview(review) {
   const box = $('#preview');
-  const screen = (review.screens || [])[mockupScreen];
+  const screen = (review.screens || [])[viewOf(activeTask).mockupScreen];
   if (!box) return;
   if (!screen) {
     box.innerHTML = '<p class="muted">No screen to preview yet.</p>';
     return;
   }
-  const [w, h] = MOCKUP_VIEWPORTS[mockupViewport];
+  const [w, h] = MOCKUP_VIEWPORTS[viewOf(activeTask).mockupViewport];
   const scale = Math.min(1, (box.clientWidth || w) / w);
   const url = mockupUrl(review, screen);
   box.innerHTML = `
@@ -534,13 +557,14 @@ function drawPreview(review) {
 
 function renderMockupReview(review) {
   const screens = review.screens || [];
-  if (mockupScreen >= screens.length) mockupScreen = 0;
+  const v = viewOf(activeTask);
+  if (v.mockupScreen >= screens.length) v.mockupScreen = 0;
   const tabs = screens.map((s, i) =>
-    `<button data-screen="${i}"${i === mockupScreen ? ' class="selected"' : ''}>${
+    `<button data-screen="${i}"${i === v.mockupScreen ? ' class="selected"' : ''}>${
       esc(s.title || s.id)}</button>`).join('');
-  const viewports = Object.keys(MOCKUP_VIEWPORTS).map(v =>
-    `<button data-viewport="${v}"${v === mockupViewport ? ' class="selected"' : ''}>${v}</button>`)
-    .join('');
+  const viewports = Object.keys(MOCKUP_VIEWPORTS).map(vp =>
+    `<button data-viewport="${vp}"${vp === v.mockupViewport ? ' class="selected"' : ''}>${
+      vp}</button>`).join('');
   const chat = (review.chat || []).map(m =>
     `<div class="msg ${m.role === 'user' ? 'user' : 'agent'}">
       <span class="who">${m.role === 'user' ? 'You' : 'Agent'}</span>${esc(m.text)}</div>`).join('');
@@ -564,8 +588,8 @@ function renderMockupReview(review) {
       apply(btn.dataset[attr]);
       drawPreview(review);
     }));
-  select('screen', v => { mockupScreen = +v; });
-  select('viewport', v => { mockupViewport = v; });
+  select('screen', val => { v.mockupScreen = +val; });
+  select('viewport', val => { v.mockupViewport = val; });
   $('#sendMockup').addEventListener('click', () => {
     const t = $('#mockupFeedback').value.trim();
     if (!t) return;
@@ -638,7 +662,7 @@ function renderFailed(step) {
 }
 
 function backToSummary() {
-  showSummary = true;
+  viewOf(activeTask).showSummary = true;
   tick();
 }
 
@@ -672,7 +696,7 @@ function renderMockoon(step) {
   const copy = $('#copyMockoon');
   // The environment is fetched straight from the session dir, so nothing renders
   // it into the orchestrator's context on the way here.
-  fetch('/api/mockoon')
+  fetch(`/api/mockoon?taskId=${encodeURIComponent(activeTask)}`)
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
     .then(text => {
       $('#mockoonJson').textContent = text;
@@ -688,9 +712,9 @@ function renderMockoon(step) {
     });
 }
 
-function renderSummary(state) {
-  const sum = state.summary;
-  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP) || {};
+function renderSummary(task) {
+  const sum = task.summary;
+  const mockoon = task.steps.find(s => s.id === MOCKOON_STEP) || {};
   const hasMocks = mockoon.status === 'completed';
   const list = items => `<ul>${(items || []).map(i => `<li>${esc(i)}</li>`).join('')}</ul>`;
   const block = text => `<pre class="summary-text">${esc(text || '—')}</pre>`;
@@ -717,7 +741,12 @@ function renderSummary(state) {
     </section>
   </div>`;
   // Already generated: the JSON is one local switch away, no agent needed.
-  if (hasMocks) $('#showMockoon').addEventListener('click', () => { showSummary = false; tick(); });
+  if (hasMocks) {
+    $('#showMockoon').addEventListener('click', () => {
+      viewOf(activeTask).showSummary = false;
+      tick();
+    });
+  }
   $('#generateMockoon').addEventListener('click', () => {
     lockPanel('Requested — the agent is building the Mockoon environment…');
     sendAnswer({ kind: 'summary', decision: 'mockoon' });

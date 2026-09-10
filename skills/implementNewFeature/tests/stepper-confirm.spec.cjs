@@ -9,7 +9,8 @@ const { createApp } = require('../scripts/server.cjs');
 let app, base, dir;
 
 const postState = body => fetch(`${base}/api/state`, {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ taskId: 't1', ...body })
 });
 // wait=1: gdyby klik jednak coś wysłał, sekunda wystarczy by to złapać
 const takeAnswer = async () => (await (await fetch(`${base}/api/answer?wait=1`)).json()).answer;
