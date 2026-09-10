@@ -136,6 +136,42 @@ test('branch zajęty przez inny task blokuje Next z własnym komunikatem', async
   await expect(page.locator('#next')).toBeEnabled();
 });
 
+test('niewysłany formularz przeżywa utworzenie taska i powrót na zakładkę', async ({ page }) => {
+  await page.fill('#task', 'Opis pierwszego');
+  await page.fill('#biz', 'Wymagania pierwszego');
+  await page.fill('#branch', 'feature/pierwszy');
+  await page.click('#createTask');
+  await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
+  await page.fill('#branch', 'feature/drugi');
+  await page.click('#tabs .tab[data-task=t1]');
+  // Nic nie zostało wysłane, więc serwer o tym nie wie — to czysto ekranowy stan.
+  await expect(page.locator('#task')).toHaveValue('Opis pierwszego');
+  await expect(page.locator('#biz')).toHaveValue('Wymagania pierwszego');
+  await expect(page.locator('#branch')).toHaveValue('feature/pierwszy');
+  await expect(page.locator('#next')).toBeEnabled();
+  await page.click('#tabs .tab[data-task=t2]');
+  await expect(page.locator('#branch')).toHaveValue('feature/drugi');
+  await expect(page.locator('#task')).toHaveValue('Opis pierwszego');
+});
+
+test('wysłanie brancha przez sąsiada blokuje otwarty formularz bez przerysowania', async ({ page }) => {
+  await page.fill('#task', 'Opis');
+  await page.fill('#biz', 'Wymagania');
+  await page.click('#createTask');
+  await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
+  await page.fill('#branch', 'feature/kolizja');
+  await expect(page.locator('#next')).toBeEnabled();
+  // t1 zgłasza ten sam branch spoza tej zakładki; otwarty formularz musi to zauważyć
+  // sam z siebie, bez zdarzenia input i bez gubienia wpisanego tekstu.
+  await fetch(`${base}/api/answer`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ taskId: 't1', kind: 'step1', branch: 'feature/kolizja' })
+  });
+  await expect(page.locator('#branchHint')).toHaveText('Another task is already using this branch.');
+  await expect(page.locator('#next')).toBeDisabled();
+  await expect(page.locator('#task')).toHaveValue('Opis');
+});
+
 test('zakładkę da się otworzyć z klawiatury', async ({ page }) => {
   await page.click('#createTask');
   await page.locator('#tabs .tab[data-task=t1]').focus();

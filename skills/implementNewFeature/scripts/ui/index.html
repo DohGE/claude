@@ -239,6 +239,24 @@ let activeTask = null;
 // The last polled state, so the step-1 form can check the other tasks' branches
 // without threading the whole document through every render function.
 let lastState = null;
+// The open step-1 form's gate, so a sibling task submitting its branch can make
+// this form re-check without re-rendering it (which would wipe what is typed).
+let refreshGate = null;
+let takenBranches = '';
+
+// Whatever is typed into a step-1 form but not submitted yet. Switching tabs or
+// creating a task re-renders the panel, and without this the text would be gone.
+function snapshotStep1() {
+  if (!activeTask || !$('#branch')) return;
+  viewOf(activeTask).draft = {
+    taskDescription: $('#task').value,
+    businessRequirements: $('#biz').value,
+    branch: $('#branch').value,
+    contractsText: $('#contractsText').value,
+    hintsNote: $('#hintsNote').value,
+    generateMockups: $('#genMockups').checked
+  };
+}
 // Per-task view state, so switching tabs never leaks one task's preview selection
 // or summary toggle into another's. Step 7 runs on demand once the summary exists,
 // so which of the two screens is visible is the user's choice, not a pipeline state.
@@ -398,6 +416,11 @@ async function tick() {
     lastSig = null;
   }
   lastState = state;
+  const taken = state.tasks.map(t => `${t.id}=${t.branch}`).join(',');
+  if (taken !== takenBranches) {
+    takenBranches = taken;
+    if (refreshGate) refreshGate();
+  }
   const task = state.tasks.find(t => t.id === activeTask);
   renderTabs(state);
   renderStepper(task);
@@ -443,6 +466,7 @@ function renderTabs(state) {
   box.querySelectorAll('[data-task]').forEach(el => {
     const open = () => {
       if (el.dataset.task === activeTask) return;
+      snapshotStep1();
       activeTask = el.dataset.task;
       lastSig = null;
       tick();
@@ -538,6 +562,7 @@ function renderPanel(state, task) {
 }
 
 function renderActive(task, step) {
+  refreshGate = null;
   // Mockoon mocks are generated after the pipeline is over, so while step 7 is the
   // active one its panel outranks the summary — until the user asks to go back.
   if (task.activeStep === MOCKOON_STEP && !viewOf(task.id).showSummary) {
@@ -563,7 +588,9 @@ function renderStep1(task) {
   }
   // The form is rebuilt from the last submitted (or copied) answer, so a task the
   // user came back to arrives filled in rather than blank.
-  const d = task.step1 || {};
+  // An unsubmitted draft outranks the last submission for the text fields; the
+  // file lists always come from the server, which is what actually holds them.
+  const d = { ...(task.step1 || {}), ...(viewOf(task.id).draft || {}) };
   const revisit = !!task.step1Submitted;
   // Files already on disk cannot be put back into a file input, so they are listed
   // separately and removed through the server.
@@ -677,6 +704,7 @@ function renderStep1(task) {
   ['#task', '#biz', '#branch', '#authLogin', '#authPassword'].forEach(sel =>
     $(sel).addEventListener('input', gate));
   gate();   // a form that arrived filled in must enable Next without a keystroke
+  refreshGate = gate;
   // The tab bar is rebuilt on the tick, so the open tab's label is patched in place
   // to follow the branch as it is typed.
   $('#branch').addEventListener('input', () => {
@@ -686,6 +714,7 @@ function renderStep1(task) {
   // Non-destructive and reversible with the tab's ×, so no confirmation.
   $('#createTask').addEventListener('click', async () => {
     $('#createTask').disabled = true;
+    snapshotStep1();
     const { id } = await postJson('/api/tasks', { copyFrom: activeTask, values: {
       taskDescription: $('#task').value, businessRequirements: $('#biz').value,
       contractsText: $('#contractsText').value, hintsNote: $('#hintsNote').value,
@@ -742,6 +771,7 @@ function renderStep1(task) {
       mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
       authProvided: a.complete || task.authSaved,
       generateMockups: $('#genMockups').checked });
+    viewOf(activeTask).draft = null;
   });
 }
 
