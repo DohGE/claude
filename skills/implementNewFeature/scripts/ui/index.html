@@ -371,7 +371,17 @@ function wireTextareas() {
   });
 }
 
-window.addEventListener('resize', wireTextareas);
+// A drag fires resize dozens of times a second and each pass forces a layout per
+// textarea, so coalesce them into one measurement per frame.
+let resizePending = false;
+window.addEventListener('resize', () => {
+  if (resizePending) return;
+  resizePending = true;
+  requestAnimationFrame(() => {
+    resizePending = false;
+    wireTextareas();
+  });
+});
 
 async function tick() {
   if (serverDown) return;
@@ -905,18 +915,27 @@ function renderProgress(step) {
   updateDynamic(step);
 }
 
+// Runs on every tick of a view-only step, which is most of a long run — so each
+// piece is written only when its own value actually moved.
 function updateDynamic(step) {
   const fill = $('#barFill');
   if (fill) {
     const indeterminate = step.progress == null && step.status === 'in_progress';
+    const width = indeterminate ? '100%' : `${step.progress || 0}%`;
     fill.classList.toggle('indeterminate', indeterminate);
-    fill.style.width = indeterminate ? '100%' : `${step.progress || 0}%`;
+    if (fill.style.width !== width) fill.style.width = width;
   }
   const op = $('#op');
-  if (op) op.textContent = (step.progress != null ? `${step.progress}% — ` : '')
+  const opText = (step.progress != null ? `${step.progress}% — ` : '')
     + (step.currentOperation || '');
+  if (op && op.textContent !== opText) op.textContent = opText;
   const log = $('#log');
-  if (log) log.innerHTML = step.log.slice(-15).reverse().map(e =>
+  if (!log) return;
+  const entries = step.log.slice(-15);
+  const sigNow = `${step.log.length}|${entries.length && entries[entries.length - 1].time}`;
+  if (log.dataset.sig === sigNow) return;
+  log.dataset.sig = sigNow;
+  log.innerHTML = entries.reverse().map(e =>
     `<li><time>${esc(e.time.slice(11, 19))}</time>${esc(e.text)}</li>`).join('');
 }
 

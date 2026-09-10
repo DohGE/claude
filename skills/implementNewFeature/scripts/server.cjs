@@ -19,7 +19,9 @@ const MOCKUP_TYPES = {
   '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.woff2': 'font/woff2'
 };
 const MAX_BODY = 25 * 1024 * 1024;
-const MAX_LOG = 50;
+// The panel renders the last 15 entries and the whole state document is re-sent to
+// the browser once a second, per task — so the cap sits just above what is visible.
+const MAX_LOG = 20;
 const UPLOAD_CATEGORIES = ['mockups', 'contracts', 'hints'];
 
 // One task is one feature on one branch with its own seven-step pipeline, its own
