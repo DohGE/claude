@@ -41,6 +41,11 @@ Answer kinds and where they belong: `step1` → step 1 of that task; `answer` �
 task's agent asked; `decision` → that task's plan gate, failure gate or Mockoon gate; `mockup` → that
 task's mockup gate; `back` → the revision protocol; `summary` → that task's summary screen.
 
+**"Wait for T's `kind==X`" below never means blocking the run on T.** It means: stay in this loop,
+keep polling unfiltered, keep serving whatever arrives for other tasks, and resume T's step when its
+`X` shows up. Never poll with `&taskId=`, and never discard an answer because it belongs elsewhere —
+one task waiting at a gate must not stall the others.
+
 Because agents run in the background, several tasks can sit in steps 2-4 and 6 at once. A task that
 fails does not stop the run: the others keep going while it waits at its gate.
 

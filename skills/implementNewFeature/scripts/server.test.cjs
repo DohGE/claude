@@ -276,6 +276,14 @@ test('a step1 answer is stored on the task so the form can be re-rendered', asyn
   // The envelope is not part of the form.
   assert.equal(task.step1.kind, undefined);
   assert.equal(task.step1.taskId, undefined);
+  // Neither is anything else a client happens to send: the whole state document is
+  // re-sent to the browser once a second, so only the form's own fields are kept.
+  await post(base, '/api/answer', { taskId: 't1', kind: 'step1', branch: 'feature/x',
+    junk: 'x'.repeat(1000), taskDescription: 'y'.repeat(300000), hints: ['../../auth.json'] });
+  const after = await task0(base);
+  assert.equal(after.step1.junk, undefined);
+  assert.equal(after.step1.taskDescription.length, 200 * 1024);
+  assert.deepEqual(after.step1.hints, ['auth.json'], 'file names stay bare names');
   // The answer still reaches the orchestrator.
   const { answer } = await (await fetch(`${base}/api/answer`)).json();
   assert.equal(answer.kind, 'step1');

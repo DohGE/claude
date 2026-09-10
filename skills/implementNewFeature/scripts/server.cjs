@@ -47,6 +47,23 @@ function safeName(raw) {
   return !name || name === '.' || name === '..' ? null : name;
 }
 
+const MAX_FIELD = 200 * 1024;
+const text = v => String(v == null ? '' : v).slice(0, MAX_FIELD);
+const names = v => (Array.isArray(v) ? v : []).map(safeName).filter(Boolean).slice(0, 200);
+
+// The step-1 form, and nothing else a client happens to send.
+function formOf(body) {
+  return {
+    taskDescription: text(body.taskDescription),
+    businessRequirements: text(body.businessRequirements),
+    branch: text(body.branch),
+    contractsText: text(body.contractsText),
+    hintsNote: text(body.hintsNote),
+    mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
+    authProvided: !!body.authProvided, generateMockups: !!body.generateMockups
+  };
+}
+
 // Clients are LLM sub-agents; despite instructions some post through
 // PowerShell, which re-encodes bodies to UTF-16 (Out-File default) or the
 // Windows ANSI codepage (cp1250 on Polish systems), so sniff instead of
@@ -109,18 +126,18 @@ function createApp(sessionDir, opts = {}) {
 
   function copyCategory(fromId, toId, category) {
     const from = path.join(taskDir(fromId), category);
-    let names;
+    let files;
     try {
-      names = fs.readdirSync(from, { withFileTypes: true })
+      files = fs.readdirSync(from, { withFileTypes: true })
         .filter(e => e.isFile()).map(e => e.name);
     } catch (_e) {
       return [];
     }
-    if (!names.length) return [];
+    if (!files.length) return [];
     const to = path.join(taskDir(toId), category);
     fs.mkdirSync(to, { recursive: true });
-    for (const n of names) fs.copyFileSync(path.join(from, n), path.join(to, n));
-    return names;
+    for (const n of files) fs.copyFileSync(path.join(from, n), path.join(to, n));
+    return files;
   }
 
   function persist() {
@@ -149,7 +166,7 @@ function createApp(sessionDir, opts = {}) {
     }
     if (body.activeStep !== undefined) task.activeStep = body.activeStep;
     if (body.branch !== undefined) task.branch = String(body.branch);
-    if (body.root !== undefined) task.root = body.root;
+    if (body.root !== undefined) task.root = body.root == null ? null : String(body.root);
     if (body.question !== undefined) {
       task.question = body.question;
       // Monotonic, server-owned: the UI keys its re-render on this counter, so a
@@ -180,6 +197,16 @@ function createApp(sessionDir, opts = {}) {
       return;
     }
     queueFor(a.taskId).push(a);
+  }
+
+  // A removed task must not leave a poll parked on it until its timeout expires.
+  function releaseWaiters(taskId) {
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i].taskId !== taskId) continue;
+      const [w] = waiters.splice(i, 1);
+      clearTimeout(w.timer);
+      w.resolve(null);
+    }
   }
 
   function takeQueued(taskId) {
@@ -230,13 +257,14 @@ function createApp(sessionDir, opts = {}) {
         const task = findTask(body.taskId);
         if (!task) return sendJson(res, 400, { error: 'unknown task' });
         if (body.kind === 'step1') {
-          // The form is re-rendered from this on a revisit, so keep it verbatim
-          // minus the envelope. Credentials never pass through here — they go to
-          // /api/auth and only a flag comes back in the answer.
-          const { taskId: _id, kind: _kind, ...form } = body;
-          task.step1 = form;
+          // The form is re-rendered from this on a revisit. Only the form's own
+          // fields are kept: the whole state document is persisted on every write
+          // and re-sent to the browser once a second, so anything else a client
+          // sends would be paid for on every tick. Credentials never pass through
+          // here — they go to /api/auth and only a flag comes back in the answer.
+          task.step1 = formOf(body);
           task.step1Submitted = true;
-          task.branch = String(form.branch || '');
+          task.branch = task.step1.branch;
           persist();
         }
         pushAnswer({ ...body, taskId: task.id });
@@ -269,14 +297,7 @@ function createApp(sessionDir, opts = {}) {
         }
         // Everything the form holds except the branch: two tasks cannot share one,
         // and an empty required field forces a deliberate name.
-        task.step1 = {
-          taskDescription: String(v.taskDescription || ''),
-          businessRequirements: String(v.businessRequirements || ''),
-          contractsText: String(v.contractsText || ''),
-          hintsNote: String(v.hintsNote || ''),
-          generateMockups: !!v.generateMockups,
-          branch: '', authProvided: task.authSaved, ...copied
-        };
+        task.step1 = formOf({ ...v, ...copied, branch: '', authProvided: task.authSaved });
         state.tasks.push(task);
         persist();
         return sendJson(res, 200, { id: task.id });
@@ -294,6 +315,7 @@ function createApp(sessionDir, opts = {}) {
         }
         state.tasks = state.tasks.filter(t => t.id !== task.id);
         answers.delete(task.id);
+        releaseWaiters(task.id);
         try { fs.rmSync(taskDir(task.id), { recursive: true, force: true }); } catch {}
         persist();
         return sendJson(res, 200, { ok: true });
@@ -438,13 +460,20 @@ function main() {
   }
   const app = createApp(path.resolve(sessionDir), { onShutdown: () => process.exit(0) });
   const port = parseInt(get('--port') || '0', 10) || 0;
-  app.server.listen(port, '127.0.0.1', () => {
+  const announce = () => {
     const actual = app.server.address().port;
     fs.mkdirSync(path.resolve(sessionDir), { recursive: true });
     fs.writeFileSync(path.join(path.resolve(sessionDir), 'server.json'),
       JSON.stringify({ port: actual, pid: process.pid }));
     console.log(JSON.stringify({ port: actual }));
+  };
+  // A restart asks for the port it had, so the browser tab the user already has
+  // open keeps working. If something else took it meanwhile, any port will do.
+  app.server.on('error', e => {
+    if (e.code !== 'EADDRINUSE' || !port) throw e;
+    app.server.listen(0, '127.0.0.1', announce);
   });
+  app.server.listen(port, '127.0.0.1', announce);
 }
 
 module.exports = { createApp, initialState, taskState };
