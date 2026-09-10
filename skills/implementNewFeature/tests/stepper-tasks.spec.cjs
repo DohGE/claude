@@ -112,6 +112,37 @@ test('zakładkę da się zamknąć tylko przed startem taska', async ({ page }) 
   await expect(page.locator('#branch')).toBeVisible();
 });
 
+test('branch zajęty przez inny task blokuje Next z własnym komunikatem', async ({ page }) => {
+  await page.fill('#task', 'Opis');
+  await page.fill('#biz', 'Wymagania');
+  await page.fill('#branch', 'feature/zaproszenia');
+  await page.click('#next');
+  await page.click('#confirmOk');
+  await (await fetch(`${base}/api/answer?wait=5`)).json();
+  await state({ taskId: 't1', step: 1, status: 'completed', activeStep: 2 });
+  await state({ taskId: 't1', step: 2, status: 'in_progress' });
+  // Drugi task tworzony ręcznie, bo formularz pierwszego jest już zamknięty.
+  await fetch(`${base}/api/tasks`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ values: { taskDescription: 'Opis 2', businessRequirements: 'Wym 2' } })
+  });
+  await state({ taskId: 't2', step: 1, status: 'in_progress', activeStep: 1 });
+  await page.click('#tabs .tab[data-task=t2]');
+  await page.fill('#branch', 'feature/zaproszenia');
+  await expect(page.locator('#branchHint')).toHaveText('Another task is already using this branch.');
+  await expect(page.locator('#next')).toBeDisabled();
+  await page.fill('#branch', 'feature/inny');
+  await expect(page.locator('#branchHint')).toBeHidden();
+  await expect(page.locator('#next')).toBeEnabled();
+});
+
+test('zakładkę da się otworzyć z klawiatury', async ({ page }) => {
+  await page.click('#createTask');
+  await page.locator('#tabs .tab[data-task=t1]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#tabs .tab[data-task=t1]')).toHaveAttribute('aria-selected', 'true');
+});
+
 test('przełączenie zakładki nie odblokowuje wysłanej już odpowiedzi', async ({ page }) => {
   await page.click('#createTask');
   await state({ taskId: 't1', step: 2, status: 'in_progress', activeStep: 2,

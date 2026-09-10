@@ -38,9 +38,12 @@
   /* The one thing that tells the user a background task has stopped and needs them. */
   .tabs-bar .pending { color:var(--accent-2); font-size:11px; line-height:1; flex:none;
           animation:pulse 1.6s ease-in-out infinite; }
-  .tabs-bar .close { color:var(--muted); font-size:14px; line-height:1; padding:0 2px; flex:none;
-          border-radius:4px; cursor:pointer; }
-  .tabs-bar .close:hover { color:var(--failed); }
+  .tabs-bar .tab { cursor:pointer; }
+  .tabs-bar .tab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .tabs-bar .close { margin:0; padding:0 3px; background:transparent; color:var(--muted);
+          font-size:14px; line-height:1; flex:none; border-radius:4px; }
+  .tabs-bar .close:hover:not(:disabled) { color:var(--failed); background:var(--card-2);
+          transform:none; filter:none; }
   .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
   /* 120px basis keeps all seven tiles (Mockups enabled) on a single row at 940px. */
   .step { flex:1 1 120px; background:var(--card); border:1px solid var(--border); border-radius:14px;
@@ -119,6 +122,7 @@
   .switch input:disabled { opacity:.5; cursor:not-allowed; }
   .switch label { margin:0; color:var(--text); cursor:pointer; }
   .hint { font-size:12.5px; color:var(--muted); margin:6px 0 0; }
+  .hint.error { color:var(--failed); }
   /* Files already uploaded: a file input cannot be pre-filled, so they are listed. */
   ul.files { list-style:none; margin:8px 0 0; padding:0; font-size:12.5px; }
   ul.files li { display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -232,6 +236,9 @@ let serverDown = false; // set when the user shuts the server down from the summ
 // Which tab is open is page state, never server state: parallel pipelines write
 // to the state concurrently and must not yank the user's view to another task.
 let activeTask = null;
+// The last polled state, so the step-1 form can check the other tasks' branches
+// without threading the whole document through every render function.
+let lastState = null;
 // Per-task view state, so switching tabs never leaks one task's preview selection
 // or summary toggle into another's. Step 7 runs on demand once the summary exists,
 // so which of the two screens is visible is the user's choice, not a pipeline state.
@@ -380,6 +387,7 @@ async function tick() {
     activeTask = state.tasks[0].id;
     lastSig = null;
   }
+  lastState = state;
   const task = state.tasks.find(t => t.id === activeTask);
   renderTabs(state);
   renderStepper(task);
@@ -405,26 +413,37 @@ function renderTabs(state) {
   box.hidden = false;
   if (box.dataset.sig === sigNow) return;
   box.dataset.sig = sigNow;
+  // The close control is a real button, so the tab itself cannot be one — nesting
+  // interactive elements is invalid HTML and leaves the × unreachable by keyboard.
   box.innerHTML = state.tasks.map((t, i) => {
     const open = t.id === activeTask;
     // Step 1 in_progress is just an unsubmitted form, so the pipeline has started
     // once the form was submitted — that is what closes the × for good.
     const closable = !t.step1Submitted && t.steps.slice(1).every(s => s.status === 'waiting');
-    return `<button class="tab${open ? ' selected' : ''}" data-task="${esc(t.id)}">
+    return `<span class="tab${open ? ' selected' : ''}" role="tab"
+      aria-selected="${open}" tabindex="0" data-task="${esc(t.id)}">
       <span class="dot ${activeStepOf(t).status}"></span>
       <span class="label">${esc(tabLabel(t, i))}</span>
       ${pending(t) && !open ? '<span class="pending" title="Waiting for you">●</span>' : ''}
-      ${closable ? `<span class="close" role="button" data-close="${esc(t.id)}"
-        aria-label="Close task" title="Close task">×</span>` : ''}
-    </button>`;
+      ${closable ? `<button type="button" class="close" data-close="${esc(t.id)}"
+        aria-label="Close task" title="Close task">×</button>` : ''}
+    </span>`;
   }).join('');
-  box.querySelectorAll('[data-task]').forEach(btn =>
-    btn.addEventListener('click', () => {
-      if (btn.dataset.task === activeTask) return;
-      activeTask = btn.dataset.task;
+  box.setAttribute('role', 'tablist');
+  box.querySelectorAll('[data-task]').forEach(el => {
+    const open = () => {
+      if (el.dataset.task === activeTask) return;
+      activeTask = el.dataset.task;
       lastSig = null;
       tick();
-    }));
+    };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      open();
+    });
+  });
   box.querySelectorAll('[data-close]').forEach(el =>
     el.addEventListener('click', async e => {
       e.stopPropagation();   // the × sits inside the tab button
@@ -552,9 +571,9 @@ function renderStep1(task) {
     <label>Business requirements <span class="req">*</span></label>
     <textarea id="biz">${esc(d.businessRequirements || '')}</textarea>
     <label>Branch <span class="req">*</span></label>
-    <input type="text" id="branch" placeholder="feature/nazwa-funkcji" autocomplete="off"
+    <input type="text" id="branch" placeholder="feature/my-feature" autocomplete="off"
       value="${esc(d.branch || '')}">
-    <p class="hint" id="branchHint" hidden>Nazwa nie jest poprawną nazwą gałęzi gita.</p>
+    <p class="hint error" id="branchHint" hidden></p>
     <h3>Additional materials (optional)</h3>
     <p class="muted">Inspirations, screenshots of another app, diagrams, exported designs —
       anything that should guide the refinement questions and the mockup design.</p>
@@ -631,9 +650,18 @@ function renderStep1(task) {
   const gate = () => {
     const a = auth();
     const branch = $('#branch').value.trim();
-    $('#branchHint').hidden = !branch || branchOk(branch);
+    // Two tasks cannot share a branch: step 4 would fail on `git worktree add`,
+    // and only then — after refinement, mockups and a plan. Say so here instead.
+    const taken = (lastState ? lastState.tasks : [])
+      .some(t => t.id !== task.id && t.branch && t.branch === branch);
+    const problem = !branch ? ''
+      : !branchOk(branch) ? 'Not a valid git branch name.'
+        : taken ? 'Another task is already using this branch.' : '';
+    $('#branchHint').textContent = problem;
+    $('#branchHint').hidden = !problem;
     // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
-    $('#next').disabled = !($('#task').value.trim() && $('#biz').value.trim() && branchOk(branch)
+    $('#next').disabled = !($('#task').value.trim() && $('#biz').value.trim()
+      && branchOk(branch) && !taken
       && (a.complete || (!a.login && !a.password.trim())));
   };
   ['#task', '#biz', '#branch', '#authLogin', '#authPassword'].forEach(sel =>
