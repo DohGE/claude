@@ -122,12 +122,10 @@ Milestones: inputs read 10, project design language explored 20, first mockup se
 artifacts updated after approval 95. Between rounds the orchestrator owns the progress — do not
 report while waiting for feedback.
 
-## Encoding (MANDATORY)
-
-Your POST bodies contain {{LANGUAGE}} text. Run curl from a POSIX shell (Bash tool) where inline
-UTF-8 JSON is safe. Never pass non-ASCII JSON inline through PowerShell — it re-encodes to the
-system codepage and the UI shows `�`. If PowerShell is unavoidable, write the JSON to a temp file
-as UTF-8 **without BOM** and send it with `--data-binary "@file"`.
+**Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
+never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
+(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
+`--data-binary "@file"`.)
 
 ## Rules
 

@@ -26,7 +26,7 @@ only the server, the browser page and one Validation & E2E slot.
 Hold this per task, and nothing more:
 
     { id, branch, root, step, agentIds{refinement, mockup, impl, validation, review, mockoon},
-      mockups, revisionCount, rev }
+      mockups, revisionCount, mockupRounds }
 
 Then loop until the user shuts the server down:
 
@@ -228,10 +228,10 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
 1. POST `{"taskId":"T","step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
 2. Spawn the mockup agent: prompt = contents of `<SKILL_DIR>/references/mockup-agent.md` with the
    usual placeholders substituted.
-3. Keep only a round count `REV(T)` for the progress bar. The chat transcript and the `rev` the UI
+3. Keep only `mockupRounds(T)`, for the progress bar. The chat transcript and the `rev` the UI
    re-renders on are the SERVER's — never hold either in your context. Loop on the agent's final JSON:
-   - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → `REV(T)++` and POST
-     `{"taskId":"T","step":3,"progress":<min(90, 20+10×REV)>,"currentOperation":"Waiting for your review","mockupReview":{"text":"<summary>","screens":[…]},"mockupChat":{"role":"agent","text":"<summary>"}}`.
+   - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → `mockupRounds(T)++` and POST
+     `{"taskId":"T","step":3,"progress":<min(90, 20+10×mockupRounds)>,"currentOperation":"Waiting for your review","mockupReview":{"text":"<summary>","screens":[…]},"mockupChat":{"role":"agent","text":"<summary>"}}`.
      Omit `rev` and omit `chat`: the server stamps the next `rev` itself and carries the existing
      chat forward, so a round can never reuse a number and leave the panel locked.
      Then wait for T's `kind=="mockup"`:

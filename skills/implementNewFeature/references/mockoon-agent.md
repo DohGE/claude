@@ -170,6 +170,11 @@ PowerShell (mojibake); if unavoidable, write a UTF-8-no-BOM temp file and send `
   `default: true` response per route. Fix the file, never the check.
 - Never paste the JSON into your messages; the file on disk is the deliverable.
 
+**Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
+never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
+(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
+`--data-binary "@file"`.)
+
 ## Final message
 
 - Success: `{"type":"result","routes":<count>,"summary":"<which endpoints, which error variants, what the payloads contain, ~5 sentences in {{LANGUAGE}}>"}`

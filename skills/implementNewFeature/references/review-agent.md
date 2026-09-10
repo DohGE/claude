@@ -113,6 +113,11 @@ PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `--data-bi
   `doh:codeReview` reports with how you fixed it, plus the `## Rejected findings` list with the
   ground for each rejection.
 
+**Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
+never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
+(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
+`--data-binary "@file"`.)
+
 ## Final message
 
 - Success: `{"type":"result","findingsFixed":<N>,"findingsRejected":<N>,"reviewSummary":"<categories, counts, notable fixes, and every rejected finding with its ground, in {{LANGUAGE}}>"}`
