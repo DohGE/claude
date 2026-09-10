@@ -26,7 +26,7 @@ only the server, the browser page and one Validation & E2E slot.
 Hold this per task, and nothing more:
 
     { id, branch, root, step, agentIds{refinement, mockup, impl, validation, review, mockoon},
-      mockups, revisionCount }
+      mockups, revisionCount, rev }
 
 Then loop until the user shuts the server down:
 
@@ -94,7 +94,7 @@ retry, and released when the task leaves step 5 — then start the next task in 
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
-  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"summary":{...}}`
+  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
   Step ids are fixed (1 Requirements, 2 Feature Refinement, 3 Mockups, 4 Implementation,
   5 Validation & E2E, 6 Code Review, 7 Mockoon Mocks). Step 3 ships `enabled:false` and the stepper
   hides it, so a task without mockups shows five tiles numbered 1-5 plus the Mockoon one. Step 7 is
@@ -228,13 +228,15 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
 1. POST `{"taskId":"T","step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
 2. Spawn the mockup agent: prompt = contents of `<SKILL_DIR>/references/mockup-agent.md` with the
    usual placeholders substituted.
-3. Keep `REV(T) = 0` and a `CHAT(T)` array of `{"role":"agent"|"user","text":"…"}`. Loop on the agent's final JSON:
-   - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → append `{"role":"agent","text":summary}`
-     to `CHAT(T)`, `REV(T)++`, and POST
-     `{"taskId":"T","step":3,"progress":<min(90, 20+10×REV)>,"currentOperation":"Waiting for your review","mockupReview":{"rev":REV,"text":"<summary>","screens":[…],"chat":CHAT}}`.
+3. Keep only a round count `REV(T)` for the progress bar. The chat transcript and the `rev` the UI
+   re-renders on are the SERVER's — never hold either in your context. Loop on the agent's final JSON:
+   - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → `REV(T)++` and POST
+     `{"taskId":"T","step":3,"progress":<min(90, 20+10×REV)>,"currentOperation":"Waiting for your review","mockupReview":{"text":"<summary>","screens":[…]},"mockupChat":{"role":"agent","text":"<summary>"}}`.
+     Omit `rev` and omit `chat`: the server stamps the next `rev` itself and carries the existing
+     chat forward, so a round can never reuse a number and leave the panel locked.
      Then wait for T's `kind=="mockup"`:
-     - `decision=="feedback"` → append `{"role":"user","text":<text>}` to `CHAT(T)`, then **immediately**
-       (before contacting the agent) POST `{"taskId":"T","step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>"}`
+     - `decision=="feedback"` → **immediately** (before contacting the agent) POST
+       `{"taskId":"T","step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>","mockupChat":{"role":"user","text":"<the feedback>"}}`
        so the UI reacts to the click at once, then SendMessage the feedback text to the agent. Back to 3.
      - `decision=="approve"` → SendMessage exactly: `APPROVED — update spec.md, plan.md and
        checklist.md to match the approved mockups, then reply with the result JSON.` Back to 3.
@@ -242,9 +244,6 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
      POST `{"taskId":"T","step":3,"status":"completed","progress":100,"mockupReview":null,"activeStep":4}`.
      Keep the screen count and the summary only — never the mockup markup.
    - `{"type":"error","report"}` → failure protocol for step 3.
-
-`rev` must increase on every agent round: the UI keys its re-render on it, so a repeated value
-leaves the panel locked on the previous answer.
 
 ## Step 4 — Implementation (view-only)
 

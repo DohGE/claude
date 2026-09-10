@@ -34,7 +34,7 @@ function taskState(id) {
       enabled: !OPTIONAL_STEPS.includes(i + 1),
       currentOperation: '', report: null, log: []
     })),
-    activeStep: 1, question: null, questionSeq: 0,
+    activeStep: 1, question: null, questionSeq: 0, mockupSeq: 0,
     reviewSummary: null, mockupReview: null, summary: null,
     step1: null, step1Submitted: false, authSaved: false
   };
@@ -176,7 +176,29 @@ function createApp(sessionDir, opts = {}) {
       task.questionSeq = (task.questionSeq || 0) + 1;
     }
     if (body.reviewSummary !== undefined) task.reviewSummary = body.reviewSummary;
-    if (body.mockupReview !== undefined) task.mockupReview = body.mockupReview;
+    if (body.mockupReview !== undefined) {
+      // The chat and the revision counter live here, not in the orchestrator: its
+      // context must not grow with a mockup conversation, and a repeated `rev`
+      // would leave the panel locked on the previous round. A caller may still
+      // pass either explicitly — the tests and a resumed run do.
+      const chat = body.mockupReview && body.mockupReview.chat !== undefined
+        ? body.mockupReview.chat
+        : (task.mockupReview && task.mockupReview.chat) || [];
+      task.mockupReview = body.mockupReview && {
+        ...body.mockupReview,
+        rev: body.mockupReview.rev !== undefined ? body.mockupReview.rev
+          : (task.mockupSeq = (task.mockupSeq || 0) + 1),
+        chat
+      };
+    }
+    if (body.mockupChat) {
+      if (!task.mockupReview) task.mockupReview = { rev: 0, text: '', screens: [], chat: [] };
+      if (!Array.isArray(task.mockupReview.chat)) task.mockupReview.chat = [];
+      task.mockupReview.chat.push({
+        role: body.mockupChat.role === 'user' ? 'user' : 'agent',
+        text: text(body.mockupChat.text)
+      });
+    }
     if (body.summary !== undefined) task.summary = body.summary;
     persist();
   }

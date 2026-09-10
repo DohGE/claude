@@ -93,6 +93,36 @@ test('POST /api/state enables the Mockups step and round-trips mockupReview', as
   assert.equal((await task0(base)).mockupReview, null);
 });
 
+test('the server owns the mockup rev and the chat, not the orchestrator', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const screens = [{ id: 'login', title: 'Logowanie', file: 'login.html' }];
+  await postState(base, { step: 3, enabled: true });
+  // Round 1: the orchestrator sends the round, never a counter and never the chat.
+  await postState(base, { mockupReview: { text: 'Pierwsza wersja', screens },
+    mockupChat: { role: 'agent', text: 'Pierwsza wersja' } });
+  let r = (await task0(base)).mockupReview;
+  assert.equal(r.rev, 1);
+  assert.deepEqual(r.chat, [{ role: 'agent', text: 'Pierwsza wersja' }]);
+  // The user's feedback appends without resending anything.
+  await postState(base, { mockupChat: { role: 'user', text: 'Szerszy przycisk' } });
+  r = (await task0(base)).mockupReview;
+  assert.equal(r.rev, 1, 'feedback is not a new round');
+  assert.equal(r.chat.length, 2);
+  // Round 2 carries the chat forward and moves the counter the UI re-renders on.
+  await postState(base, { mockupReview: { text: 'Druga wersja', screens },
+    mockupChat: { role: 'agent', text: 'Druga wersja' } });
+  r = (await task0(base)).mockupReview;
+  assert.equal(r.rev, 2);
+  assert.deepEqual(r.chat.map(m => m.role), ['agent', 'user', 'agent']);
+  // Clearing the panel and starting over keeps the counter monotonic.
+  await postState(base, { mockupReview: null });
+  await postState(base, { mockupReview: { text: 'Trzecia', screens } });
+  assert.equal((await task0(base)).mockupReview.rev, 3);
+  assert.deepEqual((await task0(base)).mockupReview.chat, []);
+});
+
 function writeMockup(dir, taskId, name, body) {
   const d = path.join(dir, 'tasks', taskId, 'generated-mockups');
   fs.mkdirSync(d, { recursive: true });
