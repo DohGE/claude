@@ -252,8 +252,11 @@ leaves the panel locked on the previous answer.
    - no other task has claimed `PROJECT` yet → `ROOT = PROJECT`, and
      `git -C "<ROOT>" checkout -b <branch>` (or `checkout <branch>` when it already exists). Mark
      `PROJECT` claimed for the rest of the run.
-   - otherwise → `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<branch with / and
-     non-ASCII replaced by ->`, created with `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch>`.
+   - otherwise → `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<slug>-<taskId>`,
+     where `<slug>` is the branch with `/` and non-ASCII replaced by `-`. The task id is what keeps
+     the path unique: two different branches can slugify to the same string, and `worktree add`
+     would then fail on an existing directory. Create it with
+     `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch>`.
      When the branch already exists and is not checked out anywhere, drop `-b`. When it IS checked
      out elsewhere, go to the failure protocol with a report naming the conflict.
    A worktree is created from HEAD, so it has neither `node_modules` nor the untracked local config
@@ -294,8 +297,10 @@ back when the lock frees.
      final summary — it says which endpoints were faked, so the user knows what was never proven
      against a real API.
    - `{"type":"error","report"}` (<99% after 3 cycles, a unit suite that stayed red, or an
-     extension that never became available) → failure protocol; the lock stays held until the task
-     leaves step 5.
+     extension that never became available) → failure protocol. The lock stays held across a
+     `retry`, because the retry is still this task inside step 5 — but RELEASE it the moment the
+     task leaves the step in any direction, including `finish`. A failed-and-finished task that
+     kept the lock would strand every other task in front of validation for the rest of the run.
 
 ## Step 6 — Code Review (view-only)
 
@@ -333,7 +338,8 @@ It can run any number of times ("Regenerate" is the same step over the same file
    - `retry` → POST `{"taskId":"T","step":N,"status":"in_progress","report":null}`; re-spawn that step's agent **fresh** (new Agent call, same prompt + note about the previous failure report path).
    - `finish` → write that task's final summary (below, including the `auth.json` cleanup) with
      `finalStatus:"Failed at step N"`.
-3. A failed task does not end the run: keep serving the others from the event loop.
+3. If the task held `E2E_LOCK`, release it on `finish` and start the next task in the queue.
+4. A failed task does not end the run: keep serving the others from the event loop.
 
 ## Final summary (per task)
 
