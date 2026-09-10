@@ -98,6 +98,21 @@ test('etykieta otwartej zakładki podąża za wpisywanym branchem', async ({ pag
   await expect(page.locator('#tabs .tab[data-task=t2] .label')).toHaveText('feature/drugi');
 });
 
+test('wpisywanie brancha nie przebudowuje paska zakładek', async ({ page }) => {
+  await page.fill('#task', 'Opis');
+  await page.fill('#biz', 'Wymagania');
+  await page.click('#createTask');
+  const tab = page.locator('#tabs .tab[data-task=t1]');
+  // Jeśli pasek się przebuduje, ten węzeł zostanie odłączony i klik w niego
+  // przepadnie — dokładnie to gubiło przełączanie zakładek podczas pisania.
+  const handle = await tab.elementHandle();
+  await page.fill('#branch', 'feature/drugi');
+  await page.waitForTimeout(1500);
+  expect(await handle.evaluate(el => el.isConnected)).toBe(true);
+  await handle.click();
+  await expect(page.locator('#tabs .tab[data-task=t1]')).toHaveAttribute('aria-selected', 'true');
+});
+
 test('zakładkę da się zamknąć tylko przed startem taska', async ({ page }) => {
   await page.click('#createTask');
   // Krok 1 in_progress to tylko otwarty formularz — nadal można zamknąć.

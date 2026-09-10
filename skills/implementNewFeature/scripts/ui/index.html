@@ -439,10 +439,7 @@ function renderTabs(state) {
   }
   // Same reason as the stepper: only redraw when a tab actually changed, or the
   // rebuild would steal focus from a tab the user is on every single second.
-  const sigNow = state.tasks.map((t, i) => [t.id, tabLabel(t, i), activeStepOf(t).status,
-    pending(t) ? '!' : '', t.step1Submitted ? 'S' : '',
-    t.steps.slice(1).every(s => s.status === 'waiting') ? 'w' : '',
-    t.id === activeTask ? '*' : ''].join(':')).join(',');
+  const sigNow = tabsSig(state);
   box.hidden = false;
   if (box.dataset.sig === sigNow) return;
   box.dataset.sig = sigNow;
@@ -493,13 +490,31 @@ function renderTabs(state) {
     }));
 }
 
-// The open tab tracks the branch input as it is typed; the others use what was saved.
+const tabsSig = state => state.tasks.map((t, i) => [t.id, tabLabel(t, i),
+  activeStepOf(t).status, pending(t) ? '!' : '', t.step1Submitted ? 'S' : '',
+  t.steps.slice(1).every(s => s.status === 'waiting') ? 'w' : '',
+  t.id === activeTask ? '*' : ''].join(':')).join(',');
+
+// A tab is named by whatever branch its form holds — the draft while it is being
+// typed, the submitted value afterwards. Reading the live input instead would tie
+// the bar's signature to the DOM the input handler patches, and the bar would
+// rebuild on every keystroke, detaching the tabs under the user's cursor.
 function tabLabel(task, i) {
-  if (task.id === activeTask) {
-    const input = $('#branch');
-    if (input && input.value.trim()) return input.value.trim();
-  }
-  return task.branch || `Task ${i + 1}`;
+  const draft = viewOf(task.id).draft;
+  const typed = draft && String(draft.branch || '').trim();
+  return typed || task.branch || `Task ${i + 1}`;
+}
+
+// Patch the open tab's label in place and keep the bar's signature in step, so
+// typing a branch never triggers a rebuild.
+function syncTabLabel() {
+  const box = $('#tabs');
+  if (!box || box.hidden || !lastState) return;
+  const i = lastState.tasks.findIndex(t => t.id === activeTask);
+  const label = box.querySelector(`.tab[data-task="${activeTask}"] .label`);
+  if (i === -1 || !label) return;
+  label.textContent = tabLabel(lastState.tasks[i], i);
+  box.dataset.sig = tabsSig(lastState);
 }
 
 // Step ids are fixed, but disabled steps (Mockups when the toggle stayed off)
@@ -705,11 +720,11 @@ function renderStep1(task) {
     $(sel).addEventListener('input', gate));
   gate();   // a form that arrived filled in must enable Next without a keystroke
   refreshGate = gate;
-  // The tab bar is rebuilt on the tick, so the open tab's label is patched in place
-  // to follow the branch as it is typed.
+  // Keep the draft current as the branch is typed, so the open tab's label can
+  // follow it without the bar re-rendering.
   $('#branch').addEventListener('input', () => {
-    const label = document.querySelector(`#tabs .tab[data-task="${activeTask}"] .label`);
-    if (label) label.textContent = $('#branch').value.trim() || 'Task';
+    snapshotStep1();
+    syncTabLabel();
   });
   // Non-destructive and reversible with the tab's ×, so no confirmation.
   $('#createTask').addEventListener('click', async () => {
