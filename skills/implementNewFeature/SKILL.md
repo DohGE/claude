@@ -1,21 +1,60 @@
 ---
 name: implementNewFeature
-description: Use when the user wants a complete feature implemented end-to-end - runs a 5-step pipeline (Requirements, Feature Refinement, Implementation, Validation & E2E, Code Review) plus an optional Mockups step and an on-demand Mockoon mocks step, with a browser stepper UI; the orchestrator coordinates sub-agents and keeps the main context clean
+description: Use when the user wants a complete feature implemented end-to-end - runs a 5-step pipeline (Requirements, Feature Refinement, Implementation, Validation & E2E, Code Review) plus an optional Mockups step and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, and the requirements form stays editable until implementation starts; the orchestrator coordinates sub-agents and keeps the main context clean
 ---
 
 # implementNewFeature — pipeline orchestrator
 
 You are the **orchestrator**. You never implement, test, or review code yourself.
-Sub-agents do all heavy work; you hold only: step statuses, artifact paths, short summaries.
+Sub-agents do all heavy work; you hold only: task records, step statuses, artifact paths, short summaries.
 Dynamic texts (questions, reports, summary) stay in the user's conversation language; UI chrome is English.
 
 ## Hard rules
 
 - NEVER paste file contents (spec, plan, code) into your own context — pass **paths** to sub-agents.
 - Every sub-agent ends its final message with a single JSON object: `{"type":"question"|"result"|"error", ...}`. Parse it; ignore prose around it.
-- Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`); continue an existing one with SendMessage (its context is preserved).
-- The pipeline NEVER commits in the target project. Work happens on a feature branch; stage changes at the very end.
+- Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND; continue an existing one with SendMessage (its context is preserved).
+- The pipeline NEVER commits in the target project. Each task works on its own branch; stage its changes at the very end.
 - Update the stepper before and after every phase so the browser always reflects reality.
+
+## The run is an event loop, not a walk
+
+A run holds one or more **tasks**. A task is one feature on one branch with its own seven-step
+pipeline, its own `<SESSION>/tasks/<id>/` and its own sub-agents. Tasks are independent; they share
+only the server, the browser page and one Validation & E2E slot.
+
+Hold this per task, and nothing more:
+
+    { id, branch, root, step, agentIds{refinement, mockup, impl, validation, review, mockoon},
+      mockups, revisionCount, mockupRounds }
+
+Then loop until the user shuts the server down:
+
+1. Poll `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` (Bash tool `timeout: 320000`).
+2. An answer arrives → read its `taskId`, act on THAT task's state machine, keep looping.
+3. `null` → poll again.
+4. A sub-agent completion notification arrives → advance THAT task's state machine, keep looping.
+5. `{"kind":"summary","decision":"shutdown"}` → stop looping and end your turn.
+6. curl cannot connect → the server is gone: stop looping and end your turn.
+
+Answer kinds and where they belong: `step1` → step 1 of that task; `answer` → the question that
+task's agent asked; `decision` → that task's plan gate, failure gate or Mockoon gate; `mockup` → that
+task's mockup gate; `back` → the revision protocol; `summary` → that task's summary screen.
+
+**"Wait for T's `kind==X`" below never means blocking the run on T.** It means: stay in this loop,
+keep polling unfiltered, keep serving whatever arrives for other tasks, and resume T's step when its
+`X` shows up. Never poll with `&taskId=`, and never discard an answer because it belongs elsewhere —
+one task waiting at a gate must not stall the others.
+
+Because agents run in the background, several tasks can sit in steps 2-4 and 6 at once. A task that
+fails does not stop the run: the others keep going while it waits at its gate.
+
+**E2E_LOCK.** Chrome, the Claude in Chrome extension, the Playwright installation and the app's dev
+port are single-instance, so only ONE task may be inside step 5 at a time. A task reaching step 5
+while the lock is held is posted as
+`{"taskId":"<id>","step":5,"status":"waiting","activeStep":5,"currentOperation":"Waiting for the E2E slot"}`
+and queued FIFO by arrival. The lock is held for the whole step, including any failure-protocol
+retry, and released when the task leaves step 5 — then start the next task in the queue.
 
 ## Setup
 
@@ -28,45 +67,71 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
      project's own `doh/instructions/` rulebook stays committable.
    - otherwise → `SESSION = <SKILL_DIR>/.implementNewFeature/<yyyyMMdd-HHmmss>` (the skill's own
      `.gitignore` already covers it).
-   Create `SESSION`. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`:
-   the `doh` plugin's own Playwright is the only runner the pipeline ever uses — never the
-   project's copy, never a fresh install in the target project.
+   Create `SESSION`. Each task's artifacts live in `<SESSION>/tasks/<taskId>/` — the server creates
+   that directory on the task's first upload, you create it before writing `requirements.md`.
+   `SESSION` always stays under `PROJECT`, never inside a worktree, so one `.gitignore` covers every
+   task. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`: the `doh`
+   plugin's own Playwright is the only runner the pipeline ever uses — never the project's copy,
+   never a fresh install in the target project.
 3. Start the server (pick the script for the OS) and capture the port:
    - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
    - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`
    - stdout is `{"port":N}`; remember `PORT`. Tell the user the stepper is open at `http://127.0.0.1:PORT/`.
+4. A run starts with one task, `t1`. POST `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}`
+   and enter the event loop.
+
+## Placeholders passed to every sub-agent
+
+| Placeholder | Value |
+|---|---|
+| `{{SESSION}}` | `<SESSION>/tasks/<taskId>` — the task's own artifacts, not the run root |
+| `{{TASK_ID}}` | `t1`, `t2`, … — MANDATORY in every `/api/state` body the agent posts |
+| `{{ROOT}}` | the task's working directory. Before step 4 it is `PROJECT`; step 4 fixes it to `PROJECT` or to the task's worktree |
+| `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}`, `{{LANGUAGE}}` | as before |
 
 ## Server helpers (use exactly these shapes)
 
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
-  Fields: `{"step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"summary":{...}}`
+  Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
+  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
   Step ids are fixed (1 Requirements, 2 Feature Refinement, 3 Mockups, 4 Implementation,
   5 Validation & E2E, 6 Code Review, 7 Mockoon Mocks). Step 3 ships `enabled:false` and the stepper
-  hides it, so a run without mockups shows five tiles numbered 1-5 plus the Mockoon one. Step 7 is
+  hides it, so a task without mockups shows five tiles numbered 1-5 plus the Mockoon one. Step 7 is
   always visible and stays `waiting` through the whole run — it only moves when the user asks for
   mocks on the summary screen.
-  Merge consecutive updates into ONE POST whenever nothing (user interaction, agent work) happens
-  between them — e.g. completing a step and activating the next is a single body, never two calls.
+  A body binds to ONE task and its step fields bind to ONE step, so merge consecutive updates into
+  ONE POST only when they share both and nothing (user interaction, agent work) happens between them
+  — e.g. completing a step and activating the next in the same task is a single body.
 - Wait for a user answer (long-poll, repeat until non-null):
-  `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` → `{"answer":{...}|null}`
+  `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` → `{"answer":{...,"taskId":"t1"}|null}`
+  Poll WITHOUT `taskId`: this is the event loop and it must see every task's answers. The returned
+  object names the task it belongs to — route on it, never drop it because it belongs to another
+  task. (`&taskId=t1` exists for a targeted wait; the orchestrator should not need it.)
   ALWAYS pass `timeout: 320000` to the Bash tool for this call — the default 120 s tool timeout
   would kill the poll mid-wait. The poll returns instantly once the user answers; the long wait
-  only spares empty polls. Repeat the call in a loop while `answer` is null. If curl cannot
-  connect, the server died: re-run the launcher (state reloads from `pipeline-state.json`) and continue.
+  only spares empty polls. If curl cannot connect, the server died: re-run the launcher (state
+  reloads from `pipeline-state.json`) and continue.
 - **Encoding (MANDATORY, also for every sub-agent):** bodies contain non-ASCII text (e.g. Polish).
   Always run curl from a POSIX shell (Bash tool) where inline UTF-8 JSON is safe.
   Never pass non-ASCII JSON inline through PowerShell — it re-encodes to the system codepage and
   the UI shows `�`. If PowerShell is unavoidable, write the JSON to a temp file as UTF-8
   **without BOM** and send it with `--data-binary "@file"`.
 
-## Step 1 — Requirements (interactive)
+## Step 1 — Requirements (interactive, per task, repeatable)
 
-1. POST `{"step":1,"status":"in_progress","activeStep":1}`.
-2. Poll answers until `kind=="step1"`. When the answer has `authProvided:true`, the browser has
-   already written login+password for E2E tests to `<SESSION>/auth.json` — NEVER read, quote or
-   copy that file; only the validation agent uses it.
-3. Write `<SESSION>/requirements.md`:
+The user may click "Create new task" on the form: the server creates it, copies the form and the
+uploaded files, and the browser switches to it and puts it into its own step 1. There is NO barrier —
+each task starts its own pipeline the moment ITS form is submitted, so the user can launch task 1
+while still writing task 2.
+
+On a `step1` answer for task T:
+
+1. When `authProvided` is true, the browser has already written login+password for E2E tests to
+   `<SESSION>/tasks/T/auth.json` — NEVER read, quote or copy that file; only the validation agent
+   uses it.
+2. `branch` is the branch this task will be implemented on. Keep it; step 4 uses it verbatim.
+3. Write `<SESSION>/tasks/T/requirements.md`:
 
    ```markdown
    # Requirements
@@ -76,6 +141,9 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 
    ## Business requirements
    <businessRequirements>
+
+   ## Branch
+   <branch>
 
    ## Additional materials (hints for refinement and mockups)
    Files: <hints list or "—">
@@ -88,142 +156,202 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
    Mockups: <mockups list or "—">  |  Contracts: <contracts list or "—">
 
    ## Authorization
-   <"Provided — credentials in auth.json (session dir); never copy them into spec/plan/tests" if authProvided, else "—">
+   <"Provided — credentials in auth.json (task dir); never copy them into spec/plan/tests" if authProvided, else "—">
 
    ## Mockup generation
    <"Enabled — step 3 designs the screens" if generateMockups, else "Disabled">
    ```
 
-   (Uploads already sit in `<SESSION>/mockups/`, `<SESSION>/contracts/` and `<SESSION>/hints/`.)
-4. Remember `MOCKUPS = answer.generateMockups` — it decides whether step 3 runs after step 2.
-   When `MOCKUPS`, POST `{"step":3,"enabled":true}` first (`enabled` binds to the body's `step`,
-   so it cannot ride along with the step-1 update).
-5. POST `{"step":1,"status":"completed","activeStep":2}`.
+   (Uploads already sit in `<SESSION>/tasks/T/mockups/`, `contracts/` and `hints/`.)
+4. Remember `MOCKUPS(T) = answer.generateMockups` — it decides whether step 3 runs after step 2.
+   When `MOCKUPS(T)`, POST `{"taskId":"T","step":3,"enabled":true}` first (`enabled` binds to the
+   body's `step`, so it cannot ride along with the step-1 update).
+5. POST `{"taskId":"T","step":1,"status":"completed","activeStep":2}` and start step 2 for T.
+
+## Revising step 1
+
+Until a task enters step 4, its user can press "Back to requirements" on the step-2 question panel,
+the plan gate or the mockup gate. That arrives as `{"kind":"back","taskId":"T"}`. Then:
+
+1. POST `{"taskId":"T","step":2,"status":"waiting","progress":null,"currentOperation":""}`, and the
+   same for step 3 when `MOCKUPS(T)`.
+2. POST `{"taskId":"T","step":1,"status":"in_progress","activeStep":1,"question":null,
+   "reviewSummary":null,"mockupReview":null,"logEntry":"Revision requested"}`.
+   Clearing those three is NOT optional: the panel checks them before it checks `activeStep`, so a
+   stale one would keep the old panel on screen instead of the form. Reset the other steps first so
+   the browser lands on a clean form.
+3. Wait for T's next `step1` answer. Then, in this order:
+   - copy `requirements.md` to `requirements-prev.md`,
+   - write the new `requirements.md`,
+   - write `requirements-changes.md`: a `## Revision <n>` heading and a bullet list naming which
+     fields changed, which files were added or removed, and any change to the branch or the mockups
+     toggle. Name the changes; do NOT copy the field bodies — they are already in the two files.
+   - `revisionCount(T)++`.
+4. Re-run step 2 in REDUCED SCOPE. `SendMessage` the EXISTING refinement agent — do not re-spawn it:
+   its project exploration, spec, plan and whole Q&A ARE the reduced scope.
+
+       Requirements changed. Read <SESSION>/tasks/T/requirements-changes.md, then requirements.md
+       and requirements-prev.md. Revision mode: patch spec.md, plan.md and checklist.md only where
+       the change lands, ask only what the change opens, do not re-explore the project, and keep the
+       ## UI design section. Reply with the result JSON.
+
+   If SendMessage cannot reach it, spawn a fresh refinement agent with the same prompt plus that
+   paragraph. Then continue at step 2's gate as usual.
+5. Mockups toggle transitions: off → on, POST `{"taskId":"T","step":3,"enabled":true}` and spawn a
+   FRESH mockup agent after the plan gate. On → off, POST
+   `{"taskId":"T","step":3,"enabled":false,"status":"waiting"}` and add to the refinement message:
+   `The mockups toggle was turned OFF — remove the ## UI design section and the verify: visual
+   checklist lines.`
+6. After the revision the task rejoins the normal route: plan gate → mockups when enabled → step 4.
 
 ## Step 2 — Feature Refinement (interactive, proxy Q&A)
 
-1. POST `{"step":2,"status":"in_progress","activeStep":2,"progress":5,"currentOperation":"Refinement in progress"}`.
-2. Spawn the refinement agent: prompt = contents of `<SKILL_DIR>/references/refinement-agent.md` with placeholders `{{SESSION}}`, `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}`, `{{LANGUAGE}}` substituted.
-3. Loop on the agent's final JSON:
-   - `{"type":"question","id","text","options"?}` → POST `{"question":{...}}`, poll answers until `kind=="answer"`, then **immediately** (before contacting the agent) POST `{"question":null,"step":2,"progress":<min(60, 20+5×answers so far)>,"currentOperation":"Processing answer…","logEntry":"<id>: <answer, shortened>"}` so the UI reacts to the click at once, then SendMessage the answer text to the agent. You own the Q&A progress — the agent does not report between questions.
-   - `{"type":"result","summary"}` → spec/plan/checklist now exist in `<SESSION>`. Go to 4.
+1. POST `{"taskId":"T","step":2,"status":"in_progress","activeStep":2,"progress":5,"currentOperation":"Refinement in progress"}`.
+2. Spawn the refinement agent: prompt = contents of `<SKILL_DIR>/references/refinement-agent.md` with the placeholders from the table above substituted.
+3. Route this task's answers and its agent's final JSON:
+   - `{"type":"question","id","text","options"?}` → POST `{"taskId":"T","question":{...}}`, wait for
+     T's `kind=="answer"`, then **immediately** (before contacting the agent) POST
+     `{"taskId":"T","question":null,"step":2,"progress":<min(60, 20+5×answers so far)>,"currentOperation":"Processing answer…","logEntry":"<id>: <answer, shortened>"}`
+     so the UI reacts to the click at once, then SendMessage the answer text to the agent. You own
+     the Q&A progress — the agent does not report between questions.
+   - `{"type":"result","summary"}` → spec/plan/checklist now exist in `<SESSION>/tasks/T`. Go to 4.
    - `{"type":"error","report"}` → failure protocol (below) for step 2.
-4. Gate: POST `{"reviewSummary":{"text":"<summary>"}}`; poll answers until `kind=="decision"`:
-   - `approve` → POST `{"reviewSummary":null,"step":2,"status":"completed","activeStep":<3 if MOCKUPS else 4>}`; continue.
+4. Gate: POST `{"taskId":"T","reviewSummary":{"text":"<summary>"}}`; wait for T's `kind=="decision"`:
+   - `approve` → POST `{"taskId":"T","reviewSummary":null,"step":2,"status":"completed","activeStep":<3 if MOCKUPS(T) else 4>}`; continue.
    - `feedback` → SendMessage the feedback to the agent; back to 3.
 
 ## Step 3 — Mockups (interactive, conditional)
 
-Runs ONLY when `MOCKUPS`. Otherwise skip the whole step: it stays `enabled:false` / `waiting`, the
+Runs ONLY when `MOCKUPS(T)`. Otherwise skip the whole step: it stays `enabled:false` / `waiting`, the
 stepper never shows it, and step 2's gate already moved `activeStep` straight to 4.
 
-1. POST `{"step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
+1. POST `{"taskId":"T","step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
 2. Spawn the mockup agent: prompt = contents of `<SKILL_DIR>/references/mockup-agent.md` with the
    usual placeholders substituted.
-3. Keep `REV = 0` and a `CHAT` array of `{"role":"agent"|"user","text":"…"}`. Loop on the agent's final JSON:
-   - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → append `{"role":"agent","text":summary}`
-     to `CHAT`, `REV++`, and POST
-     `{"step":3,"progress":<min(90, 20+10×REV)>,"currentOperation":"Waiting for your review","mockupReview":{"rev":REV,"text":"<summary>","screens":[…],"chat":CHAT}}`.
-     Then poll answers until `kind=="mockup"`:
-     - `decision=="feedback"` → append `{"role":"user","text":<text>}` to `CHAT`, then **immediately**
-       (before contacting the agent) POST `{"step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>"}`
+3. Keep only `mockupRounds(T)`, for the progress bar. The chat transcript and the `rev` the UI
+   re-renders on are the SERVER's — never hold either in your context. Loop on the agent's final JSON:
+   - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → `mockupRounds(T)++` and POST
+     `{"taskId":"T","step":3,"progress":<min(90, 20+10×mockupRounds)>,"currentOperation":"Waiting for your review","mockupReview":{"text":"<summary>","screens":[…]},"mockupChat":{"role":"agent","text":"<summary>"}}`.
+     Omit `rev` and omit `chat`: the server stamps the next `rev` itself and carries the existing
+     chat forward, so a round can never reuse a number and leave the panel locked.
+     Then wait for T's `kind=="mockup"`:
+     - `decision=="feedback"` → **immediately** (before contacting the agent) POST
+       `{"taskId":"T","step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>","mockupChat":{"role":"user","text":"<the feedback>"}}`
        so the UI reacts to the click at once, then SendMessage the feedback text to the agent. Back to 3.
      - `decision=="approve"` → SendMessage exactly: `APPROVED — update spec.md, plan.md and
        checklist.md to match the approved mockups, then reply with the result JSON.` Back to 3.
    - `{"type":"result","summary","screens":[…]}` (only ever arrives after the approval message) →
-     POST `{"step":3,"status":"completed","progress":100,"mockupReview":null,"activeStep":4}`.
+     POST `{"taskId":"T","step":3,"status":"completed","progress":100,"mockupReview":null,"activeStep":4}`.
      Keep the screen count and the summary only — never the mockup markup.
    - `{"type":"error","report"}` → failure protocol for step 3.
 
-`rev` must increase on every agent round: the UI keys its re-render on it, so a repeated value
-leaves the panel locked on the previous answer.
-
 ## Step 4 — Implementation (view-only)
 
-1. Derive `SLUG` from the feature title (first line of `<SESSION>/spec.md`): lowercase, ASCII, spaces→`-`, strip other chars, max 40 chars. `git checkout -b feature/<SLUG>`; if the branch already exists (e.g. a retry of this step), `git checkout feature/<SLUG>` instead.
-2. POST `{"step":4,"status":"in_progress","activeStep":4,"progress":0}`.
-3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder substitution). It reports progress itself via POST /api/state and writes code against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
-4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"step":4,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
+1. Pick this task's working directory `ROOT`, once, here:
+   - no other task has claimed `PROJECT` yet → `ROOT = PROJECT`, and
+     `git -C "<ROOT>" checkout -b <branch>` (or `checkout <branch>` when it already exists). Mark
+     `PROJECT` claimed for the rest of the run.
+   - otherwise → `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<slug>-<taskId>`,
+     where `<slug>` is the branch with `/` and non-ASCII replaced by `-`. The task id is what keeps
+     the path unique: two different branches can slugify to the same string, and `worktree add`
+     would then fail on an existing directory. Create it with
+     `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch>`.
+     When the branch already exists and is not checked out anywhere, drop `-b`. When it IS checked
+     out elsewhere, go to the failure protocol with a report naming the conflict.
+   A worktree is created from HEAD, so it has neither `node_modules` nor the untracked local config
+   the app needs. Bootstrap it before spawning anything:
+   - `package-lock.json` → `npm ci`; `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`;
+     `yarn.lock` → `yarn install --immutable`; no lockfile → skip.
+   - copy every `.env*` file from `PROJECT` into `ROOT`.
+   A failure in either goes to the failure protocol for step 4. Playwright is unaffected: the
+   pipeline keeps using the plugin's own installation in `SKILL_DIR`.
+   POST `{"taskId":"T","root":"<ROOT>"}` so the summary can name it.
+2. POST `{"taskId":"T","step":4,"status":"in_progress","activeStep":4,"progress":0}`.
+3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder
+   substitution, `{{ROOT}}` included). It reports progress itself via POST /api/state and writes code
+   against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
+4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"taskId":"T","step":4,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
 
 ## Step 5 — Validation & E2E (view-only, except the Chrome-extension prompt)
 
-1. POST `{"step":5,"status":"in_progress","activeStep":5,"progress":0}`.
-2. Spawn the validation agent from `references/validation-agent.md`. It runs the project's own unit
+Take `E2E_LOCK` first; if it is held, queue this task as described in the event-loop section and come
+back when the lock frees.
+
+1. POST `{"taskId":"T","step":5,"status":"in_progress","activeStep":5,"progress":0}`.
+2. Spawn the validation agent from `references/validation-agent.md`. It runs the task's own unit
    suite, then writes and runs the E2E suite on the plugin's own Playwright, and uses the user's
    Chrome (Claude in Chrome extension) for discovery, failure debugging and a UX pass — expect a
    tab to open there during this step. Endpoints the backend does not serve yet are faked in the
-   app's code for the length of the step and removed before it ends (archived to `<SESSION>/mocks/`),
-   so step 6 and the commit never see them.
-3. Loop on the agent's final JSON:
+   app's code for the length of the step and removed before it ends (archived to
+   `<SESSION>/tasks/T/mocks/`), so step 6 and the commit never see them.
+3. Route this task's answers and its agent's final JSON:
    - `{"type":"question","id","text","options"?}` → the extension is unavailable, and it is
-     REQUIRED: the agent is blocked until the user installs/enables it. POST `{"question":{...}}`,
-     poll answers until `kind=="answer"`, then **immediately** (before contacting the agent) POST
-     `{"question":null,"step":5,"currentOperation":"Retrying the Chrome extension…","logEntry":"<id>: <answer, shortened>"}`
+     REQUIRED: the agent is blocked until the user installs/enables it. POST `{"taskId":"T","question":{...}}`,
+     wait for T's `kind=="answer"`, then **immediately** (before contacting the agent) POST
+     `{"taskId":"T","question":null,"step":5,"currentOperation":"Retrying the Chrome extension…","logEntry":"<id>: <answer, shortened>"}`
      so the UI reacts to the click at once, then SendMessage the answer text to the agent. Never
      tell it to continue without the extension, and never re-spawn it with that requirement waived.
    - `{"type":"result","compliance":NN,"testsSummary","unitSummary","mockupSummary","uxSummary","apiMockSummary"}`
-     with `compliance>=99` → POST completed. Keep `apiMockSummary` for the final summary — it says
-     which endpoints were faked, so the user knows what was never proven against a real API.
+     with `compliance>=99` → POST completed and RELEASE `E2E_LOCK`. Keep `apiMockSummary` for the
+     final summary — it says which endpoints were faked, so the user knows what was never proven
+     against a real API.
    - `{"type":"error","report"}` (<99% after 3 cycles, a unit suite that stayed red, or an
-     extension that never became available) → failure protocol.
+     extension that never became available) → failure protocol. The lock stays held across a
+     `retry`, because the retry is still this task inside step 5 — but RELEASE it the moment the
+     task leaves the step in any direction, including `finish`. A failed-and-finished task that
+     kept the lock would strand every other task in front of validation for the rest of the run.
 
 ## Step 6 — Code Review (view-only)
 
-1. POST `{"step":6,"status":"in_progress","activeStep":6,"progress":0}`.
+1. POST `{"taskId":"T","step":6,"status":"in_progress","activeStep":6,"progress":0}`.
 2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method, and it always runs TWO rounds of `1 full review + up to 2 --since-last re-reviews`, fixing every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
-3. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/auth.json` if it exists
+3. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/tasks/T/auth.json` if it exists
    (step 6's regression run is its last consumer, so the credentials die with the step, not with the
    pipeline), then POST completed. `error` → failure protocol.
 
-## Step 7 — Mockoon mocks (on demand, view-only)
+## Step 7 — Mockoon mocks (on demand, view-only, per task)
 
-Never part of the pipeline run: the tile waits until the user clicks "Generate Mockoon mocks" on the
-summary screen, which reaches you through the wait loop below. It can run any number of times
-("Regenerate" is the same step over the same file).
+Never part of a task's run: the tile waits until the user clicks "Generate Mockoon mocks" on that
+task's summary screen, which reaches you as `{"kind":"summary","decision":"mockoon","taskId":"T"}`.
+It can run any number of times ("Regenerate" is the same step over the same file).
 
-1. POST `{"step":7,"status":"in_progress","activeStep":7,"progress":0}` — this also pulls the browser
-   off the summary and onto the step's panel.
+1. POST `{"taskId":"T","step":7,"status":"in_progress","activeStep":7,"progress":0}` — this also
+   pulls the browser off the summary and onto the step's panel.
 2. Spawn the mockoon agent from `references/mockoon-agent.md` (same placeholder substitution). It
-   reads spec/plan, the contracts and the implemented code, and writes `<SESSION>/mockoon.json`
-   (one environment on `localhost:3000`). The browser fetches that file itself from `/api/mockoon` —
-   NEVER read it, never paste it into a message or into `/api/state`.
-3. `{"type":"result","routes":N,"summary"}` → POST `{"step":7,"status":"completed","progress":100}`;
+   reads spec/plan, the contracts and the implemented code, and writes `<SESSION>/tasks/T/mockoon.json`
+   (one environment on `localhost:3000`). The browser fetches that file itself from
+   `/api/mockoon?taskId=T` — NEVER read it, never paste it into a message or into `/api/state`.
+3. `{"type":"result","routes":N,"summary"}` → POST `{"taskId":"T","step":7,"status":"completed","progress":100}`;
    the panel then shows the JSON with a Copy button. Keep the route count and the summary only.
-4. `{"type":"error","report"}` → POST `{"step":7,"status":"failed","report":"<report>"}`, then poll
-   answers until `kind=="decision"`: `retry` → POST `{"step":7,"status":"in_progress","report":null}`
+4. `{"type":"error","report"}` → POST `{"taskId":"T","step":7,"status":"failed","report":"<report>"}`, then wait
+   for T's `kind=="decision"`: `retry` → POST `{"taskId":"T","step":7,"status":"in_progress","report":null}`
    and re-spawn the agent **fresh**; `finish` → the user went back to the summary, so leave the step
-   failed and return to the wait loop.
+   failed and keep looping.
 
-## Failure protocol (any step)
+## Failure protocol (any step, any task)
 
-1. POST `{"step":N,"status":"failed","report":"<report>","question":null}` — clearing the question
-   matters: a step that failed while waiting for an answer would otherwise re-show that stale
-   question the moment a retry flips the status back to in_progress.
-2. Poll answers until `kind=="decision"`:
-   - `retry` → POST `{"step":N,"status":"in_progress","report":null}`; re-spawn that step's agent **fresh** (new Agent call, same prompt + note about the previous failure report path).
-   - `finish` → write the final summary (below, including the `auth.json` cleanup) with
-     `finalStatus:"Failed at step N"`, then stop.
+1. POST `{"taskId":"T","step":N,"status":"failed","report":"<report>","question":null}` — clearing
+   the question matters: a step that failed while waiting for an answer would otherwise re-show that
+   stale question the moment a retry flips the status back to in_progress.
+2. Wait for T's `kind=="decision"`:
+   - `retry` → POST `{"taskId":"T","step":N,"status":"in_progress","report":null}`; re-spawn that step's agent **fresh** (new Agent call, same prompt + note about the previous failure report path).
+   - `finish` → write that task's final summary (below, including the `auth.json` cleanup) with
+     `finalStatus:"Failed at step N"`.
+3. If the task held `E2E_LOCK`, release it on `finish` and start the next task in the queue.
+4. A failed task does not end the run: keep serving the others from the event loop.
 
-## Final summary
+## Final summary (per task)
 
-1. Delete `<SESSION>/auth.json` if it still exists — step 6 normally already did, so this is the
-   backstop for runs that never got there (the server also wipes it on shutdown). Do this on BOTH
-   outcomes — success and `finish` after a failure.
+1. Delete `<SESSION>/tasks/T/auth.json` if it still exists — step 6 normally already did, so this is
+   the backstop for tasks that never got there (the server also wipes every task's on shutdown). Do
+   this on BOTH outcomes — success and `finish` after a failure.
 2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), API mocks, mockup comparison, UX findings, review results.
-3. POST `{"summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `uxReview` = its `uxSummary`; `codeReview` = the review agent's `reviewSummary`, which also names every finding it rejected and on what ground).
-4. Print the same summary in the terminal (user's language).
-5. Stage everything: `git add -A` (already done by the step-6 agent; verify with `git status --short`).
-6. Suggest `superpowers:finishing-a-development-branch` for commit/merge/PR.
-7. Leave the server running and enter the wait loop below. Do NOT kill the PID yourself.
-
-## After the summary (wait loop)
-
-The pipeline is done, but the summary screen still offers "Generate Mockoon mocks", so the run ends
-only when the user says so. Loop:
-
-1. Poll `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` (Bash tool `timeout: 320000`), repeating
-   while `answer` is null.
-2. `{"kind":"summary","decision":"mockoon"}` → run step 7 above, then keep looping.
-3. `{"kind":"summary","decision":"shutdown"}` → the user pressed "Shut down server": stop looping and
-   end your turn.
-4. curl cannot connect → the server is already gone: stop looping and end your turn.
+3. POST `{"taskId":"T","summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `uxReview` = its `uxSummary`; `codeReview` = the review agent's `reviewSummary`, which also names every finding it rejected and on what ground). Put the task's branch and `ROOT` at the top of `changes` so the user can find the work.
+4. Stage that task's changes: `git -C "<ROOT>" add -A` (already done by its step-6 agent; verify with
+   `git -C "<ROOT>" status --short`). Worktrees have their own index, so tasks never stage into each other.
+5. When EVERY task has finished, print ONE combined summary in the terminal (user's language): a row
+   per task with its branch, working directory and final status, then the per-task details.
+6. Suggest `superpowers:finishing-a-development-branch` per task, and `git worktree remove <ROOT>`
+   for the tasks that got one — the pipeline never removes a worktree itself.
+7. Leave the server running and stay in the event loop. Do NOT kill the PID yourself. The run ends
+   only when the user presses "Shut down server" or the server dies.

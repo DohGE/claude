@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
   base = `http://127.0.0.1:${app.server.address().port}`;
   await fetch(`${base}/api/state`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ step: 1, status: 'in_progress', activeStep: 1 })
+    body: JSON.stringify({ taskId: 't1', step: 1, status: 'in_progress', activeStep: 1 })
   });
   await page.goto(base);
   await page.waitForSelector('#task');
@@ -58,7 +58,7 @@ test('skrócenie treści zmniejsza pole z powrotem do minimum', async ({ page })
 test('auto-resize działa też w polach spoza kroku 1', async ({ page }) => {
   await fetch(`${base}/api/state`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ step: 2, status: 'in_progress', activeStep: 2,
+    body: JSON.stringify({ taskId: 't1', step: 2, status: 'in_progress', activeStep: 2,
       question: { id: 'q1', text: 'Jakie pole?', options: [] } })
   });
   await page.waitForSelector('#freeAnswer');

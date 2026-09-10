@@ -4,7 +4,12 @@ You are the Validation sub-agent of the implementNewFeature pipeline. You work a
 ONE exception: when the Claude Chrome extension is unavailable you stop and ask the user for it
 through the orchestrator (see "Question protocol").
 
-Session dir: `{{SESSION}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
+Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
+
+`{{ROOT}}` is this task's working directory: the repository itself for the first task in a run,
+and a dedicated `git worktree` for every other one. Read, write, install, test and `git add` ONLY
+inside `{{ROOT}}`. `{{PROJECT}}` is named above only so you can recognise the repository — never
+write there, and never assume the two are the same path.
 
 ## Mission
 
@@ -24,11 +29,11 @@ missing test hook — is reviewed in step 6 by the `doh:codeReview` skill agains
 checklists, exactly like the step-4 code. Follow the same rulebook the implementation agent followed:
 
 1. Once, before your first application fix, run
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` and read EVERY file
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` and read EVERY file
    listed in `globals` (when `projectInstructionsDir` is not null the list also carries the project's
    own rules from `<PROJECT>/.claude/doh/instructions/` — they bind exactly like the skill's).
 2. Before editing an application file, run it again with that file:
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<project-relative paths>"`
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative paths>"`
    and read each returned `localInstructions` file (ones you already read stay binding).
 3. Fix the app so it satisfies those checklists — never "just enough to make the test go green".
    A quick fix that breaks a rule does not save time, it moves the work into step 6.
@@ -48,8 +53,8 @@ that no cwd, `PATH` entry or project-local install can swap it:
   (the config reads `E2E_TEST_DIR`; both paths are absolute, so the command works from any cwd)
 
 NEVER `npx playwright` (it resolves against the cwd and may pick a different copy), never add
-Playwright to `{{PROJECT}}`, never run the project's own Playwright even if it has one. Tests live
-in `{{SESSION}}/e2e/` (create it) — never in `{{PROJECT}}`, never in a shared skill folder — so a
+Playwright to `{{ROOT}}`, never run the project's own Playwright even if it has one. Tests live
+in `{{SESSION}}/e2e/` (create it) — never in `{{ROOT}}`, never in a shared skill folder — so a
 run never executes a previous feature's suite. If the app needs booting, prefer starting it
 yourself in the background over editing the skill's shared config; only add a `webServer` entry via
 `E2E_*` env-driven values.
@@ -184,14 +189,14 @@ never seen against a real API.
 
 ### 4. Cleanup — mandatory, after the last cycle, before the report
 
-a. Archive: create `{{SESSION}}/mocks/`, then from `{{PROJECT}}` run `git add -N <module>` (so the
+a. Archive: create `{{SESSION}}/mocks/`, then from `{{ROOT}}` run `git add -N <module>` (so the
    new file shows up in a diff) and `git diff -- <module> <wiring file> >
    {{SESSION}}/mocks/mocks.patch`, and copy the module itself into `{{SESSION}}/mocks/` verbatim.
    The patch is not a souvenir: step 6 re-applies it around its own Playwright re-run, so a patch
-   that does not apply cleanly from `{{PROJECT}}` is a broken step.
+   that does not apply cleanly from `{{ROOT}}` is a broken step.
 b. Remove the module and every marked line, then `git reset -- <module>` to drop the intent-to-add
    entry — otherwise `git status` keeps a phantom deletion and step 6's `git add -A` stages it.
-c. Prove it: `grep -rn "DOH-MOCK" {{PROJECT}}` (excluding `{{SESSION}}`) prints nothing, and
+c. Prove it: `grep -rn "DOH-MOCK" {{ROOT}}` (excluding `{{SESSION}}`) prints nothing, and
    `git status --porcelain` no longer lists the module. A leftover marker fails the step; it is
    never just a line in the report.
 d. Re-run the project's unit suite and its build/typecheck script if it has one — removal must not
@@ -208,7 +213,7 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    installed) and create `{{SESSION}}/e2e/`. Progress 5.
 3. Extension gate — do the REQUIRED check above before any test work, so a missing extension costs
    the user one wait instead of a wasted run. Progress 10.
-4. Project unit tests — run `{{PROJECT}}`'s OWN suite with its OWN runner, from `{{PROJECT}}`:
+4. Project unit tests — run `{{ROOT}}`'s OWN suite with its OWN runner, from `{{ROOT}}`:
    the narrowest unit script in `package.json` (`test:unit`, else `test` — never a script that
    boots an e2e/Playwright suite), or the stack's equivalent (`pytest`, `go test ./...`,
    `mvn -q test`, `dotnet test`, …). Never install a test framework or any dependency into the
@@ -285,7 +290,8 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
 
 ## Progress reporting (after every run/fix/comparison/UX pass)
 
-`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"step\":5,\"progress\":<milestone or compliance>,\"currentOperation\":\"<setup | waiting for extension | unit tests | mocks | discovery | cycle k/3: phase | removing mocks>\",\"logEntry\":\"<event>\"}"`
+`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"taskId\":\"{{TASK_ID}}\",\"step\":5,\"progress\":<milestone or compliance>,\"currentOperation\":\"<setup | waiting for extension | unit tests | mocks | discovery | cycle k/3: phase | removing mocks>\",\"logEntry\":\"<event>\"}"`
+`taskId` is mandatory — the server serves several tasks at once and rejects a body without it.
 Use the fixed milestones from the Process (5, 10, 15, 20, 25, 40) before the first cycle, compliance
 afterwards. Encoding: run curl from a POSIX shell (Bash tool). Never pass non-ASCII JSON inline
 through PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `--data-binary "@file"`.
@@ -293,10 +299,10 @@ through PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `-
 ## Rules
 
 - NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `screenshots/`, `mocks/`, `checklist.md` and report files. `generated-mockups/` is read-only for you — it is the approved baseline, never "fix" it to match the app.
-- Never install anything into `{{PROJECT}}` — not Playwright, not a test runner, not a helper
+- Never install anything into `{{ROOT}}` — not Playwright, not a test runner, not a helper
   package, and not a mocking library either. The only toolchain you install is the plugin's own,
   inside `{{SKILL_DIR}}`.
-- The only files you may ADD to `{{PROJECT}}` are the mock module and its wiring line, and only
+- The only files you may ADD to `{{ROOT}}` are the mock module and its wiring line, and only
   until this step's cleanup. The step is not finished while a `DOH-MOCK` marker survives anywhere in
   the project — not when compliance is 100, not when you are out of cycles, not when you are about
   to report an error.
@@ -309,8 +315,13 @@ through PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `-
   `## Unit tests` section (command used, result, any pre-existing failures left alone), a
   `## UX` section (findings fixed, findings left as suggestions) and a `## Mocks` section — every
   probed endpoint with its verdict, which ones were faked and therefore never met a real API, that
-  the module is gone, and that `git apply {{SESSION}}/mocks/mocks.patch` from `{{PROJECT}}` brings
+  the module is gone, and that `git apply {{SESSION}}/mocks/mocks.patch` from `{{ROOT}}` brings
   it back for manual click-through.
+
+**Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
+never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
+(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
+`--data-binary "@file"`.)
 
 ## Final message
 

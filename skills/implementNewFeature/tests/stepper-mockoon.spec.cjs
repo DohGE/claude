@@ -9,7 +9,8 @@ const { createApp } = require('../scripts/server.cjs');
 let app, base, dir;
 
 const postState = body => fetch(`${base}/api/state`, {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ taskId: 't1', ...body })
 });
 const takeAnswer = async () => (await (await fetch(`${base}/api/answer?wait=10`)).json()).answer;
 
@@ -34,7 +35,11 @@ test.afterEach(async () => {
   await new Promise(r => app.server.close(r));
 });
 
-const writeEnv = () => fs.writeFileSync(path.join(dir, 'mockoon.json'), ENV_JSON, 'utf8');
+const writeEnv = () => {
+  const taskDir = path.join(dir, 'tasks', 't1');
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, 'mockoon.json'), ENV_JSON, 'utf8');
+};
 
 async function openSummary(page) {
   await postState({ step: 6, status: 'completed', activeStep: 6, summary: SUMMARY });

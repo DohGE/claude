@@ -21,6 +21,29 @@
   h1 { font-size:22px; margin:0 0 28px; letter-spacing:.2px; width:fit-content;
        background:linear-gradient(90deg,var(--accent),var(--accent-2));
        -webkit-background-clip:text; background-clip:text; color:transparent; }
+  /* Task tabs appear only from the second task on — one task looks like it always did. */
+  .tabs-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .tabs-bar .tab { display:inline-flex; align-items:center; gap:8px; margin:0; padding:8px 12px;
+          max-width:100%; font-size:12.5px; font-weight:600; background:var(--card);
+          color:var(--muted); border:1px solid var(--border); border-radius:10px; }
+  .tabs-bar .tab:hover:not(:disabled) { color:var(--text); border-color:var(--border-hi);
+          transform:none; filter:none; }
+  .tabs-bar .tab.selected { color:var(--text); border-color:var(--accent);
+          background:rgba(124,140,248,.14); }
+  .tabs-bar .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22ch; }
+  .tabs-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--waiting); flex:none; }
+  .tabs-bar .dot.in_progress { background:var(--accent); }
+  .tabs-bar .dot.completed { background:var(--completed); }
+  .tabs-bar .dot.failed { background:var(--failed); }
+  /* The one thing that tells the user a background task has stopped and needs them. */
+  .tabs-bar .pending { color:var(--accent-2); font-size:11px; line-height:1; flex:none;
+          animation:pulse 1.6s ease-in-out infinite; }
+  .tabs-bar .tab { cursor:pointer; }
+  .tabs-bar .tab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .tabs-bar .close { margin:0; padding:0 3px; background:transparent; color:var(--muted);
+          font-size:14px; line-height:1; flex:none; border-radius:4px; }
+  .tabs-bar .close:hover:not(:disabled) { color:var(--failed); background:var(--card-2);
+          transform:none; filter:none; }
   .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
   /* 120px basis keeps all seven tiles (Mockups enabled) on a single row at 940px. */
   .step { flex:1 1 120px; background:var(--card); border:1px solid var(--border); border-radius:14px;
@@ -73,6 +96,13 @@
           color:var(--text); }
   .field-with-btn { position:relative; }
   .field-with-btn input { padding-right:46px; }
+  .copy-wrap { position:relative; }
+  .copy-wrap > textarea, .copy-wrap > input[type=text] { padding-right:44px; }
+  button.copy { position:absolute; top:7px; right:7px; margin:0; padding:5px 7px;
+          background:transparent; color:var(--muted); line-height:0; border-radius:8px; }
+  button.copy:hover:not(:disabled) { color:var(--text); background:var(--card);
+          transform:none; filter:none; }
+  button.copy:disabled { background:transparent; }
   button.reveal { position:absolute; top:50%; right:6px; transform:translateY(-50%); margin:0;
           background:transparent; padding:6px 8px; color:var(--muted); line-height:0;
           border-radius:8px; }
@@ -92,6 +122,16 @@
   .switch input:disabled { opacity:.5; cursor:not-allowed; }
   .switch label { margin:0; color:var(--text); cursor:pointer; }
   .hint { font-size:12.5px; color:var(--muted); margin:6px 0 0; }
+  .hint.error { color:var(--failed); }
+  /* Files already uploaded: a file input cannot be pre-filled, so they are listed. */
+  ul.files { list-style:none; margin:8px 0 0; padding:0; font-size:12.5px; }
+  ul.files li { display:flex; align-items:center; justify-content:space-between; gap:10px;
+          padding:6px 10px; margin-top:6px; background:var(--card-2);
+          border:1px solid var(--border); border-radius:8px; color:#c3c9d6; }
+  ul.files .rm { margin:0; padding:2px 8px; background:transparent; color:var(--muted);
+          font-size:15px; line-height:1; border-radius:6px; }
+  ul.files .rm:hover:not(:disabled) { color:var(--failed); background:var(--card);
+          transform:none; filter:none; }
   .mockup-bar { display:flex; justify-content:space-between; align-items:center; gap:12px;
           flex-wrap:wrap; margin:18px 0 10px; }
   .tabs { display:flex; gap:6px; flex-wrap:wrap; }
@@ -156,6 +196,7 @@
 <body>
 <div class="wrap">
   <h1>implementNewFeature</h1>
+  <div class="tabs-bar" id="tabs" hidden></div>
   <div class="stepper" id="stepper"></div>
   <div class="panel" id="panel"><p class="muted">Connecting…</p></div>
 </div>
@@ -183,13 +224,55 @@ const EYE_OFF = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" str
   + '<path d="M17.9 17.9A10 10 0 0 1 12 20C5 20 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 4.2A9.1 9.1 0'
   + ' 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.2 3.2m-6.7-1.1a3 3 0 1 1-4.2-4.2"/>'
   + '<path d="M1 1l22 22"/></svg>';
+const COPY_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"'
+  + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<rect x="9" y="9" width="12" height="12" rx="2"/>'
+  + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"'
+  + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M20 6L9 17l-5-5"/></svg>';
 let lastSig = null;
 let serverDown = false; // set when the user shuts the server down from the summary
-let mockupScreen = 0;   // preview selection survives re-renders of the mockup panel
-let mockupViewport = 'Desktop';
-// Step 7 runs on demand once the summary exists, so which of the two screens is
-// visible is the user's choice, not a pipeline state — it lives here, in the page.
-let showSummary = false;
+// Which tab is open is page state, never server state: parallel pipelines write
+// to the state concurrently and must not yank the user's view to another task.
+let activeTask = null;
+// The last polled state, so the step-1 form can check the other tasks' branches
+// without threading the whole document through every render function.
+let lastState = null;
+// The open step-1 form's gate, so a sibling task submitting its branch can make
+// this form re-check without re-rendering it (which would wipe what is typed).
+let refreshGate = null;
+let takenBranches = '';
+
+// Whatever is typed into a step-1 form but not submitted yet. Switching tabs or
+// creating a task re-renders the panel, and without this the text would be gone.
+function snapshotStep1() {
+  if (!activeTask || !$('#branch')) return;
+  viewOf(activeTask).draft = {
+    taskDescription: $('#task').value,
+    businessRequirements: $('#biz').value,
+    branch: $('#branch').value,
+    contractsText: $('#contractsText').value,
+    hintsNote: $('#hintsNote').value,
+    generateMockups: $('#genMockups').checked
+  };
+}
+// Per-task view state, so switching tabs never leaks one task's preview selection
+// or summary toggle into another's. Step 7 runs on demand once the summary exists,
+// so which of the two screens is visible is the user's choice, not a pipeline state.
+const view = {};
+const viewOf = id => (view[id] || (view[id] = {
+  showSummary: false, mockupScreen: 0, mockupViewport: 'Desktop',
+  // A sent answer locks the panel until the orchestrator moves the state. The lock
+  // is remembered per task, because switching tabs re-renders the panel and would
+  // otherwise hand back a live button — and a second click would queue a duplicate
+  // answer that a later gate then mistakes for its own.
+  locked: null, lockedSig: null
+}));
+
+// Refuses what `git check-ref-format` refuses, without shelling out to git.
+const branchOk = v => !!v && !/[\s~^:?*[\\]/.test(v) && !v.includes('..') && !v.includes('@{')
+  && !v.startsWith('/') && !v.endsWith('/') && !v.endsWith('.lock');
 
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s == null ? '' : s)
@@ -205,10 +288,13 @@ function toB64(file) {
   });
 }
 async function postJson(url, body) {
-  await fetch(url, { method: 'POST',
+  const res = await fetch(url, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  // Create-task needs the new id back; every other caller ignores the result,
+  // and /api/shutdown dies mid-response, hence the catch.
+  return res.json().catch(() => ({}));
 }
-const sendAnswer = payload => postJson('/api/answer', payload);
+const sendAnswer = payload => postJson('/api/answer', { taskId: activeTask, ...payload });
 
 // In-page confirmation modal — never window.confirm(): a native dialog freezes the page
 // (and any browser automation driving it), cannot be styled and cannot be asserted on.
@@ -220,10 +306,13 @@ function askConfirm({ title, text, confirmLabel }) {
   $('#confirmText').textContent = text;
   $('#confirmOk').textContent = confirmLabel || 'Confirm';
   dlg.returnValue = '';
+  // The panel behind the dialog may re-render while it is open (a new question, a
+  // failure). Confirming then would answer something that is no longer on screen.
+  const openedAt = lastSig;
   return new Promise(resolve => {
     const onClose = () => {
       dlg.removeEventListener('close', onClose);
-      resolve(dlg.returnValue === 'ok');
+      resolve(dlg.returnValue === 'ok' && lastSig === openedAt);
     };
     dlg.addEventListener('close', onClose);
     dlg.showModal();
@@ -235,7 +324,12 @@ $('#confirmCancel').addEventListener('click', () => $('#confirmDialog').close('c
 
 // Instant click feedback: disable every control and show a spinner notice.
 // The panel stays locked until the orchestrator changes the state (sig changes).
-function lockPanel(message) {
+function lockPanel(message, remember = true) {
+  if (remember) {
+    const v = viewOf(activeTask);
+    v.locked = message;
+    v.lockedSig = lastSig;
+  }
   document.querySelectorAll('#panel button, #panel textarea, #panel input')
     .forEach(el => { el.disabled = true; });
   const n = document.createElement('div');
@@ -259,6 +353,32 @@ function autoGrow(el) {
   el.style.overflowY = want > max ? 'auto' : 'hidden';
 }
 
+// A decorator rather than a change in every render function: every step's text
+// fields get a copy button, including any field added later. Password fields opt
+// out with data-no-copy, because revealing one flips its type to text.
+function wireCopyButtons() {
+  document.querySelectorAll('#panel textarea, #panel input[type=text]').forEach(el => {
+    if (el.dataset.copyWired || el.dataset.noCopy) return;
+    el.dataset.copyWired = '1';
+    const wrap = document.createElement('div');
+    wrap.className = 'copy-wrap';
+    el.parentNode.insertBefore(wrap, el);
+    wrap.appendChild(el);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy';
+    btn.innerHTML = COPY_ICON;
+    btn.title = 'Copy field content';
+    btn.setAttribute('aria-label', 'Copy field content');
+    btn.addEventListener('click', async () => {
+      await copyText(el.value);
+      btn.innerHTML = CHECK_ICON;
+      setTimeout(() => { btn.innerHTML = COPY_ICON; }, 2000);
+    });
+    wrap.appendChild(btn);
+  });
+}
+
 function wireTextareas() {
   document.querySelectorAll('#panel textarea').forEach(el => {
     if (!el.dataset.autogrow) {
@@ -269,7 +389,17 @@ function wireTextareas() {
   });
 }
 
-window.addEventListener('resize', wireTextareas);
+// A drag fires resize dozens of times a second and each pass forces a layout per
+// textarea, so coalesce them into one measurement per frame.
+let resizePending = false;
+window.addEventListener('resize', () => {
+  if (resizePending) return;
+  resizePending = true;
+  requestAnimationFrame(() => {
+    resizePending = false;
+    wireTextareas();
+  });
+});
 
 async function tick() {
   if (serverDown) return;
@@ -281,14 +411,123 @@ async function tick() {
     lastSig = null;
     return;
   }
-  renderStepper(state);
-  renderPanel(state);
+  if (!activeTask || !state.tasks.some(t => t.id === activeTask)) {
+    activeTask = state.tasks[0].id;
+    lastSig = null;
+  }
+  lastState = state;
+  const taken = state.tasks.map(t => `${t.id}=${t.branch}`).join(',');
+  if (taken !== takenBranches) {
+    takenBranches = taken;
+    if (refreshGate) refreshGate();
+  }
+  const task = state.tasks.find(t => t.id === activeTask);
+  renderTabs(state);
+  renderStepper(task);
+  renderPanel(state, task);
+}
+
+// Rebuilt every tick like the stepper — the bar holds no input, so a background
+// task changing state never re-renders (and never clears) the open panel.
+function renderTabs(state) {
+  const box = $('#tabs');
+  if (state.tasks.length < 2) {
+    box.hidden = true;
+    box.innerHTML = '';
+    box.dataset.sig = '';
+    return;
+  }
+  // Same reason as the stepper: only redraw when a tab actually changed, or the
+  // rebuild would steal focus from a tab the user is on every single second.
+  const sigNow = tabsSig(state);
+  box.hidden = false;
+  if (box.dataset.sig === sigNow) return;
+  box.dataset.sig = sigNow;
+  // The close control is a real button, so the tab itself cannot be one — nesting
+  // interactive elements is invalid HTML and leaves the × unreachable by keyboard.
+  box.innerHTML = state.tasks.map((t, i) => {
+    const open = t.id === activeTask;
+    // Step 1 in_progress is just an unsubmitted form, so the pipeline has started
+    // once the form was submitted — that is what closes the × for good.
+    const closable = !t.step1Submitted && t.steps.slice(1).every(s => s.status === 'waiting');
+    return `<span class="tab${open ? ' selected' : ''}" role="tab"
+      aria-selected="${open}" tabindex="0" data-task="${esc(t.id)}">
+      <span class="dot ${activeStepOf(t).status}"></span>
+      <span class="label">${esc(tabLabel(t, i))}</span>
+      ${pending(t) && !open ? '<span class="pending" title="Waiting for you">●</span>' : ''}
+      ${closable ? `<button type="button" class="close" data-close="${esc(t.id)}"
+        aria-label="Close task" title="Close task">×</button>` : ''}
+    </span>`;
+  }).join('');
+  box.setAttribute('role', 'tablist');
+  box.querySelectorAll('[data-task]').forEach(el => {
+    const open = () => {
+      if (el.dataset.task === activeTask) return;
+      snapshotStep1();
+      activeTask = el.dataset.task;
+      lastSig = null;
+      tick();
+    };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      open();
+    });
+  });
+  box.querySelectorAll('[data-close]').forEach(el =>
+    el.addEventListener('click', async e => {
+      e.stopPropagation();   // the × sits inside the tab button
+      const id = el.dataset.close;
+      const ok = await askConfirm({ title: 'Close this task?',
+        text: 'Its form and uploaded files are deleted. The task has not started yet.',
+        confirmLabel: 'Close task' });
+      if (!ok) return;
+      await postJson('/api/tasks/remove', { taskId: id });
+      if (id === activeTask) activeTask = null;
+      lastSig = null;
+      tick();
+    }));
+}
+
+const tabsSig = state => state.tasks.map((t, i) => [t.id, tabLabel(t, i),
+  activeStepOf(t).status, pending(t) ? '!' : '', t.step1Submitted ? 'S' : '',
+  t.steps.slice(1).every(s => s.status === 'waiting') ? 'w' : '',
+  t.id === activeTask ? '*' : ''].join(':')).join(',');
+
+// A tab is named by whatever branch its form holds — the draft while it is being
+// typed, the submitted value afterwards. Reading the live input instead would tie
+// the bar's signature to the DOM the input handler patches, and the bar would
+// rebuild on every keystroke, detaching the tabs under the user's cursor.
+function tabLabel(task, i) {
+  const draft = viewOf(task.id).draft;
+  const typed = draft && String(draft.branch || '').trim();
+  return typed || task.branch || `Task ${i + 1}`;
+}
+
+// Patch the open tab's label in place and keep the bar's signature in step, so
+// typing a branch never triggers a rebuild.
+function syncTabLabel() {
+  const box = $('#tabs');
+  if (!box || box.hidden || !lastState) return;
+  const i = lastState.tasks.findIndex(t => t.id === activeTask);
+  const label = box.querySelector(`.tab[data-task="${activeTask}"] .label`);
+  if (i === -1 || !label) return;
+  label.textContent = tabLabel(lastState.tasks[i], i);
+  box.dataset.sig = tabsSig(lastState);
 }
 
 // Step ids are fixed, but disabled steps (Mockups when the toggle stayed off)
 // are hidden and the visible ones are numbered 1..n so the badges stay contiguous.
-function renderStepper(state) {
-  $('#stepper').innerHTML = state.steps.filter(s => s.enabled !== false).map((s, i) => `
+function renderStepper(task) {
+  // Rebuilding innerHTML every second would drop focus and restart the pulse
+  // animation, so the tiles are redrawn only when something about them changed.
+  const sigNow = task.id + '|' + task.steps
+    .filter(s => s.enabled !== false).map(s => `${s.id}:${s.status}`).join(',');
+  const box = $('#stepper');
+  if (box.dataset.sig === sigNow) return;
+  box.dataset.sig = sigNow;
+  box.innerHTML = task.steps.filter(s => s.enabled !== false).map((s, i) => `
     <div class="step ${s.status}">
       <span class="num">${i + 1}</span>
       <span class="name">${esc(s.name || STEP_NAMES[s.id - 1])}</span>
@@ -296,99 +535,138 @@ function renderStepper(state) {
     </div>`).join('');
 }
 
-const activeStepOf = state =>
-  state.steps.find(s => s.id === state.activeStep) || state.steps[0];
+const activeStepOf = task =>
+  task.steps.find(s => s.id === task.activeStep) || task.steps[0];
 
-function sig(state) {
-  const step = activeStepOf(state);
-  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP);
-  return [state.activeStep, step.status,
-    state.question ? `q${state.questionSeq || 0}` : '',
-    state.reviewSummary ? '1' : '',
+// A task stopped at a gate, waiting for the user rather than for an agent.
+const pending = task => !!(task.question || task.reviewSummary || task.mockupReview);
+
+function sig(task) {
+  const v = viewOf(task.id);
+  const step = activeStepOf(task);
+  const mockoon = task.steps.find(s => s.id === MOCKOON_STEP);
+  return [task.id, task.activeStep, step.status,
+    task.question ? `q${task.questionSeq || 0}` : '',
+    task.reviewSummary ? '1' : '',
     // rev changes on every agent round, which re-renders the mockup panel and
     // clears the lock left by the previous Send.
-    state.mockupReview ? `m${state.mockupReview.rev || 0}` : '',
-    state.summary ? '1' : '',
+    task.mockupReview ? `m${task.mockupReview.rev || 0}` : '',
+    task.summary ? '1' : '',
     // The Mockoon step changes status while the summary is the visible screen,
     // and the switch between the two screens is local — both must re-render.
-    mockoon ? mockoon.status : '', showSummary ? 'S' : ''].join('|');
+    mockoon ? mockoon.status : '', v.showSummary ? 'S' : ''].join('|');
 }
 
-function renderPanel(state) {
-  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP);
+function renderPanel(state, task) {
+  const v = viewOf(task.id);
+  const mockoon = task.steps.find(s => s.id === MOCKOON_STEP);
   // A fresh Mockoon run always pulls the user back onto its panel, whatever they
   // were looking at when they asked for it.
-  if (mockoon && mockoon.status === 'in_progress') showSummary = false;
-  const s = sig(state);
-  const step = activeStepOf(state);
+  if (mockoon && mockoon.status === 'in_progress') v.showSummary = false;
+  const s = sig(task);
+  const step = activeStepOf(task);
   if (s === lastSig) { updateDynamic(step); return; }
   lastSig = s;
-  renderActive(state, step);
+  renderActive(task, step);
+  wireCopyButtons();
   wireTextareas();
+  // The orchestrator has not moved this task since the answer went out, so the
+  // panel goes back under its lock instead of offering the button again.
+  if (v.locked && v.lockedSig === s) lockPanel(v.locked, false);
+  else { v.locked = null; v.lockedSig = null; }
 }
 
-function renderActive(state, step) {
+function renderActive(task, step) {
+  refreshGate = null;
   // Mockoon mocks are generated after the pipeline is over, so while step 7 is the
   // active one its panel outranks the summary — until the user asks to go back.
-  if (state.activeStep === MOCKOON_STEP && !showSummary) {
+  if (task.activeStep === MOCKOON_STEP && !viewOf(task.id).showSummary) {
     return step.status === 'failed' ? renderFailed(step) : renderMockoon(step);
   }
-  if (state.summary) return renderSummary(state);
+  if (task.summary) return renderSummary(task);
   if (step.status === 'failed') return renderFailed(step);
   // Any step may ask: the refinement Q&A in step 2, the required Chrome extension in step 5.
-  if (state.question) return renderQuestion(state.question, step);
-  if (state.activeStep === 1) return renderStep1(step);
-  if (state.activeStep === 2 && state.reviewSummary) return renderReview(state.reviewSummary);
-  if (state.activeStep === 3 && state.mockupReview) {
-    return renderMockupReview(state.mockupReview);
+  if (task.question) return renderQuestion(task.question, step);
+  if (task.activeStep === 1) return renderStep1(task);
+  if (task.activeStep === 2 && task.reviewSummary) return renderReview(task.reviewSummary);
+  if (task.activeStep === 3 && task.mockupReview) {
+    return renderMockupReview(task.mockupReview);
   }
   renderProgress(step);
 }
 
-function renderStep1(step) {
+function renderStep1(task) {
+  const step = task.steps[0];
   if (step.status !== 'in_progress') {
     $('#panel').innerHTML = '<p class="muted">Waiting for the pipeline…</p>';
     return;
   }
+  // The form is rebuilt from the last submitted (or copied) answer, so a task the
+  // user came back to arrives filled in rather than blank.
+  // An unsubmitted draft outranks the last submission for the text fields; the
+  // file lists always come from the server, which is what actually holds them.
+  const d = { ...(task.step1 || {}), ...(viewOf(task.id).draft || {}) };
+  const revisit = !!task.step1Submitted;
+  // Files already on disk cannot be put back into a file input, so they are listed
+  // separately and removed through the server.
+  const fileList = cat => {
+    const names = d[cat] || [];
+    return names.length ? `<ul class="files" id="files-${cat}">${names.map(n =>
+      `<li><span>${esc(n)}</span><button type="button" class="rm" data-cat="${esc(cat)}"
+        data-name="${esc(n)}" aria-label="Remove ${esc(n)}" title="Remove">×</button></li>`)
+      .join('')}</ul>` : '';
+  };
   $('#panel').innerHTML = `
     <h2>Requirements</h2>
     <label>Task description <span class="req">*</span></label>
-    <textarea id="task"></textarea>
+    <textarea id="task">${esc(d.taskDescription || '')}</textarea>
     <label>Business requirements <span class="req">*</span></label>
-    <textarea id="biz"></textarea>
+    <textarea id="biz">${esc(d.businessRequirements || '')}</textarea>
+    <label>Branch <span class="req">*</span></label>
+    <input type="text" id="branch" placeholder="feature/my-feature" autocomplete="off"
+      value="${esc(d.branch || '')}">
+    <p class="hint error" id="branchHint" hidden></p>
     <h3>Additional materials (optional)</h3>
     <p class="muted">Inspirations, screenshots of another app, diagrams, exported designs —
       anything that should guide the refinement questions and the mockup design.</p>
     <label>Files</label>
+    ${fileList('hints')}
     <input type="file" id="hints" multiple>
-    <div id="hintsNoteBox" hidden>
+    <div id="hintsNoteBox"${(d.hints || []).length ? '' : ' hidden'}>
       <label>What should we take from these files?</label>
       <textarea id="hintsNote"
-        placeholder="e.g. copy the card layout from screen 2, ignore the colors"></textarea>
+        placeholder="e.g. copy the card layout from screen 2, ignore the colors">${
+  esc(d.hintsNote || '')}</textarea>
     </div>
     <label>Mockups (optional)</label>
+    ${fileList('mockups')}
     <input type="file" id="mockups" multiple accept="image/*,.pdf">
     <div class="switch">
-      <input type="checkbox" id="genMockups">
+      <input type="checkbox" id="genMockups"${d.generateMockups ? ' checked' : ''}>
       <label for="genMockups">Generate mockups</label>
     </div>
     <p class="hint">Adds a Mockups step after planning: an agent designs the screens from the plan
       (and from the files above, if any), you refine them in a chat, and the approved design drives
       both the implementation and the visual E2E comparison.</p>
     <label>API contracts / specs (optional — files or pasted text)</label>
+    ${fileList('contracts')}
     <input type="file" id="contracts" multiple>
-    <textarea id="contractsText" placeholder="…or paste contracts here"></textarea>
+    <textarea id="contractsText" placeholder="…or paste contracts here">${
+  esc(d.contractsText || '')}</textarea>
     <h3>Authorization (optional)</h3>
     <p class="muted">Credentials for E2E tests only — stored in the session dir, outside git.</p>
+    ${task.authSaved ? '<p class="hint">Credentials are stored for this task — fill both fields'
+      + ' to replace them.</p>' : ''}
     <label>Login</label>
     <input type="text" id="authLogin" autocomplete="off">
     <label>Password</label>
     <div class="field-with-btn">
-      <input type="password" id="authPassword" autocomplete="new-password">
+      <input type="password" id="authPassword" autocomplete="new-password" data-no-copy="1">
       <button type="button" id="togglePassword" class="reveal" aria-pressed="false"
         aria-label="Show password" title="Show password">${EYE}</button>
     </div>
-    <button id="next" disabled>Next</button>`;
+    <button id="next" disabled>${revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>
+    <button id="createTask" class="secondary">Create new task</button>`;
   $('#togglePassword').addEventListener('click', () => {
     const input = $('#authPassword');
     const btn = $('#togglePassword');
@@ -403,9 +681,19 @@ function renderStep1(step) {
   // The note only makes sense once there is something to describe, so it stays
   // hidden until the first file is picked (and disappears again if all are removed).
   $('#hints').addEventListener('change', () => {
-    $('#hintsNoteBox').hidden = $('#hints').files.length === 0;
+    $('#hintsNoteBox').hidden = $('#hints').files.length === 0 && !(d.hints || []).length;
+    wireCopyButtons();
     wireTextareas();
   });
+  // The server owns the file lists, so a removal re-renders from the new state.
+  document.querySelectorAll('#panel .rm').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      await postJson('/api/upload/remove',
+        { taskId: activeTask, category: btn.dataset.cat, filename: btn.dataset.name });
+      lastSig = null;
+      tick();
+    }));
   const auth = () => {
     const login = $('#authLogin').value.trim();
     const password = $('#authPassword').value;
@@ -413,43 +701,113 @@ function renderStep1(step) {
   };
   const gate = () => {
     const a = auth();
+    const branch = $('#branch').value.trim();
+    // Two tasks cannot share a branch: step 4 would fail on `git worktree add`,
+    // and only then — after refinement, mockups and a plan. Say so here instead.
+    const taken = (lastState ? lastState.tasks : [])
+      .some(t => t.id !== task.id && t.branch && t.branch === branch);
+    const problem = !branch ? ''
+      : !branchOk(branch) ? 'Not a valid git branch name.'
+        : taken ? 'Another task is already using this branch.' : '';
+    $('#branchHint').textContent = problem;
+    $('#branchHint').hidden = !problem;
     // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
     $('#next').disabled = !($('#task').value.trim() && $('#biz').value.trim()
+      && branchOk(branch) && !taken
       && (a.complete || (!a.login && !a.password.trim())));
   };
-  ['#task', '#biz', '#authLogin', '#authPassword'].forEach(sel =>
+  ['#task', '#biz', '#branch', '#authLogin', '#authPassword'].forEach(sel =>
     $(sel).addEventListener('input', gate));
+  gate();   // a form that arrived filled in must enable Next without a keystroke
+  refreshGate = gate;
+  // Keep the draft current as the branch is typed, so the open tab's label can
+  // follow it without the bar re-rendering.
+  $('#branch').addEventListener('input', () => {
+    snapshotStep1();
+    syncTabLabel();
+  });
+  // Non-destructive and reversible with the tab's ×, so no confirmation.
+  $('#createTask').addEventListener('click', async () => {
+    $('#createTask').disabled = true;
+    snapshotStep1();
+    const { id } = await postJson('/api/tasks', { copyFrom: activeTask, values: {
+      taskDescription: $('#task').value, businessRequirements: $('#biz').value,
+      contractsText: $('#contractsText').value, hintsNote: $('#hintsNote').value,
+      generateMockups: $('#genMockups').checked } });
+    if (id) {
+      // A brand-new task sits at waiting; put it straight into its form.
+      await postJson('/api/state', { taskId: id, step: 1, status: 'in_progress', activeStep: 1 });
+      activeTask = id;
+    }
+    lastSig = null;
+    tick();
+  });
   $('#next').addEventListener('click', async () => {
     const ok = await askConfirm({
-      title: 'Submit requirements?',
-      text: 'Step 2 starts: the refinement agent reads this form and begins asking questions. '
-        + 'You cannot come back and edit it.',
-      confirmLabel: 'Submit and continue' });
+      title: revisit ? 'Resubmit the requirements?' : 'Submit requirements?',
+      text: revisit
+        ? 'Refinement re-runs on what you changed — and the mockups too, when they are enabled. '
+          + 'You can come back here again until implementation starts.'
+        : 'Step 2 starts: the refinement agent reads this form and begins asking questions. '
+          + 'You can come back and edit it until implementation starts.',
+      confirmLabel: revisit ? 'Resubmit and continue' : 'Submit and continue' });
     if (!ok) return;
     lockPanel('Uploading and submitting…');
     const upload = async (cat, input) => {
       const names = [];
       for (const f of input.files) {
         await postJson('/api/upload',
-          { category: cat, filename: f.name, dataBase64: await toB64(f) });
+          { taskId: activeTask, category: cat, filename: f.name, dataBase64: await toB64(f) });
         names.push(f.name);
       }
       return names;
     };
-    const mockups = await upload('mockups', $('#mockups'));
-    const contracts = await upload('contracts', $('#contracts'));
-    const hints = await upload('hints', $('#hints'));
+    // Files kept from the previous submission plus the ones just picked; a
+    // re-upload of the same name overwrites on disk, so the list is deduped.
+    const uploaded = {
+      mockups: await upload('mockups', $('#mockups')),
+      contracts: await upload('contracts', $('#contracts')),
+      hints: await upload('hints', $('#hints'))
+    };
+    const keep = cat => [...new Set([...(d[cat] || []), ...uploaded[cat]])];
     // Credentials go straight to the server (auth.json); the step1 answer
     // only carries a flag so they never reach the orchestrator's context.
     const a = auth();
-    if (a.complete) await postJson('/api/auth', { login: a.login, password: a.password });
+    if (a.complete) {
+      await postJson('/api/auth',
+        { taskId: activeTask, login: a.login, password: a.password });
+    }
     await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
       businessRequirements: $('#biz').value.trim(),
+      branch: $('#branch').value.trim(),
       contractsText: $('#contractsText').value.trim(),
       hintsNote: $('#hintsNote').value.trim(),
-      mockups, contracts, hints, authProvided: a.complete,
+      mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
+      authProvided: a.complete || task.authSaved,
       generateMockups: $('#genMockups').checked });
+    viewOf(activeTask).draft = null;
+  });
+}
+
+// Only on the three interactive gates — the step-2 question, the plan gate and the
+// mockup gate. Those are exactly the moments the orchestrator is blocked on
+// GET /api/answer, so the answer reaches the right gate. On a progress panel it
+// would sit in the queue and later be mistaken for the answer to a question, and
+// from step 4 on the point of no return has passed.
+const backButton = () => '<button id="backToStep1" class="secondary">Back to requirements</button>';
+
+function wireBackButton() {
+  const btn = $('#backToStep1');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const ok = await askConfirm({ title: 'Back to requirements?',
+      text: 'Refinement re-runs on what you change — and the mockups too, when they are enabled. '
+        + 'Everything you already answered stays.',
+      confirmLabel: 'Back to the form' });
+    if (!ok) return;
+    lockPanel('Going back to the requirements form…');
+    sendAnswer({ kind: 'back' });
   });
 }
 
@@ -472,7 +830,8 @@ function renderQuestion(q, step) {
     <div class="options">${opts}</div>
     <label>…or type your own answer</label>
     <textarea id="freeAnswer"></textarea>
-    <button id="send">Send answer</button>`;
+    <button id="send">Send answer</button>
+    ${step.id === 2 ? backButton() : ''}`;
   document.querySelectorAll('[data-opt]').forEach(btn =>
     btn.addEventListener('click', () =>
       submit(q.options[+btn.dataset.opt], () => btn.classList.add('selected'))));
@@ -480,6 +839,7 @@ function renderQuestion(q, step) {
     const v = $('#freeAnswer').value.trim();
     if (v) submit(v);
   });
+  wireBackButton();
 }
 
 function renderReview(review) {
@@ -489,7 +849,8 @@ function renderReview(review) {
     <button id="approve">Approve</button>
     <label>…or request changes</label>
     <textarea id="feedback"></textarea>
-    <button id="sendFeedback" class="secondary">Send feedback</button>`;
+    <button id="sendFeedback" class="secondary">Send feedback</button>
+    ${backButton()}`;
   $('#approve').addEventListener('click', async () => {
     const ok = await askConfirm({
       title: 'Approve the plan?',
@@ -505,23 +866,25 @@ function renderReview(review) {
     lockPanel('Feedback sent — the agent is revising the plan…');
     sendAnswer({ kind: 'decision', decision: 'feedback', text: t });
   });
+  wireBackButton();
 }
 
 function mockupUrl(review, screen) {
-  return `/generated-mockups/${encodeURIComponent(screen.file)}?rev=${review.rev || 0}`;
+  return `/generated-mockups/${encodeURIComponent(activeTask)}/${
+    encodeURIComponent(screen.file)}?rev=${review.rev || 0}`;
 }
 
 // The panel is ~930 px wide, so a 1280 px mockup is scaled down rather than
 // letterboxed — otherwise the preview would misreport the layout.
 function drawPreview(review) {
   const box = $('#preview');
-  const screen = (review.screens || [])[mockupScreen];
+  const screen = (review.screens || [])[viewOf(activeTask).mockupScreen];
   if (!box) return;
   if (!screen) {
     box.innerHTML = '<p class="muted">No screen to preview yet.</p>';
     return;
   }
-  const [w, h] = MOCKUP_VIEWPORTS[mockupViewport];
+  const [w, h] = MOCKUP_VIEWPORTS[viewOf(activeTask).mockupViewport];
   const scale = Math.min(1, (box.clientWidth || w) / w);
   const url = mockupUrl(review, screen);
   box.innerHTML = `
@@ -534,13 +897,14 @@ function drawPreview(review) {
 
 function renderMockupReview(review) {
   const screens = review.screens || [];
-  if (mockupScreen >= screens.length) mockupScreen = 0;
+  const v = viewOf(activeTask);
+  if (v.mockupScreen >= screens.length) v.mockupScreen = 0;
   const tabs = screens.map((s, i) =>
-    `<button data-screen="${i}"${i === mockupScreen ? ' class="selected"' : ''}>${
+    `<button data-screen="${i}"${i === v.mockupScreen ? ' class="selected"' : ''}>${
       esc(s.title || s.id)}</button>`).join('');
-  const viewports = Object.keys(MOCKUP_VIEWPORTS).map(v =>
-    `<button data-viewport="${v}"${v === mockupViewport ? ' class="selected"' : ''}>${v}</button>`)
-    .join('');
+  const viewports = Object.keys(MOCKUP_VIEWPORTS).map(vp =>
+    `<button data-viewport="${vp}"${vp === v.mockupViewport ? ' class="selected"' : ''}>${
+      vp}</button>`).join('');
   const chat = (review.chat || []).map(m =>
     `<div class="msg ${m.role === 'user' ? 'user' : 'agent'}">
       <span class="who">${m.role === 'user' ? 'You' : 'Agent'}</span>${esc(m.text)}</div>`).join('');
@@ -556,7 +920,8 @@ function renderMockupReview(review) {
     <label>Refine the mockup — describe what to change</label>
     <textarea id="mockupFeedback"></textarea>
     <button id="sendMockup" class="secondary">Send</button>
-    <button id="approveMockup">Approve mockups</button>`;
+    <button id="approveMockup">Approve mockups</button>
+    ${backButton()}`;
   const select = (attr, apply) => document.querySelectorAll(`[data-${attr}]`).forEach(btn =>
     btn.addEventListener('click', () => {
       document.querySelectorAll(`[data-${attr}]`)
@@ -564,8 +929,8 @@ function renderMockupReview(review) {
       apply(btn.dataset[attr]);
       drawPreview(review);
     }));
-  select('screen', v => { mockupScreen = +v; });
-  select('viewport', v => { mockupViewport = v; });
+  select('screen', val => { v.mockupScreen = +val; });
+  select('viewport', val => { v.mockupViewport = val; });
   $('#sendMockup').addEventListener('click', () => {
     const t = $('#mockupFeedback').value.trim();
     if (!t) return;
@@ -582,6 +947,7 @@ function renderMockupReview(review) {
     lockPanel('Approved — the agent is updating spec, plan and checklist…');
     sendAnswer({ kind: 'mockup', decision: 'approve' });
   });
+  wireBackButton();
   drawPreview(review);
 }
 
@@ -594,18 +960,27 @@ function renderProgress(step) {
   updateDynamic(step);
 }
 
+// Runs on every tick of a view-only step, which is most of a long run — so each
+// piece is written only when its own value actually moved.
 function updateDynamic(step) {
   const fill = $('#barFill');
   if (fill) {
     const indeterminate = step.progress == null && step.status === 'in_progress';
+    const width = indeterminate ? '100%' : `${step.progress || 0}%`;
     fill.classList.toggle('indeterminate', indeterminate);
-    fill.style.width = indeterminate ? '100%' : `${step.progress || 0}%`;
+    if (fill.style.width !== width) fill.style.width = width;
   }
   const op = $('#op');
-  if (op) op.textContent = (step.progress != null ? `${step.progress}% — ` : '')
+  const opText = (step.progress != null ? `${step.progress}% — ` : '')
     + (step.currentOperation || '');
+  if (op && op.textContent !== opText) op.textContent = opText;
   const log = $('#log');
-  if (log) log.innerHTML = step.log.slice(-15).reverse().map(e =>
+  if (!log) return;
+  const entries = step.log.slice(-15);
+  const sigNow = `${step.log.length}|${entries.length && entries[entries.length - 1].time}`;
+  if (log.dataset.sig === sigNow) return;
+  log.dataset.sig = sigNow;
+  log.innerHTML = entries.reverse().map(e =>
     `<li><time>${esc(e.time.slice(11, 19))}</time>${esc(e.text)}</li>`).join('');
 }
 
@@ -638,7 +1013,7 @@ function renderFailed(step) {
 }
 
 function backToSummary() {
-  showSummary = true;
+  viewOf(activeTask).showSummary = true;
   tick();
 }
 
@@ -672,7 +1047,7 @@ function renderMockoon(step) {
   const copy = $('#copyMockoon');
   // The environment is fetched straight from the session dir, so nothing renders
   // it into the orchestrator's context on the way here.
-  fetch('/api/mockoon')
+  fetch(`/api/mockoon?taskId=${encodeURIComponent(activeTask)}`)
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
     .then(text => {
       $('#mockoonJson').textContent = text;
@@ -688,9 +1063,9 @@ function renderMockoon(step) {
     });
 }
 
-function renderSummary(state) {
-  const sum = state.summary;
-  const mockoon = state.steps.find(s => s.id === MOCKOON_STEP) || {};
+function renderSummary(task) {
+  const sum = task.summary;
+  const mockoon = task.steps.find(s => s.id === MOCKOON_STEP) || {};
   const hasMocks = mockoon.status === 'completed';
   const list = items => `<ul>${(items || []).map(i => `<li>${esc(i)}</li>`).join('')}</ul>`;
   const block = text => `<pre class="summary-text">${esc(text || '—')}</pre>`;
@@ -717,7 +1092,12 @@ function renderSummary(state) {
     </section>
   </div>`;
   // Already generated: the JSON is one local switch away, no agent needed.
-  if (hasMocks) $('#showMockoon').addEventListener('click', () => { showSummary = false; tick(); });
+  if (hasMocks) {
+    $('#showMockoon').addEventListener('click', () => {
+      viewOf(activeTask).showSummary = false;
+      tick();
+    });
+  }
   $('#generateMockoon').addEventListener('click', () => {
     lockPanel('Requested — the agent is building the Mockoon environment…');
     sendAnswer({ kind: 'summary', decision: 'mockoon' });

@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
   base = `http://127.0.0.1:${app.server.address().port}`;
   await fetch(`${base}/api/state`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ step: 1, status: 'in_progress', activeStep: 1 })
+    body: JSON.stringify({ taskId: 't1', step: 1, status: 'in_progress', activeStep: 1 })
   });
   await page.goto(base);
   await page.waitForSelector('#task');
@@ -28,6 +28,7 @@ test.afterEach(async () => {
 async function fillRequired(page) {
   await page.fill('#task', 'Opis zadania');
   await page.fill('#biz', 'Wymagania biznesowe');
+  await page.fill('#branch', 'feature/test');
 }
 
 // Submit w krokach 1-3 przechodzi przez własny dialog potwierdzenia (stepper-confirm.spec.cjs).
@@ -87,7 +88,7 @@ test('submit z credentials zapisuje auth.json, a odpowiedź step1 nie zawiera ha
   expect(got.answer.kind).toBe('step1');
   expect(got.answer.authProvided).toBe(true);
   expect(JSON.stringify(got.answer)).not.toContain('S3kret!');
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'auth.json'), 'utf8'));
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'tasks', 't1', 'auth.json'), 'utf8'));
   expect(saved).toEqual({ login: 'qa@example.com', password: 'S3kret!' });
 });
 
@@ -97,5 +98,5 @@ test('submit bez credentials wysyła authProvided:false i nie tworzy auth.json',
   const got = await (await fetch(`${base}/api/answer?wait=10`)).json();
   expect(got.answer.kind).toBe('step1');
   expect(got.answer.authProvided).toBe(false);
-  expect(fs.existsSync(path.join(dir, 'auth.json'))).toBe(false);
+  expect(fs.existsSync(path.join(dir, 'tasks', 't1', 'auth.json'))).toBe(false);
 });

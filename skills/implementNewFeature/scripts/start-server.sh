@@ -12,8 +12,14 @@ done
 [ -n "$SESSION_DIR" ] || { echo "usage: start-server.sh --session-dir <dir> [--open]" >&2; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$SESSION_DIR"
-rm -f "$SESSION_DIR/server.json"
-nohup node "$SCRIPT_DIR/server.cjs" --session-dir "$SESSION_DIR" \
+# Reuse the previous port when restarting, so a browser tab the user still has
+# open keeps working; the server falls back to any free port if it is taken.
+PREV_PORT=0
+if [ -f "$SESSION_DIR/server.json" ]; then
+  PREV_PORT=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).port||0)}catch(e){console.log(0)}" "$SESSION_DIR/server.json")
+  rm -f "$SESSION_DIR/server.json"
+fi
+nohup node "$SCRIPT_DIR/server.cjs" --session-dir "$SESSION_DIR" --port "$PREV_PORT" \
   > "$SESSION_DIR/server.log" 2>&1 &
 for _ in $(seq 1 75); do
   [ -f "$SESSION_DIR/server.json" ] && break

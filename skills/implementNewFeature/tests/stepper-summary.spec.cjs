@@ -9,7 +9,8 @@ const { createApp } = require('../scripts/server.cjs');
 let app, base, dir;
 
 const postState = body => fetch(`${base}/api/state`, {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ taskId: 't1', ...body })
 });
 
 test.beforeEach(async () => {
@@ -45,7 +46,7 @@ test('podsumowanie pokazuje zamockowane endpointy między testami a porównaniem
     // sekcja musi stać przy wynikach testów: to ona mówi, czego nie sprawdzono na prawdziwym API
     expect(await page.locator('.summary section h3').allTextContents()).toEqual([
       'Final status', 'Changes', 'Implemented features', 'Test results', 'API mocks',
-      'Mockup comparison', 'UX review', 'Code review'
+      'Mockup comparison', 'UX review', 'Code review', 'Mockoon mocks'
     ]);
     await expect(page.locator('.summary section', { has: page.getByRole('heading', { name: 'API mocks' }) }))
       .toContainText('GET /api/users, POST /api/users — backend nie odpowiadał');

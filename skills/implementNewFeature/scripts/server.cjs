@@ -19,16 +19,50 @@ const MOCKUP_TYPES = {
   '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.woff2': 'font/woff2'
 };
 const MAX_BODY = 25 * 1024 * 1024;
-const MAX_LOG = 50;
+// The panel renders the last 15 entries and the whole state document is re-sent to
+// the browser once a second, per task — so the cap sits just above what is visible.
+const MAX_LOG = 20;
+const UPLOAD_CATEGORIES = ['mockups', 'contracts', 'hints'];
 
-function initialState() {
+// One task is one feature on one branch with its own seven-step pipeline, its own
+// artifacts under tasks/<id>/ and its own sub-agents. A run holds one or more.
+function taskState(id) {
   return {
+    id, branch: '', root: null,
     steps: STEP_NAMES.map((name, i) => ({
       id: i + 1, name, status: 'waiting', progress: null,
       enabled: !OPTIONAL_STEPS.includes(i + 1),
       currentOperation: '', report: null, log: []
     })),
-    activeStep: 1, question: null, questionSeq: 0, reviewSummary: null, mockupReview: null, summary: null
+    activeStep: 1, question: null, questionSeq: 0, mockupSeq: 0,
+    reviewSummary: null, mockupReview: null, summary: null,
+    step1: null, step1Submitted: false, authSaved: false
+  };
+}
+
+function initialState() {
+  return { tasks: [taskState('t1')], nextTaskId: 2 };
+}
+
+function safeName(raw) {
+  const name = path.basename(String(raw || '').replace(/\\/g, '/'));
+  return !name || name === '.' || name === '..' ? null : name;
+}
+
+const MAX_FIELD = 200 * 1024;
+const text = v => String(v == null ? '' : v).slice(0, MAX_FIELD);
+const names = v => (Array.isArray(v) ? v : []).map(safeName).filter(Boolean).slice(0, 200);
+
+// The step-1 form, and nothing else a client happens to send.
+function formOf(body) {
+  return {
+    taskDescription: text(body.taskDescription),
+    businessRequirements: text(body.businessRequirements),
+    branch: text(body.branch),
+    contractsText: text(body.contractsText),
+    hintsNote: text(body.hintsNote),
+    mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
+    authProvided: !!body.authProvided, generateMockups: !!body.generateMockups
   };
 }
 
@@ -82,8 +116,30 @@ function createApp(sessionDir, opts = {}) {
   let state;
   try {
     state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    // A state file from before tasks existed cannot be migrated meaningfully —
+    // its single run has no branch and no task dir. Start clean instead.
+    if (!Array.isArray(state.tasks) || !state.tasks.length) state = initialState();
   } catch (_e) {
     state = initialState();
+  }
+
+  const findTask = id => state.tasks.find(t => t.id === id);
+  const taskDir = id => path.join(sessionDir, 'tasks', id);
+
+  function copyCategory(fromId, toId, category) {
+    const from = path.join(taskDir(fromId), category);
+    let files;
+    try {
+      files = fs.readdirSync(from, { withFileTypes: true })
+        .filter(e => e.isFile()).map(e => e.name);
+    } catch (_e) {
+      return [];
+    }
+    if (!files.length) return [];
+    const to = path.join(taskDir(toId), category);
+    fs.mkdirSync(to, { recursive: true });
+    for (const n of files) fs.copyFileSync(path.join(from, n), path.join(to, n));
+    return files;
   }
 
   function persist() {
@@ -92,8 +148,10 @@ function createApp(sessionDir, opts = {}) {
   }
 
   function applyUpdate(body) {
+    const task = findTask(body.taskId);
+    if (!task) throw new Error(`unknown task ${body.taskId}`);
     if (body.step !== undefined) {
-      const step = state.steps.find(s => s.id === body.step);
+      const step = task.steps.find(s => s.id === body.step);
       if (!step) throw new Error(`unknown step ${body.step}`);
       if (body.status !== undefined) {
         if (!STATUSES.includes(body.status)) throw new Error(`bad status ${body.status}`);
@@ -108,33 +166,92 @@ function createApp(sessionDir, opts = {}) {
         if (step.log.length > MAX_LOG) step.log.splice(0, step.log.length - MAX_LOG);
       }
     }
-    if (body.activeStep !== undefined) state.activeStep = body.activeStep;
+    if (body.activeStep !== undefined) task.activeStep = body.activeStep;
+    if (body.branch !== undefined) task.branch = String(body.branch);
+    if (body.root !== undefined) task.root = body.root == null ? null : String(body.root);
     if (body.question !== undefined) {
-      state.question = body.question;
+      task.question = body.question;
       // Monotonic, server-owned: the UI keys its re-render on this counter, so a
       // sub-agent that reuses a question id still gets a fresh, unlocked panel.
-      state.questionSeq = (state.questionSeq || 0) + 1;
+      task.questionSeq = (task.questionSeq || 0) + 1;
     }
-    if (body.reviewSummary !== undefined) state.reviewSummary = body.reviewSummary;
-    if (body.mockupReview !== undefined) state.mockupReview = body.mockupReview;
-    if (body.summary !== undefined) state.summary = body.summary;
+    if (body.reviewSummary !== undefined) task.reviewSummary = body.reviewSummary;
+    if (body.mockupReview !== undefined) {
+      // The chat and the revision counter live here, not in the orchestrator: its
+      // context must not grow with a mockup conversation, and a repeated `rev`
+      // would leave the panel locked on the previous round. A caller may still
+      // pass either explicitly — the tests and a resumed run do.
+      const chat = body.mockupReview && body.mockupReview.chat !== undefined
+        ? body.mockupReview.chat
+        : (task.mockupReview && task.mockupReview.chat) || [];
+      task.mockupReview = body.mockupReview && {
+        ...body.mockupReview,
+        rev: body.mockupReview.rev !== undefined ? body.mockupReview.rev
+          : (task.mockupSeq = (task.mockupSeq || 0) + 1),
+        chat
+      };
+    }
+    if (body.mockupChat) {
+      if (!task.mockupReview) task.mockupReview = { rev: 0, text: '', screens: [], chat: [] };
+      if (!Array.isArray(task.mockupReview.chat)) task.mockupReview.chat = [];
+      task.mockupReview.chat.push({
+        role: body.mockupChat.role === 'user' ? 'user' : 'agent',
+        text: text(body.mockupChat.text)
+      });
+    }
+    if (body.summary !== undefined) task.summary = body.summary;
     persist();
   }
 
-  const answers = [];
-  const waiters = [];
+  const answers = new Map();   // taskId -> queued answers
+  const waiters = [];          // {taskId|null, resolve, timer}
+
+  const queueFor = id => {
+    if (!answers.has(id)) answers.set(id, []);
+    return answers.get(id);
+  };
 
   function pushAnswer(a) {
-    const w = waiters.shift();
-    if (w) { clearTimeout(w.timer); w.resolve(a); return; }
-    answers.push(a);
+    // A waiter with no taskId is the orchestrator's event loop: it takes anything.
+    const i = waiters.findIndex(w => !w.taskId || w.taskId === a.taskId);
+    if (i !== -1) {
+      const [w] = waiters.splice(i, 1);
+      clearTimeout(w.timer);
+      w.resolve(a);
+      return;
+    }
+    queueFor(a.taskId).push(a);
   }
 
-  function popAnswer(waitMs) {
-    if (answers.length) return Promise.resolve(answers.shift());
+  // A removed task must not leave a poll parked on it until its timeout expires.
+  function releaseWaiters(taskId) {
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      if (waiters[i].taskId !== taskId) continue;
+      const [w] = waiters.splice(i, 1);
+      clearTimeout(w.timer);
+      w.resolve(null);
+    }
+  }
+
+  function takeQueued(taskId) {
+    if (taskId) {
+      const q = answers.get(taskId);
+      return q && q.length ? q.shift() : null;
+    }
+    // Unfiltered: task order, so the oldest task's backlog drains first.
+    for (const t of state.tasks) {
+      const q = answers.get(t.id);
+      if (q && q.length) return q.shift();
+    }
+    return null;
+  }
+
+  function popAnswer(taskId, waitMs) {
+    const queued = takeQueued(taskId);
+    if (queued) return Promise.resolve(queued);
     if (!waitMs) return Promise.resolve(null);
     return new Promise(resolve => {
-      const waiter = { resolve, timer: null };
+      const waiter = { taskId: taskId || null, resolve, timer: null };
       waiter.timer = setTimeout(() => {
         const i = waiters.indexOf(waiter);
         if (i !== -1) waiters.splice(i, 1);
@@ -161,48 +278,130 @@ function createApp(sessionDir, opts = {}) {
       }
       if (req.method === 'POST' && url.pathname === '/api/answer') {
         const body = JSON.parse(await readBody(req) || '{}');
-        pushAnswer(body);
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        if (body.kind === 'step1') {
+          // The form is re-rendered from this on a revisit. Only the form's own
+          // fields are kept: the whole state document is persisted on every write
+          // and re-sent to the browser once a second, so anything else a client
+          // sends would be paid for on every tick. Credentials never pass through
+          // here — they go to /api/auth and only a flag comes back in the answer.
+          task.step1 = formOf(body);
+          task.step1Submitted = true;
+          task.branch = task.step1.branch;
+          persist();
+        }
+        pushAnswer({ ...body, taskId: task.id });
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'GET' && url.pathname === '/api/answer') {
+        const taskId = url.searchParams.get('taskId') || null;
+        if (taskId && !findTask(taskId)) return sendJson(res, 400, { error: 'unknown task' });
         // 300 s cap: long polls resolve instantly when an answer arrives, so a
         // high cap only reduces the number of empty polls while the user thinks.
         const waitS = Math.min(parseInt(url.searchParams.get('wait') || '0', 10) || 0, 300);
-        const answer = await popAnswer(waitS * 1000);
+        const answer = await popAnswer(taskId, waitS * 1000);
         return sendJson(res, 200, { answer });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/tasks') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const src = body.copyFrom ? findTask(body.copyFrom) : null;
+        if (body.copyFrom && !src) return sendJson(res, 400, { error: 'unknown task' });
+        const task = taskState(`t${state.nextTaskId++}`);
+        const v = body.values || {};
+        const copied = { mockups: [], contracts: [], hints: [] };
+        if (src) {
+          for (const cat of UPLOAD_CATEGORIES) copied[cat] = copyCategory(src.id, task.id, cat);
+          const srcAuth = path.join(taskDir(src.id), 'auth.json');
+          if (fs.existsSync(srcAuth)) {
+            fs.mkdirSync(taskDir(task.id), { recursive: true });
+            fs.copyFileSync(srcAuth, path.join(taskDir(task.id), 'auth.json'));
+            task.authSaved = true;
+          }
+        }
+        // Everything the form holds except the branch: two tasks cannot share one,
+        // and an empty required field forces a deliberate name.
+        task.step1 = formOf({ ...v, ...copied, branch: '', authProvided: task.authSaved });
+        state.tasks.push(task);
+        persist();
+        return sendJson(res, 200, { id: task.id });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/tasks/remove') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        if (state.tasks.length < 2) return sendJson(res, 400, { error: 'last task' });
+        // Only a task whose pipeline never started: closing a running one would
+        // orphan its agents and its branch. Step 1 sitting in_progress is just an
+        // unsubmitted form, so the test is the submission, not that step's status.
+        if (task.step1Submitted || !task.steps.slice(1).every(s => s.status === 'waiting')) {
+          return sendJson(res, 400, { error: 'task already started' });
+        }
+        state.tasks = state.tasks.filter(t => t.id !== task.id);
+        answers.delete(task.id);
+        releaseWaiters(task.id);
+        try { fs.rmSync(taskDir(task.id), { recursive: true, force: true }); } catch {}
+        persist();
+        return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/api/upload') {
         const body = JSON.parse(await readBody(req) || '{}');
-        if (!['mockups', 'contracts', 'hints'].includes(body.category)) {
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        if (!UPLOAD_CATEGORIES.includes(body.category)) {
           return sendJson(res, 400, { error: 'bad category' });
         }
-        const name = path.basename(String(body.filename || '').replace(/\\/g, '/'));
-        if (!name || name === '.' || name === '..') {
-          return sendJson(res, 400, { error: 'bad filename' });
-        }
-        const destDir = path.join(sessionDir, body.category);
+        const name = safeName(body.filename);
+        if (!name) return sendJson(res, 400, { error: 'bad filename' });
+        const destDir = path.join(taskDir(task.id), body.category);
         fs.mkdirSync(destDir, { recursive: true });
         const dest = path.join(destDir, name);
         fs.writeFileSync(dest, Buffer.from(String(body.dataBase64 || ''), 'base64'));
         return sendJson(res, 200, { ok: true, path: dest });
       }
+      if (req.method === 'POST' && url.pathname === '/api/upload/remove') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        if (!UPLOAD_CATEGORIES.includes(body.category)) {
+          return sendJson(res, 400, { error: 'bad category' });
+        }
+        const name = safeName(body.filename);
+        if (!name) return sendJson(res, 400, { error: 'bad filename' });
+        try {
+          fs.rmSync(path.join(taskDir(task.id), body.category, name), { force: true });
+        } catch {}
+        // The form lists files from step1, so the record must follow the disk.
+        const listed = task.step1 && task.step1[body.category];
+        if (Array.isArray(listed)) {
+          task.step1[body.category] = listed.filter(n => n !== name);
+          persist();
+        }
+        return sendJson(res, 200, { ok: true });
+      }
       if (req.method === 'POST' && url.pathname === '/api/auth') {
         const body = JSON.parse(await readBody(req) || '{}');
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
         const login = String(body.login || '').trim();
         const password = String(body.password || '');
         if (!login || !password.trim()) {
           return sendJson(res, 400, { error: 'login and password are required' });
         }
-        fs.mkdirSync(sessionDir, { recursive: true });
+        fs.mkdirSync(taskDir(task.id), { recursive: true });
         // Write-only secret: no GET counterpart, so credentials never travel
         // back over HTTP; agents read the file straight from disk.
-        fs.writeFileSync(path.join(sessionDir, 'auth.json'),
+        fs.writeFileSync(path.join(taskDir(task.id), 'auth.json'),
           JSON.stringify({ login, password }), { mode: 0o600 });
+        task.authSaved = true;
+        persist();
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/api/shutdown') {
         // Credentials must not outlive the pipeline: best-effort wipe on shutdown.
-        try { fs.rmSync(path.join(sessionDir, 'auth.json'), { force: true }); } catch {}
+        for (const t of state.tasks) {
+          try { fs.rmSync(path.join(taskDir(t.id), 'auth.json'), { force: true }); } catch {}
+        }
         // Flush the response first, then close; keep-alive sockets would
         // otherwise hold the server open, so force-close them.
         res.on('finish', () => setImmediate(() => {
@@ -212,12 +411,14 @@ function createApp(sessionDir, opts = {}) {
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'GET' && url.pathname === '/api/mockoon') {
-        // Read-only window onto <SESSION>/mockoon.json, served verbatim: the step-7
+        // Read-only window onto the task's mockoon.json, served verbatim: the step-7
         // agent writes the environment to disk and the browser copies it from here,
         // so the JSON never passes through the orchestrator's context.
+        const task = findTask(url.searchParams.get('taskId'));
+        if (!task) return sendJson(res, 404, { error: 'not found' });
         let data;
         try {
-          data = fs.readFileSync(path.join(sessionDir, MOCKOON_FILE));
+          data = fs.readFileSync(path.join(taskDir(task.id), MOCKOON_FILE));
         } catch (_e) {
           return sendJson(res, 404, { error: 'not found' });
         }
@@ -228,21 +429,27 @@ function createApp(sessionDir, opts = {}) {
         return res.end(data);
       }
       if (req.method === 'GET' && url.pathname.startsWith(`/${MOCKUP_DIR}/`)) {
-        // Read-only window into <SESSION>/generated-mockups for the review iframe.
-        // Only a bare filename with a known extension is served, so the route can
-        // never walk out of the session dir or hand back auth.json.
-        let name;
+        // Read-only window into one task's generated-mockups for the review iframe.
+        // Only <taskId>/<bare filename with a known extension> is served, so the
+        // route can never walk out of the task dir or hand back auth.json.
+        let parts;
         try {
-          name = path.basename(
-            decodeURIComponent(url.pathname.slice(MOCKUP_DIR.length + 2)).replace(/\\/g, '/'));
+          parts = decodeURIComponent(url.pathname.slice(MOCKUP_DIR.length + 2))
+            .replace(/\\/g, '/').split('/');
         } catch (_e) {
           return sendJson(res, 400, { error: 'bad path' });
         }
+        if (parts.length !== 2 || !findTask(parts[0])) {
+          return sendJson(res, 404, { error: 'not found' });
+        }
+        const name = parts[1];
         const type = MOCKUP_TYPES[path.extname(name).toLowerCase()];
-        if (!type || name.startsWith('.')) return sendJson(res, 404, { error: 'not found' });
+        if (!type || name.startsWith('.') || name !== path.basename(name)) {
+          return sendJson(res, 404, { error: 'not found' });
+        }
         let data;
         try {
-          data = fs.readFileSync(path.join(sessionDir, MOCKUP_DIR, name));
+          data = fs.readFileSync(path.join(taskDir(parts[0]), MOCKUP_DIR, name));
         } catch (_e) {
           return sendJson(res, 404, { error: 'not found' });
         }
@@ -277,14 +484,21 @@ function main() {
   }
   const app = createApp(path.resolve(sessionDir), { onShutdown: () => process.exit(0) });
   const port = parseInt(get('--port') || '0', 10) || 0;
-  app.server.listen(port, '127.0.0.1', () => {
+  const announce = () => {
     const actual = app.server.address().port;
     fs.mkdirSync(path.resolve(sessionDir), { recursive: true });
     fs.writeFileSync(path.join(path.resolve(sessionDir), 'server.json'),
       JSON.stringify({ port: actual, pid: process.pid }));
     console.log(JSON.stringify({ port: actual }));
+  };
+  // A restart asks for the port it had, so the browser tab the user already has
+  // open keeps working. If something else took it meanwhile, any port will do.
+  app.server.on('error', e => {
+    if (e.code !== 'EADDRINUSE' || !port) throw e;
+    app.server.listen(0, '127.0.0.1', announce);
   });
+  app.server.listen(port, '127.0.0.1', announce);
 }
 
-module.exports = { createApp, initialState };
+module.exports = { createApp, initialState, taskState };
 if (require.main === module) main();

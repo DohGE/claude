@@ -21,12 +21,13 @@ test.beforeEach(async ({ page }) => {
   base = `http://127.0.0.1:${app.server.address().port}`;
   await fetch(`${base}/api/state`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ step: 1, status: 'in_progress', activeStep: 1 })
+    body: JSON.stringify({ taskId: 't1', step: 1, status: 'in_progress', activeStep: 1 })
   });
   await page.goto(base);
   await page.waitForSelector('#hints');
   await page.fill('#task', 'Opis zadania');
   await page.fill('#biz', 'Wymagania biznesowe');
+  await page.fill('#branch', 'feature/test');
 });
 
 test.afterEach(async () => {
@@ -60,11 +61,11 @@ test('pliki i opis trafiają do odpowiedzi kroku 1 oraz na dysk', async ({ page 
     hints: ['ekran-a.png', 'ekran-b.png'],
     hintsNote: 'Skopiuj układ kart z ekranu A, kolory zignoruj'
   });
-  expect(fs.readdirSync(path.join(dir, 'hints')).sort()).toEqual(['ekran-a.png', 'ekran-b.png']);
+  expect(fs.readdirSync(path.join(dir, 'tasks', 't1', 'hints')).sort()).toEqual(['ekran-a.png', 'ekran-b.png']);
 });
 
 test('sekcja jest opcjonalna — bez plików odpowiedź niesie puste wartości', async ({ page }) => {
   await submit(page);
   expect(await takeAnswer()).toMatchObject({ kind: 'step1', hints: [], hintsNote: '' });
-  expect(fs.existsSync(path.join(dir, 'hints'))).toBe(false);
+  expect(fs.existsSync(path.join(dir, 'tasks', 't1', 'hints'))).toBe(false);
 });
