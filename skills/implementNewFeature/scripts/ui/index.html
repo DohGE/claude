@@ -237,7 +237,12 @@ let activeTask = null;
 // so which of the two screens is visible is the user's choice, not a pipeline state.
 const view = {};
 const viewOf = id => (view[id] || (view[id] = {
-  showSummary: false, mockupScreen: 0, mockupViewport: 'Desktop'
+  showSummary: false, mockupScreen: 0, mockupViewport: 'Desktop',
+  // A sent answer locks the panel until the orchestrator moves the state. The lock
+  // is remembered per task, because switching tabs re-renders the panel and would
+  // otherwise hand back a live button — and a second click would queue a duplicate
+  // answer that a later gate then mistakes for its own.
+  locked: null, lockedSig: null
 }));
 
 // Refuses what `git check-ref-format` refuses, without shelling out to git.
@@ -276,10 +281,13 @@ function askConfirm({ title, text, confirmLabel }) {
   $('#confirmText').textContent = text;
   $('#confirmOk').textContent = confirmLabel || 'Confirm';
   dlg.returnValue = '';
+  // The panel behind the dialog may re-render while it is open (a new question, a
+  // failure). Confirming then would answer something that is no longer on screen.
+  const openedAt = lastSig;
   return new Promise(resolve => {
     const onClose = () => {
       dlg.removeEventListener('close', onClose);
-      resolve(dlg.returnValue === 'ok');
+      resolve(dlg.returnValue === 'ok' && lastSig === openedAt);
     };
     dlg.addEventListener('close', onClose);
     dlg.showModal();
@@ -291,7 +299,12 @@ $('#confirmCancel').addEventListener('click', () => $('#confirmDialog').close('c
 
 // Instant click feedback: disable every control and show a spinner notice.
 // The panel stays locked until the orchestrator changes the state (sig changes).
-function lockPanel(message) {
+function lockPanel(message, remember = true) {
+  if (remember) {
+    const v = viewOf(activeTask);
+    v.locked = message;
+    v.lockedSig = lastSig;
+  }
   document.querySelectorAll('#panel button, #panel textarea, #panel input')
     .forEach(el => { el.disabled = true; });
   const n = document.createElement('div');
@@ -380,9 +393,18 @@ function renderTabs(state) {
   if (state.tasks.length < 2) {
     box.hidden = true;
     box.innerHTML = '';
+    box.dataset.sig = '';
     return;
   }
+  // Same reason as the stepper: only redraw when a tab actually changed, or the
+  // rebuild would steal focus from a tab the user is on every single second.
+  const sigNow = state.tasks.map((t, i) => [t.id, tabLabel(t, i), activeStepOf(t).status,
+    pending(t) ? '!' : '', t.step1Submitted ? 'S' : '',
+    t.steps.slice(1).every(s => s.status === 'waiting') ? 'w' : '',
+    t.id === activeTask ? '*' : ''].join(':')).join(',');
   box.hidden = false;
+  if (box.dataset.sig === sigNow) return;
+  box.dataset.sig = sigNow;
   box.innerHTML = state.tasks.map((t, i) => {
     const open = t.id === activeTask;
     // Step 1 in_progress is just an unsubmitted form, so the pipeline has started
@@ -430,7 +452,14 @@ function tabLabel(task, i) {
 // Step ids are fixed, but disabled steps (Mockups when the toggle stayed off)
 // are hidden and the visible ones are numbered 1..n so the badges stay contiguous.
 function renderStepper(task) {
-  $('#stepper').innerHTML = task.steps.filter(s => s.enabled !== false).map((s, i) => `
+  // Rebuilding innerHTML every second would drop focus and restart the pulse
+  // animation, so the tiles are redrawn only when something about them changed.
+  const sigNow = task.id + '|' + task.steps
+    .filter(s => s.enabled !== false).map(s => `${s.id}:${s.status}`).join(',');
+  const box = $('#stepper');
+  if (box.dataset.sig === sigNow) return;
+  box.dataset.sig = sigNow;
+  box.innerHTML = task.steps.filter(s => s.enabled !== false).map((s, i) => `
     <div class="step ${s.status}">
       <span class="num">${i + 1}</span>
       <span class="name">${esc(s.name || STEP_NAMES[s.id - 1])}</span>
@@ -473,6 +502,10 @@ function renderPanel(state, task) {
   renderActive(task, step);
   wireCopyButtons();
   wireTextareas();
+  // The orchestrator has not moved this task since the answer went out, so the
+  // panel goes back under its lock instead of offering the button again.
+  if (v.locked && v.lockedSig === s) lockPanel(v.locked, false);
+  else { v.locked = null; v.lockedSig = null; }
 }
 
 function renderActive(task, step) {

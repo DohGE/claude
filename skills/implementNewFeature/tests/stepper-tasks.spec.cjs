@@ -112,6 +112,27 @@ test('zakładkę da się zamknąć tylko przed startem taska', async ({ page }) 
   await expect(page.locator('#branch')).toBeVisible();
 });
 
+test('przełączenie zakładki nie odblokowuje wysłanej już odpowiedzi', async ({ page }) => {
+  await page.click('#createTask');
+  await state({ taskId: 't1', step: 2, status: 'in_progress', activeStep: 2,
+    reviewSummary: { text: 'Plan na trzy zadania' } });
+  await page.click('#tabs .tab[data-task=t1]');
+  await page.click('#approve');
+  await page.click('#confirmOk');
+  await expect(page.locator('#panel .notice')).toBeVisible();
+  const drained = await (await fetch(`${base}/api/answer?wait=5`)).json();
+  expect(drained.answer.decision).toBe('approve');
+  // Powrót na zakładkę przerysowuje panel — blokada musi przetrwać, inaczej
+  // drugi klik dopisałby duplikat, który późniejsza brama wzięłaby za swój.
+  await page.click('#tabs .tab[data-task=t2]');
+  await page.click('#tabs .tab[data-task=t1]');
+  await expect(page.locator('#approve')).toBeDisabled();
+  await expect(page.locator('#panel .notice')).toBeVisible();
+  // Dopiero ruch orkiestratora zdejmuje blokadę.
+  await state({ taskId: 't1', step: 2, status: 'completed', activeStep: 4, reviewSummary: null });
+  await expect(page.locator('#panel .notice')).toHaveCount(0);
+});
+
 test('zamknięcie otwartej zakładki wraca na pierwszy task', async ({ page }) => {
   await page.fill('#task', 'Pierwszy');
   await page.click('#createTask');
