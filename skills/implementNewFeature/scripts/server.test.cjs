@@ -377,9 +377,14 @@ test('POST /api/tasks/remove refuses a started task and the last one', async t =
   await post(base, '/api/tasks', {});
   await post(base, '/api/upload', { taskId: 't2', category: 'hints', filename: 'a.png',
     dataBase64: Buffer.from('x').toString('base64') });
+  // Step 1 in_progress is only an open form — still closable.
   await post(base, '/api/state', { taskId: 't2', step: 1, status: 'in_progress' });
+  await post(base, '/api/state', { taskId: 't2', step: 2, status: 'in_progress' });
   assert.equal((await remove('t2')).status, 400);          // already started
-  await post(base, '/api/state', { taskId: 't2', step: 1, status: 'waiting' });
+  await post(base, '/api/state', { taskId: 't2', step: 2, status: 'waiting' });
+  await post(base, '/api/answer', { taskId: 't2', kind: 'step1', branch: 'feature/x' });
+  assert.equal((await remove('t2')).status, 400);          // form already submitted
+  app.getState().tasks[1].step1Submitted = false;
   assert.equal((await remove('t2')).status, 200);
   const state = await getState(base);
   assert.deepEqual(state.tasks.map(x => x.id), ['t1']);

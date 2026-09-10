@@ -286,9 +286,10 @@ function createApp(sessionDir, opts = {}) {
         const task = findTask(body.taskId);
         if (!task) return sendJson(res, 400, { error: 'unknown task' });
         if (state.tasks.length < 2) return sendJson(res, 400, { error: 'last task' });
-        // Only a task that never started: closing a running pipeline would orphan
-        // its agents and its branch.
-        if (!task.steps.every(s => s.status === 'waiting')) {
+        // Only a task whose pipeline never started: closing a running one would
+        // orphan its agents and its branch. Step 1 sitting in_progress is just an
+        // unsubmitted form, so the test is the submission, not that step's status.
+        if (task.step1Submitted || !task.steps.slice(1).every(s => s.status === 'waiting')) {
           return sendJson(res, 400, { error: 'task already started' });
         }
         state.tasks = state.tasks.filter(t => t.id !== task.id);

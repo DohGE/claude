@@ -21,6 +21,26 @@
   h1 { font-size:22px; margin:0 0 28px; letter-spacing:.2px; width:fit-content;
        background:linear-gradient(90deg,var(--accent),var(--accent-2));
        -webkit-background-clip:text; background-clip:text; color:transparent; }
+  /* Task tabs appear only from the second task on — one task looks like it always did. */
+  .tabs-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .tabs-bar .tab { display:inline-flex; align-items:center; gap:8px; margin:0; padding:8px 12px;
+          max-width:100%; font-size:12.5px; font-weight:600; background:var(--card);
+          color:var(--muted); border:1px solid var(--border); border-radius:10px; }
+  .tabs-bar .tab:hover:not(:disabled) { color:var(--text); border-color:var(--border-hi);
+          transform:none; filter:none; }
+  .tabs-bar .tab.selected { color:var(--text); border-color:var(--accent);
+          background:rgba(124,140,248,.14); }
+  .tabs-bar .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22ch; }
+  .tabs-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--waiting); flex:none; }
+  .tabs-bar .dot.in_progress { background:var(--accent); }
+  .tabs-bar .dot.completed { background:var(--completed); }
+  .tabs-bar .dot.failed { background:var(--failed); }
+  /* The one thing that tells the user a background task has stopped and needs them. */
+  .tabs-bar .pending { color:var(--accent-2); font-size:11px; line-height:1; flex:none;
+          animation:pulse 1.6s ease-in-out infinite; }
+  .tabs-bar .close { color:var(--muted); font-size:14px; line-height:1; padding:0 2px; flex:none;
+          border-radius:4px; cursor:pointer; }
+  .tabs-bar .close:hover { color:var(--failed); }
   .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
   /* 120px basis keeps all seven tiles (Mockups enabled) on a single row at 940px. */
   .step { flex:1 1 120px; background:var(--card); border:1px solid var(--border); border-radius:14px;
@@ -165,6 +185,7 @@
 <body>
 <div class="wrap">
   <h1>implementNewFeature</h1>
+  <div class="tabs-bar" id="tabs" hidden></div>
   <div class="stepper" id="stepper"></div>
   <div class="panel" id="panel"><p class="muted">Connecting…</p></div>
 </div>
@@ -307,8 +328,63 @@ async function tick() {
     lastSig = null;
   }
   const task = state.tasks.find(t => t.id === activeTask);
+  renderTabs(state);
   renderStepper(task);
   renderPanel(state, task);
+}
+
+// Rebuilt every tick like the stepper — the bar holds no input, so a background
+// task changing state never re-renders (and never clears) the open panel.
+function renderTabs(state) {
+  const box = $('#tabs');
+  if (state.tasks.length < 2) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = state.tasks.map((t, i) => {
+    const open = t.id === activeTask;
+    // Step 1 in_progress is just an unsubmitted form, so the pipeline has started
+    // once the form was submitted — that is what closes the × for good.
+    const closable = !t.step1Submitted && t.steps.slice(1).every(s => s.status === 'waiting');
+    return `<button class="tab${open ? ' selected' : ''}" data-task="${esc(t.id)}">
+      <span class="dot ${activeStepOf(t).status}"></span>
+      <span class="label">${esc(tabLabel(t, i))}</span>
+      ${pending(t) && !open ? '<span class="pending" title="Waiting for you">●</span>' : ''}
+      ${closable ? `<span class="close" role="button" data-close="${esc(t.id)}"
+        aria-label="Close task" title="Close task">×</span>` : ''}
+    </button>`;
+  }).join('');
+  box.querySelectorAll('[data-task]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      if (btn.dataset.task === activeTask) return;
+      activeTask = btn.dataset.task;
+      lastSig = null;
+      tick();
+    }));
+  box.querySelectorAll('[data-close]').forEach(el =>
+    el.addEventListener('click', async e => {
+      e.stopPropagation();   // the × sits inside the tab button
+      const id = el.dataset.close;
+      const ok = await askConfirm({ title: 'Close this task?',
+        text: 'Its form and uploaded files are deleted. The task has not started yet.',
+        confirmLabel: 'Close task' });
+      if (!ok) return;
+      await postJson('/api/tasks/remove', { taskId: id });
+      if (id === activeTask) activeTask = null;
+      lastSig = null;
+      tick();
+    }));
+}
+
+// The open tab tracks the branch input as it is typed; the others use what was saved.
+function tabLabel(task, i) {
+  if (task.id === activeTask) {
+    const input = $('#branch');
+    if (input && input.value.trim()) return input.value.trim();
+  }
+  return task.branch || `Task ${i + 1}`;
 }
 
 // Step ids are fixed, but disabled steps (Mockups when the toggle stayed off)
@@ -444,7 +520,8 @@ function renderStep1(task) {
       <button type="button" id="togglePassword" class="reveal" aria-pressed="false"
         aria-label="Show password" title="Show password">${EYE}</button>
     </div>
-    <button id="next" disabled>${revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>`;
+    <button id="next" disabled>${revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>
+    <button id="createTask" class="secondary">Create new task</button>`;
   $('#togglePassword').addEventListener('click', () => {
     const input = $('#authPassword');
     const btn = $('#togglePassword');
@@ -487,6 +564,27 @@ function renderStep1(task) {
   ['#task', '#biz', '#branch', '#authLogin', '#authPassword'].forEach(sel =>
     $(sel).addEventListener('input', gate));
   gate();   // a form that arrived filled in must enable Next without a keystroke
+  // The tab bar is rebuilt on the tick, so the open tab's label is patched in place
+  // to follow the branch as it is typed.
+  $('#branch').addEventListener('input', () => {
+    const label = document.querySelector(`#tabs .tab[data-task="${activeTask}"] .label`);
+    if (label) label.textContent = $('#branch').value.trim() || 'Task';
+  });
+  // Non-destructive and reversible with the tab's ×, so no confirmation.
+  $('#createTask').addEventListener('click', async () => {
+    $('#createTask').disabled = true;
+    const { id } = await postJson('/api/tasks', { copyFrom: activeTask, values: {
+      taskDescription: $('#task').value, businessRequirements: $('#biz').value,
+      contractsText: $('#contractsText').value, hintsNote: $('#hintsNote').value,
+      generateMockups: $('#genMockups').checked } });
+    if (id) {
+      // A brand-new task sits at waiting; put it straight into its form.
+      await postJson('/api/state', { taskId: id, step: 1, status: 'in_progress', activeStep: 1 });
+      activeTask = id;
+    }
+    lastSig = null;
+    tick();
+  });
   $('#next').addEventListener('click', async () => {
     const ok = await askConfirm({
       title: revisit ? 'Resubmit the requirements?' : 'Submit requirements?',
