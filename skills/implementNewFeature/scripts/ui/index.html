@@ -674,6 +674,27 @@ function renderStep1(task) {
   });
 }
 
+// Only on the three interactive gates — the step-2 question, the plan gate and the
+// mockup gate. Those are exactly the moments the orchestrator is blocked on
+// GET /api/answer, so the answer reaches the right gate. On a progress panel it
+// would sit in the queue and later be mistaken for the answer to a question, and
+// from step 4 on the point of no return has passed.
+const backButton = () => '<button id="backToStep1" class="secondary">Back to requirements</button>';
+
+function wireBackButton() {
+  const btn = $('#backToStep1');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const ok = await askConfirm({ title: 'Back to requirements?',
+      text: 'Refinement re-runs on what you change — and the mockups too, when they are enabled. '
+        + 'Everything you already answered stays.',
+      confirmLabel: 'Back to the form' });
+    if (!ok) return;
+    lockPanel('Going back to the requirements form…');
+    sendAnswer({ kind: 'back' });
+  });
+}
+
 function renderQuestion(q, step) {
   // Steps 1-3 are the interactive ones — there an answer is confirmed before it is sent.
   // Step 5 only asks to retry the Chrome extension, which needs no gate.
@@ -693,7 +714,8 @@ function renderQuestion(q, step) {
     <div class="options">${opts}</div>
     <label>…or type your own answer</label>
     <textarea id="freeAnswer"></textarea>
-    <button id="send">Send answer</button>`;
+    <button id="send">Send answer</button>
+    ${step.id === 2 ? backButton() : ''}`;
   document.querySelectorAll('[data-opt]').forEach(btn =>
     btn.addEventListener('click', () =>
       submit(q.options[+btn.dataset.opt], () => btn.classList.add('selected'))));
@@ -701,6 +723,7 @@ function renderQuestion(q, step) {
     const v = $('#freeAnswer').value.trim();
     if (v) submit(v);
   });
+  wireBackButton();
 }
 
 function renderReview(review) {
@@ -710,7 +733,8 @@ function renderReview(review) {
     <button id="approve">Approve</button>
     <label>…or request changes</label>
     <textarea id="feedback"></textarea>
-    <button id="sendFeedback" class="secondary">Send feedback</button>`;
+    <button id="sendFeedback" class="secondary">Send feedback</button>
+    ${backButton()}`;
   $('#approve').addEventListener('click', async () => {
     const ok = await askConfirm({
       title: 'Approve the plan?',
@@ -726,6 +750,7 @@ function renderReview(review) {
     lockPanel('Feedback sent — the agent is revising the plan…');
     sendAnswer({ kind: 'decision', decision: 'feedback', text: t });
   });
+  wireBackButton();
 }
 
 function mockupUrl(review, screen) {
@@ -779,7 +804,8 @@ function renderMockupReview(review) {
     <label>Refine the mockup — describe what to change</label>
     <textarea id="mockupFeedback"></textarea>
     <button id="sendMockup" class="secondary">Send</button>
-    <button id="approveMockup">Approve mockups</button>`;
+    <button id="approveMockup">Approve mockups</button>
+    ${backButton()}`;
   const select = (attr, apply) => document.querySelectorAll(`[data-${attr}]`).forEach(btn =>
     btn.addEventListener('click', () => {
       document.querySelectorAll(`[data-${attr}]`)
@@ -805,6 +831,7 @@ function renderMockupReview(review) {
     lockPanel('Approved — the agent is updating spec, plan and checklist…');
     sendAnswer({ kind: 'mockup', decision: 'approve' });
   });
+  wireBackButton();
   drawPreview(review);
 }
 
