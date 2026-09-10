@@ -27,6 +27,7 @@ test.beforeEach(async ({ page }) => {
   await page.waitForSelector('#hints');
   await page.fill('#task', 'Opis zadania');
   await page.fill('#biz', 'Wymagania biznesowe');
+  await page.fill('#branch', 'feature/test');
 });
 
 test.afterEach(async () => {

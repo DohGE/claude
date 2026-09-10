@@ -92,6 +92,15 @@
   .switch input:disabled { opacity:.5; cursor:not-allowed; }
   .switch label { margin:0; color:var(--text); cursor:pointer; }
   .hint { font-size:12.5px; color:var(--muted); margin:6px 0 0; }
+  /* Files already uploaded: a file input cannot be pre-filled, so they are listed. */
+  ul.files { list-style:none; margin:8px 0 0; padding:0; font-size:12.5px; }
+  ul.files li { display:flex; align-items:center; justify-content:space-between; gap:10px;
+          padding:6px 10px; margin-top:6px; background:var(--card-2);
+          border:1px solid var(--border); border-radius:8px; color:#c3c9d6; }
+  ul.files .rm { margin:0; padding:2px 8px; background:transparent; color:var(--muted);
+          font-size:15px; line-height:1; border-radius:6px; }
+  ul.files .rm:hover:not(:disabled) { color:var(--failed); background:var(--card);
+          transform:none; filter:none; }
   .mockup-bar { display:flex; justify-content:space-between; align-items:center; gap:12px;
           flex-wrap:wrap; margin:18px 0 10px; }
   .tabs { display:flex; gap:6px; flex-wrap:wrap; }
@@ -195,6 +204,10 @@ const view = {};
 const viewOf = id => (view[id] || (view[id] = {
   showSummary: false, mockupScreen: 0, mockupViewport: 'Desktop'
 }));
+
+// Refuses what `git check-ref-format` refuses, without shelling out to git.
+const branchOk = v => !!v && !/[\s~^:?*[\\]/.test(v) && !v.includes('..') && !v.includes('@{')
+  && !v.startsWith('/') && !v.endsWith('/') && !v.endsWith('.lock');
 
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s == null ? '' : s)
@@ -369,45 +382,69 @@ function renderStep1(task) {
     $('#panel').innerHTML = '<p class="muted">Waiting for the pipeline…</p>';
     return;
   }
+  // The form is rebuilt from the last submitted (or copied) answer, so a task the
+  // user came back to arrives filled in rather than blank.
+  const d = task.step1 || {};
+  const revisit = !!task.step1Submitted;
+  // Files already on disk cannot be put back into a file input, so they are listed
+  // separately and removed through the server.
+  const fileList = cat => {
+    const names = d[cat] || [];
+    return names.length ? `<ul class="files" id="files-${cat}">${names.map(n =>
+      `<li><span>${esc(n)}</span><button type="button" class="rm" data-cat="${esc(cat)}"
+        data-name="${esc(n)}" aria-label="Remove ${esc(n)}" title="Remove">×</button></li>`)
+      .join('')}</ul>` : '';
+  };
   $('#panel').innerHTML = `
     <h2>Requirements</h2>
     <label>Task description <span class="req">*</span></label>
-    <textarea id="task"></textarea>
+    <textarea id="task">${esc(d.taskDescription || '')}</textarea>
     <label>Business requirements <span class="req">*</span></label>
-    <textarea id="biz"></textarea>
+    <textarea id="biz">${esc(d.businessRequirements || '')}</textarea>
+    <label>Branch <span class="req">*</span></label>
+    <input type="text" id="branch" placeholder="feature/nazwa-funkcji" autocomplete="off"
+      value="${esc(d.branch || '')}">
+    <p class="hint" id="branchHint" hidden>Nazwa nie jest poprawną nazwą gałęzi gita.</p>
     <h3>Additional materials (optional)</h3>
     <p class="muted">Inspirations, screenshots of another app, diagrams, exported designs —
       anything that should guide the refinement questions and the mockup design.</p>
     <label>Files</label>
+    ${fileList('hints')}
     <input type="file" id="hints" multiple>
-    <div id="hintsNoteBox" hidden>
+    <div id="hintsNoteBox"${(d.hints || []).length ? '' : ' hidden'}>
       <label>What should we take from these files?</label>
       <textarea id="hintsNote"
-        placeholder="e.g. copy the card layout from screen 2, ignore the colors"></textarea>
+        placeholder="e.g. copy the card layout from screen 2, ignore the colors">${
+  esc(d.hintsNote || '')}</textarea>
     </div>
     <label>Mockups (optional)</label>
+    ${fileList('mockups')}
     <input type="file" id="mockups" multiple accept="image/*,.pdf">
     <div class="switch">
-      <input type="checkbox" id="genMockups">
+      <input type="checkbox" id="genMockups"${d.generateMockups ? ' checked' : ''}>
       <label for="genMockups">Generate mockups</label>
     </div>
     <p class="hint">Adds a Mockups step after planning: an agent designs the screens from the plan
       (and from the files above, if any), you refine them in a chat, and the approved design drives
       both the implementation and the visual E2E comparison.</p>
     <label>API contracts / specs (optional — files or pasted text)</label>
+    ${fileList('contracts')}
     <input type="file" id="contracts" multiple>
-    <textarea id="contractsText" placeholder="…or paste contracts here"></textarea>
+    <textarea id="contractsText" placeholder="…or paste contracts here">${
+  esc(d.contractsText || '')}</textarea>
     <h3>Authorization (optional)</h3>
     <p class="muted">Credentials for E2E tests only — stored in the session dir, outside git.</p>
+    ${task.authSaved ? '<p class="hint">Credentials are stored for this task — fill both fields'
+      + ' to replace them.</p>' : ''}
     <label>Login</label>
     <input type="text" id="authLogin" autocomplete="off">
     <label>Password</label>
     <div class="field-with-btn">
-      <input type="password" id="authPassword" autocomplete="new-password">
+      <input type="password" id="authPassword" autocomplete="new-password" data-no-copy="1">
       <button type="button" id="togglePassword" class="reveal" aria-pressed="false"
         aria-label="Show password" title="Show password">${EYE}</button>
     </div>
-    <button id="next" disabled>Next</button>`;
+    <button id="next" disabled>${revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>`;
   $('#togglePassword').addEventListener('click', () => {
     const input = $('#authPassword');
     const btn = $('#togglePassword');
@@ -422,9 +459,18 @@ function renderStep1(task) {
   // The note only makes sense once there is something to describe, so it stays
   // hidden until the first file is picked (and disappears again if all are removed).
   $('#hints').addEventListener('change', () => {
-    $('#hintsNoteBox').hidden = $('#hints').files.length === 0;
+    $('#hintsNoteBox').hidden = $('#hints').files.length === 0 && !(d.hints || []).length;
     wireTextareas();
   });
+  // The server owns the file lists, so a removal re-renders from the new state.
+  document.querySelectorAll('#panel .rm').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      await postJson('/api/upload/remove',
+        { taskId: activeTask, category: btn.dataset.cat, filename: btn.dataset.name });
+      lastSig = null;
+      tick();
+    }));
   const auth = () => {
     const login = $('#authLogin').value.trim();
     const password = $('#authPassword').value;
@@ -432,18 +478,24 @@ function renderStep1(task) {
   };
   const gate = () => {
     const a = auth();
+    const branch = $('#branch').value.trim();
+    $('#branchHint').hidden = !branch || branchOk(branch);
     // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
-    $('#next').disabled = !($('#task').value.trim() && $('#biz').value.trim()
+    $('#next').disabled = !($('#task').value.trim() && $('#biz').value.trim() && branchOk(branch)
       && (a.complete || (!a.login && !a.password.trim())));
   };
-  ['#task', '#biz', '#authLogin', '#authPassword'].forEach(sel =>
+  ['#task', '#biz', '#branch', '#authLogin', '#authPassword'].forEach(sel =>
     $(sel).addEventListener('input', gate));
+  gate();   // a form that arrived filled in must enable Next without a keystroke
   $('#next').addEventListener('click', async () => {
     const ok = await askConfirm({
-      title: 'Submit requirements?',
-      text: 'Step 2 starts: the refinement agent reads this form and begins asking questions. '
-        + 'You cannot come back and edit it.',
-      confirmLabel: 'Submit and continue' });
+      title: revisit ? 'Resubmit the requirements?' : 'Submit requirements?',
+      text: revisit
+        ? 'Refinement re-runs on what you changed — and the mockups too, when they are enabled. '
+          + 'You can come back here again until implementation starts.'
+        : 'Step 2 starts: the refinement agent reads this form and begins asking questions. '
+          + 'You can come back and edit it until implementation starts.',
+      confirmLabel: revisit ? 'Resubmit and continue' : 'Submit and continue' });
     if (!ok) return;
     lockPanel('Uploading and submitting…');
     const upload = async (cat, input) => {
@@ -455,9 +507,14 @@ function renderStep1(task) {
       }
       return names;
     };
-    const mockups = await upload('mockups', $('#mockups'));
-    const contracts = await upload('contracts', $('#contracts'));
-    const hints = await upload('hints', $('#hints'));
+    // Files kept from the previous submission plus the ones just picked; a
+    // re-upload of the same name overwrites on disk, so the list is deduped.
+    const uploaded = {
+      mockups: await upload('mockups', $('#mockups')),
+      contracts: await upload('contracts', $('#contracts')),
+      hints: await upload('hints', $('#hints'))
+    };
+    const keep = cat => [...new Set([...(d[cat] || []), ...uploaded[cat]])];
     // Credentials go straight to the server (auth.json); the step1 answer
     // only carries a flag so they never reach the orchestrator's context.
     const a = auth();
@@ -468,9 +525,11 @@ function renderStep1(task) {
     await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
       businessRequirements: $('#biz').value.trim(),
+      branch: $('#branch').value.trim(),
       contractsText: $('#contractsText').value.trim(),
       hintsNote: $('#hintsNote').value.trim(),
-      mockups, contracts, hints, authProvided: a.complete,
+      mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
+      authProvided: a.complete || task.authSaved,
       generateMockups: $('#genMockups').checked });
   });
 }

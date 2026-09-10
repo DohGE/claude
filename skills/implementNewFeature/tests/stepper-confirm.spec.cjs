@@ -33,6 +33,7 @@ async function openStep1(page) {
   await page.waitForSelector('#task');
   await page.fill('#task', 'Opis zadania');
   await page.fill('#biz', 'Wymagania biznesowe');
+  await page.fill('#branch', 'feature/test');
 }
 
 async function openQuestion(page) {

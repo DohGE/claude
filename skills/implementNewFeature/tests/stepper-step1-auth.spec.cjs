@@ -28,6 +28,7 @@ test.afterEach(async () => {
 async function fillRequired(page) {
   await page.fill('#task', 'Opis zadania');
   await page.fill('#biz', 'Wymagania biznesowe');
+  await page.fill('#branch', 'feature/test');
 }
 
 // Submit w krokach 1-3 przechodzi przez własny dialog potwierdzenia (stepper-confirm.spec.cjs).
