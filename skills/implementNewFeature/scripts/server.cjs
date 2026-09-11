@@ -34,7 +34,7 @@ function taskState(id) {
       enabled: !OPTIONAL_STEPS.includes(i + 1),
       currentOperation: '', report: null, log: []
     })),
-    activeStep: 1, question: null, questionSeq: 0, mockupSeq: 0,
+    activeStep: 1, question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0,
     reviewSummary: null, mockupReview: null, summary: null,
     step1: null, step1Submitted: false, authSaved: false
   };
@@ -175,7 +175,17 @@ function createApp(sessionDir, opts = {}) {
       // sub-agent that reuses a question id still gets a fresh, unlocked panel.
       task.questionSeq = (task.questionSeq || 0) + 1;
     }
-    if (body.reviewSummary !== undefined) task.reviewSummary = body.reviewSummary;
+    if (body.reviewSummary !== undefined) {
+      // Server-owned, like the mockups' rev: the UI keys its re-render on it, so a
+      // plan revised after feedback replaces the text on screen instead of leaving
+      // the previous version under the gate. A caller may still pass one — the
+      // tests and a resumed run do.
+      task.reviewSummary = body.reviewSummary && {
+        ...body.reviewSummary,
+        rev: body.reviewSummary.rev !== undefined ? body.reviewSummary.rev
+          : (task.reviewSeq = (task.reviewSeq || 0) + 1)
+      };
+    }
     if (body.mockupReview !== undefined) {
       // The chat and the revision counter live here, not in the orchestrator: its
       // context must not grow with a mockup conversation, and a repeated `rev`
@@ -289,6 +299,11 @@ function createApp(sessionDir, opts = {}) {
           task.step1 = formOf(body);
           task.step1Submitted = true;
           task.branch = task.step1.branch;
+          persist();
+        }
+        if (body.kind === 'mockup' && body.decision === 'feedback' && task.mockupReview) {
+          if (!Array.isArray(task.mockupReview.chat)) task.mockupReview.chat = [];
+          task.mockupReview.chat.push({ role: 'user', text: text(body.text) });
           persist();
         }
         pushAnswer({ ...body, taskId: task.id });

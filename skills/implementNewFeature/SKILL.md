@@ -37,9 +37,22 @@ Then loop until the user shuts the server down:
 5. `{"kind":"summary","decision":"shutdown"}` → stop looping and end your turn.
 6. curl cannot connect → the server is gone: stop looping and end your turn.
 
-Answer kinds and where they belong: `step1` → step 1 of that task; `answer` → the question that
-task's agent asked; `decision` → that task's plan gate, failure gate or Mockoon gate; `mockup` → that
-task's mockup gate; `back` → the revision protocol; `summary` → that task's summary screen.
+Answer kinds and where they belong: `step1` → step 1 of that task (the first one starts its
+pipeline, every later one is a revision); `answer` → the question that task's agent asked;
+`decision` → that task's plan gate, failure gate or Mockoon gate; `mockup` → that task's mockup
+gate; `summary` → that task's summary screen.
+
+**Which step a user is LOOKING at is never an event.** The stepper's tiles walk them back and forth
+over the steps a task has already reached, and the requirements form is one of those tiles. None of
+that reaches you, so never expect a "went back" message and never move `activeStep` to follow the
+user — `activeStep` says where the PIPELINE is, and the browser decides what it shows.
+
+**Sending text does not block a task's panel**, so one message may be followed by another before an
+agent has answered the first. Extra `answer` and `mockup`/`feedback` messages are therefore
+normal: SendMessage each to that step's agent as it arrives, in order, and never drop one. An
+`answer` arriving while no question is open is an afterthought to the previous one — pass it on the
+same way, and never read it as a gate decision. Gate decisions (`approve`, `retry`, `finish`,
+`mockoon`, `shutdown`) still arrive at most once per gate, because those buttons do lock the panel.
 
 **"Wait for T's `kind==X`" below never means blocking the run on T.** It means: stay in this loop,
 keep polling unfiltered, keep serving whatever arrives for other tasks, and resume T's step when its
@@ -95,6 +108,8 @@ retry, and released when the task leaves step 5 — then start the next task in 
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
   `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
+  `mockupChat` carries the AGENT's lines only — the server records the user's own the moment the
+  browser sends them, so a copy from you would show the same message twice.
   Step ids are fixed (1 Requirements, 2 Feature Refinement, 3 Mockups, 4 Implementation,
   5 Validation & E2E, 6 Code Review, 7 Mockoon Mocks). Step 3 ships `enabled:false` and the stepper
   hides it, so a task without mockups shows five tiles numbered 1-5 plus the Mockoon one. Step 7 is
@@ -168,26 +183,34 @@ On a `step1` answer for task T:
    body's `step`, so it cannot ride along with the step-1 update).
 5. POST `{"taskId":"T","step":1,"status":"completed","activeStep":2}` and start step 2 for T.
 
-## Revising step 1
+## Revising step 1 (a second `step1` answer)
 
-Until a task enters step 4, its user can press "Back to requirements" on the step-2 question panel,
-the plan gate or the mockup gate. That arrives as `{"kind":"back","taskId":"T"}`. Then:
+Walking back to the requirements form costs nothing: the tile is always there while the task is
+before step 4, and reading the form changes no state. What reaches you is the RESUBMISSION, and the
+browser only offers that button once a field, a file, the mockups toggle or the credentials actually
+differ from the last submission — so a `step1` answer for a task whose `requirements.md` you have
+already written always carries a real change.
 
-1. POST `{"taskId":"T","step":2,"status":"waiting","progress":null,"currentOperation":""}`, and the
-   same for step 3 when `MOCKUPS(T)`.
-2. POST `{"taskId":"T","step":1,"status":"in_progress","activeStep":1,"question":null,
-   "reviewSummary":null,"mockupReview":null,"logEntry":"Revision requested"}`.
-   Clearing those three is NOT optional: the panel checks them before it checks `activeStep`, so a
-   stale one would keep the old panel on screen instead of the form. Reset the other steps first so
-   the browser lands on a clean form.
-3. Wait for T's next `step1` answer. Then, in this order:
+It can arrive at any moment before step 4: while the refinement agent is thinking, while its question
+is on screen, while the plan gate or the mockup gate is open. Take it whatever T was doing. Step 1
+stays `completed` through all of it — never send it back to `in_progress`, and never POST
+`activeStep:1`, which would claim the pipeline moved backwards when only the user did.
+
+On such an answer, in this order:
+
+1. `revisionCount(T)++`, then
    - copy `requirements.md` to `requirements-prev.md`,
    - write the new `requirements.md`,
    - write `requirements-changes.md`: a `## Revision <n>` heading and a bullet list naming which
      fields changed, which files were added or removed, and any change to the branch or the mockups
      toggle. Name the changes; do NOT copy the field bodies — they are already in the two files.
-   - `revisionCount(T)++`.
-4. Re-run step 2 in REDUCED SCOPE. `SendMessage` the EXISTING refinement agent — do not re-spawn it:
+2. POST `{"taskId":"T","step":2,"status":"in_progress","activeStep":2,"progress":5,
+   "currentOperation":"Refinement in progress","question":null,"reviewSummary":null,
+   "mockupReview":null,"logEntry":"Revision <n> submitted"}`, and when `MOCKUPS(T)` also
+   `{"taskId":"T","step":3,"status":"waiting","progress":null,"currentOperation":""}`.
+   Clearing those three is NOT optional: a question or a gate left standing would keep the old panel
+   on screen and take an answer for a round that no longer exists.
+3. Re-run step 2 in REDUCED SCOPE. `SendMessage` the EXISTING refinement agent — do not re-spawn it:
    its project exploration, spec, plan and whole Q&A ARE the reduced scope.
 
        Requirements changed. Read <SESSION>/tasks/T/requirements-changes.md, then requirements.md
@@ -197,12 +220,12 @@ the plan gate or the mockup gate. That arrives as `{"kind":"back","taskId":"T"}`
 
    If SendMessage cannot reach it, spawn a fresh refinement agent with the same prompt plus that
    paragraph. Then continue at step 2's gate as usual.
-5. Mockups toggle transitions: off → on, POST `{"taskId":"T","step":3,"enabled":true}` and spawn a
+4. Mockups toggle transitions: off → on, POST `{"taskId":"T","step":3,"enabled":true}` and spawn a
    FRESH mockup agent after the plan gate. On → off, POST
    `{"taskId":"T","step":3,"enabled":false,"status":"waiting"}` and add to the refinement message:
    `The mockups toggle was turned OFF — remove the ## UI design section and the verify: visual
    checklist lines.`
-6. After the revision the task rejoins the normal route: plan gate → mockups when enabled → step 4.
+5. After the revision the task rejoins the normal route: plan gate → mockups when enabled → step 4.
 
 ## Step 2 — Feature Refinement (interactive, proxy Q&A)
 
@@ -213,7 +236,9 @@ the plan gate or the mockup gate. That arrives as `{"kind":"back","taskId":"T"}`
      T's `kind=="answer"`, then **immediately** (before contacting the agent) POST
      `{"taskId":"T","question":null,"step":2,"progress":<min(60, 20+5×answers so far)>,"currentOperation":"Processing answer…","logEntry":"<id>: <answer, shortened>"}`
      so the UI reacts to the click at once, then SendMessage the answer text to the agent. You own
-     the Q&A progress — the agent does not report between questions.
+     the Q&A progress — the agent does not report between questions. A further `answer` for T while
+     no question is open is the user adding to what they just said: SendMessage it to the same agent
+     and keep waiting for its next JSON.
    - `{"type":"result","summary"}` → spec/plan/checklist now exist in `<SESSION>/tasks/T`. Go to 4.
    - `{"type":"error","report"}` → failure protocol (below) for step 2.
 4. Gate: POST `{"taskId":"T","reviewSummary":{"text":"<summary>"}}`; wait for T's `kind=="decision"`:
@@ -236,8 +261,11 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
      chat forward, so a round can never reuse a number and leave the panel locked.
      Then wait for T's `kind=="mockup"`:
      - `decision=="feedback"` → **immediately** (before contacting the agent) POST
-       `{"taskId":"T","step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>","mockupChat":{"role":"user","text":"<the feedback>"}}`
-       so the UI reacts to the click at once, then SendMessage the feedback text to the agent. Back to 3.
+       `{"taskId":"T","step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>"}`
+       so the UI reacts to the click at once, then SendMessage the feedback text to the agent. Do NOT
+       post the line as `mockupChat` — the server already appended it when the browser sent it.
+       The composer is not locked while the agent reworks, so more feedback may arrive: SendMessage
+       each one as it comes, in order, and keep waiting for the round. Back to 3.
      - `decision=="approve"` → SendMessage exactly: `APPROVED — update spec.md, plan.md and
        checklist.md to match the approved mockups, then reply with the result JSON.` Back to 3.
    - `{"type":"result","summary","screens":[…]}` (only ever arrives after the approval message) →

@@ -1,5 +1,5 @@
-// Testy UI steppera implementNewFeature — powrót na krok 1 z trzech bram interaktywnych,
-// i jego brak tam, gdzie agent pracuje albo implementacja już ruszyła.
+// Testy UI steppera implementNewFeature — powrót na formularz wymagań: dzieje się
+// wyłącznie w przeglądarce, nie budzi orkiestratora i nie gasi bramy, z której wyszedł.
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -13,11 +13,15 @@ const state = body => fetch(`${base}/api/state`, {
   body: JSON.stringify({ taskId: 't1', ...body })
 });
 
+const takeAnswer = async () => (await (await fetch(`${base}/api/answer?wait=1`)).json()).answer;
+
 test.beforeEach(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inf-back-'));
   app = createApp(dir);
   await new Promise(r => app.server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${app.server.address().port}`;
+  // Krok 1 jest domknięty, ale osiągalny — dopiero to czyni powrót możliwym.
+  await state({ step: 1, status: 'completed' });
 });
 
 test.afterEach(async () => {
@@ -25,28 +29,30 @@ test.afterEach(async () => {
   await new Promise(r => app.server.close(r));
 });
 
-test('brama planu wysyła decyzję powrotu po potwierdzeniu', async ({ page }) => {
+test('powrót na formularz nie wysyła nic do orkiestratora', async ({ page }) => {
   await state({ step: 2, status: 'in_progress', activeStep: 2,
     reviewSummary: { text: 'Plan na trzy zadania' } });
   await page.goto(base);
   await page.waitForSelector('#backToStep1');
   await page.click('#backToStep1');
-  await expect(page.locator('#confirmTitle')).toHaveText('Back to requirements?');
-  await page.click('#confirmOk');
-  const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
-  expect(answer).toMatchObject({ kind: 'back', taskId: 't1' });
+  await expect(page.locator('#branch')).toBeVisible();
+  // Ani dialogu, ani odpowiedzi: przełączanie kroków jest sprawą przeglądarki.
+  await expect(page.locator('#confirmDialog')).toBeHidden();
+  expect(await takeAnswer()).toBeNull();
 });
 
-test('Cancel w dialogu powrotu nic nie wysyła', async ({ page }) => {
+test('brama planu czeka nietknięta i wraca kafelkiem steppera', async ({ page }) => {
   await state({ step: 2, status: 'in_progress', activeStep: 2,
     reviewSummary: { text: 'Plan na trzy zadania' } });
   await page.goto(base);
   await page.waitForSelector('#backToStep1');
   await page.click('#backToStep1');
-  await page.click('#confirmCancel');
-  const { answer } = await (await fetch(`${base}/api/answer?wait=1`)).json();
-  expect(answer).toBeNull();
-  await expect(page.locator('#backToStep1')).toBeEnabled();
+  await expect(page.locator('#branch')).toBeVisible();
+  await expect(page.locator('#viewbar')).toContainText('Feature Refinement');
+  await page.click('.step[data-step="2"]');
+  await expect(page.locator('#approve')).toBeVisible();
+  await expect(page.locator('.summary-text')).toHaveText('Plan na trzy zadania');
+  await expect(page.locator('#viewbar')).toBeHidden();
 });
 
 test('pytanie kroku 2 i brama makiet mają przycisk, pytanie kroku 5 nie', async ({ page }) => {
@@ -77,19 +83,4 @@ test('panele postępu i podsumowanie nie mają przycisku powrotu', async ({ page
     summary: { finalStatus: 'Gotowe', changes: [], features: [] } });
   await page.waitForSelector('.summary');
   await expect(page.locator('#backToStep1')).toHaveCount(0);
-});
-
-test('powrót blokuje panel do czasu reakcji orkiestratora', async ({ page }) => {
-  await state({ step: 2, status: 'in_progress', activeStep: 2,
-    reviewSummary: { text: 'Plan na trzy zadania' } });
-  await page.goto(base);
-  await page.waitForSelector('#backToStep1');
-  await page.click('#backToStep1');
-  await page.click('#confirmOk');
-  await expect(page.locator('#panel .notice')).toContainText('Going back to the requirements form');
-  await expect(page.locator('#approve')).toBeDisabled();
-  // Dopiero stan wystawiony przez orkiestratora wraca na formularz.
-  await state({ step: 2, status: 'waiting' });
-  await state({ step: 1, status: 'in_progress', activeStep: 1, reviewSummary: null });
-  await expect(page.locator('#branch')).toBeVisible();
 });

@@ -23,6 +23,7 @@
        -webkit-background-clip:text; background-clip:text; color:transparent; }
   /* Task tabs appear only from the second task on — one task looks like it always did. */
   .tabs-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .tabs-bar[hidden], .viewbar[hidden] { display:none; }
   .tabs-bar .tab { display:inline-flex; align-items:center; gap:8px; margin:0; padding:8px 12px;
           max-width:100%; font-size:12.5px; font-weight:600; background:var(--card);
           color:var(--muted); border:1px solid var(--border); border-radius:10px; }
@@ -65,6 +66,20 @@
   .step.in_progress .badge { color:var(--accent); }
   .step.completed .badge { color:var(--completed); }
   .step.failed .badge { color:var(--failed); }
+  /* A reached step is a place the user may go back to. Switching is local to the
+     page: it reaches neither the orchestrator nor any agent. */
+  .step.clickable { cursor:pointer; }
+  .step.clickable:hover { border-color:var(--border-hi); }
+  .step.clickable:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .step.viewing { border-color:var(--accent-2);
+          box-shadow:0 0 0 1px rgba(167,139,250,.45), 0 8px 24px -12px rgba(167,139,250,.5); }
+  /* Shown only while the user looks at a step the pipeline is not on. */
+  .viewbar { display:flex; align-items:center; justify-content:space-between; gap:12px;
+          flex-wrap:wrap; margin:-14px 0 18px; padding:10px 14px; font-size:13px;
+          color:var(--muted); background:rgba(167,139,250,.08);
+          border:1px solid var(--border-hi); border-radius:10px; }
+  .viewbar b { color:var(--text); }
+  .viewbar button { margin:0; padding:6px 12px; font-size:12.5px; }
   .panel { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:24px;
           box-shadow:0 20px 50px -30px rgba(0,0,0,.8); }
   .panel h2 { margin:0 0 14px; font-size:17px; }
@@ -150,6 +165,17 @@
   .msg .who { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.8px;
           font-weight:700; margin-bottom:4px; color:var(--muted); }
   .msg.user .who { color:var(--accent); }
+  .chat:empty, .sent:empty { display:none; }
+  .sent { margin-top:18px; border-top:1px solid var(--border); }
+  .gate-actions { display:flex; gap:10px; flex-wrap:wrap; }
+  /* The composer rides the bottom of the viewport, so a long mockup page never
+     scrolls the field to answer with off the screen. */
+  .composer { position:sticky; bottom:0; z-index:2; display:flex; gap:10px; align-items:flex-end;
+          margin:16px -24px -24px; padding:14px 24px 16px; background:var(--card);
+          border-top:1px solid var(--border); border-radius:0 0 16px 16px; }
+  .composer textarea { flex:1; min-height:44px; }
+  .composer .copy-wrap { flex:1; }
+  .composer button { margin:0; flex:none; }
   .bar { height:8px; background:var(--card-2); border:1px solid var(--border); border-radius:99px;
           overflow:hidden; margin:10px 0 6px; }
   .bar > div { height:100%; background:linear-gradient(90deg,var(--accent),var(--accent-2));
@@ -198,6 +224,7 @@
   <h1>implementNewFeature</h1>
   <div class="tabs-bar" id="tabs" hidden></div>
   <div class="stepper" id="stepper"></div>
+  <div class="viewbar" id="viewbar" hidden></div>
   <div class="panel" id="panel"><p class="muted">Connecting…</p></div>
 </div>
 <dialog id="confirmDialog" class="confirm" aria-labelledby="confirmTitle">
@@ -263,10 +290,19 @@ function snapshotStep1() {
 const view = {};
 const viewOf = id => (view[id] || (view[id] = {
   showSummary: false, mockupScreen: 0, mockupViewport: 'Desktop',
-  // A sent answer locks the panel until the orchestrator moves the state. The lock
-  // is remembered per task, because switching tabs re-renders the panel and would
-  // otherwise hand back a live button — and a second click would queue a duplicate
-  // answer that a later gate then mistakes for its own.
+  // Which step the user is looking at. null means "whatever the pipeline is on";
+  // anything else is their own pick, and the pipeline moving must not steal it.
+  viewStep: null,
+  // A file added or removed since the last submission. The form's own lists are
+  // rewritten by the server on a removal, so only this remembers it happened.
+  filesDirty: false,
+  // What is typed into the mockup composer, and what was already sent from the
+  // panel now on screen — a Send no longer locks, so both must survive a redraw.
+  mockupDraft: '', sent: [], sentSig: null,
+  // An irreversible decision still locks the panel until the orchestrator moves the
+  // state. The lock is remembered per task, because switching tabs re-renders the
+  // panel and would otherwise hand back a live button — and a second click would
+  // queue a duplicate decision that a later gate then mistakes for its own.
   locked: null, lockedSig: null
 }));
 
@@ -295,6 +331,7 @@ async function postJson(url, body) {
   return res.json().catch(() => ({}));
 }
 const sendAnswer = payload => postJson('/api/answer', { taskId: activeTask, ...payload });
+const currentTask = () => lastState && lastState.tasks.find(t => t.id === activeTask);
 
 // In-page confirmation modal — never window.confirm(): a native dialog freezes the page
 // (and any browser automation driving it), cannot be styled and cannot be asserted on.
@@ -347,7 +384,7 @@ function lockPanel(message, remember = true) {
 function autoGrow(el) {
   el.style.height = 'auto';
   const border = el.offsetHeight - el.clientHeight;
-  const max = Math.round(window.innerHeight * 0.45);
+  const max = Math.round(window.innerHeight * ((Number(el.dataset.maxVh) || 45) / 100));
   const want = el.scrollHeight + border;
   el.style.height = `${Math.min(want, max)}px`;
   el.style.overflowY = want > max ? 'auto' : 'hidden';
@@ -424,6 +461,7 @@ async function tick() {
   const task = state.tasks.find(t => t.id === activeTask);
   renderTabs(state);
   renderStepper(task);
+  renderViewBar(task);
   renderPanel(state, task);
 }
 
@@ -522,39 +560,118 @@ function syncTabLabel() {
 function renderStepper(task) {
   // Rebuilding innerHTML every second would drop focus and restart the pulse
   // animation, so the tiles are redrawn only when something about them changed.
-  const sigNow = task.id + '|' + task.steps
-    .filter(s => s.enabled !== false).map(s => `${s.id}:${s.status}`).join(',');
+  const viewed = viewedStep(task);
+  const sigNow = [task.id, viewed.id, task.steps.filter(s => s.enabled !== false)
+    .map(s => `${s.id}:${s.status}`).join(',')].join('|');
   const box = $('#stepper');
   if (box.dataset.sig === sigNow) return;
   box.dataset.sig = sigNow;
-  box.innerHTML = task.steps.filter(s => s.enabled !== false).map((s, i) => `
-    <div class="step ${s.status}">
+  box.innerHTML = task.steps.filter(s => s.enabled !== false).map((s, i) => {
+    const name = esc(s.name || STEP_NAMES[s.id - 1]);
+    const nav = visitable(s);
+    return `
+    <div class="step ${s.status}${nav ? ' clickable' : ''}${s.id === viewed.id ? ' viewing' : ''}"
+      data-step="${s.id}"${nav ? ` role="button" tabindex="0" aria-label="Go to ${name}"` : ''}>
       <span class="num">${i + 1}</span>
-      <span class="name">${esc(s.name || STEP_NAMES[s.id - 1])}</span>
+      <span class="name">${name}</span>
       <span class="badge">${BADGE[s.status] || s.status}</span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+  box.querySelectorAll('.step.clickable').forEach(el => {
+    const go = () => gotoStep(+el.dataset.step);
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      go();
+    });
+  });
 }
 
 const activeStepOf = task =>
   task.steps.find(s => s.id === task.activeStep) || task.steps[0];
+
+// A step the pipeline has already opened can be revisited; one it never reached
+// has no panel to show. Mockups stay unreachable while the toggle is off.
+const visitable = step => step.enabled !== false && step.status !== 'waiting';
+
+// The step whose panel is on screen: the user's own pick while it still holds,
+// otherwise wherever the pipeline is.
+function viewedStep(task) {
+  const v = viewOf(task.id);
+  const picked = v.viewStep && task.steps.find(s => s.id === v.viewStep);
+  if (picked && visitable(picked)) return picked;
+  v.viewStep = null;
+  return activeStepOf(task);
+}
+
+// Navigation is page state and nothing else: no answer is posted, so neither the
+// orchestrator nor any agent learns that the user looked at another step.
+function gotoStep(id) {
+  const task = currentTask();
+  if (!task) return;
+  const v = viewOf(task.id);
+  snapshotStep1();
+  // Step 7's panel and the summary share the screen — picking the tile means the panel.
+  if (id === MOCKOON_STEP) v.showSummary = false;
+  // Clicking the step the pipeline is on hands the view back to it; with a summary
+  // on screen every tile is a pick, because the summary is what following means.
+  v.viewStep = id === task.activeStep && !task.summary ? null : id;
+  lastSig = null;
+  tick();
+}
+
+// Only while the user is off the pipeline's own step — it is the way back.
+function renderViewBar(task) {
+  const box = $('#viewbar');
+  const v = viewOf(task.id);
+  const viewed = viewedStep(task);
+  const followed = task.summary ? null : activeStepOf(task);
+  const name = s => esc(s.name || STEP_NAMES[s.id - 1]);
+  const sigNow = v.viewStep == null ? ''
+    : [task.id, viewed.id, followed ? followed.id : 'S', pending(task) ? '!' : ''].join('|');
+  if (box.dataset.sig === sigNow) return;
+  box.dataset.sig = sigNow;
+  if (v.viewStep == null) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = `<span>Viewing <b>${name(viewed)}</b> — ${followed
+    ? `the pipeline is on <b>${name(followed)}</b>${
+      pending(task) ? ' and is waiting for you' : ''}.`
+    : 'the pipeline has finished.'}</span>
+    <button id="goCurrent" class="secondary">${
+  followed ? 'Go to current' : 'Back to summary'}</button>`;
+  $('#goCurrent').addEventListener('click', () => {
+    v.viewStep = null;
+    if (task.summary) v.showSummary = true;
+    lastSig = null;
+    tick();
+  });
+}
 
 // A task stopped at a gate, waiting for the user rather than for an agent.
 const pending = task => !!(task.question || task.reviewSummary || task.mockupReview);
 
 function sig(task) {
   const v = viewOf(task.id);
-  const step = activeStepOf(task);
+  const step = viewedStep(task);
   const mockoon = task.steps.find(s => s.id === MOCKOON_STEP);
-  return [task.id, task.activeStep, step.status,
+  return [task.id, step.id, task.activeStep, step.status,
     task.question ? `q${task.questionSeq || 0}` : '',
-    task.reviewSummary ? '1' : '',
-    // rev changes on every agent round, which re-renders the mockup panel and
-    // clears the lock left by the previous Send.
+    // rev changes on every agent round, so a revised plan replaces the one on
+    // screen instead of leaving stale text under a gate the user is answering.
+    task.reviewSummary ? `r${task.reviewSummary.rev || 0}` : '',
+    // Same for the mockups, where it also clears the lock left by an Approve.
     task.mockupReview ? `m${task.mockupReview.rev || 0}` : '',
     task.summary ? '1' : '',
     // The Mockoon step changes status while the summary is the visible screen,
     // and the switch between the two screens is local — both must re-render.
-    mockoon ? mockoon.status : '', v.showSummary ? 'S' : ''].join('|');
+    mockoon ? mockoon.status : '', v.showSummary ? 'S' : '',
+    // Stepping off the pipeline's own step is a different screen, and so is coming back.
+    v.viewStep == null ? '' : 'V'].join('|');
 }
 
 function renderPanel(state, task) {
@@ -562,10 +679,13 @@ function renderPanel(state, task) {
   const mockoon = task.steps.find(s => s.id === MOCKOON_STEP);
   // A fresh Mockoon run always pulls the user back onto its panel, whatever they
   // were looking at when they asked for it.
-  if (mockoon && mockoon.status === 'in_progress') v.showSummary = false;
+  if (mockoon && mockoon.status === 'in_progress') {
+    v.showSummary = false;
+    v.viewStep = null;
+  }
   const s = sig(task);
-  const step = activeStepOf(task);
-  if (s === lastSig) { updateDynamic(step); return; }
+  const step = viewedStep(task);
+  if (s === lastSig) { updateDynamic(task, step); return; }
   lastSig = s;
   renderActive(task, step);
   wireCopyButtons();
@@ -578,26 +698,31 @@ function renderPanel(state, task) {
 
 function renderActive(task, step) {
   refreshGate = null;
+  const v = viewOf(task.id);
+  // A gate only answers while the orchestrator is actually waiting at it, so a
+  // step revisited after the fact shows its panel without its buttons. Step 7 is
+  // the exception on the summary test: its gate opens after the summary is written.
+  const live = step.id === task.activeStep && (step.id === MOCKOON_STEP || !task.summary);
   // Mockoon mocks are generated after the pipeline is over, so while step 7 is the
-  // active one its panel outranks the summary — until the user asks to go back.
-  if (task.activeStep === MOCKOON_STEP && !viewOf(task.id).showSummary) {
-    return step.status === 'failed' ? renderFailed(step) : renderMockoon(step);
+  // one on screen its panel outranks the summary — until the user asks to go back.
+  if (step.id === MOCKOON_STEP && !v.showSummary) {
+    return step.status === 'failed' ? renderFailed(step, live) : renderMockoon(task, step);
   }
-  if (task.summary) return renderSummary(task);
-  if (step.status === 'failed') return renderFailed(step);
-  // Any step may ask: the refinement Q&A in step 2, the required Chrome extension in step 5.
-  if (task.question) return renderQuestion(task.question, step);
-  if (task.activeStep === 1) return renderStep1(task);
-  if (task.activeStep === 2 && task.reviewSummary) return renderReview(task.reviewSummary);
-  if (task.activeStep === 3 && task.mockupReview) {
-    return renderMockupReview(task.mockupReview);
-  }
-  renderProgress(step);
+  // The summary is what following the pipeline means once it is written; a step
+  // the user picked for themselves outranks it.
+  if (task.summary && v.viewStep == null) return renderSummary(task);
+  if (step.status === 'failed') return renderFailed(step, live);
+  // A question carries no step of its own — it belongs to whatever step is running.
+  if (task.question && live) return renderQuestion(task.question, step);
+  if (step.id === 1) return renderStep1(task);
+  if (step.id === 2 && task.reviewSummary) return renderReview(task.reviewSummary);
+  if (step.id === 3 && task.mockupReview) return renderMockupReview(task.mockupReview);
+  renderProgress(task, step);
 }
 
 function renderStep1(task) {
   const step = task.steps[0];
-  if (step.status !== 'in_progress') {
+  if (step.status === 'waiting') {
     $('#panel').innerHTML = '<p class="muted">Waiting for the pipeline…</p>';
     return;
   }
@@ -605,8 +730,13 @@ function renderStep1(task) {
   // user came back to arrives filled in rather than blank.
   // An unsubmitted draft outranks the last submission for the text fields; the
   // file lists always come from the server, which is what actually holds them.
-  const d = { ...(task.step1 || {}), ...(viewOf(task.id).draft || {}) };
+  const v = viewOf(task.id);
+  const d = { ...(task.step1 || {}), ...(v.draft || {}) };
   const revisit = !!task.step1Submitted;
+  // Implementation is the point of no return: from there the form is the record of
+  // what was asked for, not something the pipeline can still be sent back over.
+  const frozen = revisit
+    && ((task.steps.find(s => s.id === 4) || {}).status !== 'waiting' || !!task.summary);
   // Files already on disk cannot be put back into a file input, so they are listed
   // separately and removed through the server.
   const fileList = cat => {
@@ -665,7 +795,12 @@ function renderStep1(task) {
       <button type="button" id="togglePassword" class="reveal" aria-pressed="false"
         aria-label="Show password" title="Show password">${EYE}</button>
     </div>
-    <button id="next" disabled>${revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>
+    ${frozen ? '<p class="hint">Implementation has started — the requirements are frozen for'
+      + ' this task. Create a new task to take the feature in another direction.</p>'
+      : `<button id="next" disabled>${
+        revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>
+    <p class="hint" id="changeHint" hidden>Nothing changed yet — edit a field, add or remove a
+      file, or fill in credentials to re-run refinement.</p>`}
     <button id="createTask" class="secondary">Create new task</button>`;
   $('#togglePassword').addEventListener('click', () => {
     const input = $('#authPassword');
@@ -691,42 +826,12 @@ function renderStep1(task) {
       btn.disabled = true;
       await postJson('/api/upload/remove',
         { taskId: activeTask, category: btn.dataset.cat, filename: btn.dataset.name });
+      if (revisit) v.filesDirty = true;
       lastSig = null;
       tick();
     }));
-  const auth = () => {
-    const login = $('#authLogin').value.trim();
-    const password = $('#authPassword').value;
-    return { login, password, complete: !!(login && password.trim()) };
-  };
-  const gate = () => {
-    const a = auth();
-    const branch = $('#branch').value.trim();
-    // Two tasks cannot share a branch: step 4 would fail on `git worktree add`,
-    // and only then — after refinement, mockups and a plan. Say so here instead.
-    const taken = (lastState ? lastState.tasks : [])
-      .some(t => t.id !== task.id && t.branch && t.branch === branch);
-    const problem = !branch ? ''
-      : !branchOk(branch) ? 'Not a valid git branch name.'
-        : taken ? 'Another task is already using this branch.' : '';
-    $('#branchHint').textContent = problem;
-    $('#branchHint').hidden = !problem;
-    // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
-    $('#next').disabled = !($('#task').value.trim() && $('#biz').value.trim()
-      && branchOk(branch) && !taken
-      && (a.complete || (!a.login && !a.password.trim())));
-  };
-  ['#task', '#biz', '#branch', '#authLogin', '#authPassword'].forEach(sel =>
-    $(sel).addEventListener('input', gate));
-  gate();   // a form that arrived filled in must enable Next without a keystroke
-  refreshGate = gate;
-  // Keep the draft current as the branch is typed, so the open tab's label can
-  // follow it without the bar re-rendering.
-  $('#branch').addEventListener('input', () => {
-    snapshotStep1();
-    syncTabLabel();
-  });
-  // Non-destructive and reversible with the tab's ×, so no confirmation.
+  // Non-destructive and reversible with the tab's ×, so no confirmation — and it
+  // stays available on a frozen form, which is the way to change direction.
   $('#createTask').addEventListener('click', async () => {
     $('#createTask').disabled = true;
     snapshotStep1();
@@ -741,6 +846,62 @@ function renderStep1(task) {
     }
     lastSig = null;
     tick();
+  });
+  if (frozen) {
+    document.querySelectorAll('#panel textarea, #panel input, #panel .rm')
+      .forEach(el => { el.disabled = true; });
+    return;
+  }
+  const auth = () => {
+    const login = $('#authLogin').value.trim();
+    const password = $('#authPassword').value;
+    return { login, password, complete: !!(login && password.trim()) };
+  };
+  // Walking back to the form to re-read it is free; re-running refinement is not,
+  // so a resubmission has to carry something the agents have not seen.
+  const changed = () => {
+    if (v.filesDirty) return true;
+    if (['#mockups', '#contracts', '#hints'].some(sel => $(sel).files.length)) return true;
+    const a = auth();
+    if (a.login || a.password) return true;
+    const prev = task.step1 || {};
+    const same = (sel, key) => $(sel).value.trim() === String(prev[key] || '').trim();
+    return !(same('#task', 'taskDescription') && same('#biz', 'businessRequirements')
+      && same('#branch', 'branch') && same('#contractsText', 'contractsText')
+      && same('#hintsNote', 'hintsNote')
+      && $('#genMockups').checked === !!prev.generateMockups);
+  };
+  const gate = () => {
+    const a = auth();
+    const branch = $('#branch').value.trim();
+    // Two tasks cannot share a branch: step 4 would fail on `git worktree add`,
+    // and only then — after refinement, mockups and a plan. Say so here instead.
+    const taken = (lastState ? lastState.tasks : [])
+      .some(t => t.id !== task.id && t.branch && t.branch === branch);
+    const problem = !branch ? ''
+      : !branchOk(branch) ? 'Not a valid git branch name.'
+        : taken ? 'Another task is already using this branch.' : '';
+    $('#branchHint').textContent = problem;
+    $('#branchHint').hidden = !problem;
+    // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
+    const valid = !!($('#task').value.trim() && $('#biz').value.trim()
+      && branchOk(branch) && !taken
+      && (a.complete || (!a.login && !a.password.trim())));
+    const dirty = !revisit || changed();
+    $('#next').disabled = !(valid && dirty);
+    $('#changeHint').hidden = !(valid && !dirty);
+  };
+  ['#task', '#biz', '#branch', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
+    .forEach(sel => $(sel).addEventListener('input', gate));
+  ['#genMockups', '#mockups', '#contracts', '#hints']
+    .forEach(sel => $(sel).addEventListener('change', gate));
+  gate();   // a form that arrived filled in must enable Next without a keystroke
+  refreshGate = gate;
+  // Keep the draft current as the branch is typed, so the open tab's label can
+  // follow it without the bar re-rendering.
+  $('#branch').addEventListener('input', () => {
+    snapshotStep1();
+    syncTabLabel();
   });
   $('#next').addEventListener('click', async () => {
     const ok = await askConfirm({
@@ -786,40 +947,63 @@ function renderStep1(task) {
       mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
       authProvided: a.complete || task.authSaved,
       generateMockups: $('#genMockups').checked });
-    viewOf(activeTask).draft = null;
+    v.draft = null;
+    v.filesDirty = false;
+    // Submitting means "go", so the view rejoins the pipeline wherever it now is.
+    v.viewStep = null;
   });
 }
 
-// Only on the three interactive gates — the step-2 question, the plan gate and the
-// mockup gate. Those are exactly the moments the orchestrator is blocked on
-// GET /api/answer, so the answer reaches the right gate. On a progress panel it
-// would sit in the queue and later be mistaken for the answer to a question, and
-// from step 4 on the point of no return has passed.
+// A shortcut to the stepper's own first tile, offered on the three interactive
+// gates. It only changes what is on screen: the gate stays open, the agents hear
+// nothing, and refinement re-runs only if the form comes back actually changed.
 const backButton = () => '<button id="backToStep1" class="secondary">Back to requirements</button>';
 
 function wireBackButton() {
   const btn = $('#backToStep1');
   if (!btn) return;
-  btn.addEventListener('click', async () => {
-    const ok = await askConfirm({ title: 'Back to requirements?',
-      text: 'Refinement re-runs on what you change — and the mockups too, when they are enabled. '
-        + 'Everything you already answered stays.',
-      confirmLabel: 'Back to the form' });
-    if (!ok) return;
-    lockPanel('Going back to the requirements form…');
-    sendAnswer({ kind: 'back' });
-  });
+  btn.addEventListener('click', () => gotoStep(1));
+}
+
+const msgHtml = (role, text) =>
+  `<div class="msg ${role === 'user' ? 'user' : 'agent'}">
+    <span class="who">${role === 'user' ? 'You' : 'Agent'}</span>${esc(text)}</div>`;
+
+// A text message no longer locks the panel, so this trail is what tells the user
+// it went out. It belongs to the panel on screen and is dropped with it — the
+// mockup step has the server's own chat instead and never uses this.
+function renderSentTrail() {
+  const box = $('#sentTrail');
+  if (!box) return;
+  const v = viewOf(activeTask);
+  if (v.sentSig !== lastSig) {
+    v.sent = [];
+    v.sentSig = lastSig;
+  }
+  box.innerHTML = v.sent.map(t => msgHtml('user', t)).join('');
+}
+
+function pushSent(text) {
+  const v = viewOf(activeTask);
+  if (v.sentSig !== lastSig) {
+    v.sent = [];
+    v.sentSig = lastSig;
+  }
+  v.sent.push(text);
+  renderSentTrail();
 }
 
 function renderQuestion(q, step) {
   // Steps 1-3 are the interactive ones — there an answer is confirmed before it is sent.
   // Step 5 only asks to retry the Chrome extension, which needs no gate.
   const confirmFirst = step.id <= 3;
-  const submit = async (value, mark) => {
+  // An answer never locks the panel: the user may follow it with a correction or
+  // an afterthought while the agent is still reading the first one.
+  const submit = async (value, after) => {
     if (confirmFirst && !await askConfirm({ title: 'Send this answer?', text: value,
       confirmLabel: 'Send answer' })) return;
-    if (mark) mark();
-    lockPanel('Answer sent — the agent is processing it…');
+    if (after) after();
+    pushSent(value);
     sendAnswer({ kind: 'answer', questionId: q.id, value });
   };
   const opts = (q.options || []).map((o, i) =>
@@ -828,6 +1012,7 @@ function renderQuestion(q, step) {
     <h2>${esc(step.name || STEP_NAMES[step.id - 1])}</h2>
     <p>${esc(q.text)}</p>
     <div class="options">${opts}</div>
+    <div class="sent" id="sentTrail"></div>
     <label>…or type your own answer</label>
     <textarea id="freeAnswer"></textarea>
     <button id="send">Send answer</button>
@@ -836,9 +1021,14 @@ function renderQuestion(q, step) {
     btn.addEventListener('click', () =>
       submit(q.options[+btn.dataset.opt], () => btn.classList.add('selected'))));
   $('#send').addEventListener('click', () => {
-    const v = $('#freeAnswer').value.trim();
-    if (v) submit(v);
+    const value = $('#freeAnswer').value.trim();
+    if (!value) return;
+    submit(value, () => {
+      $('#freeAnswer').value = '';
+      autoGrow($('#freeAnswer'));
+    });
   });
+  renderSentTrail();
   wireBackButton();
 }
 
@@ -847,6 +1037,7 @@ function renderReview(review) {
     <h2>Plan review</h2>
     <pre class="summary-text">${esc(review.text)}</pre>
     <button id="approve">Approve</button>
+    <div class="sent" id="sentTrail"></div>
     <label>…or request changes</label>
     <textarea id="feedback"></textarea>
     <button id="sendFeedback" class="secondary">Send feedback</button>
@@ -863,9 +1054,12 @@ function renderReview(review) {
   $('#sendFeedback').addEventListener('click', () => {
     const t = $('#feedback').value.trim();
     if (!t) return;
-    lockPanel('Feedback sent — the agent is revising the plan…');
+    $('#feedback').value = '';
+    autoGrow($('#feedback'));
+    pushSent(t);
     sendAnswer({ kind: 'decision', decision: 'feedback', text: t });
   });
+  renderSentTrail();
   wireBackButton();
 }
 
@@ -905,9 +1099,6 @@ function renderMockupReview(review) {
   const viewports = Object.keys(MOCKUP_VIEWPORTS).map(vp =>
     `<button data-viewport="${vp}"${vp === v.mockupViewport ? ' class="selected"' : ''}>${
       vp}</button>`).join('');
-  const chat = (review.chat || []).map(m =>
-    `<div class="msg ${m.role === 'user' ? 'user' : 'agent'}">
-      <span class="who">${m.role === 'user' ? 'You' : 'Agent'}</span>${esc(m.text)}</div>`).join('');
   $('#panel').innerHTML = `
     <h2>Mockups</h2>
     ${review.text ? `<pre class="summary-text">${esc(review.text)}</pre>` : ''}
@@ -916,12 +1107,18 @@ function renderMockupReview(review) {
       <div class="tabs">${viewports}</div>
     </div>
     <div id="preview"></div>
-    ${chat ? `<div class="chat">${chat}</div>` : ''}
-    <label>Refine the mockup — describe what to change</label>
-    <textarea id="mockupFeedback"></textarea>
-    <button id="sendMockup" class="secondary">Send</button>
-    <button id="approveMockup">Approve mockups</button>
-    ${backButton()}`;
+    <div class="chat" id="mockupChat">${chatHtml(review.chat || [])}</div>
+    <div class="gate-actions">
+      <button id="approveMockup">Approve mockups</button>
+      ${backButton()}
+    </div>
+    <div class="composer">
+      <textarea id="mockupFeedback" data-max-vh="30" rows="1"
+        placeholder="Describe what to change — Ctrl+Enter sends"></textarea>
+      <button id="sendMockup" class="secondary">Send</button>
+    </div>`;
+  // Whatever was half-typed when the agent's next round landed.
+  $('#mockupFeedback').value = v.mockupDraft || '';
   const select = (attr, apply) => document.querySelectorAll(`[data-${attr}]`).forEach(btn =>
     btn.addEventListener('click', () => {
       document.querySelectorAll(`[data-${attr}]`)
@@ -931,12 +1128,28 @@ function renderMockupReview(review) {
     }));
   select('screen', val => { v.mockupScreen = +val; });
   select('viewport', val => { v.mockupViewport = val; });
-  $('#sendMockup').addEventListener('click', () => {
-    const t = $('#mockupFeedback').value.trim();
+  // Sending does not lock: the user may add a second thought before the agent has
+  // even read the first. The server records each message as it arrives, so the chat
+  // shows it without waiting for the orchestrator to come back round.
+  const send = async () => {
+    const el = $('#mockupFeedback');
+    const t = el.value.trim();
     if (!t) return;
-    lockPanel('Feedback sent — the agent is reworking the mockup…');
-    sendAnswer({ kind: 'mockup', decision: 'feedback', text: t });
+    el.value = '';
+    v.mockupDraft = '';
+    autoGrow(el);
+    await sendAnswer({ kind: 'mockup', decision: 'feedback', text: t });
+    tick();
+  };
+  $('#mockupFeedback').addEventListener('input', () => {
+    v.mockupDraft = $('#mockupFeedback').value;
   });
+  $('#mockupFeedback').addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    send();
+  });
+  $('#sendMockup').addEventListener('click', send);
   $('#approveMockup').addEventListener('click', async () => {
     const ok = await askConfirm({
       title: 'Approve the mockups?',
@@ -951,18 +1164,36 @@ function renderMockupReview(review) {
   drawPreview(review);
 }
 
-function renderProgress(step) {
+const chatHtml = msgs => msgs.map(m => msgHtml(m.role, m.text)).join('');
+
+// Appended rather than re-rendered: rebuilding the panel would reload the preview
+// iframe and throw away whatever is half-typed in the composer.
+function updateMockupChat(review) {
+  const box = $('#mockupChat');
+  if (!box) return;
+  const msgs = review.chat || [];
+  const have = box.childElementCount;
+  if (have === msgs.length) return;
+  if (have > msgs.length) {
+    box.innerHTML = chatHtml(msgs);
+    return;
+  }
+  box.insertAdjacentHTML('beforeend', chatHtml(msgs.slice(have)));
+}
+
+function renderProgress(task, step) {
   $('#panel').innerHTML = `
     <h2>${esc(step.name)}</h2>
     <div class="bar"><div id="barFill"></div></div>
     <div class="op" id="op"></div>
     <ul class="log" id="log"></ul>`;
-  updateDynamic(step);
+  updateDynamic(task, step);
 }
 
 // Runs on every tick of a view-only step, which is most of a long run — so each
 // piece is written only when its own value actually moved.
-function updateDynamic(step) {
+function updateDynamic(task, step) {
+  if (step.id === 3 && task.mockupReview) updateMockupChat(task.mockupReview);
   const fill = $('#barFill');
   if (fill) {
     const indeterminate = step.progress == null && step.status === 'in_progress';
@@ -984,10 +1215,19 @@ function updateDynamic(step) {
     `<li><time>${esc(e.time.slice(11, 19))}</time>${esc(e.text)}</li>`).join('');
 }
 
-function renderFailed(step) {
+function renderFailed(step, live) {
   // Step 7 runs after the pipeline is already finished, so declining its retry drops
   // the user back on the summary instead of ending the run.
   const isMockoon = step.id === MOCKOON_STEP;
+  // Nobody is waiting on this one any more, so Retry and Finish would send a
+  // decision into an empty queue for a later gate to mistake for its own.
+  if (!live) {
+    $('#panel').innerHTML = `
+      <h2>${esc(step.name)} — failed</h2>
+      <pre class="report">${esc(step.report || 'No report provided.')}</pre>
+      <p class="muted">The pipeline is no longer waiting on this step.</p>`;
+    return;
+  }
   $('#panel').innerHTML = `
     <h2>${esc(step.name)} — failed</h2>
     <pre class="report">${esc(step.report || 'No report provided.')}</pre>
@@ -1013,7 +1253,10 @@ function renderFailed(step) {
 }
 
 function backToSummary() {
-  viewOf(activeTask).showSummary = true;
+  const v = viewOf(activeTask);
+  v.showSummary = true;
+  v.viewStep = null;
+  lastSig = null;
   tick();
 }
 
@@ -1034,8 +1277,8 @@ async function copyText(text) {
   ta.remove();
 }
 
-function renderMockoon(step) {
-  if (step.status !== 'completed') return renderProgress(step);
+function renderMockoon(task, step) {
+  if (step.status !== 'completed') return renderProgress(task, step);
   $('#panel').innerHTML = `
     <h2>${esc(step.name)}</h2>
     <p class="muted">Import it in Mockoon (Import/export → Mockoon's format → from clipboard).

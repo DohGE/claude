@@ -630,3 +630,34 @@ test('POST /api/state bumps questionSeq per task even when the question id repea
   assert.strictEqual(await seq('t1'), 3, 'every question POST moves the counter the UI re-renders on');
   assert.strictEqual(await seq('t2'), 0, 'the counter belongs to the task, not the run');
 });
+
+test('POST /api/answer records mockup feedback in the chat as it arrives', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 3, enabled: true });
+  await postState(base, { step: 3, status: 'in_progress', activeStep: 3,
+    mockupReview: { text: 'Two screens', screens: [] } });
+  await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'feedback',
+    text: 'Wider button' });
+  const chat = (await task0(base)).mockupReview.chat;
+  assert.deepStrictEqual(chat, [{ role: 'user', text: 'Wider button' }],
+    'the browser gets its message back without waiting for the orchestrator');
+  // Approve is not a chat message.
+  await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'approve' });
+  assert.strictEqual((await task0(base)).mockupReview.chat.length, 1);
+});
+
+test('POST /api/state stamps reviewSummary with a fresh rev every round', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const rev = async () => (await task0(base)).reviewSummary.rev;
+  await postState(base, { step: 2, reviewSummary: { text: 'Plan v1' } });
+  assert.strictEqual(await rev(), 1);
+  await postState(base, { reviewSummary: null });
+  await postState(base, { step: 2, reviewSummary: { text: 'Plan v2' } });
+  assert.strictEqual(await rev(), 2, 'a revised plan must replace the one on screen');
+  await postState(base, { step: 2, reviewSummary: { text: 'Plan v3', rev: 9 } });
+  assert.strictEqual(await rev(), 9, 'an explicit rev still wins, as a resumed run needs');
+});

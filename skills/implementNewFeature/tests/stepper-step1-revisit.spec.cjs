@@ -51,9 +51,14 @@ test('formularz wraca wypełniony poprzednim zgłoszeniem', async ({ page }) => 
   await expect(page.locator('#contractsText')).toHaveValue('POST /invites');
   await expect(page.locator('#hintsNote')).toHaveValue('układ z ekranu 2');
   await expect(page.locator('#genMockups')).toBeChecked();
-  // Wypełniony formularz musi odblokować Next bez żadnego wciśnięcia klawisza.
-  await expect(page.locator('#next')).toBeEnabled();
+  // Nic się nie zmieniło, więc nie ma czego wysyłać — agenci zostają w spokoju.
+  await expect(page.locator('#next')).toBeDisabled();
+  await expect(page.locator('#changeHint')).toBeVisible();
   await expect(page.locator('#next')).toHaveText('Resubmit and re-run refinement');
+  // Dopiero realna zmiana otwiera ponowne zgłoszenie.
+  await page.fill('#biz', 'Admin i menedżer zapraszają');
+  await expect(page.locator('#next')).toBeEnabled();
+  await expect(page.locator('#changeHint')).toBeHidden();
   // Opis materiałów jest widoczny, bo pliki już są — mimo pustego inputu plikowego.
   await expect(page.locator('#hintsNoteBox')).toBeVisible();
 });
@@ -61,6 +66,7 @@ test('formularz wraca wypełniony poprzednim zgłoszeniem', async ({ page }) => 
 test('ponowne zgłoszenie zapowiada zawężony re-run', async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#next');
+  await page.fill('#biz', 'Admin i menedżer zapraszają');
   await page.click('#next');
   await expect(page.locator('#confirmTitle')).toHaveText('Resubmit the requirements?');
   await expect(page.locator('#confirmText')).toContainText('re-runs on what you changed');
@@ -96,6 +102,31 @@ test('edycja i ponowne wysłanie nadpisuje zapisane zgłoszenie', async ({ page 
   expect(task.branch).toBe('feature/zaproszenia-v2');
 });
 
+test('sam toggle makiet wystarcza za zmianę', async ({ page }) => {
+  await page.goto(base);
+  await page.waitForSelector('#genMockups');
+  await expect(page.locator('#next')).toBeDisabled();
+  await page.uncheck('#genMockups');
+  await expect(page.locator('#next')).toBeEnabled();
+  await page.click('#next');
+  await page.click('#confirmOk');
+  const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
+  expect(answer.generateMockups).toBe(false);
+});
+
+test('po starcie implementacji formularz jest tylko do odczytu', async ({ page }) => {
+  await state({ step: 1, status: 'completed' });
+  await state({ step: 4, status: 'in_progress', activeStep: 4 });
+  await page.goto(base);
+  await page.waitForSelector('.step[data-step="1"]');
+  await page.click('.step[data-step="1"]');
+  await expect(page.locator('#task')).toBeDisabled();
+  await expect(page.locator('#panel')).toContainText('requirements are frozen');
+  await expect(page.locator('#next')).toHaveCount(0);
+  // Nowe zadanie to jedyne wyjście i musi zostać dostępne.
+  await expect(page.locator('#createTask')).toBeEnabled();
+});
+
 test('zapisane poświadczenia są sygnalizowane, a pola zostają puste', async ({ page }) => {
   await post('/api/auth', { taskId: 't1', login: 'qa@example.com', password: 'sekret' });
   await page.goto(base);
@@ -104,6 +135,7 @@ test('zapisane poświadczenia są sygnalizowane, a pola zostają puste', async (
   await expect(page.locator('#authLogin')).toHaveValue('');
   await expect(page.locator('#authPassword')).toHaveValue('');
   // Bez ponownego wpisania poświadczeń odpowiedź nadal mówi, że są.
+  await page.fill('#biz', 'Admin i menedżer zapraszają');
   await page.click('#next');
   await page.click('#confirmOk');
   const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
