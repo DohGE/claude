@@ -853,7 +853,7 @@ through missing real line numbers and rule references.
 - component-test: DOM assertions via `fixture.debugElement.query(By.css(...))` (markup belongs to snapshots/e2e).
 - component-test: facade mock cast `as unknown as UserPanelFacade` instead of `Partial<Facade>` with real `signal(...)` values; signal mocked as `jest.fn`.
 - component-test: TestBed + `beforeEach` fixture instead of `MockBuilder`/`ngMocks.faster()` + one shared `MockRender` in `beforeAll`.
-- unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); injected-dependency variable named `svc`; existence-only `should create` test; `it.each` dataset inline, unused in assertions (test asserts nothing per-case); `it`/`it.each` descriptions not starting with `should` (`'renders the card'`, `'renders %s %s'`, `'opens details'`, `'collapses the card'`, `'emits the note'`).
+- unit-tests: SCREAMING_SNAKE fixture (`MOCK_USERS`); injected-dependency variable named `svc`; existence-only `should create` test; `it.each` row values unused in assertions (test asserts nothing per-case); `it`/`it.each` descriptions not starting with `should` (`'renders the card'`, `'renders %s %s'`, `'opens details'`, `'collapses the card'`, `'emits the note'`).
 - general + unit-tests: `it.only('emits the note')` — a committed focused test silently reduces the suite to one case (🔴 High).
 - component + unit-tests: `component['isExpanded']` reaches a member through string-index access to work around visibility.
 - unit-tests: `'collapses the card'` calls `setInput(...)` and asserts without flushing change detection (`fixture.detectChanges()`/`TestBed.tick()`), so it reads the pre-effect state.
