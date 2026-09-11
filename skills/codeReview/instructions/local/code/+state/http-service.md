@@ -3,6 +3,8 @@ name: HTTP service
 applies-to:
   - "**/data-access/services/*.service.ts"
   - "**/data-access/services/**/*.service.ts"
+  - "!**/*.spec.ts"
+gate: the file is an HTTP layer - it injects an HTTP client (`HttpClient`) or its methods execute REST requests. A service in this folder that performs no request is an architecture finding (wrong location), never a set of HTTP-service findings
 ---
 ## Checklist
 - The service is a thin HTTP layer — the only place in the area executing REST requests — injected **exclusively by effects**; never used by components, facades, reducers or selectors.

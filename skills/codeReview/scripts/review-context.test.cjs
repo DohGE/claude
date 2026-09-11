@@ -372,6 +372,14 @@ function makeSkillDir(t, locals = {}, globals = {}) {
 
 const TS_INSTRUCTION = '---\nname: TS\napplies-to:\n  - "**/*.ts"\n---\n## Checklist\n- rule\n';
 
+// How many items a plan entry's spec (`1-3,7`) stands for.
+function countSpec(spec) {
+  return spec.split(',').reduce((n, part) => {
+    const [from, to] = part.split('-').map(Number);
+    return n + (to === undefined ? 1 : to - from + 1);
+  }, 0);
+}
+
 test('matchLocalInstructions applies globs per file', () => {
   const locals = [
     { file: 'L/angular-ts.md', appliesTo: ['**/*.component.ts'] },
@@ -452,7 +460,7 @@ test('a global excludes a folder it has nothing to say about', (t) => {
   const files = ctx.targets[0].files;
   const code = files.find((f) => f.path === 'src/a.service.ts');
   const model = files.find((f) => f.path === 'src/models/user.interface.ts');
-  assert.deepStrictEqual(code.checklist, ['coverage:2', 'naming:1']);
+  assert.deepStrictEqual(code.checklist, ['coverage:1-2', 'naming:1']);
   assert.deepStrictEqual(model.checklist, ['naming:1'], 'the excluded global is out of the plan');
   assert.strictEqual(model.checklistTotal, 1);
   assert.deepStrictEqual(model.globalInstructionsSkipped.map((f) => path.basename(f)), ['coverage.md']);
@@ -769,7 +777,7 @@ test('every file carries the checklist size it must be walked against', (t) => {
   assert.strictEqual(file.checklistTotal, 5, '3 global + 2 local checklist items');
 });
 
-test('every file carries its ticking plan: instruction id + item count, globals first', (t) => {
+test('every file carries its ticking plan: instruction id + item numbers, globals first', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/plan']);
   commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
@@ -788,10 +796,10 @@ test('every file carries its ticking plan: instruction id + item count, globals 
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   const files = ctx.targets[0].files;
   const code = files.find((f) => f.path === 'src/a.ts');
-  assert.deepStrictEqual(code.checklist, ['naming:3', 'runtime:2', 'ts:2'], 'globals first, then the matched locals');
+  assert.deepStrictEqual(code.checklist, ['naming:1-3', 'runtime:1-2', 'ts:1-2'], 'globals first, then the matched locals');
   assert.deepStrictEqual(code.globalInstructionsSkipped, [], 'a .ts file is in scope of both globals');
   const doc = files.find((f) => f.path === 'config/app.json');
-  assert.deepStrictEqual(doc.checklist, ['naming:3'], 'a scoped global drops out of a file it does not apply to');
+  assert.deepStrictEqual(doc.checklist, ['naming:1-3'], 'a scoped global drops out of a file it does not apply to');
   assert.strictEqual(doc.checklistTotal, 3, 'the total counts only the globals this file is walked against');
   assert.deepStrictEqual(
     doc.globalInstructionsSkipped.map((f) => path.basename(f)),
@@ -799,7 +807,7 @@ test('every file carries its ticking plan: instruction id + item count, globals 
     'the skipped globals are named, so a shorter plan reads as a decision',
   );
   assert.strictEqual(
-    code.checklist.reduce((n, entry) => n + Number(entry.split(':')[1]), 0),
+    code.checklist.reduce((n, entry) => n + countSpec(entry.split(':')[1]), 0),
     code.checklistTotal,
     'the plan sums to the checklist total',
   );
@@ -808,6 +816,164 @@ test('every file carries its ticking plan: instruction id + item count, globals 
     { naming: 'naming.md', runtime: 'runtime.md', ts: 'ts.md' },
     'an instruction with no checklist items is left out of the plan and the dictionary',
   );
+});
+
+test('formatItemSpec collapses consecutive item numbers into ranges', () => {
+  assert.strictEqual(rc.formatItemSpec([1, 2, 3]), '1-3');
+  assert.strictEqual(rc.formatItemSpec([1, 3, 4, 5, 9]), '1,3-5,9');
+  assert.strictEqual(rc.formatItemSpec([7]), '7');
+  assert.strictEqual(rc.formatItemSpec([]), '');
+});
+
+test('parseChecklistItems reads the scope tag of every item, numbering unchanged', (t) => {
+  const dir = tempDir(t, 'cr-items-');
+  const file = path.join(dir, 'i.md');
+  fs.writeFileSync(file, [
+    '---',
+    'name: Scoped',
+    'scopes:',
+    '  styles: ["**/*.scss", "**/*.css"]',
+    '  markup:',
+    '    - "**/*.html"',
+    '---',
+    '## Checklist',
+    '- plain rule',
+    '- {styles} a stylesheet rule',
+    '- {markup, styles} a rule for both',
+    '- `@defer` is not a scope tag',
+    '',
+  ].join('\n'));
+  assert.deepStrictEqual(rc.parseChecklistItems(file), [
+    { n: 1, scopes: [] },
+    { n: 2, scopes: ['styles'] },
+    { n: 3, scopes: ['markup', 'styles'] },
+    { n: 4, scopes: [] },
+  ]);
+  assert.strictEqual(rc.countChecklistItems(file), 4, 'numbering still counts every bullet');
+  const fm = rc.parseFrontmatter(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual(fm.scopes, { styles: ['**/*.scss', '**/*.css'], markup: ['**/*.html'] });
+});
+
+test('matchChecklistItems keeps untagged items and narrows the tagged ones', () => {
+  const items = [
+    { n: 1, scopes: [] },
+    { n: 2, scopes: ['styles'] },
+    { n: 3, scopes: ['markup', 'styles'] },
+    { n: 4, scopes: ['typo'] },
+  ];
+  const named = { styles: ['**/*.scss'], markup: ['**/*.html'] };
+  assert.deepStrictEqual(rc.matchChecklistItems(items, named, 'src/a.scss'), [1, 2, 3, 4]);
+  assert.deepStrictEqual(rc.matchChecklistItems(items, named, 'src/a.html'), [1, 3, 4]);
+  assert.deepStrictEqual(
+    rc.matchChecklistItems(items, named, 'src/a.ts'),
+    [1, 4],
+    'an undeclared scope name fails open - a typo never deletes a rule',
+  );
+});
+
+test('item scope tags narrow the plan and the total, and a fully out-of-scope instruction drops out', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/item-scopes']);
+  commitFile(dir, 'src/a.component.scss', '.a { color: red }\n', 'styles');
+  commitFile(dir, 'src/a.component.ts', 'export class A {}\n', 'code');
+  const skillDir = makeSkillDir(
+    t,
+    { 'tsonly.md': '---\nname: TS only\napplies-to:\n  - "**/*.ts"\n  - "**/*.scss"\nscopes:\n  ts: ["**/*.ts"]\n---\n- {ts} one\n- {ts} two\n' },
+    {
+      'mixed.md': [
+        '---',
+        'name: Mixed',
+        'scopes:',
+        '  styles: ["**/*.scss"]',
+        '  code: ["**/*.ts"]',
+        '---',
+        '- everywhere',
+        '- {styles} contrast',
+        '- {code} typing',
+        '- {styles, code} both',
+        '',
+      ].join('\n'),
+    },
+  );
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const files = ctx.targets[0].files;
+  const styles = files.find((f) => f.path === 'src/a.component.scss');
+  const code = files.find((f) => f.path === 'src/a.component.ts');
+  assert.deepStrictEqual(styles.checklist, ['mixed:1-2,4'], 'the TS-only items and the TS-only instruction are gone');
+  assert.strictEqual(styles.checklistTotal, 3);
+  assert.deepStrictEqual(code.checklist, ['mixed:1,3-4', 'tsonly:1-2']);
+  assert.strictEqual(code.checklistTotal, 5);
+  assert.deepStrictEqual(
+    styles.localInstructions,
+    [],
+    'an instruction whose every item is out of scope is not one of the file\'s instructions',
+  );
+});
+
+test('an item scope tag naming an undeclared scope warns, and so does a scope no item uses', (t) => {
+  const skillDir = makeSkillDir(t, {
+    'typo.md': '---\nname: Typo\napplies-to:\n  - "**/*.ts"\nscopes:\n  styles: ["**/*.scss"]\n  unused: ["**/*.css"]\n---\n- {stlyes} misspelled\n',
+  });
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
+  assert.ok(res.warnings.some((w) => /not declared in the "scopes:" frontmatter.*stlyes/.test(w)), res.warnings.join('\n'));
+  assert.ok(res.warnings.some((w) => /Declared scope\(s\) no checklist item uses: styles, unused/.test(w)), res.warnings.join('\n'));
+});
+
+test('globalInstructions lists only the globals some reviewed file actually walks', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/global-narrowing']);
+  commitFile(dir, 'src/a.scss', '.a { color: red }\n', 'styles');
+  const skillDir = makeSkillDir(t, {}, {
+    'ts-rules.md': '---\nname: TS rules\napplies-to:\n  - "**/*.ts"\n---\n- one\n',
+    'everywhere.md': '---\nname: Everywhere\n---\n- one\n',
+  });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(
+    ctx.globalInstructions.map((f) => path.basename(f)),
+    ['everywhere.md'],
+    'a rulebook no file in this diff walks is not loaded',
+  );
+  assert.deepStrictEqual(Object.keys(ctx.checklistIds), ['everywhere']);
+});
+
+test('the shipped rulebook loads clean: every scope tag resolves and every scope is used', () => {
+  const res = rc.loadInstructions(path.join(__dirname, '..', 'instructions'), 'review');
+  assert.deepStrictEqual(res.warnings, [], 'the skill\'s own instructions must not warn');
+  assert.ok(res.globals.length > 0 && res.locals.length > 0);
+  // A scoped instruction must still be reachable: some file kind has to walk each of its items.
+  const kinds = [
+    'src/app/a/components-a/ui/b/b.component.ts', 'src/app/a/components-a/feature/c/c.component.ts',
+    'src/app/a/components-a/ui/b/b.component.html', 'src/app/a/components-a/ui/b/b.component.scss',
+    'src/app/a/components-a/ui/b/tests/b.component.spec.ts',
+    'src/app/a/data-access/+state/a.actions.ts', 'src/app/a/data-access/+state/a.reducer.ts',
+    'src/app/a/data-access/+state/a.selectors.ts', 'src/app/a/data-access/+state/a.effects.ts',
+    'src/app/a/data-access/+state/a.facade.ts', 'src/app/a/data-access/services/a.service.ts',
+    'src/app/a/data-access/+state/tests/a.effects.spec.ts', 'src/app/a/data-access/+state/tests/a.facade.spec.ts',
+    'src/app/a/data-access/+state/tests/a.reducer.spec.ts', 'src/app/a/data-access/+state/tests/a.selectors.spec.ts',
+    'src/app/a/models/interfaces/a.interface.ts', 'src/app/a/models/interfaces/a-state.interface.ts',
+    'src/app/a/models/consts/a.const.ts', 'src/app/a/models/consts/a-initial-state.const.ts',
+    'src/app/a/models/enums/a.enum.ts', 'src/app/a/models/types/a.type.ts', 'src/app/a/models/index.ts',
+    'src/app/a/shared/utils/build-a.util.ts', 'src/app/a/shared/utils/tests/build-a.util.spec.ts',
+    'src/app/a/shared/guards/a.guard.ts', 'src/app/a/shared/guards/tests/a.guard.spec.ts',
+    'src/app/a/shared/pipes/a.pipe.ts', 'src/app/a/shared/directives/a.directive.ts',
+    'src/app/a/shared/interceptors/a.interceptor.ts', 'src/app/a/shared/routes/a.routes.ts',
+    'src/app/app.config.ts', 'src/main.ts', 'src/assets/i18n/en.json', 'tsconfig.json',
+    'src/app/a/shared/utils/tests/build-a.util.spec.snap',
+  ];
+  for (const file of [...res.globals, ...res.locals.map((l) => l.file)]) {
+    const items = rc.parseChecklistItems(file);
+    if (items.length === 0) continue;
+    const walked = new Set();
+    for (const kind of kinds) {
+      const inScope = res.globals.includes(file)
+        ? rc.matchGlobalInstructions(res.globals, res.scopes, kind).includes(file)
+        : rc.matchLocalInstructions(res.locals, kind).includes(file);
+      if (!inScope) continue;
+      for (const n of rc.matchChecklistItems(items, res.scopes[file].itemScopes, kind)) walked.add(n);
+    }
+    const unreachable = items.map((i) => i.n).filter((n) => !walked.has(n));
+    assert.deepStrictEqual(unreachable, [], `${path.basename(file)}: item(s) no file kind walks`);
+  }
 });
 
 test('checklistIdOf keeps ids short, unique and deterministic', () => {

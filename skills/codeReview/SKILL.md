@@ -44,7 +44,8 @@ scope gate).
 
 ## Step 2 — Load the rulebook (once per run)
 
-1. Read EVERY file listed in `globalInstructions`.
+1. Read EVERY file listed in `globalInstructions` — the globals at least one reviewed file is
+   actually walked against, not every global the skill ships.
 2. Read EVERY file listed in `localInstructionsCatalog` (already deduplicated across targets;
    per-file `localInstructions` are INDEXES into this catalog).
 3. If `claudeMd` is not null, read it and treat it as one more global instruction.
@@ -63,13 +64,23 @@ Every checklist item has an address, and Step 3 ticks the items off one by one u
 order — the only numbering there is. `checklistIds` (top level of the context JSON) says which
 instruction file each `<id>` stands for; number the bullets of every instruction as you read it.
 Each file of a target carries its own plan: `checklist` lists one `<id>:<items>` entry per
-instruction that applies to that file — the globals first, then its matched locals — and
+instruction that applies to that file — the globals first, then its matched locals — where `<items>`
+names WHICH items of that instruction this file is walked against (`general:1-13`, and
+`accessibility:6-9,12-14,17,20` for a file whose kind takes it out of the markup-only rules).
 `checklistTotal` is their sum, the number of items the file must be walked against.
-A global instruction may declare `applies-to` and is then narrowed by path exactly like a local one;
-one that declares none still applies to every file. A pattern starting with `!` excludes what it matches
-and always wins over an include. The plan already reflects that, so a plan shorter
+The plan is the authority on that: walk exactly the numbers it lists, under the addresses it gives
+them, and never renumber a narrowed instruction from 1 — `accessibility#12` is the twelfth bullet of
+the file, whether or not `#1-11` are in this file's plan.
+Two mechanisms put an item there or leave it out, and both are already resolved in the plan.
+A whole instruction is narrowed by `applies-to`: a global that declares one is narrowed by path
+exactly like a local, one that declares none still applies to every file, and a pattern starting with
+`!` excludes what it matches and always wins over an include. A single item is narrowed by a leading
+scope tag — `- {styles} Contrast ratios …` walks only for the file kinds the instruction's `scopes:`
+frontmatter maps that name to (an untagged item walks wherever its instruction does). So a plan shorter
 than the rulebook is a decision, not an omission — `globalInstructionsSkipped` names the globals this
-file's path took it out of, and an instruction that is not in the plan is never walked or ticked.
+file's path took it out of, an instruction that is not in the plan is never walked or ticked, and an
+item the plan does not list is not this file's rule: it is never walked, never ticked and never
+reported, not even when the file happens to break it.
 `checklistGates` (top level of the context JSON) holds the `gate:` sentence of every instruction that
 declares one — a precondition answered per file, in Step 3 point 2, before that instruction is walked.
 The project `CLAUDE.md` is a rulebook, not a numbered checklist: its rules decide verdicts and
@@ -183,8 +194,10 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    (`importing file → imported module`, one entry per import) — the cross-file layering question
    consumes this ledger after the per-file pass.
    With the file's diff and content in front of you, turn its `checklist` into the ticking list of
-   this file: every instruction of the plan, in plan order, item `#1` through `#<items>` — that
-   list, and nothing shorter, is what point 2 walks and what point 4 writes down.
+   this file: every instruction of the plan, in plan order, expanded to exactly the item numbers its
+   `<items>` spec names (`component:1-27` is `#1`…`#27`; `accessibility:6-9,12` is four items, and
+   `#1-5`, `#10-11` are not this file's rules) — that list, and nothing shorter or wider, is what
+   point 2 walks and what point 4 writes down.
 2. Evaluate the file against every point below, checklist-driven — never holistically. For points
    1 and 2, walk that ticking list top-to-bottom: read an item, check the file's code against that
    one item, reach an explicit pass/violation verdict, record the finding(s) on violation, tick the
@@ -214,9 +227,10 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    **Gates come first, and only where the instruction declares one.** For each instruction of the
    plan whose `<id>` appears in `checklistGates`, answer that one sentence against the file's content
    BEFORE walking its items. A gate that holds changes nothing — walk the items one by one as always.
-   A gate that fails is a verdict for the whole instruction: its items are collapsed into ONE ticked
-   range line naming what is absent (`[x] accessibility#1-30 — BRAMKA: plik nie zawiera markupu,
-   stylów ani pracy z DOM`), and they count as checked, because the gate answered every one of them.
+   A gate that fails is a verdict for the whole instruction: the items THIS FILE'S PLAN gives it are
+   collapsed into ONE ticked range line naming what is absent (`[x] security#1-6,#8-13 — BRAMKA:
+   plik zawiera wyłącznie re-eksporty`), and they count as checked, because the gate answered every
+   one of them.
    A gate is answered from what the file HOLDS, never from its name or its size: a `.component.ts`
    with inline `styles`, a `host: {}` binding, a timer or a `document` call renders UI, and a gate
    waved through on "this looks like a plain class" is the unearned tick the ticking exists to
@@ -291,7 +305,7 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    The checklist block is the file's walk, written down:
 
        <!-- checklist: <file.path>
-       [x] accessibility#1-30 — BRAMKA: plik nie zawiera markupu ani stylów
+       [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
        [x] general#1-5,#7-13 — OK (brak wystąpień)
        [x] general#6 nazwy const camelCase — NARUSZENIE (L12, L18)
        [x] component#1 OnPush — NARUSZENIE (L4)
@@ -299,11 +313,14 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
        [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
        -->
 
-   - The block covers every item of the file's ticking list (point 1), in plan order. It does NOT
-     spend a line per item: **items of one instruction that share a verdict are collapsed into one
-     line** whose address is a range or a list of ranges (`general#1-5,#7-13`). Every item still
-     appears exactly once — the ranges of one instruction never overlap and never skip a number, or
-     the renderer says so. Expanded, the block has exactly `checklistTotal` items.
+   - The block covers every item of the file's ticking list (point 1), in plan order — the plan's
+     item numbers, no others: an item the plan left out gets no line, not even a `NIE DOTYCZY` one.
+     It does NOT spend a line per item: **items of one instruction that share a verdict are collapsed
+     into one line** whose address is a range or a list of ranges (`general#1-5,#7-13`). Every item
+     the plan lists still appears exactly once — the ranges of one instruction never overlap and
+     never skip a number the plan lists, or the renderer says so (a number the plan itself does not
+     list is not a gap, and a range may jump over it). Expanded, the block has exactly
+     `checklistTotal` items.
    - Collapse only what genuinely shares a verdict. `NARUSZENIE` and `NIEZWERYFIKOWANE` lines carry
      their own reason, so they stay separate — a range is for the OK run around them and for a
      gated-out instruction, never a way to sweep a violation into a neighbour's range.

@@ -68,6 +68,30 @@ A local instruction without any including `applies-to` pattern never matches and
 
 Any instruction may also declare a one-line `gate:` — a precondition the reviewer answers from the file’s CONTENT before walking the items, for what a glob cannot see (a `.ts` file holding no markup, a barrel carrying no behaviour). A failed gate collapses the whole instruction into one ticked range line naming what is absent; an unclear answer means the gate holds and the items are walked. Gates reach the reviewer as the top-level `checklistGates` map.
 
+### Per-item scopes
+
+`applies-to` narrows a whole instruction; `scopes:` narrows a single checklist item, so one topic can stay in one file while each of its rules is walked only where it can be answered.
+A scope is a name and a glob list (inline or as an indented list, `!` excludes included), and an item opts into one or more of them with a leading `{tag}`:
+
+    ---
+    name: Accessibility — WCAG 2.2 level AA
+    applies-to:
+      - "**/*.html"
+      - "**/*.scss"
+    scopes:
+      markup: ["**/*.html"]
+      styles: ["**/*.scss", "**/*.css"]
+    ---
+    ## Checklist
+    - {markup} Every `<img>` carries a text alternative
+    - {markup, styles} Contrast ratios hold for every colour pair the diff introduces
+    - Every rule without a tag is walked wherever the instruction applies
+
+An item is walked when its instruction matches the file AND (it carries no tag OR the file matches one of its tagged scopes).
+Numbering never moves: `<id>#<n>` stays the n-th bullet of the file, so narrowing a checklist changes which numbers a file walks, never what they mean.
+An instruction every item of which is out of scope for a file drops out of that file's plan entirely — it is not read, walked or ticked for it.
+A tag naming a scope the frontmatter does not declare keeps the item (a typo must never delete a rule) and is reported as a warning, as is a declared scope no item uses.
+
 ### Glob subset
 
 `**` matches any number of directories, `*` matches within one path segment, `?` matches a single character.
@@ -79,13 +103,14 @@ A global with only excluding patterns covers everything except them; a local sti
 
 ## Checklist coverage
 
-The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for. Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and `globalInstructionsSkipped` names them per file so a shorter plan reads as a decision rather than an omission.
-Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under.
+The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-9,12-14,17,20` for one the file's kind narrowed. `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for.
+Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and `globalInstructionsSkipped` names them per file so a shorter plan reads as a decision rather than an omission; `globalInstructions` itself lists only the globals at least one reviewed file walks, so a diff of stylesheets never loads the TypeScript rulebook.
+Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under, whether or not the file walks every neighbour.
 
 The reviewer walks that list item by item and writes the result next to the file's findings, as one HTML comment block per file:
 
     <!-- checklist: src/app/user.component.ts
-    [x] accessibility#1-30 — BRAMKA: plik nie zawiera markupu ani stylów
+    [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
     [x] general#1-5,#7-13 — OK (brak wystąpień)
     [x] general#6 nazwy const camelCase — NARUSZENIE (L12, L18)
     [x] component#1 OnPush — NARUSZENIE (L4)
