@@ -217,6 +217,10 @@
   .summary h3 { font-size:14px; margin:0 0 6px; color:var(--accent); }
   .summary ul { margin:0; padding-left:20px; }
   .status-final { font-size:15px; font-weight:700; }
+  .send-error { position:fixed; left:50%; transform:translateX(-50%); bottom:18px; z-index:20;
+          max-width:min(560px, calc(100vw - 32px)); padding:11px 16px; border-radius:12px;
+          border:1px solid #7f1d1d; background:#2a1113; color:#fecaca; font-size:13px;
+          box-shadow:0 20px 40px -24px rgba(0,0,0,.9); }
 </style>
 </head>
 <body>
@@ -227,6 +231,7 @@
   <div class="viewbar" id="viewbar" hidden></div>
   <div class="panel" id="panel"><p class="muted">Connecting…</p></div>
 </div>
+<div class="send-error" id="sendError" hidden role="alert"></div>
 <dialog id="confirmDialog" class="confirm" aria-labelledby="confirmTitle">
   <h3 id="confirmTitle"></h3>
   <p id="confirmText"></p>
@@ -323,12 +328,39 @@ function toB64(file) {
     r.readAsDataURL(file);
   });
 }
+// A write that never reached the server must never look like one that did: the
+// orchestrator is waiting on a long poll, so a dropped answer leaves the run
+// parked with no sign anything went wrong. Shutdown is the one write whose
+// failure is expected — the server is killing itself mid-response.
+function showSendError(text) {
+  const bar = $('#sendError');
+  if (!bar) return;
+  bar.textContent = text;
+  bar.hidden = false;
+}
+function clearSendError() {
+  const bar = $('#sendError');
+  if (bar) bar.hidden = true;
+}
 async function postJson(url, body) {
-  const res = await fetch(url, { method: 'POST',
-    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const quiet = url === '/api/shutdown';
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  } catch (_e) {
+    if (!quiet) showSendError('Could not reach the server — nothing was sent. Check that it is still running and try again.');
+    return {};
+  }
   // Create-task needs the new id back; every other caller ignores the result,
   // and /api/shutdown dies mid-response, hence the catch.
-  return res.json().catch(() => ({}));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok && !quiet) {
+    showSendError(`The server rejected this (${res.status}${data.error ? ': ' + data.error : ''}). Nothing was sent — reload the page and try again.`);
+    return {};
+  }
+  if (!quiet) clearSendError();
+  return data;
 }
 const sendAnswer = payload => postJson('/api/answer', { taskId: activeTask, ...payload });
 const currentTask = () => lastState && lastState.tasks.find(t => t.id === activeTask);

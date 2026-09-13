@@ -13,6 +13,11 @@ Dynamic texts (questions, reports, summary) stay in the user's conversation lang
 
 - NEVER paste file contents (spec, plan, code) into your own context — pass **paths** to sub-agents.
 - Every sub-agent ends its final message with a single JSON object: `{"type":"question"|"result"|"error", ...}`. Parse it; ignore prose around it.
+  An agent that finishes with NO parsable JSON — it crashed, was cut off, or answered in prose — counts
+  as `{"type":"error"}` for its step: run the failure protocol with a report saying the agent ended
+  without a result. Never wait for a message that is not coming, and never re-read the step as still
+  running: a step-5 agent dying this way would otherwise hold `E2E_LOCK` for the rest of the run and
+  strand every task queued behind validation.
 - Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND; continue an existing one with SendMessage (its context is preserved).
 - The pipeline NEVER commits in the target project. Each task works on its own branch; stage its changes at the very end.
 - Update the stepper before and after every phase so the browser always reflects reality.
@@ -41,6 +46,15 @@ Answer kinds and where they belong: `step1` → step 1 of that task (the first o
 pipeline, every later one is a revision); `answer` → the question that task's agent asked;
 `decision` → that task's plan gate, failure gate or Mockoon gate; `mockup` → that task's mockup
 gate; `summary` → that task's summary screen.
+Each kind carries its own fields, and they are what you read — never guess a name: `answer` has
+`questionId` and `value` (the answer TEXT is `value`, not `text`); `decision` and `mockup` have
+`decision` plus a `text` on `feedback`; `summary` has `decision`; `step1` carries the form. Every
+one also carries `taskId`, which is how you route it. Reading the wrong name yields `undefined`,
+and the run then forwards an empty answer to the agent instead of stopping.
+Two server caps bound what a form can carry: a request body over 25 MB is answered with
+`413 body over 25 MB`, which the page shows as a rejected send, and any single text field over 200 KB is stored cut, with a
+visible `[…ucięte…]` marker at the end. A pasted OpenAPI contract can reach that: when you see the
+marker in `requirements.md`, say so to the user instead of passing the half document on.
 
 **Which step a user is LOOKING at is never an event.** The stepper's tiles walk them back and forth
 over the steps a task has already reached, and the requirements form is one of those tiles. None of
@@ -100,7 +114,8 @@ retry, and released when the task leaves step 5 — then start the next task in 
 | `{{SESSION}}` | `<SESSION>/tasks/<taskId>` — the task's own artifacts, not the run root |
 | `{{TASK_ID}}` | `t1`, `t2`, … — MANDATORY in every `/api/state` body the agent posts |
 | `{{ROOT}}` | the task's working directory. Before step 4 it is `PROJECT`; step 4 fixes it to `PROJECT` or to the task's worktree |
-| `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}`, `{{LANGUAGE}}` | as before |
+| `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}` | the values from Setup (points 3 and 1) |
+| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation`. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on |
 
 ## Server helpers (use exactly these shapes)
 
@@ -126,11 +141,19 @@ retry, and released when the task leaves step 5 — then start the next task in 
   ALWAYS pass `timeout: 320000` to the Bash tool for this call — the default 120 s tool timeout
   would kill the poll mid-wait. The poll returns instantly once the user answers; the long wait
   only spares empty polls. If curl cannot connect, the server died: re-run the launcher (state
-  reloads from `pipeline-state.json`) and continue.
+  reloads from `pipeline-state.json`) and continue. Read `PORT` off the launcher's `{"port":N}`
+  again instead of assuming the old one — it normally reuses the previous port precisely so open
+  browser tabs keep working, but it falls back to any free port when that one is now taken. On the
+  rare run where the number DID change, every sub-agent already spawned still carries the old
+  `{{PORT}}` in its prompt, so its progress POSTs now go nowhere: the run looks alive while its
+  panels sit frozen. SendMessage each running agent the new port before you carry on.
 - **Encoding (MANDATORY, also for every sub-agent):** bodies contain non-ASCII text (e.g. Polish).
   Always run curl from a POSIX shell (Bash tool) where inline UTF-8 JSON is safe.
-  Never pass non-ASCII JSON inline through PowerShell — it re-encodes to the system codepage and
-  the UI shows `�`. If PowerShell is unavoidable, write the JSON to a temp file as UTF-8
+  Never pass non-ASCII JSON inline through PowerShell. The body does not arrive mangled - it does
+  not arrive at all: PowerShell re-encodes the argument, the byte length stops matching the string,
+  and the server answers 400 `Unterminated string in JSON` (or, with single quotes, 400 `Expected
+  property name` once it has eaten them). Read such a 400 as the shell, never as a bad body.
+  If PowerShell is unavoidable, write the JSON to a temp file as UTF-8
   **without BOM** and send it with `--data-binary "@file"`.
 
 ## Step 1 — Requirements (interactive, per task, repeatable)
@@ -214,9 +237,10 @@ On such an answer, in this order:
    its project exploration, spec, plan and whole Q&A ARE the reduced scope.
 
        Requirements changed. Read <SESSION>/tasks/T/requirements-changes.md, then requirements.md
-       and requirements-prev.md. Revision mode: patch spec.md, plan.md and checklist.md only where
-       the change lands, ask only what the change opens, do not re-explore the project, and keep the
-       ## UI design section. Reply with the result JSON.
+       and requirements-prev.md, then every file it names as ADDED under hints/, contracts/ and
+       mockups/. Revision mode: patch spec.md, plan.md and checklist.md only where the change lands,
+       ask only what the change opens, do not re-explore the project, and keep the ## UI design
+       section. Reply with the result JSON.
 
    If SendMessage cannot reach it, spawn a fresh refinement agent with the same prompt plus that
    paragraph. Then continue at step 2's gate as usual.
@@ -290,7 +314,9 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
    the app needs. Bootstrap it before spawning anything:
    - `package-lock.json` → `npm ci`; `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`;
      `yarn.lock` → `yarn install --immutable`; no lockfile → skip.
-   - copy every `.env*` file from `PROJECT` into `ROOT`.
+   - copy every `.env*` file from `PROJECT` into `ROOT`, each at the same path relative to the
+     root: they are gitignored, so a fresh worktree has none of them, and one nested in a workspace
+     package is the one whose absence looks like an application bug in step 5 rather than a missing file.
    A failure in either goes to the failure protocol for step 4. Playwright is unaffected: the
    pipeline keeps using the plugin's own installation in `SKILL_DIR`.
    POST `{"taskId":"T","root":"<ROOT>"}` so the summary can name it.
@@ -298,7 +324,15 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
 3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder
    substitution, `{{ROOT}}` included). It reports progress itself via POST /api/state and writes code
    against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
-4. Final JSON `{"type":"result","filesChanged":[...],"summary"}` → POST `{"taskId":"T","step":4,"status":"completed","progress":100}`. Keep `filesChanged` count and summary only. `error` → failure protocol.
+4. Final JSON `{"type":"result","filesChanged":[…],"summary","deviations":[…]}` → POST
+   `{"taskId":"T","step":4,"status":"completed","progress":100,"report":"<the summary, then every
+   `deviations` entry on its own line>"}`. Keep the `filesChanged` COUNT, the summary and the
+   deviations; the path list itself stays out of your context.
+   `deviations` is the agent's only channel for what it had to do differently — a plan step it
+   replaced, a mockup that overrode the plan, a rulebook its worktree never received because the
+   project had not committed it. Nothing else in the run reports any of that, so an orchestrator
+   that parses the field and drops it hides exactly the part a reviewer needs. `error` → failure
+   protocol.
 
 ## Step 5 — Validation & E2E (view-only, except the Chrome-extension prompt)
 
@@ -332,7 +366,7 @@ back when the lock frees.
 ## Step 6 — Code Review (view-only)
 
 1. POST `{"taskId":"T","step":6,"status":"in_progress","activeStep":6,"progress":0}`.
-2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method, and it always runs TWO rounds of `1 full review + up to 2 --since-last re-reviews`, fixing every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
+2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method, pointed at this task's `ROOT`, and it runs TWO rounds of `1 full review + up to 2 --since-last re-reviews` unless round 1 came back clean on its first cycle, fixing every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
 3. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/tasks/T/auth.json` if it exists
    (step 6's regression run is its last consumer, so the credentials die with the step, not with the
    pipeline), then POST completed. `error` → failure protocol.
@@ -364,7 +398,9 @@ It can run any number of times ("Regenerate" is the same step over the same file
 2. Wait for T's `kind=="decision"`:
    - `retry` → POST `{"taskId":"T","step":N,"status":"in_progress","report":null}`; re-spawn that step's agent **fresh** (new Agent call, same prompt + note about the previous failure report path).
    - `finish` → write that task's final summary (below, including the `auth.json` cleanup) with
-     `finalStatus:"Failed at step N"`.
+     `finalStatus:"Failed at <step name>"` — the NAME (`Implementation`, `Validation & E2E`), never
+     the id. The stepper numbers the tiles it shows, so with mockups off step 4 is the tile labelled
+     3: an id quoted at the user points them at the wrong tile. Names never drift.
 3. If the task held `E2E_LOCK`, release it on `finish` and start the next task in the queue.
 4. A failed task does not end the run: keep serving the others from the event loop.
 
@@ -373,13 +409,22 @@ It can run any number of times ("Regenerate" is the same step over the same file
 1. Delete `<SESSION>/tasks/T/auth.json` if it still exists — step 6 normally already did, so this is
    the backstop for tasks that never got there (the server also wipes every task's on shutdown). Do
    this on BOTH outcomes — success and `finish` after a failure.
-2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), API mocks, mockup comparison, UX findings, review results.
-3. POST `{"taskId":"T","summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `uxReview` = its `uxSummary`; `codeReview` = the review agent's `reviewSummary`, which also names every finding it rejected and on what ground). Put the task's branch and `ROOT` at the top of `changes` so the user can find the work.
+2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), API mocks, mockup comparison, UX findings, review results, and step 4's deviations when it reported any — they belong at the end of `changes`, prefixed so a reader sees at once that the run departed from the plan.
+3. POST `{"taskId":"T","summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `mockupComparison` = its `mockupSummary` - every renamed field is listed here, so a missing line reads as "no source" and the section lands empty even when the step did the work; `uxReview` = its `uxSummary`; `codeReview` = the review agent's `reviewSummary`, which also names every finding it rejected and on what ground). Put the task's branch and `ROOT` at the top of `changes` so the user can find the work.
 4. Stage that task's changes: `git -C "<ROOT>" add -A` (already done by its step-6 agent; verify with
    `git -C "<ROOT>" status --short`). Worktrees have their own index, so tasks never stage into each other.
 5. When EVERY task has finished, print ONE combined summary in the terminal (user's language): a row
    per task with its branch, working directory and final status, then the per-task details.
-6. Suggest `superpowers:finishing-a-development-branch` per task, and `git worktree remove <ROOT>`
-   for the tasks that got one — the pipeline never removes a worktree itself.
+6. Suggest `superpowers:finishing-a-development-branch` per task, and — for the tasks that got a
+   worktree — `git worktree remove <ROOT>` AFTERWARDS, in that order. The order is not a preference:
+   the pipeline deliberately ends with the work staged and uncommitted, and `git worktree remove`
+   refuses a worktree in that state (`fatal: ... contains modified or untracked files`). Say so when
+   you suggest it, and say plainly that `--force` is NOT the way around it — it would delete the
+   feature the run just built. Finish the branch first (commit, merge or PR), then remove the
+   worktree; the pipeline never removes one itself, and it holds copies of the project's `.env*`
+   files, so an abandoned worktree leaves those sitting outside the project.
 7. Leave the server running and stay in the event loop. Do NOT kill the PID yourself. The run ends
-   only when the user presses "Shut down server" or the server dies.
+   only when the user presses "Shut down server" or the server dies. Point them at the button rather
+   than letting them close the terminal: pressing it is also what wipes every task's `auth.json`, so a
+   run killed any other way leaves the credentials they typed sitting in the session directory
+   (git-ignored, but still on disk) until they delete them by hand.

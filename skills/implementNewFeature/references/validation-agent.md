@@ -49,8 +49,15 @@ that no cwd, `PATH` entry or project-local install can swap it:
 - install deps once: `npm --prefix "{{SKILL_DIR}}" install`
 - install the browser once: `node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" install chromium`
 - run the suite:
-  `E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"`
+  `NODE_PATH="{{SKILL_DIR}}/node_modules" E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"`
   (the config reads `E2E_TEST_DIR`; both paths are absolute, so the command works from any cwd)
+  `NODE_PATH` is not optional: your spec files live under `{{SESSION}}`, which is inside `{{PROJECT}}`,
+  so a bare `require("@playwright/test")` resolves against the PROJECT — failing outright on a project
+  without Playwright, or silently loading its different copy on one that has it. NODE_PATH points that
+  resolution back at the skill's own install.
+  Seeing `E2E_TEST_DIR` also makes the runner use ONE worker: your tests drive a single dev
+  server over a single data store, so running them in parallel would only produce interference
+  you would then have to report as unstable tests. Do not override it with `--workers`.
 
 NEVER `npx playwright` (it resolves against the cwd and may pick a different copy), never add
 Playwright to `{{ROOT}}`, never run the project's own Playwright even if it has one. Tests live
@@ -133,7 +140,9 @@ regression run needs them.
 ### 1. Probe — mock only what is genuinely missing
 
 Collect the endpoints the feature talks to: the call sites in the code this run changed
-(`git status --porcelain` lists every touched file — read the api clients, services, hooks and the
+(`git -C "{{ROOT}}" status --porcelain` lists every touched file — pin the `-C`, since your shell
+starts in `{{PROJECT}}` and a worktree task would otherwise probe the endpoints of another task's
+code — read the api clients, services, hooks and the
 `fetch` / `axios` / `HttpClient` calls), plus the contracts in `{{SESSION}}/contracts/` and the
 "Contracts (pasted)" section of `requirements.md`. Resolve the API base URL from the app's proxy or
 environment config, so you probe what the app actually calls, not what the contract wishes it called.
@@ -189,16 +198,26 @@ never seen against a real API.
 
 ### 4. Cleanup — mandatory, after the last cycle, before the report
 
-a. Archive: create `{{SESSION}}/mocks/`, then from `{{ROOT}}` run `git add -N <module>` (so the
-   new file shows up in a diff) and `git diff -- <module> <wiring file> >
-   {{SESSION}}/mocks/mocks.patch`, and copy the module itself into `{{SESSION}}/mocks/` verbatim.
-   The patch is not a souvenir: step 6 re-applies it around its own Playwright re-run, so a patch
-   that does not apply cleanly from `{{ROOT}}` is a broken step.
-b. Remove the module and every marked line, then `git reset -- <module>` to drop the intent-to-add
-   entry — otherwise `git status` keeps a phantom deletion and step 6's `git add -A` stages it.
+a. Archive and remove — ONE interleaved sequence, because the patch is generated FROM the removal.
+   Create `{{SESSION}}/mocks/` and copy the module into it verbatim, then, in this exact order:
+   1. `git -C "{{ROOT}}" add -A` — the index now holds the feature work AND the mocks, and becomes
+      the reference point for the next diff.
+   2. Delete the module and strip every `DOH-MOCK` line from the worktree.
+   3. `git -C "{{ROOT}}" diff -R -- <module> <wiring file> > "{{SESSION}}/mocks/mocks.patch"` —
+      worktree-against-index is the mock REMOVAL, so `-R` writes it out as the mock ADDITION, and
+      the patch holds the mock delta and nothing else.
+   4. `git -C "{{ROOT}}" add -A` again — the index now holds the feature work alone, which is the
+      state step 6 expects.
+b. Not a plain `git diff` against HEAD: step 4 never stages, so HEAD still predates the feature and
+   the diff would carry the feature's own changes alongside the one mock line — the normal case, since
+   the wiring line goes into the entry point. Step 6 stages the feature first, so such a patch fails
+   with `error: <file>: patch does not apply`: the mocks never return, the E2E suite fails against the
+   missing backend, and the agent reads that as a regression it caused. Staging first makes the index
+   the baseline, so the diff can only see the mocks. Every git command here carries `-C "{{ROOT}}"` —
+   your shell starts in `{{PROJECT}}` and an unpinned one would touch the main checkout's index.
 c. Prove it: `grep -rn "DOH-MOCK" {{ROOT}}` (excluding `{{SESSION}}`) prints nothing, and
-   `git status --porcelain` no longer lists the module. A leftover marker fails the step; it is
-   never just a line in the report.
+   `git -C "{{ROOT}}" status --porcelain` no longer lists the module. A leftover marker fails the
+   step; it is never just a line in the report.
 d. Re-run the project's unit suite and its build/typecheck script if it has one — removal must not
    leave a dangling import for step 6 to trip over. Fix what the removal broke by finishing the
    removal, never by putting a mock back.
@@ -207,7 +226,13 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
 
 ## Process
 
-1. Read `spec.md` and `checklist.md`. Work out how to launch the app and how it runs its unit tests
+1. Read `spec.md` and `checklist.md`. Every checklist line must carry a `verify: e2e|visual|manual`
+   tag — that tag is what routes the item to the suite, to the screenshot comparison or to the UX
+   walk. If the file has items but NONE of them are tagged, stop and end with the `error` JSON saying
+   the checklist is not in the `- [ ] R<n> | <requirement> | verify: …` shape step 2 must produce.
+   Do not proceed: untagged items are covered by nothing, yet step 10 would still divide ticks by
+   their count, and the run could clear the 99% gate on a number that measures no verification at
+   all. Work out how to launch the app and how it runs its unit tests
    (package.json scripts, README).
 2. Setup — run the two install commands from the toolchain section above (skip what is already
    installed) and create `{{SESSION}}/e2e/`. Progress 5.
@@ -293,8 +318,7 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
 `curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"taskId\":\"{{TASK_ID}}\",\"step\":5,\"progress\":<milestone or compliance>,\"currentOperation\":\"<setup | waiting for extension | unit tests | mocks | discovery | cycle k/3: phase | removing mocks>\",\"logEntry\":\"<event>\"}"`
 `taskId` is mandatory — the server serves several tasks at once and rejects a body without it.
 Use the fixed milestones from the Process (5, 10, 15, 20, 25, 40) before the first cycle, compliance
-afterwards. Encoding: run curl from a POSIX shell (Bash tool). Never pass non-ASCII JSON inline
-through PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `--data-binary "@file"`.
+afterwards.
 
 ## Rules
 
@@ -311,7 +335,11 @@ through PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `-
   message — pass them only via env vars, set for the single test-run command (never exported into
   the persistent shell profile or written to `.env`/config files). Leave `auth.json` in place — the
   review agent's regression run still needs it; the orchestrator deletes it when step 6 ends.
-- Write `{{SESSION}}/validation-report.md`: the raw test output of the final Playwright run, then a
+- Write `{{SESSION}}/validation-report.md`. Its three headings are FIXED IDENTIFIERS, written in
+  English exactly as spelled below even though the prose under them is in {{LANGUAGE}}: step 6 reads
+  `## Unit tests` to recover the unit-test command, so a translated or reworded heading leaves the
+  review agent unable to run the suite it must green before it finishes. Heading verbatim, content in
+  the user's language. The file holds the raw test output of the final Playwright run, then a
   `## Unit tests` section (command used, result, any pre-existing failures left alone), a
   `## UX` section (findings fixed, findings left as suggestions) and a `## Mocks` section — every
   probed endpoint with its verdict, which ones were faked and therefore never met a real API, that
@@ -319,9 +347,10 @@ through PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `-
   it back for manual click-through.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
-never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
-(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
-`--data-binary "@file"`.)
+never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the
+argument is re-encoded, its byte length stops matching the string, and the server answers 400
+`Unterminated string in JSON`. Read such a 400 as the shell, never as a bad body. (If PowerShell
+is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data-binary "@file"`.)
 
 ## Final message
 

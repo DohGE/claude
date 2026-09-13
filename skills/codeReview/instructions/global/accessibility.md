@@ -10,7 +10,7 @@ applies-to:
 gate: the file renders or styles UI - markup, style rules, or a class that builds DOM, host bindings, focus, timers or navigation the user perceives
 scopes:
   markup: ["**/*.html"]
-  styles: ["**/*.scss", "**/*.css"]
+  styles: ["**/*.scss", "**/*.css", "**/*.html", "**/*.component.ts"]
   class: ["**/*.component.ts", "**/*.directive.ts"]
 ---
 The baseline is WCAG 2.2 (https://www.w3.org/TR/WCAG22/) at conformance level AA — every level A and
@@ -46,7 +46,7 @@ announcement) and never report a criterion as passing or failing on a hunch.
 - {markup, styles} Orientation is not locked to portrait or landscape by CSS or by a "rotate your device" screen (1.3.4).
 - {markup, class} Tooltips, popovers and hover cards are dismissible with Escape, stay visible while the pointer moves onto them, and open on `focus` as well as `mouseenter` — a hover-only tooltip is a defect (1.4.13).
 - {markup, class} Every interactive element is reachable and operable by keyboard: interaction sits on native `<button type="…">` / `<a href>`; a `(click)` on a `div`/`span`/icon is a finding unless the element also declares `role`, `tabindex="0"` and Enter/Space handling, and every hover-only behavior has a focus equivalent (2.1.1).
-- {markup, styles} `tabindex` is only `0` or `-1` — a positive value rewrites the focus order; DOM order matches visual order (no `order`, `row-reverse` or absolute positioning that reorders focusable content) (1.3.2, 2.4.3).
+- {markup, styles, class} `tabindex` is only `0` or `-1` — a positive value rewrites the focus order; DOM order matches visual order (no `order`, `row-reverse` or absolute positioning that reorders focusable content); a programmatic `.focus()` targets an element that can actually receive focus (a native control, or a container the diff also gives `tabindex="-1"`) — moving focus to a plain `div` silently does nothing (1.3.2, 2.4.3).
 - {markup, styles} Focus is visible: no `outline: none` / `outline: 0` without an equally visible `:focus-visible` replacement of at least 3:1 contrast against its surroundings (2.4.7, 1.4.11).
 - {styles} Focus is never obscured: sticky headers, footers, toolbars and cookie bars added or resized in the diff do not cover the focused element — sticky offsets are matched by `scroll-margin`/`scroll-padding-top` (2.4.11).
 - {markup, class} Overlays manage focus deliberately: opening a dialog/drawer/menu moves focus into it, focus cycles inside it, Escape closes it, and focus returns to the element that opened it; nothing outside it is reachable while it is open, and no other construct traps focus (2.1.2, 2.4.3).
@@ -65,3 +65,4 @@ announcement) and never report a criterion as passing or failing on a hunch.
 - {markup, class} A control that must stay discoverable while unavailable (a submit button explaining why it is blocked) uses `aria-disabled="true"` plus a no-op handler rather than the `disabled` attribute, which removes it from the tab order and from the explanation it needs (4.1.2, 3.3.1).
 - {markup, class} Status messages reach assistive technology without stealing focus: save results, async failures, filter result counts and validation summaries render through the shared alert/snackbar component or into an `aria-live` region (`polite`, `assertive` only for errors) that already exists in the DOM before the message is inserted (4.1.3).
 - {markup} Media carries its alternatives: prerecorded video has captions and, where visuals convey information, an audio description; audio that plays automatically for more than 3 seconds can be paused or stopped (1.2.2, 1.2.5, 1.4.2).
+- {markup} Link text says where the link goes: `Click here`/`Read more`/a bare URL is a finding — the visible text (or its `aria-label`) names the destination or the action, and a link opening a new tab or starting a download announces that in its accessible name (2.4.4).

@@ -58,8 +58,10 @@ and the translation keys. So the copy is final copy, and the names are the app's
 Write into `{{SESSION}}/generated-mockups/`:
 
 - One `<id>.html` per screen — self-contained: CSS in a `<style>` tag, any JS inline, images as
-  `data:` URIs. NO external requests (no CDN, no web fonts, no remote images) — the preview iframe
-  is sandboxed and offline, so an external reference simply renders as a gap.
+  `data:` URIs. NO external requests (no CDN, no web fonts, no remote images) — the server sends the
+  preview a `default-src 'self' data:` policy, so an external reference is refused by the browser and
+  renders as a gap. Inline `<style>` and inline `<script>` are explicitly allowed by that policy;
+  a sandbox alone would not refuse anything, it only isolates the origin.
 - `manifest.json`: `{"screens":[{"id":"login","title":"Login","file":"login.html"}, …]}` —
   `file` is a bare filename (the UI serves the directory flat), `title` is what the user sees on
   the preview tab, in {{LANGUAGE}}.
@@ -91,7 +93,10 @@ Do NOT use AskUserQuestion — there is no terminal user.
 When the orchestrator sends `APPROVED — update spec.md, plan.md and checklist.md …`, the design is
 frozen. Then, and only then:
 
-1. `{{SESSION}}/spec.md` — add or replace a `## UI design` section: the screen list with file names,
+1. `{{SESSION}}/spec.md` — add or replace a `## UI design` section. That heading is a FIXED
+   IDENTIFIER: write it in English exactly like this even though the spec around it is in
+   {{LANGUAGE}} — step 2's revision mode is told never to delete it and step 4 looks it up, so a
+   translated heading is the same as no section at all. It holds the screen list with file names,
    the states each screen covers, and the design decisions settled during the chat.
 2. `{{SESSION}}/plan.md` — bring the tasks in line with the approved mockups: add tasks for UI the
    plan did not foresee, adjust ones whose scope the mockup changed, drop ones the design dropped.
@@ -106,7 +111,10 @@ frozen. Then, and only then:
 
 When the requirements change after your screens exist, the orchestrator sends you the three
 requirement files (`requirements.md`, `requirements-prev.md`, `requirements-changes.md`) and asks for
-a revision. Rework ONLY the screens the change touches: every other file in
+a revision. Read them, and also open every file `requirements-changes.md` names as ADDED under
+`{{SESSION}}/mockups/` and `{{SESSION}}/hints/` — a revision is exactly when a user attaches the
+reference image they meant all along, and it reaches you only if you open it. A file named as removed
+stops being a reference. Then rework ONLY the screens the change touches: every other file in
 `{{SESSION}}/generated-mockups/` stays byte-identical, keeps its filename and keeps its manifest
 entry. Do not redesign, re-theme or "refresh" a screen the change does not reach.
 
@@ -123,9 +131,10 @@ artifacts updated after approval 95. Between rounds the orchestrator owns the pr
 report while waiting for feedback.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
-never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
-(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
-`--data-binary "@file"`.)
+never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the
+argument is re-encoded, its byte length stops matching the string, and the server answers 400
+`Unterminated string in JSON`. Read such a 400 as the shell, never as a bad body. (If PowerShell
+is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data-binary "@file"`.)
 
 ## Rules
 

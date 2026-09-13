@@ -82,19 +82,26 @@ function expandItemSpec(spec) {
 
 function parseArgs(argv) {
   const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false };
+  const unknown = [];
   for (const arg of argv) {
     if (arg === '--keep-source') {
       args.keepSource = true;
       continue;
     }
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
-    if (!m) continue;
+    // Refused rather than skipped: a mistyped --project loses every code snippet and
+    // a mistyped --out writes the page somewhere nobody looks, both while exiting 0.
+    if (!m) { unknown.push(arg); continue; }
     if (m[1] === 'report') args.report = m[2];
     else if (m[1] === 'out') args.out = m[2];
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'mode') args.mode = m[2];
     else if (m[1] === 'base') args.base = m[2];
     else if (m[1] === 'branch') args.branch = m[2];
+    else unknown.push(arg);
+  }
+  if (unknown.length > 0) {
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.md").');
   if (!args.out) args.out = args.report.replace(/\.md$/i, '') + '.html';
@@ -667,6 +674,43 @@ function diffReader(projectRoot, source) {
 
 // A file that moved, vanished or is binary simply renders without a snippet -
 // the finding itself stays intact.
+// An id is how a ticked line says WHICH rulebook the items belong to, and nothing
+// else checks it: a mistyped or invented one (`a11y#1-30` for `accessibility`)
+// counts toward coverage all the same, so the report would claim a walk through a
+// checklist that does not exist. The ids are the instruction file names, from the
+// skill's rulebook plus the project's own when it has one.
+function knownChecklistIds(projectRoot) {
+  const ids = new Set();
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith('.md')) ids.add(entry.name.replace(/.md$/i, '').toLowerCase());
+    }
+  };
+  walk(path.join(__dirname, '..', 'instructions'));
+  if (projectRoot) walk(path.join(path.resolve(projectRoot), '.claude', 'doh', 'instructions'));
+  return ids;
+}
+
+function warnUnknownChecklistIds(report, projectRoot) {
+  const known = knownChecklistIds(projectRoot);
+  // No rulebook readable at all (a report rendered away from its skill) would turn
+  // every id into a warning, which says nothing about the report.
+  if (known.size === 0) return;
+  for (const block of report.checklists) {
+    const flagged = new Set();
+    for (const item of block.items) {
+      const id = String(item.id).split('#')[0].toLowerCase();
+      if (known.has(id) || flagged.has(id)) continue;
+      flagged.add(id);
+      report.warnings.push(`${block.path}: pozycje odchaczone pod nieznaną instrukcją "${id}" - nie ma takiego pliku w rulebooku, więc nic ich nie pokrywa.`);
+    }
+  }
+}
+
 function attachSnippets(report, projectRoot, source) {
   const read = sourceReader(projectRoot, source);
   const readDiff = diffReader(projectRoot, source);
@@ -1153,6 +1197,23 @@ const pageJs = `
     ignored: loadIgnored(),
     accepted: loadAccepted()
   };
+  // Both pools are keyed by report name, so re-rendering the same report re-reads
+  // them - and a finding that moved or disappeared leaves an id behind. A stale
+  // accepted id is the one that misleads: the toolbar would count it while the PR
+  // command, which filters against the findings actually present, would not, so the
+  // page would show one number and send another. Drop what this report does not have.
+  (function pruneStalePools() {
+    var live = {};
+    allFindings.forEach(function (f) { live[f.id] = true; });
+    var dropped = false;
+    [state.accepted, state.ignored].forEach(function (pool) {
+      Array.from(pool).forEach(function (id) {
+        if (!live[id]) { pool.delete(id); dropped = true; }
+      });
+    });
+    if (dropped) { saveAccepted(); saveIgnored(); }
+  })();
+
   reportData.ruleGroups.forEach(function (g) { g.rules.forEach(function (r) { state.selectedRules.add(r.key); }); });
 
   function visible(f) {
@@ -1697,8 +1758,8 @@ const pageJs = `
       if (pair[0] === 'full' && !file.full) {
         button.disabled = true;
         button.title = file.fullLines
-          ? 'Plik ma ' + file.fullLines + ' linii (limit 3000) - dostępny tylko fragment'
-          : 'Nie udało się odczytać pliku - dostępny tylko fragment';
+          ? 'Plik ma ' + file.fullLines + ' linii (limit ${maxFullViewLines}) - dostępny tylko fragment'
+          : 'Nie udało się odczytać pliku (brak dostępu, plik binarny albo powyżej ${Math.round(maxSourceBytes / (1024 * 1024))} MB) - dostępny tylko fragment';
       }
       button.addEventListener('click', function (event) {
         // Inside a <summary> the default action collapses the box, so the switch
@@ -2028,6 +2089,7 @@ function main(argv) {
   }
   const report = parseReport(markdown);
   const projectRoot = projectRootFor(args.report, args.project);
+  warnUnknownChecklistIds(report, projectRoot);
   attachSnippets(report, projectRoot, { mode: args.mode, base: args.base, branch: args.branch });
   const pullRequest = report.emptyState ? { pr: null, warning: null } : detectPullRequest(projectRoot, args.branch);
   report.pr = pullRequest.pr;
@@ -2067,7 +2129,7 @@ function main(argv) {
 
 module.exports = {
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
-  projectRootFor, attachSnippets, buildPayload, renderHtml, detectPullRequest, main,
+  projectRootFor, attachSnippets, warnUnknownChecklistIds, buildPayload, renderHtml, detectPullRequest, main,
 };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

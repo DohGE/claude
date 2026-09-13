@@ -21,16 +21,25 @@ try {
 
 function parseArgs(argv) {
   const args = { files: [], instructionsDir: DEFAULT_INSTRUCTIONS_DIR, project: process.cwd() };
+  const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
-    if (!m) continue;
+    // Refused, not skipped: a mistyped flag would otherwise fall back to a default
+    // (the whole rulebook instead of the file's own rules, or the wrong project)
+    // and the agent would follow the wrong instructions without noticing.
+    if (!m) { unknown.push(arg); continue; }
     if (m[1] === 'files') {
       args.files = [...new Set(m[2].split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
     } else if (m[1] === 'instructions-dir') {
       args.instructionsDir = m[2];
     } else if (m[1] === 'project') {
       args.project = m[2];
+    } else {
+      unknown.push(arg);
     }
+  }
+  if (unknown.length > 0) {
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --files, --project, --instructions-dir)`);
   }
   return args;
 }
@@ -56,7 +65,11 @@ function buildOutput(options) {
   // must follow them too.
   const projectInstructionsDir = path.join(
     path.resolve(options.project || process.cwd()), '.claude', 'doh', 'instructions');
-  const hasProjectInstructions = fs.existsSync(projectInstructionsDir);
+  // A plain existsSync is not enough: `loadInstructions` walks the path with
+  // readdirSync, so a non-directory here would crash the matcher with a stack
+  // trace instead of the JSON every caller parses.
+  const hasProjectInstructions = fs.existsSync(projectInstructionsDir)
+    && fs.statSync(projectInstructionsDir).isDirectory();
   out.projectInstructionsDir = hasProjectInstructions ? projectInstructionsDir : null;
   const { globals, locals, warnings } = reviewContext.loadInstructions(
     hasProjectInstructions ? [dir, projectInstructionsDir] : dir, 'implement');

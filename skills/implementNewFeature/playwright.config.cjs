@@ -15,6 +15,13 @@ module.exports = defineConfig({
   // Never retry. A test that only passes on the second attempt is a finding
   // ("unstable test"), not a green run — retries would hide exactly that.
   retries: 0,
+  // Session suites run serially; the skill's own suite does not. A pipeline e2e
+  // run drives ONE dev server backed by ONE data store, so parallel workers would
+  // have tests sign in, seed and navigate over each other — and the rule above
+  // turns exactly that interference into a reported "unstable test", i.e. a
+  // finding against the application for something the runner caused. The skill's
+  // own tests each start an isolated server, so they stay parallel.
+  workers: process.env.E2E_TEST_DIR ? 1 : undefined,
   // Failure artifacts land next to the session's tests, so the agent reads the
   // captured page snapshot and screenshot instead of re-walking the flow live.
   outputDir: process.env.E2E_TEST_DIR

@@ -9,9 +9,24 @@ New-Item -ItemType Directory -Force $SessionDir | Out-Null
 $serverJson = Join-Path $SessionDir 'server.json'
 # Reuse the previous port when restarting, so a browser tab the user still has
 # open keeps working; the server falls back to any free port if it is taken.
+# The old instance has to go first, or it keeps the port and the new one silently
+# lands on a different one: two servers would then share this session's state file
+# while the user's open tab talks to the one the orchestrator no longer polls.
 $prevPort = 0
 if (Test-Path $serverJson) {
-  try { $prevPort = (Get-Content $serverJson -Raw | ConvertFrom-Json).port } catch { $prevPort = 0 }
+  $prevPid = 0
+  try {
+    $prev = Get-Content $serverJson -Raw | ConvertFrom-Json
+    $prevPort = $prev.port
+    $prevPid = $prev.pid
+  } catch { $prevPort = 0 }
+  if ($prevPid -gt 0) {
+    try { Stop-Process -Id $prevPid -Force -ErrorAction Stop } catch { }
+    $stopBy = (Get-Date).AddSeconds(5)
+    while ((Get-Process -Id $prevPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $stopBy) {
+      Start-Sleep -Milliseconds 200
+    }
+  }
   Remove-Item $serverJson -Force
 }
 $nodeArgs = @($serverJs, '--session-dir', $SessionDir)

@@ -60,6 +60,9 @@ test('stepper ukrywa krok Mockups, dopóki toggle go nie włączy', async ({ pag
   await expect(page.locator('.step .name')).toHaveText(
     ['Requirements', 'Feature Refinement', 'Implementation', 'Validation & E2E', 'Code Review',
       'Mockoon Mocks']);
+  // z ukrytym krokiem Mockups numer kafelka rozjezdza sie z id kroku: Implementation ma id 4,
+  // a pokazuje sie jako 3 — dlatego finalStatus w podsumowaniu nazywa krok, a nie numeruje.
+  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6']);
   await postState({ step: 3, enabled: true });
   await expect(page.locator('.step')).toHaveCount(7);
   await expect(page.locator('.step').nth(2).locator('.name')).toHaveText('Mockups');
@@ -95,10 +98,14 @@ test('panel makiet renderuje podgląd, czat i przełącza ekrany', async ({ page
 
 test('przełącznik Desktop/Mobile zmienia szerokość podglądu', async ({ page }) => {
   await openMockupPanel(page);
-  const width = () => page.locator('#mockupFrame').evaluate(el => el.style.width);
-  expect(await width()).toBe('1280px');
+  // Both sizes are hardcoded a second time in references/mockup-agent.md and
+  // references/validation-agent.md: step 5 screenshots the running app at exactly
+  // these dimensions to compare it against the mockups approved here. If the UI
+  // drifted, the comparison would silently be made against a different size.
+  const size = () => page.locator('#mockupFrame').evaluate(el => [el.style.width, el.style.height]);
+  expect(await size()).toEqual(['1280px', '800px']);
   await page.click('[data-viewport="Mobile"]');
-  expect(await width()).toBe('390px');
+  expect(await size()).toEqual(['390px', '780px']);
 });
 
 test('Send nie blokuje panelu i od razu pokazuje wiadomość w czacie', async ({ page }) => {

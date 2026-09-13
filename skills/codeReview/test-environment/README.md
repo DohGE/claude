@@ -21,10 +21,15 @@ none of them may be reported twice under the component-template or component-sty
 
 ## How to run a review over it
 
-The files must appear in a git diff to be reviewed:
+The review needs a target that contains these files:
 
-- `git add skills/codeReview/test-environment` → `/codeReview staged`, or
+- `/codeReview folder skills/codeReview/test-environment` — folder mode (the literal word `folder`
+  first: a bare path would be read as a branch name), and the only target that reviews
+  these files and nothing else. Prefer it: the experiment stays scoped whatever else is uncommitted.
 - commit them on a branch → `/codeReview` (branch vs base).
+- `/codeReview staged` also works, but it is NOT scoped: the context script runs `git add .` itself,
+  so staging this folder first changes nothing — every other pending change in the repo joins the
+  review and stays staged afterwards.
 
 This README is the answer key, and `skipGlobs` now excludes prose (`**/*.md`), so the review never
 reads it: it is reported as a skipped file and nothing more. Committing it separately is no longer

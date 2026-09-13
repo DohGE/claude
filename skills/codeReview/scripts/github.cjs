@@ -42,7 +42,10 @@ function git(project, args) {
 function repoSlug(project) {
   for (const line of String(git(project, ['remote', '-v']) || '').split('\n')) {
     const url = line.split(/\s+/)[1] || '';
-    const m = url.match(/^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?github\.com[/:]+([^/]+)\/([^/]+?)(?:\.git)?$/i);
+    // The trailing slash is the one shape git keeps verbatim but the pattern used to
+    // refuse: `git remote add origin https://github.com/acme/repo/` then read as no
+    // GitHub remote at all, which is the opposite of what the message would say.
+    const m = url.match(/^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?github\.com[/:]+([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
     if (m) return { owner: m[1], repo: m[2] };
   }
   return null;
@@ -97,9 +100,22 @@ function credentialToken(project, options = {}) {
     const out = run('git', ['-C', project, '-c', 'credential.interactive=false', 'credential', 'fill'], {
       input, timeout: requestTimeoutMs, ...options,
     });
-    const line = String(out || '').split(/\r?\n/).find((l) => l.startsWith('password='));
-    const value = line ? line.slice('password='.length).trim() : '';
-    if (value) return value;
+    const fields = new Map(String(out || '').split(/\r?\n/)
+      .map((l) => l.match(/^([a-z_]+)=(.*)$/))
+      .filter(Boolean)
+      .map((m) => [m[1], m[2].trim()]));
+    const password = fields.get('password') || '';
+    // The OAuth-over-Basic convention puts the TOKEN in the username and the fixed
+    // string `x-oauth-basic` in the password - hub wrote credentials that way and
+    // stores set up back then still hold them. Returning the sentinel sends a value
+    // that can never authenticate, and the 401 then blames a credential store that
+    // holds a perfectly good token.
+    if (/^x-oauth-basic$/i.test(password)) {
+      const username = fields.get('username') || '';
+      if (username) return username;
+      continue;
+    }
+    if (password) return password;
   }
   return null;
 }
@@ -121,14 +137,22 @@ function netrcToken(options = {}) {
     // netrc is one flat stream of whitespace-separated words, so the entry ends
     // wherever the next `machine` begins - line breaks carry no meaning.
     const words = text.split(/\s+/).filter(Boolean);
-    let inside = false;
+    // `default` is the catch-all, so an explicit `machine github.com` outranks it
+    // wherever the two sit relative to each other. Taking whichever came first would
+    // send another service's secret to GitHub, and the refusal that follows points the
+    // reader at the github.com entry - the one line that is not the problem.
+    let fallback = null;
+    let entry = null;
     for (let i = 0; i < words.length; i++) {
       if (words[i] === 'machine' || words[i] === 'default') {
-        inside = words[i] === 'default' || words[i + 1] === 'github.com';
+        entry = words[i] === 'default' ? 'default' : (words[i + 1] === 'github.com' ? 'github' : null);
         continue;
       }
-      if (inside && words[i] === 'password' && words[i + 1]) return words[i + 1];
+      if (!entry || words[i] !== 'password' || !words[i + 1]) continue;
+      if (entry === 'github') return words[i + 1];
+      if (fallback === null) fallback = words[i + 1];
     }
+    if (fallback !== null) return fallback;
   }
   return null;
 }
@@ -156,11 +180,46 @@ function ghConfigToken(options = {}) {
     const lines = String(text).split(/\r?\n/);
     const start = lines.findIndex((l) => l.trim() === 'github.com:');
     if (start === -1) continue;
+    // gh 2.x signs in several accounts at once: each gets its own `oauth_token`
+    // under `users:`, and the host block repeats the ACTIVE one. Reading whichever
+    // comes first signs a two-account machine in as whoever `users:` happens to list
+    // first, and the refusal that follows reads as a bad token rather than as the
+    // wrong account - so the account `user:` names wins when it can be resolved.
+    const block = [];
     for (let i = start + 1; i < lines.length; i++) {
       if (lines[i].trim() && !/^\s/.test(lines[i])) break;
-      const m = lines[i].match(/^\s+oauth_token:\s*(\S+)/);
-      if (m) return m[1];
+      if (lines[i].trim()) block.push(lines[i]);
     }
+    const indentOf = (line) => line.match(/^\s*/)[0].length;
+    const base = block.length ? Math.min(...block.map(indentOf)) : 0;
+    const userTokens = new Map();
+    let activeUser = null;
+    let hostToken = null;
+    let currentUser = null;
+    let inUsers = false;
+    for (const line of block) {
+      const body = line.trim();
+      if (indentOf(line) === base) {
+        inUsers = body === 'users:';
+        currentUser = null;
+        const named = body.match(/^user:\s*(\S+)/);
+        if (named) activeUser = named[1];
+        const own = body.match(/^oauth_token:\s*(\S+)/);
+        if (own) hostToken = own[1];
+        continue;
+      }
+      if (!inUsers) continue;
+      const name = body.match(/^([^:\s]+):$/);
+      if (name) { currentUser = name[1]; continue; }
+      const token = body.match(/^oauth_token:\s*(\S+)/);
+      if (token && currentUser) userTokens.set(currentUser, token[1]);
+    }
+    if (activeUser && userTokens.has(activeUser)) return userTokens.get(activeUser);
+    // One account is the ordinary case: its own entry is the maintained one, while the
+    // host-level copy is what older gh versions wrote and can go stale after a re-auth.
+    if (userTokens.size === 1) return [...userTokens.values()][0];
+    if (hostToken) return hostToken;
+    if (userTokens.size) return [...userTokens.values()][0];
   }
   return null;
 }

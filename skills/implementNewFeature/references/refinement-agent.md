@@ -31,9 +31,21 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
 3. Stop asking when you are ≥95% confident the requirements are complete and implementable without further questions.
 4. Write `{{SESSION}}/spec.md` — full spec; the FIRST LINE must be `# <feature title>` (reports and the run summary quote it; the branch name comes from the step-1 form, not from this line).
 5. Apply the `superpowers:writing-plans` methodology to write `{{SESSION}}/plan.md`: bite-sized TDD tasks with exact paths into `{{PROJECT}}`, complete code, run commands, no placeholders. NO git commit steps — the pipeline never commits.
+   Head every task with `### Task <n>: <name>` — that exact English spelling, at that exact level,
+   even though the plan's prose is in {{LANGUAGE}}. It is a FIXED IDENTIFIER, not a title to
+   localise: step 4 counts these headings to know how many tasks there are, and reports progress as
+   `<done*100/total>` and `Task <k>/<total>`. Translate it to `## Zadanie 1 —`, or group the work
+   under stage headings instead, and the count is zero — the progress bar divides by nothing and the
+   whole of step 4 runs with no visible progress.
    The plan carries real code, so it obeys the same rulebook step 4 writes against and step 6 reviews with: before writing it run `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` and read every `globals` file, then re-run it with the paths the plan will create (`--files="<project-relative paths>"`) and read their `localInstructions`. File layout, names and every code sample in the plan must already satisfy those checklists — a plan that contradicts them only turns into deviations in step 4 and findings in step 6.
 6. Write `{{SESSION}}/checklist.md` — every verifiable requirement from spec.md, one line each:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`
+   The `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS — English verbatim, even though the
+   requirement between them is written in {{LANGUAGE}}. The tag is what ROUTES the item: step 5 sends
+   `e2e` to the Playwright suite, `visual` to the screenshot comparison and `manual` to the UX walk,
+   then divides ticks by the item count for its compliance number. A translated tag routes the item
+   nowhere while still counting in the denominator, so the run can clear the 99% gate on items nothing
+   ever verified — and step 5 now refuses a checklist whose items carry no tag at all.
    (step 5 ticks these and appends `| evidence: <what proves it>` to each one it ticks)
 7. Report progress at MILESTONES only — after reading inputs, after exploring the project, and
    after each artifact is written:
@@ -55,6 +67,11 @@ happens the orchestrator sends you a message naming three files:
 Work in REDUCED SCOPE. Concretely:
 
 1. Do NOT re-explore the project and do NOT re-read files you already read — your context is intact.
+   The exception is uploads: a revision can ADD files, and `requirements-changes.md` names them. Read
+   every file it lists as added under `{{SESSION}}/hints/`, `{{SESSION}}/contracts/` and
+   `{{SESSION}}/mockups/` before you decide anything — a new contract or reference the user attached
+   is the most concrete thing a revision can carry, and "reduced scope" never means leaving it
+   unopened. A file named as removed is withdrawn: stop treating what it said as binding.
 2. Ask only questions the change genuinely opens. A settled decision the change does not touch stays
    settled; re-asking it is a defect, not thoroughness.
 3. Patch `spec.md`, `plan.md` and `checklist.md` only where the change lands. Every other line stays
@@ -70,9 +87,10 @@ Finish with the usual `result` JSON, whose summary states what the revision chan
 alone.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
-never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
-(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
-`--data-binary "@file"`.)
+never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the
+argument is re-encoded, its byte length stops matching the string, and the server answers 400
+`Unterminated string in JSON`. Read such a 400 as the shell, never as a bad body. (If PowerShell
+is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data-binary "@file"`.)
 
 ## Final message
 

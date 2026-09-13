@@ -5,6 +5,8 @@ applies-to:
   - "**/app.config.*.ts"
   - "**/main.ts"
   - "**/main.*.ts"
+  - "**/polyfills.ts"
+  - "**/polyfills.*.ts"
 ---
 ## Checklist
 - Bootstrap is `bootstrapApplication(App, appConfig)` with a flat `providers` array — no root `NgModule`, no `platformBrowserDynamic()`.

@@ -22,10 +22,13 @@ You change nothing in `{{ROOT}}`.
 2. `{{SESSION}}/requirements.md` (section "Contracts (pasted)") and every file in `{{SESSION}}/contracts/`
    — OpenAPI/Swagger, Postman, plain text. When a contract covers an endpoint it is the source of
    truth: path, method, status codes and response shape come from it, never from your imagination.
-3. The implemented code. The pipeline never commits, so `git status --porcelain` lists every file the
-   run touched; read the ones that perform HTTP calls (api clients, services, hooks, `fetch` /
-   `HttpClient` / `axios` call sites). They give you the real URL, method, query params and the exact
-   field names the UI reads — a mock whose field names differ is worse than no mock.
+3. The implemented code. The pipeline never commits, so `git -C "{{ROOT}}" status --porcelain` lists
+   every file the run touched; read the ones that perform HTTP calls (api clients, services, hooks,
+   `fetch` / `HttpClient` / `axios` call sites). They give you the real URL, method, query params and
+   the exact field names the UI reads — a mock whose field names differ is worse than no mock.
+   The `-C` is not optional: your shell starts in `{{PROJECT}}`, and when `{{ROOT}}` is a worktree a
+   bare `git status` would hand you another task's file list and you would mock the wrong feature.
+   By now step 6 has staged these changes, so they appear with a staged status — still listed.
 4. The app's API base URL (proxy config, environment/config files), so `endpointPrefix` matches what
    the app actually calls.
 
@@ -158,22 +161,24 @@ Rules the skeleton cannot show:
 `taskId` is mandatory — the server serves several tasks at once and rejects a body without it.
 
 Milestones: inputs read 20, endpoint list settled 40, payloads written 70, file written and validated 95.
-Encoding: run curl from a POSIX shell (Bash tool). Never pass non-ASCII JSON inline through
-PowerShell (mojibake); if unavoidable, write a UTF-8-no-BOM temp file and send `--data-binary "@file"`.
 
 ## Rules
 
 - Write ONLY `{{SESSION}}/mockoon.json`. Never touch `{{ROOT}}`, never `git commit`, never change branch.
 - Never read or reference `{{SESSION}}/auth.json` — credentials inside a mocked payload are invented.
 - Before finishing, validate the file with `node`: parse it, then assert `port === 3000`,
-  `hostname === "localhost"`, `rootChildren.length === routes.length`, and exactly one
-  `default: true` response per route. Fix the file, never the check.
+  `hostname === "localhost"`, exactly one `default: true` response per route, and that the set of
+  `rootChildren` uuids EQUALS the set of route uuids — not merely the same length. A rootChildren
+  entry carrying a freshly minted uuid instead of its route's passes a length check and still
+  hides that route from Mockoon's tree, so the mock serves nothing and the file looks correct.
+  Fix the file, never the check.
 - Never paste the JSON into your messages; the file on disk is the deliverable.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
-never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
-(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
-`--data-binary "@file"`.)
+never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the
+argument is re-encoded, its byte length stops matching the string, and the server answers 400
+`Unterminated string in JSON`. Read such a 400 as the shell, never as a bad body. (If PowerShell
+is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data-binary "@file"`.)
 
 ## Final message
 

@@ -15,9 +15,15 @@ const github = require('./github.cjs');
 const { parseLineRanges } = require('./render-report.cjs');
 
 const maxCommentsPerReview = 50;
+// GitHub refuses a review body over 65 536 characters. A folder or staged review posted
+// to a branch PR turns EVERY finding into a leftover - none of those lines are in the PR
+// diff - so the list reaches the limit at around 130 of them, and the post then fails
+// after earlier batches already landed. Splitting keeps each body comfortably under it.
+const maxReviewBody = 60000;
 
 function parseArgs(argv) {
   const args = { report: '', project: '', pr: '', include: [], exclude: [], all: false, dryRun: false };
+  const unknown = [];
   for (const arg of argv) {
     if (arg === '--dry-run') {
       args.dryRun = true;
@@ -28,12 +34,19 @@ function parseArgs(argv) {
       continue;
     }
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
-    if (!m) continue;
+    // This command posts to a real pull request, so a mistyped flag must stop it:
+    // a dropped `--exclude` would publish findings the reviewer took out, and a
+    // dropped `--dry-run` would post a review that was meant to be a rehearsal.
+    if (!m) { unknown.push(arg); continue; }
     if (m[1] === 'report') args.report = m[2];
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'pr') args.pr = m[2];
     else if (m[1] === 'include') args.include = m[2].split(',').map((x) => x.trim()).filter(Boolean);
     else if (m[1] === 'exclude') args.exclude = m[2].split(',').map((s) => s.trim()).filter(Boolean);
+    else unknown.push(arg);
+  }
+  if (unknown.length > 0) {
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --project, --pr, --include, --exclude, --all, --dry-run).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.html").');
   return args;
@@ -149,6 +162,38 @@ function summaryBody(payload, comments, leftovers) {
   return head.join('\n');
 }
 
+// One body per review, each under the cap. The first carries the heading and the counts;
+// every further part says which part it is, so a reader of the PR sees the list continue
+// rather than three reviews that each look like the whole summary.
+function summaryBodies(payload, comments, leftovers) {
+  const whole = summaryBody(payload, comments, leftovers);
+  if (whole.length <= maxReviewBody || leftovers.length <= 1) return [whole];
+  const bodies = [];
+  let rest = leftovers.slice();
+  while (rest.length) {
+    let take = rest.length;
+    let body = bodies.length === 0
+      ? summaryBody(payload, comments, rest.slice(0, take))
+      : continuedBody(payload, rest.slice(0, take), bodies.length + 1);
+    while (take > 1 && body.length > maxReviewBody) {
+      take = Math.max(1, Math.floor(take / 2));
+      body = bodies.length === 0
+        ? summaryBody(payload, comments, rest.slice(0, take))
+        : continuedBody(payload, rest.slice(0, take), bodies.length + 1);
+    }
+    bodies.push(body);
+    rest = rest.slice(take);
+  }
+  return bodies;
+}
+
+function continuedBody(payload, leftovers, part) {
+  const full = summaryBody(payload, [], leftovers).split(String.fromCharCode(10));
+  full[0] = `## Code review — ${payload.title} (cd. ${part})`;
+  full.splice(2, 1, 'Dalsze znaleziska spoza diffa PR-a:');
+  return full.join(String.fromCharCode(10));
+}
+
 function chunk(items, size) {
   const out = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -195,6 +240,17 @@ function main(argv, api = github) {
     process.stderr.write('Brak znalezisk do wysłania (żadne nie zostało zaakceptowane?).\n');
     return 1;
   }
+  // A partial mismatch is the dangerous one: with every id gone the run stops just
+  // above, but with only some gone it would post the rest and let the reviewer
+  // believe the whole accepted pool went out. Ids drift when the report is
+  // re-rendered after the pool was saved in the browser.
+  if (included) {
+    const posted = new Set(findings.map((f) => f.id));
+    const missing = [...included].filter((id) => !posted.has(id));
+    if (missing.length) {
+      process.stderr.write(`Uwaga: ${missing.length} z ${included.size} zaakceptowanych id nie ma w raporcie i NIE zostanie wysłanych: ${missing.join(', ')}. Raport mógł zostać przerenderowany po zaakceptowaniu.\n`);
+    }
+  }
 
   const number = args.pr || (payload.pr && payload.pr.number);
   if (!number) {
@@ -216,21 +272,34 @@ function main(argv, api = github) {
 
   const { comments, leftovers } = buildComments(findings, commentableLines(diff));
   const batches = chunk(comments, maxCommentsPerReview);
-  const bodies = batches.length ? batches.map((_, i) => (i === 0
-    ? summaryBody(payload, comments, leftovers)
-    : `Code review — continued (${i + 1}/${batches.length}).`))
-    : [summaryBody(payload, comments, leftovers)];
+  // The summary may need more reviews than the comments do, or the other way round; the
+  // run posts as many as the longer of the two needs and pairs them index by index.
+  const summaries = summaryBodies(payload, comments, leftovers);
+  const reviews = Math.max(batches.length, summaries.length, 1);
+  const bodies = Array.from({ length: reviews }, (_, i) => summaries[i]
+    || `Code review — continued (${i + 1}/${reviews}).`);
 
   if (args.dryRun) {
-    process.stdout.write(`${repo} PR #${number}: ${comments.length} komentarzy w kodzie, ${leftovers.length} w podsumowaniu, ${batches.length || 1} review.\n`);
+    process.stdout.write(`${repo} PR #${number}: ${comments.length} komentarzy w kodzie, ${leftovers.length} w podsumowaniu, ${reviews} review.\n`);
     return 0;
   }
 
-  for (let i = 0; i < Math.max(batches.length, 1); i++) {
+  // GitHub's secondary rate limit fires on mutative requests sent back to back, so a
+  // split review could trip it half way and land on the PR in pieces. One second between
+  // posts is what their guidance asks for, and it costs nothing on the single-review path.
+  const pause = () => {
+    const shared = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(shared, 0, 0, 1000);
+  };
+  for (let i = 0; i < reviews; i++) {
+    if (i > 0) pause();
     const review = { event: 'COMMENT', body: bodies[i], comments: batches[i] || [] };
     const posted = api.postReview(project, slug, number, review);
     if (posted.error) {
-      process.stderr.write(`Nie udało się wysłać review (partia ${i + 1}): ${posted.error}\n`);
+      // What already landed cannot be taken back, and re-running would post it twice.
+      const done = i === 0 ? 'nic nie zostało wysłane' : `wysłano już ${i} z ${reviews} review`;
+      process.stderr.write(`Nie udało się wysłać review ${i + 1}/${reviews}: ${posted.error}. Stan: ${done} - przed ponowną próbą sprawdź PR-a, żeby nie zdublować komentarzy.
+`);
       return 1;
     }
   }
@@ -241,5 +310,5 @@ function main(argv, api = github) {
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
-  parseArgs, parsePayload, commentableLines, anchorFor, renderBody, buildComments, summaryBody, chunk, main,
+  parseArgs, parsePayload, commentableLines, anchorFor, renderBody, buildComments, summaryBody, summaryBodies, chunk, main,
 };
