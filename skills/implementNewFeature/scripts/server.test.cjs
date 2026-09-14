@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const { createApp } = require('./server.cjs');
 
 function tmpDir() {
@@ -212,6 +213,21 @@ test('createApp discards a state file written before tasks existed', async t => 
   assert.equal(state.tasks[0].activeStep, 1);
 });
 
+test('a truncated state file is kept aside, not silently overwritten', async t => {
+  const dir = tmpDir();
+  const stateFile = path.join(dir, 'pipeline-state.json');
+  // What a process killed mid-write leaves behind.
+  fs.writeFileSync(stateFile, '{"tasks":[{"id":"t1","bran');
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.equal((await getState(base)).tasks.length, 1, 'the run starts fresh rather than refusing to run');
+  assert.ok(fs.existsSync(`${stateFile}.corrupt`), 'the unreadable file is preserved for inspection');
+  await postState(base, { step: 1, status: 'completed' });
+  assert.ok(!fs.existsSync(`${stateFile}.tmp`), 'the atomic write leaves no temporary file behind');
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, 'utf8')).tasks.length, 1, 'and the state file is complete JSON');
+});
+
 test('POST /api/state with unknown step returns 400', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);
@@ -246,6 +262,23 @@ test('answers are queued per task and pollable filtered or unfiltered', async t 
   assert.equal(got.answer.taskId, 't2');
   assert.equal((await post(base, '/api/answer', { taskId: 'nope' })).status, 400);
   assert.equal((await fetch(`${base}/api/answer?taskId=nope`)).status, 400);
+});
+
+test('an abandoned long poll does not swallow the answer meant for the next one', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  // The orchestrator's poll dies mid-wait (tool timeout, interrupted session).
+  const ac = new AbortController();
+  const abandoned = fetch(`${base}/api/answer?wait=300`, { signal: ac.signal }).catch(() => null);
+  await new Promise(r => setTimeout(r, 50));
+  ac.abort();
+  await abandoned;
+  await new Promise(r => setTimeout(r, 50));
+  // The user answers in the browser afterwards; it must reach the NEXT poll.
+  await post(base, '/api/answer', { taskId: 't1', kind: 'answer', text: 'still here' });
+  const got = await (await fetch(`${base}/api/answer?wait=1`)).json();
+  assert.equal(got.answer && got.answer.text, 'still here');
 });
 
 test('an unfiltered long poll is released by an answer for any task', async t => {
@@ -312,7 +345,10 @@ test('a step1 answer is stored on the task so the form can be re-rendered', asyn
     junk: 'x'.repeat(1000), taskDescription: 'y'.repeat(300000), hints: ['../../auth.json'] });
   const after = await task0(base);
   assert.equal(after.step1.junk, undefined);
-  assert.equal(after.step1.taskDescription.length, 200 * 1024);
+  // Cut at the cap, then marked - the marker is what makes the loss visible to whoever
+  // reads requirements.md, so it is part of the stored value rather than a side channel.
+  assert.ok(after.step1.taskDescription.startsWith("y".repeat(200 * 1024)));
+  assert.match(after.step1.taskDescription.slice(200 * 1024), /ucięte/);
   assert.deepEqual(after.step1.hints, ['auth.json'], 'file names stay bare names');
   // The answer still reaches the orchestrator.
   const { answer } = await (await fetch(`${base}/api/answer`)).json();
@@ -629,4 +665,265 @@ test('POST /api/state bumps questionSeq per task even when the question id repea
   await postState(base, { question: { id: 'q1', text: 'second' } });
   assert.strictEqual(await seq('t1'), 3, 'every question POST moves the counter the UI re-renders on');
   assert.strictEqual(await seq('t2'), 0, 'the counter belongs to the task, not the run');
+});
+
+test('POST /api/answer records mockup feedback in the chat as it arrives', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 3, enabled: true });
+  await postState(base, { step: 3, status: 'in_progress', activeStep: 3,
+    mockupReview: { text: 'Two screens', screens: [] } });
+  await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'feedback',
+    text: 'Wider button' });
+  const chat = (await task0(base)).mockupReview.chat;
+  assert.deepStrictEqual(chat, [{ role: 'user', text: 'Wider button' }],
+    'the browser gets its message back without waiting for the orchestrator');
+  // Approve is not a chat message.
+  await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'approve' });
+  assert.strictEqual((await task0(base)).mockupReview.chat.length, 1);
+});
+
+test('POST /api/state stamps reviewSummary with a fresh rev every round', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const rev = async () => (await task0(base)).reviewSummary.rev;
+  await postState(base, { step: 2, reviewSummary: { text: 'Plan v1' } });
+  assert.strictEqual(await rev(), 1);
+  await postState(base, { reviewSummary: null });
+  await postState(base, { step: 2, reviewSummary: { text: 'Plan v2' } });
+  assert.strictEqual(await rev(), 2, 'a revised plan must replace the one on screen');
+  await postState(base, { step: 2, reviewSummary: { text: 'Plan v3', rev: 9 } });
+  assert.strictEqual(await rev(), 9, 'an explicit rev still wins, as a resumed run needs');
+});
+
+test('the launched server announces port AND pid, which is what the start scripts stop', async t => {
+  const dir = tmpDir();
+  // Both start scripts read server.json to stop the previous instance before
+  // taking its port back. Without the pid they cannot, and a restart silently
+  // leaves two servers sharing this session's state.
+  const child = spawn(process.execPath, [path.join(__dirname, 'server.cjs'), '--session-dir', dir, '--port', '0'],
+    { stdio: 'ignore' });
+  t.after(() => { try { child.kill(); } catch (_e) {} });
+  const file = path.join(dir, 'server.json');
+  for (let i = 0; i < 100 && !fs.existsSync(file); i++) await new Promise(r => setTimeout(r, 50));
+  assert.ok(fs.existsSync(file), 'the server writes server.json on listen');
+  const info = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok(info.port > 0, 'the announced port is a real one');
+  assert.strictEqual(info.pid, child.pid, 'the announced pid is the process to stop');
+});
+
+test('a session under .claude/doh gets the catch-all .gitignore, credentials included', async t => {
+  const root = tmpDir();
+  const dohDir = path.join(root, '.claude', 'doh');
+  const dir = path.join(dohDir, '20260912-120000');
+  fs.mkdirSync(dir, { recursive: true });
+  const app = createApp(dir);
+  t.after(() => app.server.close());
+  const gi = fs.readFileSync(path.join(dohDir, '.gitignore'), 'utf8');
+  assert.match(gi, /^\*$/m, 'everything in doh/ is ignored by default');
+  assert.match(gi, /^!instructions\/\*\*$/m, 'except the project rulebook, which is meant to be shared');
+  // Not under .claude/doh: nothing is written where it would not belong.
+  const plain = tmpDir();
+  createApp(plain).server.close();
+  assert.ok(!fs.existsSync(path.join(path.dirname(plain), '.gitignore')));
+});
+
+test('the step names SKILL.md quotes at the user are the names the server ships', async t => {
+  // A failed run reports `Failed at <step name>` and must use the NAME, never the id:
+  // with mockups off the tiles renumber, so an id points the user at the wrong tile.
+  // That makes every name SKILL.md spells out part of the contract - rename a step in
+  // the server and the summary starts naming a step that no longer exists.
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const names = (await getState(base)).tasks[0].steps.map(s => s.name);
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  for (const quoted of ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
+    'Validation & E2E', 'Code Review', 'Mockoon Mocks']) {
+    assert.ok(names.includes(quoted), 'the server still ships the step named ' + quoted);
+    assert.ok(skill.includes(quoted), 'SKILL.md still names the step ' + quoted);
+  }
+  assert.strictEqual(names.length, 7);
+});
+
+test('an answer reaches the poll with the field names SKILL.md tells the run to read', async t => {
+  // The orchestrator reads `questionId` and `value` off the polled answer. They are not
+  // guessable - `decision` and `mockup` carry their text in `text`, so reading `text`
+  // here yields undefined and the run forwards an empty answer to the agent instead of
+  // stopping. The page is the only producer, so its names are the contract.
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { question: { id: 'q1', text: 'Which one?', options: ['A', 'B'] } });
+  await post(base, '/api/answer', { taskId: 't1', kind: 'answer', questionId: 'q1', value: 'B' });
+  const { answer } = await (await fetch(`${base}/api/answer?wait=1`)).json();
+  assert.deepStrictEqual(answer, { taskId: 't1', kind: 'answer', questionId: 'q1', value: 'B' });
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  for (const name of ['questionId', 'value']) {
+    assert.ok(skill.includes('`' + name + '`'), 'SKILL.md still names the field ' + name);
+  }
+});
+
+test('every field the page sends back is a field SKILL.md names', () => {
+  // The page is the only producer of these payloads and the orchestrator the only
+  // consumer; nothing in between validates a name. A field added to the form, or one
+  // renamed, reaches an orchestrator that never learned to read it - and an unread
+  // field is indistinguishable from a field the user left empty.
+  const ui = fs.readFileSync(path.join(__dirname, 'ui', 'index.html'), 'utf8');
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  const names = new Set();
+  for (let at = ui.indexOf('sendAnswer({'); at !== -1; at = ui.indexOf('sendAnswer({', at + 1)) {
+    const open = ui.indexOf('{', at);
+    let depth = 0, end = open;
+    for (; end < ui.length; end++) {
+      if (ui[end] === '{') depth++;
+      else if (ui[end] === '}' && --depth === 0) { end++; break; }
+    }
+    let nest = 0, current = '';
+    const parts = [];
+    for (const ch of ui.slice(open + 1, end - 1)) {
+      if ('{(['.includes(ch)) nest++;
+      if ('})]'.includes(ch)) nest--;
+      if (ch === ',' && nest === 0) { parts.push(current); current = ''; } else current += ch;
+    }
+    parts.push(current);
+    for (const part of parts) {
+      const m = part.trim().match(/^([a-zA-Z][a-zA-Z0-9]*)s*:/)
+        || part.trim().match(/^([a-zA-Z][a-zA-Z0-9]*)$/);
+      if (m) names.add(m[1]);
+    }
+  }
+  names.delete('kind');
+  assert.ok(names.size >= 10, 'the payload fields were found: ' + [...names].join(', '));
+  assert.deepStrictEqual([...names].filter((n) => !skill.includes(n)).sort(), [],
+    'these fields travel to the orchestrator without SKILL.md ever naming them');
+});
+
+test('the stepper page loads nothing from the network but its own server', () => {
+  // The pipeline runs on machines that may be offline or behind a proxy that does not
+  // let a CDN through. A stylesheet or script pulled from outside would not fail at
+  // author time and would take the whole control surface down where it matters.
+  const ui = fs.readFileSync(path.join(__dirname, 'ui', 'index.html'), 'utf8');
+  const refs = [...ui.matchAll(/(?:src|href)=["']([^"']+)["']/g)].map((m) => m[1]);
+  const external = refs.filter((u) => /^(https?:)?\/\//.test(u));
+  assert.deepStrictEqual(external, [], 'these resources come from outside the server');
+  for (const call of ['WebSocket', 'sendBeacon', 'document.cookie']) {
+    assert.ok(!ui.includes(call), 'the page must not use ' + call);
+  }
+});
+
+test('a field past the cap is marked as cut, not quietly shortened', async t => {
+  // `contractsText` exists for pasting a contract, and an OpenAPI document routinely
+  // runs past the cap. Cutting it mid-sentence with nothing said leaves the refinement
+  // agent designing against half a document, with no way to know it is half.
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const long = 'x'.repeat(200 * 1024 + 10);
+  await post(base, '/api/answer', { taskId: 't1', kind: 'step1', taskDescription: 'krótki opis',
+    businessRequirements: 'wymagania', branch: 'feature/x', contractsText: long });
+  const form = (await task0(base)).step1;
+  assert.ok(form.contractsText.length > 200 * 1024, 'the cut leaves a marker behind it');
+  assert.match(form.contractsText, /ucięte/, 'and the marker says what happened');
+  assert.strictEqual(form.taskDescription, 'krótki opis', 'a field inside the cap is untouched');
+});
+
+test('an upload past the body cap is refused with a reason, and the server survives', async t => {
+  // Destroying the socket on overflow left the page with a bare network failure, so a
+  // file too large read as `the server is gone` - and the user went hunting for a dead
+  // process instead of a smaller file. Draining the rest costs milliseconds on a local
+  // socket and is what lets the response reach the browser at all.
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const res = await post(base, '/api/answer',
+    { taskId: 't1', kind: 'step1', taskDescription: 'x'.repeat(26 * 1024 * 1024) });
+  assert.strictEqual(res.status, 413);
+  assert.match((await res.json()).error, /body over 25 MB/);
+  const after = await fetch(`${base}/api/state`);
+  assert.strictEqual(after.status, 200, 'one refused upload must not take the run down');
+});
+
+test('a malformed request line is answered, not fatal', async t => {
+  // `new URL` used to run outside the handler's try, so `GET ////` threw, the async
+  // handler rejected, and the unhandled rejection took the process down - with every
+  // task's state open. Anyone able to reach the port could end a run from a browser bar.
+  const net = require('net');
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const port = app.server.address().port;
+  const eol = String.fromCharCode(13, 10);
+  const raw = (line) => new Promise((resolve) => {
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.write(line + eol + 'Host: x' + eol + 'Content-Length: 0' + eol + eol);
+    });
+    let seen = '';
+    socket.on('data', (d) => { seen += d; });
+    socket.on('close', () => resolve(seen.split(eol)[0] || ''));
+    socket.on('error', () => resolve(''));
+    setTimeout(() => socket.destroy(), 500);
+  });
+  for (const line of ['GET //// HTTP/1.1', 'GET http://x:y:z/api/state HTTP/1.1']) {
+    const status = await raw(line);
+    const code = Number(status.split(' ')[1]);
+    assert.ok(code >= 400 && code < 600, line + ' -> ' + status);
+  }
+  assert.strictEqual((await fetch(`${base}/api/state`)).status, 200, 'and the server is still up');
+});
+
+test('a burst of hostile requests leaves the server answering', async t => {
+  // The run is long, interactive and holds every task's state in this one process, so a
+  // single request that escapes the handler ends it. This fires the shapes that reach a
+  // local port in practice - a stray browser probe, a half-written body, a traversal try
+  // - all at once, because a path can be safe alone and fatal while others are in flight.
+  const net = require('net');
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const port = app.server.address().port;
+  const eol = String.fromCharCode(13, 10);
+  const raw = (line) => new Promise((resolve) => {
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.write(line + eol + 'Host: x' + eol + 'Content-Length: 0' + eol + eol);
+    });
+    socket.on('data', () => {});
+    socket.on('close', () => resolve());
+    socket.on('error', () => resolve());
+    setTimeout(() => { socket.destroy(); resolve(); }, 300);
+  });
+  const send = (path, body) => fetch(base + path, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body,
+  }).catch(() => null);
+  const jobs = [];
+  for (let i = 0; i < 15; i++) {
+    jobs.push(raw('GET //// HTTP/1.1'));
+    jobs.push(raw('GET /generated-mockups/../../x HTTP/1.1'));
+    jobs.push(send('/api/state', '{not json'));
+    jobs.push(send('/api/answer', JSON.stringify({ taskId: 'nope', kind: 'answer' })));
+    jobs.push(fetch(base + '/api/answer?taskId=nope').catch(() => null));
+    jobs.push(fetch(base + '/api/state').catch(() => null));
+  }
+  await Promise.all(jobs);
+  assert.strictEqual((await fetch(base + '/api/state')).status, 200,
+    'the server answered ' + jobs.length + ' hostile requests and is still up');
+});
+
+test('a body that will not parse is a caller error, not a server error', async t => {
+  // The page shows the status it got. Answering 500 to a malformed body tells the user
+  // the run broke, which sends them to the server log for a mistake that lives in the
+  // request - and the two need opposite responses.
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const res = await fetch(base + '/api/state', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
+  });
+  assert.strictEqual(res.status, 400);
+  assert.match((await res.json()).error, /malformed JSON body/);
+  const ok = await postState(base, { step: 1, status: 'completed' });
+  assert.strictEqual(ok.status, 200, 'a good body still goes through');
 });

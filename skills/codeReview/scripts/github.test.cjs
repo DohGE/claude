@@ -84,6 +84,9 @@ test('repoSlug reads owner and repo off every remote URL shape git writes', (t) 
   assert.deepStrictEqual(gh.repoSlug(repoWithRemote(t, 'git@github.com:DohGE/claude.git')), { owner: 'DohGE', repo: 'claude' });
   assert.deepStrictEqual(gh.repoSlug(repoWithRemote(t, 'ssh://git@github.com/DohGE/claude.git')), { owner: 'DohGE', repo: 'claude' });
   assert.deepStrictEqual(gh.repoSlug(repoWithRemote(t, 'https://DohGE@github.com/DohGE/claude.git')), { owner: 'DohGE', repo: 'claude' });
+  // git keeps a trailing slash verbatim, so a remote added with one used to read as
+  // no GitHub remote at all - the report then lost its PR button for no stated reason.
+  assert.deepStrictEqual(gh.repoSlug(repoWithRemote(t, "https://github.com/DohGE/claude/")), { owner: "DohGE", repo: "claude" });
 });
 
 test('repoSlug ignores repositories that are not on github.com', (t) => {
@@ -121,6 +124,19 @@ test('credentialToken reads the password git hands back', (t) => {
   const env = { ...process.env, GIT_CONFIG_GLOBAL: empty, GIT_CONFIG_SYSTEM: empty };
   execFileSync('git', ['-C', dir, 'config', 'credential.helper', '!f() { echo username=x-access-token; echo password=stored-token; }; f'], { stdio: 'ignore' });
   assert.strictEqual(gh.credentialToken(dir, { env }), 'stored-token');
+});
+
+test('credentialToken takes the token out of the username when the password is the sentinel', (t) => {
+  // The OAuth-over-Basic convention: token in the username, the fixed string
+  // `x-oauth-basic` in the password. Returning the sentinel sends a value that can
+  // never authenticate, and the 401 then blames a store holding a good token.
+  const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
+  const empty = path.join(dir, 'empty.gitconfig');
+  fs.writeFileSync(empty, '');
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: empty, GIT_CONFIG_SYSTEM: empty };
+  execFileSync('git', ['-C', dir, 'config', 'credential.helper',
+    '!f() { echo username=ghp_stored; echo password=x-oauth-basic; }; f'], { stdio: 'ignore' });
+  assert.strictEqual(gh.credentialToken(dir, { env }), 'ghp_stored');
 });
 
 test('credentialToken returns nothing when no helper answers', (t) => {
@@ -185,6 +201,20 @@ test('netrcToken reads the github.com entry out of either netrc filename', (t) =
   assert.strictEqual(gh.netrcToken({ home: tempDir(t, 'cr-netrc-') }), null, 'no file, no token');
 });
 
+test('an explicit github.com entry outranks a default one, wherever it sits', (t) => {
+  // `default` is netrc's catch-all. Taking whichever entry came first would hand
+  // GitHub another service's secret, and the refusal that follows would point the
+  // reader straight at the github.com line - the one that is not the problem.
+  const home = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(home, '.netrc'),
+    'default login u password catch-all' + String.fromCharCode(10) + 'machine github.com login me password gh-token' + String.fromCharCode(10));
+  assert.strictEqual(gh.netrcToken({ home }), 'gh-token');
+
+  const only = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(only, '.netrc'), 'default login u password catch-all' + String.fromCharCode(10));
+  assert.strictEqual(gh.netrcToken({ home: only }), 'catch-all', 'with no github.com entry the catch-all still answers');
+});
+
 test('netrcToken ignores a machine that is not github.com', (t) => {
   const home = tempDir(t, 'cr-netrc-');
   fs.writeFileSync(path.join(home, '.netrc'), 'machine example.com login me password nope\n');
@@ -209,6 +239,42 @@ test('ghConfigToken reads the token gh stored without running gh', (t) => {
   assert.strictEqual(gh.ghConfigToken({ configDir: bare }), 'hosts-token');
 
   assert.strictEqual(gh.ghConfigToken({ configDir: tempDir(t, 'cr-ghcfg-') }), null);
+});
+
+test('ghConfigToken picks the account gh has active, not the first one listed', (t) => {
+  // gh 2.x signs several accounts in at once. Reading whichever oauth_token comes
+  // first would authenticate as the wrong one on a work+personal machine, and the
+  // 404 that follows on a private repo reads as a bad token rather than as the
+  // wrong account - the one failure the token-source message cannot explain.
+  const configDir = tempDir(t, 'cr-ghcfg-');
+  fs.writeFileSync(path.join(configDir, 'hosts.yml'), [
+    'github.com:',
+    '    users:',
+    '        work-account:',
+    '            oauth_token: work-token',
+    '        personal-account:',
+    '            oauth_token: personal-token',
+    '    git_protocol: https',
+    '    user: personal-account',
+    '    oauth_token: legacy-copy',
+    '',
+  ].join(String.fromCharCode(10)));
+  assert.strictEqual(gh.ghConfigToken({ configDir }), 'personal-token');
+
+  // No `user:` to resolve and more than one account: the host-level copy is what gh
+  // keeps in step with the active account, so it beats guessing between the two.
+  const ambiguous = tempDir(t, 'cr-ghcfg-');
+  fs.writeFileSync(path.join(ambiguous, 'hosts.yml'), [
+    'github.com:',
+    '    users:',
+    '        a:',
+    '            oauth_token: a-token',
+    '        b:',
+    '            oauth_token: b-token',
+    '    oauth_token: host-copy',
+    '',
+  ].join(String.fromCharCode(10)));
+  assert.strictEqual(gh.ghConfigToken({ configDir: ambiguous }), 'host-copy');
 });
 
 test('ghConfigToken stays out of another host section', (t) => {

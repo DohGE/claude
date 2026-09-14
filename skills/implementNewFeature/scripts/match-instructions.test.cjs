@@ -49,6 +49,9 @@ test('parseArgs splits, trims and dedupes files; supports instructions-dir overr
   assert.strictEqual(args.instructionsDir, '/tmp/x');
   assert.deepStrictEqual(mi.parseArgs([]).files, []);
   assert.ok(mi.parseArgs([]).instructionsDir.replace(/\\/g, '/').endsWith('codeReview/instructions'));
+  // A mistyped flag must stop the run: silently ignored, it would leave the agent
+  // reading the whole rulebook instead of the file's own rules.
+  assert.throws(() => mi.parseArgs(['--file=a.ts']), /Unknown argument/);
 });
 
 test('buildOutput with --files prints only per-file matches and warnings', (t) => {
@@ -70,8 +73,11 @@ test('buildOutput with --files prints only per-file matches and warnings', (t) =
     ['i18n.md'],
   );
   assert.deepStrictEqual(byPath['src/main.ts'], []);
-  assert.strictEqual(out.warnings.length, 1);
-  assert.match(out.warnings[0], /broken\.md/);
+  // Inherited from codeReview's loader: `broken.md` has no frontmatter and no
+  // checklist items, so it is reported as useless on both counts.
+  assert.strictEqual(out.warnings.length, 2, out.warnings.join(' | '));
+  assert.ok(out.warnings.every((w) => /broken\.md/.test(w)));
+  assert.ok(out.warnings.some((w) => /No checklist items found/.test(w)));
 });
 
 test('buildOutput without --files prints the global rulebook', (t) => {
@@ -96,18 +102,28 @@ test('buildOutput keeps implement-audience instructions and drops review-only on
   assert.ok(!names.includes('review-only.md'));
 });
 
-test('buildOutput inherits the codeReview warning for global applies-to', (t) => {
+// A global MAY declare `applies-to`: it is then narrowed by path exactly like a
+// local, which is how most of the shipped rulebook works (accessibility,
+// performance, security... all declare one). So it is not a misplacement and
+// must not warn - it stays a global, just a narrowed one, and never joins the
+// local catalog.
+test('a global declaring applies-to stays a narrowed global, not a local', (t) => {
   const dir = makeInstructionsDir(t);
-  writeFile(dir, path.join('global', 'misplaced.md'), REDUCER_INSTRUCTION);
+  writeFile(dir, path.join('global', 'narrowed.md'), REDUCER_INSTRUCTION);
   const out = mi.buildOutput({ instructionsDir: dir, files: ['x.reducer.ts'] });
   assert.ok(
-    out.warnings.some((w) => /applies-to/.test(w) && /misplaced\.md/.test(w)),
-    `expected a global applies-to warning, got: ${JSON.stringify(out.warnings)}`,
+    !out.warnings.some((w) => /narrowed\.md/.test(w)),
+    `a global applies-to is legitimate and must not warn, got: ${JSON.stringify(out.warnings)}`,
   );
   assert.deepStrictEqual(
     out.files[0].localInstructions.map((f) => path.basename(f)),
     ['ngrx-reducer.md'],
-    'a misplaced global instruction must not become a local match',
+    'a global instruction must never become a local match',
+  );
+  const globals = mi.buildOutput({ instructionsDir: dir, files: [] }).globals;
+  assert.ok(
+    globals.map((f) => path.basename(f)).includes('narrowed.md'),
+    'it is still listed among the globals that bind the code',
   );
 });
 
@@ -172,4 +188,17 @@ test('buildOutput layers the project rulebook from .claude/doh/instructions', (t
     'a project file at the same relative path replaces the skill file');
   const matched = mi.buildOutput({ instructionsDir: dir, project, files: ['src/app/a.scss'] });
   assert.deepStrictEqual(matched.files[0].localInstructions.map((f) => path.basename(f)), ['styles.md']);
+});
+
+test('a .claude/doh/instructions that is not a directory is ignored, not fatal', (t) => {
+  const dir = makeInstructionsDir(t);
+  const project = tempDir(t, 'mi-notdir-');
+  const doh = path.join(project, '.claude', 'doh');
+  fs.mkdirSync(doh, { recursive: true });
+  fs.writeFileSync(path.join(doh, 'instructions'), 'not a directory');
+  // loadInstructions walks the path with readdirSync, so an unguarded existsSync
+  // would throw ENOTDIR and the caller would get a stack trace, not JSON.
+  const out = mi.buildOutput({ instructionsDir: dir, project, files: [] });
+  assert.strictEqual(out.projectInstructionsDir, null);
+  assert.deepStrictEqual(out.globals.map((f) => path.basename(f)), ['general.md', 'extra.md']);
 });

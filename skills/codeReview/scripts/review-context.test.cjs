@@ -22,6 +22,10 @@ test('parseArgs defaults and parsing', () => {
   assert.strictEqual(rc.parseArgs(['--mode=branches', '--branches=a,b;c']).branches, 'a,b;c');
   assert.strictEqual(rc.parseArgs(['--mode=folder', '--path=src/app']).path, 'src/app');
   assert.throws(() => rc.parseArgs(['--mode=nope']), /Unknown --mode/);
+  // The user types --only-md, the script takes --output=md. Skipping the unknown
+  // flag would quietly produce an html context for a Markdown-only run.
+  assert.throws(() => rc.parseArgs(['--only-md']), /Unknown argument/);
+  assert.throws(() => rc.parseArgs(['--projekt=/tmp/x']), /Unknown argument/);
 });
 
 test('parseArgs defaults --output to html and validates it', () => {
@@ -372,6 +376,14 @@ function makeSkillDir(t, locals = {}, globals = {}) {
 
 const TS_INSTRUCTION = '---\nname: TS\napplies-to:\n  - "**/*.ts"\n---\n## Checklist\n- rule\n';
 
+// How many items a plan entry's spec (`1-3,7`) stands for.
+function countSpec(spec) {
+  return spec.split(',').reduce((n, part) => {
+    const [from, to] = part.split('-').map(Number);
+    return n + (to === undefined ? 1 : to - from + 1);
+  }, 0);
+}
+
 test('matchLocalInstructions applies globs per file', () => {
   const locals = [
     { file: 'L/angular-ts.md', appliesTo: ['**/*.component.ts'] },
@@ -395,8 +407,12 @@ test('loadInstructions walks nested folders and warns on missing applies-to', (t
   const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
   assert.deepStrictEqual(res.globals.map((f) => path.basename(f)), ['naming.md', 'security.md']);
   assert.deepStrictEqual(res.locals.map((l) => path.basename(l.file)), ['broken.md', 'component.md', 'ts.md']);
-  assert.strictEqual(res.warnings.length, 1);
-  assert.match(res.warnings[0], /broken\.md/);
+  // `broken.md` has neither frontmatter nor checklist items, so it is useless in
+  // two independent ways and each gets its own line.
+  assert.strictEqual(res.warnings.length, 2, res.warnings.join(' | '));
+  assert.ok(res.warnings.every((w) => /broken\.md/.test(w)));
+  assert.ok(res.warnings.some((w) => /no including applies-to pattern/.test(w)));
+  assert.ok(res.warnings.some((w) => /No checklist items found/.test(w)));
 });
 
 test('a global instruction narrows itself with applies-to, silence means everywhere', (t) => {
@@ -439,6 +455,22 @@ test('a local instruction with only excluding patterns warns and never matches',
   assert.deepStrictEqual(rc.matchLocalInstructions(res.locals, 'src/a.ts'), []);
 });
 
+test('a global with only excluding patterns covers everything else - unlike a local', (t) => {
+  // The asymmetry is deliberate and four shipped globals depend on it: security,
+  // performance, test-coverage and accessibility declare nothing but "!**/models/**".
+  // If a global started behaving like a local here, all four would quietly stop
+  // applying to every reviewed file and the review would shrink with no warning.
+  const skillDir = makeSkillDir(t, {}, {
+    'security.md': '---\nname: Security\napplies-to:\n  - "!**/models/**"\n---\n- s1\n',
+  });
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
+  assert.deepStrictEqual(res.warnings, [], 'an excluding-only global is not the local mistake');
+  const hit = (p) => rc.matchGlobalInstructions(res.globals, res.scopes, p).length;
+  assert.strictEqual(hit('src/app/user.component.ts'), 1, 'it covers ordinary files');
+  assert.strictEqual(hit('package.json'), 1, 'including ones its patterns never mention');
+  assert.strictEqual(hit('src/app/models/user.model.ts'), 0, 'and only the exclusion is carved out');
+});
+
 test('a global excludes a folder it has nothing to say about', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/exclude']);
@@ -452,7 +484,7 @@ test('a global excludes a folder it has nothing to say about', (t) => {
   const files = ctx.targets[0].files;
   const code = files.find((f) => f.path === 'src/a.service.ts');
   const model = files.find((f) => f.path === 'src/models/user.interface.ts');
-  assert.deepStrictEqual(code.checklist, ['coverage:2', 'naming:1']);
+  assert.deepStrictEqual(code.checklist, ['coverage:1-2', 'naming:1']);
   assert.deepStrictEqual(model.checklist, ['naming:1'], 'the excluded global is out of the plan');
   assert.strictEqual(model.checklistTotal, 1);
   assert.deepStrictEqual(model.globalInstructionsSkipped.map((f) => path.basename(f)), ['coverage.md']);
@@ -468,6 +500,37 @@ test('a gate sentence reaches the context under the instruction id', (t) => {
   });
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   assert.deepStrictEqual(ctx.checklistGates, { gated: 'the file renders UI' });
+});
+
+test('an applies-to the block parser cannot read warns, and says which way it fails', (t) => {
+  // A YAML flow sequence is valid YAML and renders the same, but leaves no
+  // patterns - and the two buckets then fail in OPPOSITE directions, which is
+  // why "declared but unreadable" is worth its own warning.
+  const skillDir = makeSkillDir(
+    t,
+    { 'inline.md': '---\nname: L\napplies-to: ["**/*.service.ts"]\n---\n- rule\n' },
+    {
+      'inline.md': '---\nname: G\napplies-to: ["**/*.service.ts"]\n---\n- rule\n',
+      'nokey.md': '---\nname: Everywhere\n---\n- rule\n',
+    },
+  );
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
+  const declared = res.warnings.filter((w) => /declared but no pattern could be read/.test(w));
+  assert.strictEqual(declared.length, 2, res.warnings.join(' | '));
+  assert.ok(declared.some((w) => /applies to EVERY reviewed file/.test(w)), 'the global widens');
+  assert.ok(declared.some((w) => /matches nothing/.test(w)), 'the local narrows to nothing');
+  assert.ok(!res.warnings.some((w) => /nokey\.md/.test(w)), 'a global that declares none is legitimate');
+});
+
+test('an instruction whose items are not "- " bullets warns instead of vanishing', (t) => {
+  const skillDir = makeSkillDir(t, {
+    'star.md': '---\nname: S\napplies-to:\n  - "**/*.ts"\n---\n* rule one\n* rule two\n',
+    'fine.md': '---\nname: F\napplies-to:\n  - "**/*.ts"\n---\n- rule one\n',
+  });
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
+  assert.strictEqual(res.warnings.length, 1, res.warnings.join(' | '));
+  assert.match(res.warnings[0], /No checklist items found/);
+  assert.match(res.warnings[0], /star\.md/);
 });
 
 test('loadInstructions filters by audience and warns on unknown values', (t) => {
@@ -652,6 +715,31 @@ test('output format decides htmlReportPath across modes', (t) => {
   assert.ok(staged.targets[0].htmlReportPath.endsWith('feature-html-staged-2026-07-08-10-00.html'));
 });
 
+test('folder mode refuses a path that climbs out of the project', (t) => {
+  // Folder mode reviews the working TREE. Without a containment check,
+  // `../secret` or an absolute path would be resolved, listed, read into the
+  // review and written into a report as `../../..`-prefixed paths.
+  const dir = makeRepo(t);
+  commitFile(dir, 'src/app/a.ts', 'export const a = 1;\n', 'add ts');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const now = new Date(2026, 6, 8, 10, 0);
+  const outside = (p) => rc.buildContext({ mode: 'folder', path: p, project: dir, skillDir, now });
+
+  for (const p of ['../', '../..', 'src/../..', path.resolve(dir, '..')]) {
+    const res = outside(p);
+    assert.deepStrictEqual(res.targets, [], `${p} must produce no target`);
+    assert.strictEqual(res.errors.length, 1, `${p}: ${JSON.stringify(res.errors)}`);
+    assert.match(res.errors[0], /outside the reviewed project/);
+  }
+
+  // the legitimate shapes still work, including the project root itself
+  for (const p of ['src', 'src/app', '.']) {
+    const res = outside(p);
+    assert.deepStrictEqual(res.errors, [], `${p} must be accepted`);
+    assert.ok(res.targets[0].files.some((f) => f.path === 'src/app/a.ts'), p);
+  }
+});
+
 test('staged mode lists index files with index show commands', (t) => {
   const dir = makeRepo(t);
   commitFile(dir, 'old.css', 'body {}\n', 'add css');
@@ -769,7 +857,7 @@ test('every file carries the checklist size it must be walked against', (t) => {
   assert.strictEqual(file.checklistTotal, 5, '3 global + 2 local checklist items');
 });
 
-test('every file carries its ticking plan: instruction id + item count, globals first', (t) => {
+test('every file carries its ticking plan: instruction id + item numbers, globals first', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/plan']);
   commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
@@ -788,10 +876,10 @@ test('every file carries its ticking plan: instruction id + item count, globals 
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   const files = ctx.targets[0].files;
   const code = files.find((f) => f.path === 'src/a.ts');
-  assert.deepStrictEqual(code.checklist, ['naming:3', 'runtime:2', 'ts:2'], 'globals first, then the matched locals');
+  assert.deepStrictEqual(code.checklist, ['naming:1-3', 'runtime:1-2', 'ts:1-2'], 'globals first, then the matched locals');
   assert.deepStrictEqual(code.globalInstructionsSkipped, [], 'a .ts file is in scope of both globals');
   const doc = files.find((f) => f.path === 'config/app.json');
-  assert.deepStrictEqual(doc.checklist, ['naming:3'], 'a scoped global drops out of a file it does not apply to');
+  assert.deepStrictEqual(doc.checklist, ['naming:1-3'], 'a scoped global drops out of a file it does not apply to');
   assert.strictEqual(doc.checklistTotal, 3, 'the total counts only the globals this file is walked against');
   assert.deepStrictEqual(
     doc.globalInstructionsSkipped.map((f) => path.basename(f)),
@@ -799,7 +887,7 @@ test('every file carries its ticking plan: instruction id + item count, globals 
     'the skipped globals are named, so a shorter plan reads as a decision',
   );
   assert.strictEqual(
-    code.checklist.reduce((n, entry) => n + Number(entry.split(':')[1]), 0),
+    code.checklist.reduce((n, entry) => n + countSpec(entry.split(':')[1]), 0),
     code.checklistTotal,
     'the plan sums to the checklist total',
   );
@@ -808,6 +896,170 @@ test('every file carries its ticking plan: instruction id + item count, globals 
     { naming: 'naming.md', runtime: 'runtime.md', ts: 'ts.md' },
     'an instruction with no checklist items is left out of the plan and the dictionary',
   );
+});
+
+test('formatItemSpec collapses consecutive item numbers into ranges', () => {
+  assert.strictEqual(rc.formatItemSpec([1, 2, 3]), '1-3');
+  assert.strictEqual(rc.formatItemSpec([1, 3, 4, 5, 9]), '1,3-5,9');
+  assert.strictEqual(rc.formatItemSpec([7]), '7');
+  assert.strictEqual(rc.formatItemSpec([]), '');
+});
+
+test('parseChecklistItems reads the scope tag of every item, numbering unchanged', (t) => {
+  const dir = tempDir(t, 'cr-items-');
+  const file = path.join(dir, 'i.md');
+  fs.writeFileSync(file, [
+    '---',
+    'name: Scoped',
+    'scopes:',
+    '  styles: ["**/*.scss", "**/*.css"]',
+    '  markup:',
+    '    - "**/*.html"',
+    '---',
+    '## Checklist',
+    '- plain rule',
+    '- {styles} a stylesheet rule',
+    '- {markup, styles} a rule for both',
+    '- `@defer` is not a scope tag',
+    '',
+  ].join('\n'));
+  assert.deepStrictEqual(rc.parseChecklistItems(file), [
+    { n: 1, scopes: [] },
+    { n: 2, scopes: ['styles'] },
+    { n: 3, scopes: ['markup', 'styles'] },
+    { n: 4, scopes: [] },
+  ]);
+  assert.strictEqual(rc.countChecklistItems(file), 4, 'numbering still counts every bullet');
+  const fm = rc.parseFrontmatter(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual(fm.scopes, { styles: ['**/*.scss', '**/*.css'], markup: ['**/*.html'] });
+});
+
+test('matchChecklistItems keeps untagged items and narrows the tagged ones', () => {
+  const items = [
+    { n: 1, scopes: [] },
+    { n: 2, scopes: ['styles'] },
+    { n: 3, scopes: ['markup', 'styles'] },
+    { n: 4, scopes: ['typo'] },
+  ];
+  const named = { styles: ['**/*.scss'], markup: ['**/*.html'] };
+  assert.deepStrictEqual(rc.matchChecklistItems(items, named, 'src/a.scss'), [1, 2, 3, 4]);
+  assert.deepStrictEqual(rc.matchChecklistItems(items, named, 'src/a.html'), [1, 3, 4]);
+  assert.deepStrictEqual(
+    rc.matchChecklistItems(items, named, 'src/a.ts'),
+    [1, 4],
+    'an undeclared scope name fails open - a typo never deletes a rule',
+  );
+});
+
+test('item scope tags narrow the plan and the total, and a fully out-of-scope instruction drops out', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/item-scopes']);
+  commitFile(dir, 'src/a.component.scss', '.a { color: red }\n', 'styles');
+  commitFile(dir, 'src/a.component.ts', 'export class A {}\n', 'code');
+  const skillDir = makeSkillDir(
+    t,
+    { 'tsonly.md': '---\nname: TS only\napplies-to:\n  - "**/*.ts"\n  - "**/*.scss"\nscopes:\n  ts: ["**/*.ts"]\n---\n- {ts} one\n- {ts} two\n' },
+    {
+      'mixed.md': [
+        '---',
+        'name: Mixed',
+        'scopes:',
+        '  styles: ["**/*.scss"]',
+        '  code: ["**/*.ts"]',
+        '---',
+        '- everywhere',
+        '- {styles} contrast',
+        '- {code} typing',
+        '- {styles, code} both',
+        '',
+      ].join('\n'),
+    },
+  );
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const files = ctx.targets[0].files;
+  const styles = files.find((f) => f.path === 'src/a.component.scss');
+  const code = files.find((f) => f.path === 'src/a.component.ts');
+  assert.deepStrictEqual(styles.checklist, ['mixed:1-2,4'], 'the TS-only items and the TS-only instruction are gone');
+  assert.strictEqual(styles.checklistTotal, 3);
+  assert.deepStrictEqual(code.checklist, ['mixed:1,3-4', 'tsonly:1-2']);
+  assert.strictEqual(code.checklistTotal, 5);
+  assert.deepStrictEqual(
+    styles.localInstructions,
+    [],
+    'an instruction whose every item is out of scope is not one of the file\'s instructions',
+  );
+});
+
+test('an item scope tag naming an undeclared scope warns, and so does a scope no item uses', (t) => {
+  const skillDir = makeSkillDir(t, {
+    'typo.md': '---\nname: Typo\napplies-to:\n  - "**/*.ts"\nscopes:\n  styles: ["**/*.scss"]\n  unused: ["**/*.css"]\n---\n- {stlyes} misspelled\n',
+  });
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
+  assert.ok(res.warnings.some((w) => /not declared in the "scopes:" frontmatter.*stlyes/.test(w)), res.warnings.join('\n'));
+  assert.ok(res.warnings.some((w) => /Declared scope\(s\) no checklist item uses: styles, unused/.test(w)), res.warnings.join('\n'));
+});
+
+test('globalInstructions lists only the globals some reviewed file actually walks', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/global-narrowing']);
+  commitFile(dir, 'src/a.scss', '.a { color: red }\n', 'styles');
+  const skillDir = makeSkillDir(t, {}, {
+    'ts-rules.md': '---\nname: TS rules\napplies-to:\n  - "**/*.ts"\n---\n- one\n',
+    'everywhere.md': '---\nname: Everywhere\n---\n- one\n',
+  });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(
+    ctx.globalInstructions.map((f) => path.basename(f)),
+    ['everywhere.md'],
+    'a rulebook no file in this diff walks is not loaded',
+  );
+  assert.deepStrictEqual(Object.keys(ctx.checklistIds), ['everywhere']);
+});
+
+test('the shipped rulebook loads clean: every scope tag resolves and every scope is used', () => {
+  const res = rc.loadInstructions(path.join(__dirname, '..', 'instructions'), 'review');
+  assert.deepStrictEqual(res.warnings, [], 'the skill\'s own instructions must not warn');
+  // The implement audience carries one more global (guidelines.md) that the review pass never
+  // loads, so it needs its own assertion or a defect there would ship unnoticed.
+  assert.deepStrictEqual(
+    rc.loadInstructions(path.join(__dirname, '..', 'instructions'), 'implement').warnings, [],
+    'the implement-audience rulebook must not warn either',
+  );
+  assert.ok(res.globals.length > 0 && res.locals.length > 0);
+  // A scoped instruction must still be reachable: some file kind has to walk each of its items.
+  const kinds = [
+    'src/app/a/components-a/ui/b/b.component.ts', 'src/app/a/components-a/feature/c/c.component.ts',
+    'src/app/a/components-a/ui/b/b.component.html', 'src/app/a/components-a/ui/b/b.component.scss',
+    'src/app/a/components-a/ui/b/tests/b.component.spec.ts',
+    'src/app/a/data-access/+state/a.actions.ts', 'src/app/a/data-access/+state/a.reducer.ts',
+    'src/app/a/data-access/+state/a.selectors.ts', 'src/app/a/data-access/+state/a.effects.ts',
+    'src/app/a/data-access/+state/a.facade.ts', 'src/app/a/data-access/services/a.service.ts',
+    'src/app/a/data-access/+state/tests/a.effects.spec.ts', 'src/app/a/data-access/+state/tests/a.facade.spec.ts',
+    'src/app/a/data-access/+state/tests/a.reducer.spec.ts', 'src/app/a/data-access/+state/tests/a.selectors.spec.ts',
+    'src/app/a/models/interfaces/a.interface.ts', 'src/app/a/models/interfaces/a-state.interface.ts',
+    'src/app/a/models/consts/a.const.ts', 'src/app/a/models/consts/a-initial-state.const.ts',
+    'src/app/a/models/enums/a.enum.ts', 'src/app/a/models/types/a.type.ts', 'src/app/a/models/index.ts',
+    'src/app/a/shared/utils/build-a.util.ts', 'src/app/a/shared/utils/tests/build-a.util.spec.ts',
+    'src/app/a/shared/guards/a.guard.ts', 'src/app/a/shared/guards/tests/a.guard.spec.ts',
+    'src/app/a/shared/pipes/a.pipe.ts', 'src/app/a/shared/directives/a.directive.ts',
+    'src/app/a/shared/interceptors/a.interceptor.ts', 'src/app/a/shared/routes/a.routes.ts',
+    'src/app/app.config.ts', 'src/main.ts', 'src/assets/i18n/en.json', 'tsconfig.json',
+    'src/app/a/shared/utils/tests/build-a.util.spec.snap',
+  ];
+  for (const file of [...res.globals, ...res.locals.map((l) => l.file)]) {
+    const items = rc.parseChecklistItems(file);
+    if (items.length === 0) continue;
+    const walked = new Set();
+    for (const kind of kinds) {
+      const inScope = res.globals.includes(file)
+        ? rc.matchGlobalInstructions(res.globals, res.scopes, kind).includes(file)
+        : rc.matchLocalInstructions(res.locals, kind).includes(file);
+      if (!inScope) continue;
+      for (const n of rc.matchChecklistItems(items, res.scopes[file].itemScopes, kind)) walked.add(n);
+    }
+    const unreachable = items.map((i) => i.n).filter((n) => !walked.has(n));
+    assert.deepStrictEqual(unreachable, [], `${path.basename(file)}: item(s) no file kind walks`);
+  }
 });
 
 test('checklistIdOf keeps ids short, unique and deterministic', () => {
@@ -876,6 +1128,29 @@ test('reports are grouped in a folder named after the branch', (t) => {
 
   const folder = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now });
   assert.strictEqual(rel(folder.targets[0].reportPath), 'feature-grouped/feature-grouped-folder-src-2026-07-08-10-00.md');
+});
+
+test('every name buildContext hands out is a name pruneReports recognises', (t) => {
+  // The stamp is written by `reportPaths` and read back by a regex inside
+  // `pruneReports`. Nothing else ties the two together, so a change to the
+  // timestamp format would leave pruning silently matching nothing and every
+  // other test still green.
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/pruned']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\\n', 'feat');
+  const skillDir = makeSkillDir(t);
+  const now = new Date(2026, 6, 8, 10, 0);
+  const reportsDir = path.join(skillDir, 'reports');
+  const made = [];
+  for (const opts of [{ mode: 'auto' }, { mode: 'staged' }, { mode: 'folder', path: 'src' }]) {
+    const ctx = rc.buildContext({ ...opts, project: dir, skillDir, now });
+    for (const target of ctx.targets) {
+      for (const f of [target.reportPath, target.htmlReportPath]) if (f) { fs.writeFileSync(f, 'x'); made.push(f); }
+    }
+  }
+  assert.ok(made.length >= 6, 'the three modes produced reports to prune');
+  rc.pruneReports(reportsDir, 0);
+  assert.deepStrictEqual(made.filter((f) => fs.existsSync(f)), [], 'pruning at retain 0 must recognise every produced name');
 });
 
 test('each branch of a multi-branch run gets its own folder', (t) => {
@@ -1057,4 +1332,321 @@ test('outputFormat survives the fatal early returns', (t) => {
   const ctx = rc.buildContext({ mode: 'auto', project: dir, output: 'md' });
   assert.ok(ctx.errors.some((e) => /Not a git repository/.test(e)));
   assert.strictEqual(ctx.outputFormat, 'md', 'the requested format is reported even when the run aborts');
+});
+
+test('every shipped instruction has a file it applies to in the test environment', () => {
+  // test-environment/README.md states this as an invariant: the fake app exists so
+  // that every instruction has something to bite on. Add an instruction without a
+  // file for it and the rule ships never having been exercised - which nothing else
+  // would notice, because a rule that matches nothing simply produces no findings.
+  const skill = path.join(__dirname, '..');
+  const root = path.join(skill, 'test-environment');
+  const files = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else files.push(path.relative(skill, full).split(path.sep).join('/'));
+    }
+  })(root);
+  const res = rc.loadInstructions(path.join(skill, 'instructions'), 'review');
+  const covered = new Set();
+  for (const file of files) {
+    if (rc.isSkippedPath(file)) continue;
+    for (const g of rc.matchGlobalInstructions(res.globals, res.scopes, file)) covered.add(g);
+    for (const l of rc.matchLocalInstructions(res.locals, file)) covered.add(l.file || l);
+  }
+  const missing = [...res.globals, ...res.locals.map((l) => l.file)]
+    .filter((f) => !covered.has(f))
+    .map((f) => path.relative(skill, f));
+  assert.deepStrictEqual(missing, [], 'these instructions have nothing to review in the test environment');
+});
+
+test('the test environment answer key lists every shipped instruction', () => {
+  // The coverage map at the bottom of test-environment/README.md is the expected
+  // outcome a reviewer diffs a real run against. An instruction missing from it has
+  // no expected outcome at all, so whoever runs the environment cannot tell a rule
+  // that found nothing from a rule nobody wrote a target for. The map deliberately
+  // carries implement-audience instructions too, saying why nothing targets them.
+  const skill = path.join(__dirname, '..');
+  const instructionsDir = path.join(skill, 'instructions');
+  const md = fs.readFileSync(path.join(skill, 'test-environment', 'README.md'), 'utf8');
+  const listed = new Set(md.split(/\r?\n/)
+    .filter((line) => /^\|\s*`(global|local)\//.test(line))
+    .map((line) => line.split(String.fromCharCode(124))[1].replace(new RegExp(String.fromCharCode(96), "g"), "").trim()));
+  const shipped = new Set();
+  for (const audience of ['review', 'implement']) {
+    const res = rc.loadInstructions(instructionsDir, audience);
+    for (const f of [...res.globals, ...res.locals.map((l) => l.file)]) {
+      shipped.add(path.relative(instructionsDir, f).split(path.sep).join('/'));
+    }
+  }
+  assert.deepStrictEqual([...shipped].filter((f) => !listed.has(f)), [],
+    'these instructions are missing from the answer key');
+  assert.deepStrictEqual([...listed].filter((f) => !shipped.has(f)), [],
+    'the answer key names instructions that no longer exist');
+});
+
+test('every shipped instruction that declares a gate can reach checklistGates', () => {
+  // SKILL.md states the contract: checklistGates carries the gate sentence of every
+  // instruction that declares one, and the reviewer answers it once per file before
+  // walking that instruction. The context emits a gate only for an instruction whose
+  // checklist items are counted, so a file with a gate and no countable items would
+  // quietly turn a narrowed walk into a full one - costly on every file, visible nowhere.
+  const instructionsDir = path.join(__dirname, '..', 'instructions');
+  const declared = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.md') && /^gate:/m.test(fs.readFileSync(full, 'utf8'))) declared.push(full);
+    }
+  })(instructionsDir);
+  assert.ok(declared.length > 0, 'the rulebook does use gates');
+
+  const res = rc.loadInstructions(instructionsDir, 'review');
+  const loaded = new Set([...res.globals, ...res.locals.map((l) => l.file)]);
+  const lost = declared.filter((f) => {
+    if (!loaded.has(f)) return true;
+    const scope = res.scopes[f];
+    return !scope || !scope.gate || rc.parseChecklistItems(f).length === 0;
+  }).map((f) => path.relative(instructionsDir, f));
+  assert.deepStrictEqual(lost, [],
+    'these declare a gate the context would never hand to the reviewer');
+});
+
+test('an instruction that names another one names a file that exists', () => {
+  // The rulebook hands ownership of an overlapping rule from one file to another
+  // (`reported ONCE - here`, `belongs to the component instruction`). Rename the file
+  // on the receiving end and the hand-off points at nothing: both instructions then
+  // report the same occurrence, which is precisely what these sentences prevent.
+  const root = path.join(__dirname, '..', 'instructions');
+  const files = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.md')) files.push(full);
+    }
+  })(root);
+  const known = new Set(files.map((f) => path.basename(f).toLowerCase()));
+  const dangling = [];
+  for (const file of files) {
+    const self = path.basename(file).toLowerCase();
+    fs.readFileSync(file, 'utf8').split(/\r?\n/).forEach((line, i) => {
+      for (const m of line.matchAll(/`([a-z0-9+_-]+\.md)`/g)) {
+        const cited = m[1].toLowerCase();
+        if (cited !== self && !known.has(cited)) {
+          dangling.push(path.relative(root, file) + ':' + (i + 1) + ' -> ' + m[1]);
+        }
+      }
+    });
+  }
+  assert.deepStrictEqual(dangling, [], 'these instructions point at a rulebook file that is gone');
+});
+
+test('every checklist item has a file in the test environment that reaches it', () => {
+  // One level finer than the per-instruction guard: an instruction can have plenty of
+  // targets while a single item, narrowed by its `scopes:` tags, points at a kind of
+  // file the fixture does not contain. That item then ships never having been walked,
+  // and nothing says so - an item that matches nothing simply produces no findings.
+  const skill = path.join(__dirname, '..');
+  const files = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else files.push(path.relative(skill, full).split(path.sep).join('/'));
+    }
+  })(path.join(skill, 'test-environment'));
+  const live = files.filter((f) => !rc.isSkippedPath(f));
+  const res = rc.loadInstructions(path.join(skill, 'instructions'), 'review');
+  const unreachable = [];
+  for (const file of [...res.globals, ...res.locals.map((l) => l.file)]) {
+    const meta = res.scopes[file] || {};
+    const itemScopes = meta.itemScopes || {};
+    const isGlobal = res.globals.includes(file);
+    const targets = live.filter((f) => rc.matchesScope(meta.appliesTo || [], f, isGlobal));
+    for (const item of rc.parseChecklistItems(file)) {
+      const tags = item.scopes || [];
+      const reached = targets.some((f) => !tags.length
+        || tags.some((t) => rc.matchesScope(itemScopes[t] || [], f, false)));
+      if (!reached) unreachable.push(path.relative(skill, file) + ' #' + item.n);
+    }
+  }
+  assert.deepStrictEqual(unreachable, [], 'these checklist items have nothing to bite on');
+});
+
+test('generated code in the source tree is skipped, a folder merely named generated is not', () => {
+  // A generated client is machine-written: a finding there points at the schema or the
+  // generator, not at the file, and reviewing it costs a full checklist plus a part file
+  // per file. Only conventions that prove generation are listed - `generated/` as a bare
+  // folder name does not, so code there is still reviewed.
+  for (const skipped of ['src/api/__generated__/types.ts', 'src/api/schema.generated.ts',
+    'src/api/client.gen.ts', 'src/proto/user.pb.ts', 'src/proto/user_pb.js']) {
+    assert.strictEqual(rc.isSkippedPath(skipped), true, skipped);
+  }
+  for (const reviewed of ['src/app/generated/api.ts', 'src/app/gen-helper.ts',
+    'src/app/a.component.ts', 'src/app/generator.service.ts']) {
+    assert.strictEqual(rc.isSkippedPath(reviewed), false, reviewed);
+  }
+});
+
+test('a brace pattern warns instead of silently matching nothing', (t) => {
+  // `**/*.{ts,html}` reads like a normal glob and is a normal glob almost everywhere
+  // else. Here braces are literal, so the instruction quietly stops applying to any
+  // file - and the existing applies-to check cannot see it, because textually the
+  // pattern does include something.
+  const skillDir = makeSkillDir(t, {}, {
+    'braced.md': '---\nname: Braced\napplies-to:\n  - \"**/*.{ts,html}\"\n---\n- rule\n',
+  });
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
+  assert.strictEqual(res.warnings.length, 1, JSON.stringify(res.warnings));
+  assert.match(res.warnings[0], /Brace alternation is not supported/);
+  assert.match(res.warnings[0], /one pattern per alternative/);
+  assert.strictEqual(rc.globToRegExp('**/*.{ts,html}').test('src/a.ts'), false,
+    'and the pattern really does match nothing, which is what the warning is about');
+});
+
+test('two branches that sanitise to one name are reported, not silently merged', (t) => {
+  // `feature/x` and `feature-x` both become `feature-x`, so both targets get the same
+  // reportPath: the second review overwrites the first and the two share one
+  // --since-last snapshot. The run was asked for two reviews and would end with one
+  // file, with nothing saying which branch it belongs to.
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/x']);
+  commitFile(dir, 'x1.ts', 'const a = 1;', 'x1');
+  run(dir, ['checkout', '-q', 'main']);
+  run(dir, ['checkout', '-q', '-b', 'feature-x']);
+  commitFile(dir, 'x2.ts', 'const b = 2;', 'x2');
+  run(dir, ['checkout', '-q', 'main']);
+  const skillDir = makeSkillDir(t);
+  const ctx = rc.buildContext({
+    mode: 'branches', branches: 'feature/x,feature-x',
+    project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0),
+  });
+  assert.strictEqual(ctx.targets.length, 2, 'both branches still become targets');
+  assert.strictEqual(ctx.targets[0].reportPath, ctx.targets[1].reportPath,
+    'this is the situation being warned about');
+  assert.strictEqual(ctx.warnings.filter((w) => /same report name/.test(w)).length, 1,
+    JSON.stringify(ctx.warnings));
+  assert.match(ctx.warnings.find((w) => /same report name/.test(w)), /feature\/x.*feature-x/);
+});
+
+test('every limit README states in words is the limit the code enforces', () => {
+  // Four caps are written out in the README as plain numbers. Prose cannot be compiled,
+  // so raising one in the code leaves the documentation quoting the old figure - and a
+  // reader trusting it blames a report that was pruned, or a file that is now well
+  // inside the limit, on the wrong thing.
+  const skill = path.join(__dirname, '..');
+  const readme = fs.readFileSync(path.join(skill, 'README.md'), 'utf8');
+  const valueOf = (file, name) => {
+    const src = fs.readFileSync(path.join(skill, 'scripts', file), 'utf8');
+    const m = src.match(new RegExp('const ' + name + ' = (\\d+);'));
+    assert.ok(m, name + ' is still a plain numeric constant in ' + file);
+    return m[1];
+  };
+  const pairs = [
+    ['review-context.cjs', 'reportsRetain', (n) => 'Only the ' + n + ' newest reports are kept'],
+    ['review-context.cjs', 'forkCandidateLimit', (n) => 'among the ' + n + ' most recently updated'],
+    ['render-report.cjs', 'maxFullViewLines', (n) => 'Files longer than ' + n + ' lines are left out'],
+    ['post-pr-comments.cjs', 'maxCommentsPerReview', (n) => 'batches of ' + n + ' comments'],
+  ];
+  const stale = pairs
+    .filter(([file, name, sentence]) => !readme.includes(sentence(valueOf(file, name))))
+    .map(([file, name]) => name + ' (' + file + ')');
+  assert.deepStrictEqual(stale, [], 'README no longer states these limits the way the code sets them');
+});
+
+test('a repository with no commits and a detached HEAD both answer in JSON', (t) => {
+  // Step 1 treats a missing JSON object as a hard failure, so anything the script
+  // cannot handle has to come back as an `errors` entry rather than a stack trace on
+  // stderr. Both shapes are ordinary: a freshly initialised repo, and the detached
+  // checkout a bisect or a CI job leaves behind.
+  const script = path.join(__dirname, 'review-context.cjs');
+  const runCli = (dir) => {
+    const res = spawnSync(process.execPath, [script, '--mode=auto', '--project=' + dir], { encoding: 'utf8' });
+    const json = JSON.parse(res.stdout);
+    return { status: res.status, json };
+  };
+
+  const fresh = tempDir(t, 'cr-fresh-');
+  run(fresh, ['init', '-q']);
+  const empty = runCli(fresh);
+  assert.strictEqual(empty.status, 1);
+  assert.deepStrictEqual(empty.json.targets, []);
+  assert.ok(empty.json.errors.length > 0, 'the empty repo says why: ' + JSON.stringify(empty.json.errors));
+
+  const repo = makeRepo(t);
+  commitFile(repo, 'a.ts', 'const a = 1;', 'one');
+  run(repo, ['checkout', '-q', '--detach', 'HEAD']);
+  const detached = runCli(repo);
+  assert.strictEqual(detached.status, 1);
+  assert.deepStrictEqual(detached.json.targets, []);
+  assert.match(detached.json.errors.join(' '), /Detached HEAD/);
+});
+
+test('skipping files warns once the report that reviewed them is gone', (t) => {
+  // `--since-last` skips a file on the promise that the previous report still covers it.
+  // Pruning keeps only the newest reports, so after enough reviews of one branch the
+  // snapshot outlives the evidence - and the run would keep pointing at a file that is
+  // no longer on disk while quietly reviewing nothing.
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/prev']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;', 'a');
+  const skillDir = makeSkillDir(t);
+  const now = new Date(2026, 6, 8, 10, 0);
+  const first = rc.buildContext({ mode: 'auto', project: dir, skillDir, now });
+  const reportPath = first.targets[0].reportPath;
+  fs.writeFileSync(reportPath, '# Code Review: x | 2026-07-08 10:00', 'utf8');
+
+  const withReport = rc.buildContext({ mode: 'auto', project: dir, skillDir, now, sinceLast: true });
+  assert.ok(withReport.targets[0].unchangedSinceLastReview, 'the file is skipped as unchanged');
+  assert.deepStrictEqual(withReport.warnings.filter((w) => /previous report is gone/.test(w)), [],
+    'while the report is there, nothing to warn about');
+
+  fs.rmSync(reportPath, { force: true });
+  const without = rc.buildContext({ mode: 'auto', project: dir, skillDir, now, sinceLast: true });
+  assert.strictEqual(without.warnings.filter((w) => /previous report is gone/.test(w)).length, 1,
+    JSON.stringify(without.warnings));
+});
+
+test('the comment ban carves out exactly the comments another rule demands', () => {
+  // code-quality forbids every comment the diff adds and names two exceptions that live
+  // in other files. Rename a barrel header in models.md and the carve-out points at
+  // nothing: the reviewer then reports the very comments the models rule requires, and
+  // both instructions are individually right while the pair is wrong.
+  const root = path.join(__dirname, '..', 'instructions');
+  const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+  const quality = read(path.join('global', 'code-quality.md'));
+  const models = read(path.join('local', 'code', 'models', 'models.md'));
+  const practices = read(path.join('global', 'best-practices.md'));
+
+  const headers = [...quality.matchAll(new RegExp('`(\\/\\/ [a-z]+)`', 'g'))].map((m) => m[1]);
+  assert.ok(headers.length >= 4, 'the carve-out still lists the barrel headers: ' + headers.join(', '));
+  for (const header of headers) {
+    assert.ok(models.includes('`' + header + '`'),
+      'code-quality exempts ' + header + ' but models.md no longer prescribes it');
+  }
+
+  assert.match(quality, /@ts-expect-error/, 'the suppression carve-out is still there');
+  assert.match(practices, /@ts-expect-error/, 'and best-practices still owns that rule');
+});
+
+test('coverage and spec shape each name the other as the owner of the other half', () => {
+  // The two instructions split one subject: WHICH cases a spec must cover belongs to
+  // test-coverage, HOW the spec is written to unit-tests. Each says so, and the pair is
+  // what keeps a gap from being reported twice - once as a coverage finding and once as
+  // a spec finding. Drop either sentence and both instructions still read fine alone.
+  const root = path.join(__dirname, '..', 'instructions');
+  const coverage = fs.readFileSync(path.join(root, 'global', 'test-coverage.md'), 'utf8');
+  const shape = fs.readFileSync(path.join(root, 'local', 'unit-tests', 'unit-tests.md'), 'utf8');
+  assert.match(coverage, /OWNS coverage gaps/, 'test-coverage still claims the gaps');
+  // The sentence wraps in the file, so match the halves rather than the whole line.
+  assert.match(coverage, /unit-tests instruction owns/, 'and hands the shape over');
+  assert.match(coverage, /the SHAPE of a spec/, 'naming what the other half is');
+  assert.match(coverage, /reported ONCE/, 'with the no-double-report rule spelled out');
+  assert.match(shape, /owned by the global test-coverage instruction/,
+    'unit-tests still defers the cases back, so a gap is not reported twice');
+  assert.match(shape, /only the SHAPE/, 'and states its own boundary');
 });

@@ -2,6 +2,10 @@
 name: Utility functions
 applies-to:
   - "**/*.util.ts"
+  - "**/*.utils.ts"
+  - "**/shared/utils/**/*.ts"
+  - "!**/tests/**"
+  - "!**/*.spec.ts"
 ---
 ## Checklist
 - File is `shared/utils/<verb>-<subject>.util.ts` (singular `.util.ts`, never `.utils.ts`; thematic subfolders allowed, each with its own `tests/`); verbs describe the job: `form-`/`build-` (data → UI/payload structure), `generate-` (tables/IDs/structures), `map-` (shape A → shape B), `create-` (single element factory). When the file groups several functions, its name states the shared subject they all serve.

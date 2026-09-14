@@ -60,6 +60,9 @@ test('stepper ukrywa krok Mockups, dopóki toggle go nie włączy', async ({ pag
   await expect(page.locator('.step .name')).toHaveText(
     ['Requirements', 'Feature Refinement', 'Implementation', 'Validation & E2E', 'Code Review',
       'Mockoon Mocks']);
+  // z ukrytym krokiem Mockups numer kafelka rozjezdza sie z id kroku: Implementation ma id 4,
+  // a pokazuje sie jako 3 — dlatego finalStatus w podsumowaniu nazywa krok, a nie numeruje.
+  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6']);
   await postState({ step: 3, enabled: true });
   await expect(page.locator('.step')).toHaveCount(7);
   await expect(page.locator('.step').nth(2).locator('.name')).toHaveText('Mockups');
@@ -95,25 +98,63 @@ test('panel makiet renderuje podgląd, czat i przełącza ekrany', async ({ page
 
 test('przełącznik Desktop/Mobile zmienia szerokość podglądu', async ({ page }) => {
   await openMockupPanel(page);
-  const width = () => page.locator('#mockupFrame').evaluate(el => el.style.width);
-  expect(await width()).toBe('1280px');
+  // Both sizes are hardcoded a second time in references/mockup-agent.md and
+  // references/validation-agent.md: step 5 screenshots the running app at exactly
+  // these dimensions to compare it against the mockups approved here. If the UI
+  // drifted, the comparison would silently be made against a different size.
+  const size = () => page.locator('#mockupFrame').evaluate(el => [el.style.width, el.style.height]);
+  expect(await size()).toEqual(['1280px', '800px']);
   await page.click('[data-viewport="Mobile"]');
-  expect(await width()).toBe('390px');
+  expect(await size()).toEqual(['390px', '780px']);
 });
 
-test('Send wysyła feedback i blokuje panel do kolejnej rundy agenta', async ({ page }) => {
+test('Send nie blokuje panelu i od razu pokazuje wiadomość w czacie', async ({ page }) => {
   await openMockupPanel(page);
   await page.fill('#mockupFeedback', 'Przycisk na pełną szerokość');
   await page.click('#sendMockup');
   expect(await takeAnswer()).toMatchObject(
     { kind: 'mockup', decision: 'feedback', text: 'Przycisk na pełną szerokość' });
-  await expect(page.locator('#sendMockup')).toBeDisabled();
-  // dopiero nowy rev odblokowuje panel — inaczej user klikałby w nieaktualną makietę
-  await postState({ step: 3, mockupReview: { rev: 2, text: 'Poprawione',
-    screens: SCREENS, chat: [{ role: 'user', text: 'Przycisk na pełną szerokość' }] } });
+  // serwer zapisuje wiadomość od razu, więc czat nie czeka na rundę agenta
+  await expect(page.locator('.msg.user')).toContainText('Przycisk na pełną szerokość');
   await expect(page.locator('#sendMockup')).toBeEnabled();
-  await expect(page.locator('.msg.user .who')).toHaveText(['You']);
+  await expect(page.locator('#mockupFeedback')).toHaveValue('');
 });
+
+test('kolejna wiadomość idzie, zanim agent odpowie na poprzednią', async ({ page }) => {
+  await openMockupPanel(page);
+  await page.fill('#mockupFeedback', 'Przycisk na pełną szerokość');
+  await page.click('#sendMockup');
+  expect(await takeAnswer()).toMatchObject({ text: 'Przycisk na pełną szerokość' });
+  await page.fill('#mockupFeedback', 'I większy odstęp nad stopką');
+  await page.click('#sendMockup');
+  expect(await takeAnswer()).toMatchObject({ text: 'I większy odstęp nad stopką' });
+  await expect(page.locator('.msg.user')).toHaveCount(2);
+  // panel nie przeładował się między wiadomościami, więc podgląd stoi nietknięty
+  await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('Logowanie');
+});
+
+test('runda agenta nie gubi tekstu pisanego w trakcie', async ({ page }) => {
+  await openMockupPanel(page);
+  await page.fill('#mockupFeedback', 'Jeszcze piszę…');
+  await postState({ step: 3, mockupReview: { rev: 2, text: 'Poprawione',
+    screens: SCREENS, chat: [{ role: 'agent', text: 'Druga wersja' }] } });
+  await expect(page.locator('.summary-text')).toHaveText('Poprawione');
+  await expect(page.locator('#mockupFeedback')).toHaveValue('Jeszcze piszę…');
+});
+
+test('pole wiadomości zostaje w kadrze, choć podgląd wypycha stronę w dół',
+  async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 420 });
+    await openMockupPanel(page);
+    await expect(page.locator('.composer')).toHaveCSS('position', 'sticky');
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const scrolls = await page.evaluate(() =>
+      document.documentElement.scrollHeight > window.innerHeight);
+    expect(scrolls).toBe(true);
+    const [bottom, height] = await page.evaluate(() =>
+      [document.querySelector('#sendMockup').getBoundingClientRect().bottom, window.innerHeight]);
+    expect(bottom).toBeLessThanOrEqual(height);
+  });
 
 test('Approve zatwierdza makiety', async ({ page }) => {
   await openMockupPanel(page);

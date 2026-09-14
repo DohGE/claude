@@ -135,7 +135,7 @@ test('pytanie spoza kroku 2 renderuje się z nazwą swojego kroku i nie pyta o p
       .toMatchObject({ kind: 'answer', questionId: 'chrome1', value: 'Gotowe' });
   });
 
-test('powtórzone id pytania nadal odświeża i odblokowuje panel', async ({ page }) => {
+test('powtórzone id pytania nadal odświeża panel', async ({ page }) => {
   await postState({ step: 2, status: 'in_progress', activeStep: 2,
     question: { id: 'q1', text: 'Pierwsze pytanie?' } });
   await page.goto(base);
@@ -143,10 +143,43 @@ test('powtórzone id pytania nadal odświeża i odblokowuje panel', async ({ pag
   await page.fill('#freeAnswer', 'Tak');
   await page.click('#send');
   await page.click('#confirmOk');
-  await expect(page.locator('#send')).toBeDisabled();
-  // ten sam id, nowa treść — bez licznika po stronie serwera panel zostałby zablokowany
+  // odpowiedź nie blokuje panelu: pole jest czyste, a wysłane widać w śladzie
+  await expect(page.locator('#sentTrail .msg.user')).toContainText('Tak');
+  await expect(page.locator('#freeAnswer')).toHaveValue('');
+  await expect(page.locator('#send')).toBeEnabled();
+  // ten sam id, nowa treść — bez licznika po stronie serwera panel by się nie odświeżył
   await postState({ question: null });
   await postState({ step: 2, question: { id: 'q1', text: 'Drugie pytanie?' } });
   await expect(page.locator('#panel p').first()).toHaveText('Drugie pytanie?');
-  await expect(page.locator('#send')).toBeEnabled();
+  await expect(page.locator('#sentTrail .msg')).toHaveCount(0);
+});
+
+test('do wysłanej odpowiedzi można dorzucić kolejną', async ({ page }) => {
+  await postState({ step: 2, status: 'in_progress', activeStep: 2,
+    question: { id: 'q1', text: 'Ile ról?' } });
+  await page.goto(base);
+  await page.waitForSelector('#freeAnswer');
+  await page.fill('#freeAnswer', 'Trzy');
+  await page.click('#send');
+  await page.click('#confirmOk');
+  expect(await takeAnswer()).toMatchObject({ kind: 'answer', value: 'Trzy' });
+  await page.fill('#freeAnswer', 'Właściwie cztery — dochodzi audytor');
+  await page.click('#send');
+  await page.click('#confirmOk');
+  expect(await takeAnswer())
+    .toMatchObject({ kind: 'answer', value: 'Właściwie cztery — dochodzi audytor' });
+  await expect(page.locator('#sentTrail .msg.user')).toHaveCount(2);
+});
+
+test('feedback do planu też zostawia bramę czynną', async ({ page }) => {
+  await postState({ step: 2, status: 'in_progress', activeStep: 2,
+    reviewSummary: { text: 'Podsumowanie planu' } });
+  await page.goto(base);
+  await page.waitForSelector('#sendFeedback');
+  await page.fill('#feedback', 'Rozbij zadanie 2');
+  await page.click('#sendFeedback');
+  expect(await takeAnswer()).toMatchObject({ kind: 'decision', decision: 'feedback' });
+  await expect(page.locator('#feedback')).toHaveValue('');
+  await expect(page.locator('#sentTrail .msg.user')).toContainText('Rozbij zadanie 2');
+  await expect(page.locator('#approve')).toBeEnabled();
 });

@@ -15,10 +15,26 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview` | current branch vs its base — the target branch of its open PR, else the branch it was created from (see [Base branch detection](#base-branch-detection)) |
 | `/codeReview staged` | all uncommitted changes (runs `git add .` first, then reviews the git index against `HEAD`) |
 | `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own detected base; one report per branch |
+| `/codeReview folder src/app/user-panel` | every file currently in that folder of the working tree — no diff needed, so every line counts as changed |
 | `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
+| `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
+
+A branch list is split on `,` and `;`. Git allows both characters inside a ref name, so a branch
+literally called `feature/a,b` cannot be named in that list — it would be read as two branches and
+reported as two "Branch not found" errors for names you never typed. Check that branch out and run
+`/codeReview` with no arguments instead: auto mode reviews the current branch without naming it.
 
 `--only-md` may sit anywhere in the arguments and is stripped before the rest is mapped to a mode.
 The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
+
+`--project=<path>` moves the whole review to another repository: which tree is read and (in `staged`
+mode) staged, where the reports land, and which `CLAUDE.md` and `.claude/doh/instructions/` bind.
+Without it everything is relative to the current working directory. Pass it whenever the code you
+want reviewed is not where your shell is — most importantly from a `git worktree`, which is how
+implementNewFeature runs every task after the first; its review agent passes the task's own root on
+every cycle, so one task's review can never stage or report on another task's tree.
+
+Branch names are sanitised for the filesystem, so two branches can land on one name — `feature/x` and `feature-x` both become `feature-x`. Reviewing both in one run would overwrite the first report with the second and make them share one `--since-last` snapshot; the context script warns and names both branches, and the fix is to review them in separate runs.
 
 Reports are grouped per branch: every report of a branch lands in `reports/{branch}/` inside this skill, named `{branch}-{YYYY-MM-DD}-{HH-mm}.html` (staged variant: `{branch}-staged-{YYYY-MM-DD}-{HH-mm}.html`, folder variant: `{branch}-folder-{path}-{YYYY-MM-DD}-{HH-mm}.html`), or the same name with `.md` under `--only-md`.
 A multi-branch run writes one folder per reviewed branch. The branch stays in the file name too, so the HTML page's `localStorage` key (namespaced by file name) never collides between branches reviewed in the same minute.
@@ -29,9 +45,16 @@ Pruning counts only run-stamped report names (`…-YYYY-MM-DD-HH-mm.md|html`), s
 
 `--since-last` turns a run into a re-review: every run records the post-image blob of each reviewed file in `.last-review-<kind>.json` next to the report, and the next incremental run drops the files whose blob has not moved (they are listed in a warning, and the previous report stays the reference for them).
 It is meant for a target already reviewed in this session — the implementNewFeature review loop uses it from cycle 2 on; on a first review it warns and reviews everything.
+The snapshot is recorded while the context is built, before the first file is analyzed, so it says what the previous run intended to review rather than what it completed. A run that died half-way still recorded every file, and the next `--since-last` will skip the ones it never reached — an unchanged tree then reports "nothing to review". After an interrupted review, re-run the target in full instead. The same applies once the previous report has been pruned away: the run warns that nothing on disk covers the skipped files any more.
 
 Each analyzed file ends its block with the checklist it was walked against — one ticked line per item — and a coverage marker, `<!-- coverage: <path> <checked>/<total> -->`, `<total>` being the number of checklist items the context script counted for that file. See [Checklist coverage](#checklist-coverage).
-Generated and binary files (lockfiles, `*.min.*`, source maps, `dist/`/`build/`/`coverage/` output, images, fonts, media, executables) are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report.
+Three groups of files are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report:
+
+- **generated** — lockfiles, `*.min.*`, source maps, `dist/`/`build/`/`out/`/`coverage/`/`node_modules/`/`.angular/`/`.idea/` output, plus code generated INTO the source tree where the convention says so: `__generated__/`, `*.generated.*`, `*.gen.ts`, `*.g.ts`, `*.pb.ts`, `*_pb.{ts,js}`. A folder merely named `generated/` is NOT skipped — the name alone does not prove nobody maintains it by hand;
+- **binary** — images and `*.svg`, fonts, archives, PDFs, audio/video, executables, `*.wasm`;
+- **prose** — `*.md`, `*.markdown`, `*.txt`, `*.rst`, `*.adoc`, and `CHANGELOG`/`LICENCE`/`LICENSE`/`NOTICE`/`AUTHORS`.
+
+The third group is the one to know about: a documentation-only change is never reviewed, and the report still files it under the "wygenerowane/binarne" label, which describes the other two groups rather than this one. Nothing is lost — the instruction checklists are about code — but do not read an untouched `README.md` in the skipped list as a claim that the file is generated.
 
 ## Instructions
 
@@ -63,29 +86,72 @@ An instruction may declare `audience: implement|review|both` in its frontmatter 
     - No logic in constructors
 
 A global instruction is the same file placed under `instructions/global/`. It may declare `applies-to` too, and is then narrowed by path exactly like a local one — a global WITHOUT the key applies to every file, so narrowing is opt-in and silence means everywhere (`accessibility.md` limits itself to templates, styles, components and directives this way).
-List items under `applies-to:` must be indented; quotes around patterns are optional.
+List items under `applies-to:` must be indented, one `- pattern` per line; quotes around patterns are
+optional. The block form is the ONLY form: a YAML flow sequence on one line — `applies-to: ["**/*.ts"]`
+— parses to no patterns at all, and the two instruction kinds then fail in opposite directions.
+A LOCAL with no pattern then matches nothing; a GLOBAL with no pattern is indistinguishable from a
+global that never declared one, so it binds EVERY reviewed file — doing more than its author asked
+rather than less. Both are reported: a declared `applies-to` that yields no pattern warns on its own,
+naming which of the two directions this instruction just failed in.
+Note the asymmetry that makes this easy to walk into: the inline form DOES work one level down, under
+`scopes:` (`markup: ["**/*.html"]` parses fine), so an author whose `scopes:` line works has every
+reason to expect `applies-to: [...]` to work too. It does not. Only `applies-to` insists on bullets.
 A local instruction without any including `applies-to` pattern never matches and is reported as a warning.
 
+**Checklist items must start with `- `, at the left margin.** That is what `<id>#<n>` counts, so the
+marker is part of the format, not a style choice: an item written `* rule` or `+ rule` is not counted,
+and a file whose items are ALL written that way has zero items — it is then dropped from every plan,
+from `checklistIds` and from the catalog, because an instruction with nothing to check has nothing to
+say. That drop is reported too: an instruction with no readable items warns by name, so the bullet
+character is named as the cause instead of leaving you to debug the glob.
+Indented `- ` sub-bullets under an item are safe: they are not counted and do not shift the numbering,
+so an item may carry sub-points without moving `#12` to `#14`.
+
 Any instruction may also declare a one-line `gate:` — a precondition the reviewer answers from the file’s CONTENT before walking the items, for what a glob cannot see (a `.ts` file holding no markup, a barrel carrying no behaviour). A failed gate collapses the whole instruction into one ticked range line naming what is absent; an unclear answer means the gate holds and the items are walked. Gates reach the reviewer as the top-level `checklistGates` map.
+
+### Per-item scopes
+
+`applies-to` narrows a whole instruction; `scopes:` narrows a single checklist item, so one topic can stay in one file while each of its rules is walked only where it can be answered.
+A scope is a name and a glob list (inline or as an indented list, `!` excludes included), and an item opts into one or more of them with a leading `{tag}`:
+
+    ---
+    name: Accessibility — WCAG 2.2 level AA
+    applies-to:
+      - "**/*.html"
+      - "**/*.scss"
+    scopes:
+      markup: ["**/*.html"]
+      styles: ["**/*.scss", "**/*.css"]
+    ---
+    ## Checklist
+    - {markup} Every `<img>` carries a text alternative
+    - {markup, styles} Contrast ratios hold for every colour pair the diff introduces
+    - Every rule without a tag is walked wherever the instruction applies
+
+An item is walked when its instruction matches the file AND (it carries no tag OR the file matches one of its tagged scopes).
+Numbering never moves: `<id>#<n>` stays the n-th bullet of the file, so narrowing a checklist changes which numbers a file walks, never what they mean.
+An instruction every item of which is out of scope for a file drops out of that file's plan entirely — it is not read, walked or ticked for it.
+A tag naming a scope the frontmatter does not declare keeps the item (a typo must never delete a rule) and is reported as a warning, as is a declared scope no item uses.
 
 ### Glob subset
 
 `**` matches any number of directories, `*` matches within one path segment, `?` matches a single character.
 Matching is case-sensitive, against `/`-separated paths relative to the repo root.
-Everything else is matched literally.
+Everything else is matched literally. Brace alternation (`{ts,html}`) is therefore literal too — it matches nothing, and the context script warns about it rather than letting the instruction fall silent.
 
 A pattern starting with `!` EXCLUDES what it matches, and an exclude always wins over an include — which is how a broad instruction carves out a folder it has nothing to say about (`test-coverage`, `performance`, `security` and `accessibility` all declare `"!**/models/**"`, because a folder of consts, interfaces, enums and types has no behaviour to test, no render cost, no attack surface and no UI).
 A global with only excluding patterns covers everything except them; a local still needs at least one INCLUDING pattern, or it never matches and is reported as a warning.
 
 ## Checklist coverage
 
-The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for. Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and `globalInstructionsSkipped` names them per file so a shorter plan reads as a decision rather than an omission.
-Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under.
+The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-9,12-14,17,20` for one the file's kind narrowed. `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for.
+Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and `globalInstructionsSkipped` names them per file so a shorter plan reads as a decision rather than an omission; `globalInstructions` itself lists only the globals at least one reviewed file walks, so a diff of stylesheets never loads the TypeScript rulebook.
+Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under, whether or not the file walks every neighbour.
 
 The reviewer walks that list item by item and writes the result next to the file's findings, as one HTML comment block per file:
 
     <!-- checklist: src/app/user.component.ts
-    [x] accessibility#1-30 — BRAMKA: plik nie zawiera markupu ani stylów
+    [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
     [x] general#1-5,#7-13 — OK (brak wystąpień)
     [x] general#6 nazwy const camelCase — NARUSZENIE (L12, L18)
     [x] component#1 OnPush — NARUSZENIE (L4)
@@ -99,7 +165,9 @@ Items of one instruction that share a verdict are collapsed into ONE line addres
 Anything the reviewer could not verify stays `[ ]` with the reason — an honest gap, not a rounding error.
 A file whose whole diff is mechanical writes `<!-- coverage: <path> mechanical -->` and no block: its walk was the gate's two questions, not the checklist.
 
-The renderer expands every range and recounts the ticks instead of trusting the marker: a missing block, a block shorter than `<total>`, a marker the ticks do not back up, an item ticked twice by overlapping ranges, a malformed range and an unticked item all become warnings (which keep the Markdown next to the HTML), and the ticked lines become the page's **Pokrycie checklist** section.
+The renderer expands every range and recounts the ticks instead of trusting the marker: a missing block, a block shorter than `<total>`, a marker the ticks do not back up, an item ticked twice by overlapping ranges, a malformed range, an id that matches no instruction file (a mistyped `a11y#1-30` would otherwise count toward coverage as if `accessibility` had been walked) and an unticked item all become warnings, and the ticked lines become the page's **Pokrycie checklist** section.
+
+Any warning keeps the Markdown next to the HTML, but the two kinds mean opposite things. A `nierozpoznana`/`nieczytelny` warning is a line the parser could not read: the report drifted from the format and the HTML lost that finding or that tick — worth fixing. A `sprawdzono <checked>/<total>` warning is the parser succeeding: the block was read perfectly and simply carries an item left `[ ]` with its reason. That is the honest gap above, working as designed — never close it by ticking an item nobody checked. (Two more warnings go to stderr only and never keep the Markdown, because neither says anything about the format: a report with no coverage markers at all, and a failure to detect the pull request.)
 
 ## Review scope
 
@@ -175,12 +243,12 @@ The severity is a bold lead line; the other seven fields follow as bullets, each
 
     🔴 **High**
     - **Linia:** 87
-    - **Problem:** Brak obsługi błędu HTTP w subskrypcji
-    - **Reguła:** instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"
-    - **Expected Result:** `catchError` z mapowaniem na stan błędu komponentu
-    - **PR Problem:** The `loadUsers()` subscription passes no error callback, so a failing HTTP call never reaches the component. The view stays on the loading spinner for good and the user is given no way to retry.
-    - **PR Expected:** A failed request should leave the component in its error state instead of loading. Pipe `catchError` into the `loadUsers()` stream, map the failure to the component's `error` field and clear `loading`, then render it through the existing error branch of the template.
-    - **PR Locations:** `user-panel.component.ts` → `loadUsers()`, `user-panel.component.html` → error branch, `user-panel.component.spec.ts` → failing-request case
+    - **Problem:** Gałąź błędu efektu kończy się `EMPTY`, więc porażka żądania nie dociera do reduktora
+    - **Reguła:** instructions/local/code/+state/ngrx-effects.md → "Ścieżka błędu nigdy nie kończy się `EMPTY`"
+    - **Expected Result:** `catchError` zwracający `of(loadUsersFailure({ error }))` wewnątrz `switchMap`
+    - **PR Problem:** The `loadUsers$` effect swallows the failure: its `catchError` returns `EMPTY`, so no failure action ever reaches the reducer. The `loading` flag stays `true`, the spinner never stops and the user is told nothing.
+    - **PR Expected:** A failed request should end in a failure action that clears `loading` and fills the error state. Return `of(loadUsersFailure({ error }))` from `catchError` inside the `switchMap`, handle that action in the reducer and render it through the existing error branch of the template.
+    - **PR Locations:** `user-panel.effects.ts` → `loadUsers$`, `user-panel.reducer.ts` → `loadUsersFailure`, `user-panel.effects.spec.ts` → failing-request case
 
 `PR Problem`, `PR Expected` and `PR Locations` are the only English fields, written for the PR comment and used nowhere else on the page.
 They are written for a reviewer who never opens the report: `PR Problem` gets two sentences (what is wrong + the consequence), `PR Expected` two to three (the target state + how to reach it), and `PR Locations` lists every file and symbol the fix touches — every concrete name the Polish fields propose has to appear in them.
@@ -216,7 +284,10 @@ Finding the PR needs no credentials on a public repository; a private one needs 
 Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> --include=<ids> [--project=<repo root>] [--pr=<number>] [--dry-run]`.
 `--include` is the accepted pool and the only thing that ever reaches GitHub: a finding nobody accepted is never posted, and a command without `--include` refuses to run. `--all` is the deliberate way past that for a command run by hand with no page to accept anything in, and only then does `--exclude=<ids>` mean anything.
 A comment body carries the finding's English `PR Problem` and `PR Expected` wording (`**Expected result:** …`) plus its `PR Locations` list (`**Where to change:** …`), so the reviewer sees what is wrong, what the result should be and which files and symbols the fix touches — but no severity, no violated rule and no Polish; the Polish report keeps all of that for the reader.
-Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments.
+Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments. A summary too long for one review body (GitHub caps it at 65 536 characters, which a folder review of a large area can reach) is split across further reviews, and the posts are spaced a second apart so GitHub's secondary rate limit does not land half of them. If one is refused anyway, the message says how many already reached the PR.
+
+The button is tied to the *branch*, not to the review mode: a `--staged` or `--path` review run on a branch that has an open PR gets it too.
+That is intentional but worth knowing — those modes review code the PR diff need not contain, so most or all of their findings end up in the review body rather than pinned to lines.
 
 Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs`
 (paths are listed explicitly because PowerShell does not expand globs for native commands).

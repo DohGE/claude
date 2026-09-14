@@ -14,9 +14,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$SESSION_DIR"
 # Reuse the previous port when restarting, so a browser tab the user still has
 # open keeps working; the server falls back to any free port if it is taken.
+# The old instance has to go first, or it keeps the port and the new one silently
+# lands on a different one: two servers would then share this session's state file
+# while the user's open tab talks to the one the orchestrator no longer polls.
 PREV_PORT=0
 if [ -f "$SESSION_DIR/server.json" ]; then
   PREV_PORT=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).port||0)}catch(e){console.log(0)}" "$SESSION_DIR/server.json")
+  PREV_PID=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).pid||0)}catch(e){console.log(0)}" "$SESSION_DIR/server.json")
+  if [ "$PREV_PID" != "0" ] && kill -0 "$PREV_PID" 2>/dev/null; then
+    kill "$PREV_PID" 2>/dev/null || true
+    for _ in $(seq 1 25); do
+      kill -0 "$PREV_PID" 2>/dev/null || break
+      sleep 0.2
+    done
+  fi
   rm -f "$SESSION_DIR/server.json"
 fi
 nohup node "$SCRIPT_DIR/server.cjs" --session-dir "$SESSION_DIR" --port "$PREV_PORT" \

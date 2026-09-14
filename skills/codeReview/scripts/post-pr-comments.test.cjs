@@ -50,6 +50,10 @@ test('parseArgs reads the report, the accepted pool, the exclusions and the dry 
     report: 'r.html', project: '/repo', pr: '7', include: ['c3', 'd4'], exclude: ['a1', 'b2'], all: true, dryRun: true,
   });
   assert.throws(() => pr.parseArgs([]), /No report given/);
+  // This command publishes to a real PR: a dropped --exclude would post findings the
+  // reviewer removed, and a dropped --dry-run would turn a rehearsal into a real review.
+  assert.throws(() => pr.parseArgs(['--report=r.html', '--excludes=a1']), /Unknown argument/);
+  assert.throws(() => pr.parseArgs(['--report=r.html', '--dryrun']), /Unknown argument/);
 });
 
 test('parsePayload lifts the payload out of a rendered report', () => {
@@ -189,6 +193,16 @@ test('main posts the accepted pool alone and refuses to post without one', (t) =
   assert.strictEqual(api.posted.length, 1, 'an empty pool posts nothing at all');
 });
 
+test('an accepted id the report no longer has is reported, not dropped in silence', (t) => {
+  const api = apiStub();
+  // The pool is saved in the browser; re-rendering the report can reassign ids, and
+  // posting only what still matches would look like the whole pool went out.
+  const result = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--include=bbbb2222,zzzz9999'], api));
+  assert.strictEqual(result.code, 0, result.err);
+  assert.match(result.err, /zzzz9999/, "the id that vanished is named");
+  assert.match(result.err, /1 z 2/, "and counted against the pool the user accepted");
+});
+
 test('main skips excluded findings and honours --dry-run', (t) => {
   const api = apiStub();
   const result = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all', '--exclude=bbbb2222', '--dry-run'], api));
@@ -208,5 +222,43 @@ test('main reports a repository or an API that will not answer', (t) => {
 
   const refused = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], apiStub({ postReview: () => ({ error: 'HTTP 422' }) })));
   assert.strictEqual(refused.code, 1);
-  assert.match(refused.err, /partia 1.*HTTP 422/);
+  assert.match(refused.err, /review 1\/1: HTTP 422/);
+});
+
+test('a summary too long for one review is split, not rejected by GitHub', () => {
+  // GitHub refuses a body over 65 536 characters. A folder or staged review posted to a
+  // branch PR makes EVERY finding a leftover, so the list gets there at around 130 - and
+  // the post then fails after earlier batches have already landed on a real PR.
+  const leftover = (i) => ({
+    path: 'src/app/file' + (i % 12) + '.ts',
+    lines: String(i),
+    prProblem: 'The subscription created in ngOnInit is never torn down. Every reopen leaks one more listener and the page slows down over time.',
+    prExpected: 'The stream should complete with the component. Pipe takeUntilDestroyed into the subscription and assert the teardown in the spec.',
+    prLocations: 'user-panel.component.ts → ngOnInit, user-panel.component.spec.ts → teardown case',
+  });
+  const payload = { title: 'feature/x → main' };
+  const many = Array.from({ length: 400 }, (_, i) => leftover(i));
+
+  const one = pr.summaryBodies(payload, [], [leftover(1)]);
+  assert.strictEqual(one.length, 1, 'a short summary still travels as one body');
+
+  const split = pr.summaryBodies(payload, [], many);
+  assert.ok(split.length > 1, 'a long one is split');
+  for (const body of split) assert.ok(body.length <= 65536, 'every part fits: ' + body.length);
+  assert.match(split[0], /## Code review — feature\/x → main/, 'the first part keeps the heading');
+  assert.match(split[1], /\(cd\. 2\)/, 'later parts say which part they are');
+  const listed = split.join(String.fromCharCode(10)).match(/\*\*Line\(s\)/g) || [];
+  assert.strictEqual(listed.length, many.length, 'and no finding is dropped in the split');
+});
+
+test('a refused review says how much of the run already reached the PR', (t) => {
+  // Reviews are posted one after another and nothing can take back what landed. A bare
+  // failure leaves the reviewer to guess whether re-running duplicates half the comments
+  // on a real pull request, so the message has to say where the run stopped.
+  const api = apiStub();
+  api.postReview = () => ({ error: 'You have exceeded a secondary rate limit' });
+  const result = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], api));
+  assert.strictEqual(result.code, 1);
+  assert.match(result.err, /nic nie zostało wysłane/, 'a first-post failure says nothing landed');
+  assert.match(result.err, /nie zdublować/, 'and warns about re-running blindly');
 });

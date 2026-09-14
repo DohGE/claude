@@ -6,7 +6,7 @@ applies-to:
 ## Checklist
 - No TestBed and no mocks — the reducer is called directly; `initialState` is a copy of the exported const and **every** test input is a fresh spread (`{ ...initialState, ... }`), never `{} as State`.
 - Flag/field assertions cover the whole state: `expect(state).toEqual({ ...initialState, changedField })` proves no other field changed; `toBe` (reference equality) proves an element was **not** replaced.
-- Loading flags: one test per start action (`→ true`); success/fail resets parameterized with `it.each` over a named dataset (new actions are appended to that dataset).
+- Loading flags: one test per start action (`→ true`); success/fail resets parameterized with `it.each` over rows written inline in the call (new actions are appended to that inline array).
 - Every handler with a payload has a `describe` with assertions per modified field; every branch in a handler (`if/else`, `??`, `?.`, conditional seeding) has its own `it`.
 - Collection upserts have an explicit anti-duplication test: an item already present in state is replaced by id, not appended.
 - Null-guard handlers have `should be a no-op when <collection> is null` tests returning the unchanged state.

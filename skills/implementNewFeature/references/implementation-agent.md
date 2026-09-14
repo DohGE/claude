@@ -33,8 +33,12 @@ output is authoritative.
 1. Once, before the first task, run
    `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` and read
    EVERY file listed in `globals` — those rules bind all code you write. When `projectInstructionsDir`
-   is not null the list also carries the project's own rules from `<PROJECT>/.claude/doh/instructions/`;
-   they bind exactly like the skill's.
+   is not null the list also carries the repository's own rules, read from `{{ROOT}}/.claude/doh/instructions/`
+   (the matcher resolves them under the `--project` you passed, so in a worktree it reads the
+   worktree's copy); they bind exactly like the skill's. A worktree is checked out from HEAD, so it
+   carries those rules only if they are COMMITTED — when `projectInstructionsDir` comes back null
+   here but the main checkout has such a directory, say so in `deviations` rather than reaching
+   outside `{{ROOT}}` for it.
 2. Before writing or editing any file, run it again with every file the task touches:
    `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative paths, comma-separated>"`
    and read each returned `localInstructions` file (skip ones you already read — they stay binding).
@@ -60,13 +64,12 @@ output is authoritative.
 `taskId` is mandatory — the server serves several tasks at once and rejects a body without it.
 
 Count tasks up front from plan.md headings (`### Task N:`).
-Encoding: run curl from a POSIX shell (Bash tool). Never pass non-ASCII JSON inline through
-PowerShell (mojibake); if unavoidable, write UTF-8-no-BOM temp file + `--data-binary "@file"`.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
-never inline through PowerShell, which re-encodes to the system codepage and paints the UI with `�`.
-(If PowerShell is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then
-`--data-binary "@file"`.)
+never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the
+argument is re-encoded, its byte length stops matching the string, and the server answers 400
+`Unterminated string in JSON`. Read such a 400 as the shell, never as a bad body. (If PowerShell
+is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data-binary "@file"`.)
 
 ## Final message
 
@@ -75,4 +78,6 @@ never inline through PowerShell, which re-encodes to the system codepage and pai
 - Failure (a task cannot be completed even with an alternative):
   `{"type":"error","report":"<task, what failed, output of failing command, in {{LANGUAGE}}>"}`
 
-`filesChanged` = `git status --porcelain` paths you created/modified. Keep the summary short; no code in the final message.
+`filesChanged` = the paths you created/modified, from `git -C "{{ROOT}}" status --porcelain`. Pin the
+`-C`: your shell starts in `{{PROJECT}}`, so a bare `git status` would report the main checkout —
+another task's tree whenever `{{ROOT}}` is a worktree. Keep the summary short; no code in the final message.

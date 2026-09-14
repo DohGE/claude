@@ -138,6 +138,10 @@ test('parseArgs requires a report and derives the html path', () => {
   assert.strictEqual(rr.parseArgs(['--report=a.MD']).out, 'a.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--out=/tmp/x.html']).out, '/tmp/x.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--keep-source']).keepSource, true);
+  // Exiting 0 after dropping a mistyped flag is the failure to avoid: the page still
+  // renders, just without snippets or in the wrong place.
+  assert.throws(() => rr.parseArgs(['--report=a.md', '--projekt=/repo']), /Unknown argument/);
+  assert.throws(() => rr.parseArgs(['--report=a.md', '--keepsource']), /Unknown argument/);
   assert.throws(() => rr.parseArgs([]), /No report given/);
 });
 
@@ -495,6 +499,24 @@ test('renderHtml carries the walked checklists into the Pokrycie section', () =>
   assert.deepStrictEqual(coverage[0].items.map((i) => i.state), ['ok', 'violation', 'open']);
   assert.deepStrictEqual(coverage[1].items, [], 'a mechanical file has no items to show');
 });
+
+  test('only the exact word NARUSZENIE marks an item broken', () => {
+    // SKILL.md tells the reviewer to write it in capitals and in that exact form. If this
+    // matcher is ever loosened, that instruction becomes over-strict; if a variant silently
+    // passed as clean, the page would show a rule as compliant under the finding breaking it.
+    const state = (verdict) => rr.parseReport(reportOf(
+      '## src/a.ts',
+      '',
+      checklistOf('src/a.ts', ['[x] general#1 nazwa — ' + verdict + ' (L3)']),
+      '<!-- coverage: src/a.ts 1/1 -->',
+    )).checklists[0].items[0].state;
+
+    assert.strictEqual(state('NARUSZENIE'), 'violation');
+    assert.strictEqual(state('NARUSZENIE!'), 'violation', 'punctuation around it is fine');
+    for (const variant of ['naruszenie', 'Naruszenie', 'NARUSZONO', 'VIOLATION']) {
+      assert.strictEqual(state(variant), 'ok', variant + ' must not read as a violation');
+    }
+  });
 
 test('a report with no findings still shows what was walked', () => {
   const report = rr.parseReport(reportOf(
@@ -1217,4 +1239,136 @@ test('any other multi-line comment is swallowed whole', () => {
   const report = rr.parseReport(reportOf('## src/a.ts', '', findingOf({}), '<!-- notatka', 'druga linia', '-->'));
   assert.deepStrictEqual(report.warnings, [], 'the comment body never reaches the finding parser');
   assert.strictEqual(report.files[0].findings.length, 1);
+});
+
+test('a checklist id that matches no instruction file is reported, not counted in silence', () => {
+  const report = { checklists: [{ path: 'src/a.ts', items: [
+    { id: 'a11y#1' }, { id: 'a11y#2' }, { id: 'general#1' }, { id: 'ACCESSIBILITY#4' },
+  ] }], warnings: [] };
+  rr.warnUnknownChecklistIds(report, null);
+  assert.strictEqual(report.warnings.length, 1, 'one warning per unknown id, not per item');
+  assert.match(report.warnings[0], /a11y/);
+  assert.ok(!report.warnings.some((w) => /general|accessibility/i.test(w)), 'real ids pass, case-insensitively');
+});
+
+test('the page script the renderer emits actually parses', () => {
+  // Those 35 kB of browser code live inside a template string: nothing compiles
+  // them, so a typo would ship and only show up as a blank report page in front
+  // of the user. Parsing them here is the whole compiler this code gets.
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '',
+    findingOf({
+      problem: 'Coś jest nie tak.',
+      rule: 'security.md → zasada',
+      expected: 'Naprawić.',
+    }),
+  ));
+  const html = rr.renderHtml(report, 'r.html');
+  const blocks = [...html.matchAll(/<script(?![^>]*type=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert.ok(blocks.length >= 1, 'the page carries executable script');
+  for (const block of blocks) {
+    assert.doesNotThrow(() => new Function(block), 'a page script block must parse');
+  }
+});
+
+test('the report template in SKILL.md names the fields this parser accepts', () => {
+  // Step 4 calls its own template `a contract, not a suggestion` - but the contract
+  // lives in two places: the template agents copy, and the table this file parses.
+  // Rename a field on one side and every future report silently loses it, while
+  // every test here keeps passing because they all write the other spelling.
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  const lines = skill.slice(skill.indexOf('## Step 4')).split(/\r?\n/);
+  const open = lines.findIndex((l) => /^ {4}# Code Review:/.test(l));
+  assert.ok(open > 0, 'Step 4 still carries its indented report template');
+  const template = [];
+  for (let i = open; i < lines.length; i++) {
+    if (lines[i].trim() && !/^ {4}/.test(lines[i])) break;
+    template.push(lines[i].slice(4));
+  }
+  const documented = template
+    .map((l) => l.match(/^- \*\*([^:*]+):\*\*/))
+    .filter(Boolean)
+    .map((m) => m[1]);
+  assert.ok(documented.length >= 7, 'the template lists its fields: ' + documented.join(', '));
+  const dropped = documented.filter((name) => rr.parseReport(
+    ['# Code Review: a | 2026-01-01 10:00', '', '## f.ts', '', '🔴 **High**',
+      '- **' + name + ':** x'].join(String.fromCharCode(10))
+  ).warnings.some((w) => /nierozpoznana/.test(w)));
+  assert.deepStrictEqual(dropped, [],
+    'these fields are documented in SKILL.md but the parser does not recognise them');
+});
+
+test('the report page is self-contained: no external reference, no network call', () => {
+  // The report is a file the reviewer opens from disk and may forward to someone else.
+  // A web font or an analytics snippet added later would not show up in review, but it
+  // would tell a third party which branch is being reviewed and when - and would leave
+  // the page broken offline, which is where it is usually read.
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '',
+    findingOf({ problem: 'Coś jest nie tak.', rule: 'general.md → zasada', expected: 'Naprawić.' }),
+  ));
+  const html = rr.renderHtml(report, 'r.html');
+  const external = [...html.matchAll(/(https?:)?\/\/[a-zA-Z0-9.-]+/g)].map((m) => m[0]);
+  assert.deepStrictEqual([...new Set(external)], [], 'the page reaches outside itself');
+  for (const call of ['fetch(', 'XMLHttpRequest', 'sendBeacon', 'WebSocket', 'document.cookie']) {
+    assert.ok(!html.includes(call), 'the page must not use ' + call);
+  }
+});
+
+test('the limit the page tells the reader is the limit the renderer enforces', (t) => {
+  // The tooltip on a disabled full-view button names the line limit. It used to spell
+  // the number out next to the constant, so raising the limit would have left the page
+  // quoting the old one - and the reader would blame a file that is now well inside it.
+  const html = rr.renderHtml(rr.parseReport(reportOf(['## src/a.ts', ''], findingOf())), 'r.html');
+  const quoted = Number((html.match(/limit (\d+)/) || [])[1]);
+  assert.ok(quoted > 0, 'the page still names a limit');
+  const dir = tempDir(t, 'cr-limit-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  const write = (name, lines) => fs.writeFileSync(path.join(dir, 'src', name),
+    Array.from({ length: lines }, (_, i) => 'line ' + (i + 1)).join(String.fromCharCode(10)) + String.fromCharCode(10), 'utf8');
+  write('fits.ts', quoted);
+  write('over.ts', quoted + 1);
+  const fits = rr.parseReport(reportOf(['## src/fits.ts', ''], findingOf({ lines: '5' })));
+  const over = rr.parseReport(reportOf(['## src/over.ts', ''], findingOf({ lines: '5' })));
+  rr.attachSnippets(fits, dir);
+  rr.attachSnippets(over, dir);
+  assert.ok(fits.files[0].full, 'a file exactly at the quoted limit still gets its full view');
+  assert.strictEqual(over.files[0].full, null, 'one line more is refused, as the page says');
+});
+
+test('an oversized source is not reported as an unreadable one', (t) => {
+  // A file past the byte cap used to reach the reader as `could not read the file`,
+  // which sends them looking for permissions or an encoding problem on a file that is
+  // perfectly readable. The tooltip now names the cap - and takes it from the constant,
+  // so raising the cap cannot leave the page quoting the old figure.
+  const html = rr.renderHtml(rr.parseReport(reportOf(['## src/a.ts', ''], findingOf())), 'r.html');
+  const message = (html.match(/Nie udało się odczytać pliku[^']*/) || [''])[0];
+  assert.match(message, /powyżej (\d+) MB/, 'the message names the size cap: ' + message);
+  const quoted = Number(message.match(/powyżej (\d+) MB/)[1]);
+  const dir = tempDir(t, 'cr-big-');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'big.ts'), 'x'.repeat(quoted * 1024 * 1024 + 1), 'utf8');
+  const report = rr.parseReport(reportOf(['## src/big.ts', ''], findingOf({ lines: '1' })));
+  rr.attachSnippets(report, dir);
+  assert.strictEqual(report.files[0].full, null, 'a file past the quoted cap really is refused');
+});
+
+test('each report keeps its accepted and ignored pools to itself', () => {
+  // The page stores both pools under its own file name. Two reports sharing one name
+  // would share the pools, so accepting a finding in one would mark a different finding
+  // as accepted in the other - which is why the context script warns when two branches
+  // sanitise to the same report name.
+  const report = () => rr.parseReport(reportOf(['## src/a.ts', ''], findingOf()));
+  const a = rr.renderHtml(report(), 'feature-a-2026-01-01-10-00.html');
+  const b = rr.renderHtml(report(), 'feature-b-2026-01-01-10-00.html');
+  const nameOf = (html) => (html.match(/\"reportName\":\"([^\"]+)\"/) || [])[1];
+  assert.strictEqual(nameOf(a), 'feature-a-2026-01-01-10-00.html');
+  assert.strictEqual(nameOf(b), 'feature-b-2026-01-01-10-00.html');
+  assert.notStrictEqual(nameOf(a), nameOf(b), 'two reports never share one storage key');
+  // The payload alone proves nothing: the key has to be BUILT from that name, so assert
+  // on the expression the page runs rather than on the name sitting in the data.
+  assert.match(a, /storeKey = 'doh-code-review:' [+] reportData[.]reportName/,
+    'the storage key is derived from the report name, not a constant');
 });

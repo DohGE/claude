@@ -31,6 +31,14 @@ const skipGlobs = [
   '**/package-lock.json', '**/npm-shrinkwrap.json', '**/yarn.lock', '**/pnpm-lock.yaml',
   '**/bun.lockb', '**/composer.lock', '**/Cargo.lock', '**/Gemfile.lock', '**/poetry.lock', '**/uv.lock',
   '**/*.min.js', '**/*.min.css', '**/*.map',
+  // Code generated INTO the source tree, by the conventions that say so without
+  // ambiguity. A generated client is machine-written, so a finding there is not
+  // actionable - the fix belongs to the schema or the generator - and at ~100
+  // checklist items plus one part file per file it is the largest avoidable cost a
+  // review can carry. A bare `generated/` folder is deliberately NOT here: the name
+  // alone does not prove nobody maintains it by hand.
+  '**/__generated__/**', '**/*.generated.*', '**/*.gen.ts', '**/*.g.ts',
+  '**/*.pb.ts', '**/*_pb.ts', '**/*_pb.js',
   '**/dist/**', '**/build/**', '**/out/**', '**/coverage/**', '**/node_modules/**', '**/.angular/**', '**/.idea/**',
   '**/*.png', '**/*.jpg', '**/*.jpeg', '**/*.gif', '**/*.webp', '**/*.avif', '**/*.ico', '**/*.bmp', '**/*.svg',
   '**/*.woff', '**/*.woff2', '**/*.ttf', '**/*.eot', '**/*.otf',
@@ -47,17 +55,26 @@ function isSkippedPath(filePath) {
 
 function parseArgs(argv) {
   const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false };
+  const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
     // review of this target (see the snapshot written next to the report).
     if (arg === '--since-last') { args.sinceLast = true; continue; }
     const m = arg.match(/^--([a-z]+)=(.*)$/);
-    if (!m) continue;
+    // Anything unrecognised is refused rather than skipped: the user-facing flag
+    // is `--only-md` while the script takes `--output=md`, so a silently dropped
+    // argument would hand back an html context for a run the user asked to keep
+    // in Markdown - a wrong result that looks like a correct one.
+    if (!m) { unknown.push(arg); continue; }
     if (m[1] === 'mode') args.mode = m[2];
     else if (m[1] === 'branches') args.branches = m[2];
     else if (m[1] === 'path') args.path = m[2];
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'output') args.output = m[2];
+    else unknown.push(arg);
+  }
+  if (unknown.length > 0) {
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last; the skill's own --only-md maps to --output=md)`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -89,17 +106,55 @@ function globToRegExp(pattern) {
   return new RegExp('^' + parts.join('') + '$');
 }
 
+// `scopes:` declares the named subsets an individual checklist item may narrow
+// itself to (`- {styles} Contrast ratios …`). One name, one glob list, written
+// either inline (`styles: ["**/*.scss", "**/*.css"]`) or as a nested list —
+// the same glob language as `applies-to`, `!` excludes included.
+function parseScopeList(value) {
+  const inline = String(value).trim().replace(/^\[|\]$/g, '');
+  return inline
+    .split(',')
+    .map((p) => p.trim().replace(/^["']|["']$/g, ''))
+    .filter(Boolean);
+}
+
 function parseFrontmatter(content) {
   const lines = content.split(/\r?\n/);
-  const result = { appliesTo: [], audience: undefined, gate: null };
+  const result = { appliesTo: [], appliesToDeclared: false, audience: undefined, gate: null, scopes: {} };
   if (!lines.length || lines[0].trim() !== '---') return result;
   let inAppliesTo = false;
+  let inScopes = false;
+  let scopeName = null;
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     if (line.trim() === '---') break;
+    // Declared is not the same as readable: an inline `applies-to: **/*.ts` or a
+    // mis-indented list leaves the key present and the pattern list empty, which
+    // means something very different for a global than for a local.
+    if (/^applies-to:/.test(line)) result.appliesToDeclared = true;
     if (/^applies-to:\s*$/.test(line)) {
       inAppliesTo = true;
+      inScopes = false;
       continue;
+    }
+    if (/^scopes:\s*$/.test(line)) {
+      inScopes = true;
+      inAppliesTo = false;
+      scopeName = null;
+      continue;
+    }
+    if (inScopes) {
+      const named = line.match(/^\s+([A-Za-z0-9][A-Za-z0-9_-]*):\s*(.*)$/);
+      if (named) {
+        scopeName = named[1].toLowerCase();
+        result.scopes[scopeName] = named[2].trim() ? parseScopeList(named[2]) : [];
+        continue;
+      }
+      const nested = line.match(/^\s+-\s+(.+)$/);
+      if (nested && scopeName) {
+        result.scopes[scopeName].push(nested[1].trim().replace(/^["']|["']$/g, ''));
+        continue;
+      }
     }
     const item = line.match(/^\s+-\s+(.+)$/);
     if (inAppliesTo && item) {
@@ -110,6 +165,7 @@ function parseFrontmatter(content) {
     if (audience) {
       result.audience = audience[1].replace(/^["']|["']$/g, '');
       inAppliesTo = false;
+      inScopes = false;
       continue;
     }
     // The precondition that decides whether this instruction has anything to
@@ -119,9 +175,13 @@ function parseFrontmatter(content) {
     if (gate) {
       result.gate = gate[1].replace(/^["']|["']$/g, '') || null;
       inAppliesTo = false;
+      inScopes = false;
       continue;
     }
-    if (/^\S/.test(line)) inAppliesTo = false;
+    if (/^\S/.test(line)) {
+      inAppliesTo = false;
+      inScopes = false;
+    }
   }
   return result;
 }
@@ -346,18 +406,84 @@ function parseRawDiff(output) {
   return files;
 }
 
-// How many checklist items an instruction carries: the top-level `- ` bullets
-// of its body. The reviewer reports its per-file coverage against this number,
-// which turns "I walked every item" from a promise into a checkable figure.
-function countChecklistItems(file) {
+// A checklist item may narrow itself to part of its instruction's scope with a
+// leading tag naming one or more entries of the frontmatter `scopes:` map:
+// `- {styles} Contrast ratios …` is walked for stylesheets only. Numbering is
+// unaffected — `<id>#<n>` still counts every top-level bullet in file order —
+// so a rule that does not apply to a file drops out of that file's plan
+// instead of costing it a verdict it cannot reach.
+const reItemScopeTag = /^\{\s*([A-Za-z0-9][A-Za-z0-9 ,_-]*)\}\s+\S/;
+
+// The checklist of an instruction, item by item: `n` is its `<id>#<n>` address,
+// `scopes` the names of its scope tag (empty = wherever the instruction applies).
+function parseChecklistItems(file) {
   let body;
   try {
     body = fs.readFileSync(file, 'utf8');
   } catch {
-    return 0;
+    return [];
   }
   body = body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
-  return body.split('\n').filter((line) => /^- \S/.test(line)).length;
+  const items = [];
+  for (const line of body.split('\n')) {
+    if (!/^- \S/.test(line)) continue;
+    const tag = line.slice(2).match(reItemScopeTag);
+    items.push({
+      n: items.length + 1,
+      scopes: tag ? tag[1].split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : [],
+    });
+  }
+  return items;
+}
+
+// How many checklist items an instruction carries: the top-level `- ` bullets
+// of its body. The reviewer reports its per-file coverage against this number,
+// which turns "I walked every item" from a promise into a checkable figure.
+function countChecklistItems(file) {
+  return parseChecklistItems(file).length;
+}
+
+// Which items of an instruction this file is actually walked against: every
+// untagged item, plus the tagged ones whose scope the file falls into. A tag
+// naming a scope the instruction never declared keeps the item (a typo must not
+// silently delete a rule); `loadInstructions` reports it as a warning.
+function matchChecklistItems(items, namedScopes, filePath) {
+  const normalized = filePath.replace(/\\/g, '/');
+  const named = namedScopes || {};
+  const selected = [];
+  for (const item of items) {
+    if (item.scopes.length === 0) {
+      selected.push(item.n);
+      continue;
+    }
+    const hit = item.scopes.some((name) => (
+      !Object.prototype.hasOwnProperty.call(named, name) || matchesScope(named[name], normalized, false)
+    ));
+    if (hit) selected.push(item.n);
+  }
+  return selected;
+}
+
+// `[1,2,3,5,9,10]` -> `1-3,5,9-10`: the plan says WHICH items a file walks, not
+// just how many, so a narrowed checklist stays addressable as `<id>#<n>`.
+function formatItemSpec(numbers) {
+  const parts = [];
+  let start = null;
+  let prev = null;
+  for (const n of numbers) {
+    if (start === null) {
+      start = prev = n;
+      continue;
+    }
+    if (n === prev + 1) {
+      prev = n;
+      continue;
+    }
+    parts.push(start === prev ? `${start}` : `${start}-${prev}`);
+    start = prev = n;
+  }
+  if (start !== null) parts.push(start === prev ? `${start}` : `${start}-${prev}`);
+  return parts.join(',');
 }
 
 // How the reviewer cites one checklist item while ticking it off: `<id>#<n>`,
@@ -428,11 +554,59 @@ function loadInstructions(instructionsDirs, audience) {
   // globs (no globs = never matches); a global without them keeps applying to
   // every file, so narrowing a global is opt-in and silence means "everywhere".
   const scopes = {};
+  // A scope tag pointing at a name the frontmatter never declared would silently
+  // widen (fail-open) instead of narrowing, and a declared scope no item uses is
+  // dead config — both are reported once per instruction, at load time.
+  const checkItemScopes = (file, declared) => {
+    const items = parseChecklistItems(file);
+    const used = new Set();
+    for (const item of items) for (const name of item.scopes) used.add(name);
+    const unknown = [...used].filter((name) => !Object.prototype.hasOwnProperty.call(declared, name));
+    if (unknown.length > 0) {
+      warnings.push(`Checklist item scope(s) not declared in the "scopes:" frontmatter (items kept unnarrowed): ${unknown.join(', ')} in ${file}`);
+    }
+    const unused = Object.keys(declared).filter((name) => !used.has(name));
+    if (unused.length > 0) {
+      warnings.push(`Declared scope(s) no checklist item uses: ${unused.join(', ')} in ${file}`);
+    }
+  };
+  // A declared but unreadable `applies-to` fails in opposite directions, and
+  // silently in both: a global falls back to matching everything, a local to
+  // matching nothing.
+  // Brace alternation is the mistake this glob engine cannot warn about by itself:
+  // `**/*.{ts,html}` is a perfectly good-looking pattern that matches NOTHING here,
+  // because braces are literal (see the syntax the README documents). Nothing else
+  // would notice - the pattern is textually an including one, so the check below
+  // stays quiet and the instruction simply never applies to a file again.
+  const checkBraces = (file, fm) => {
+    const patterns = [...fm.appliesTo, ...Object.values(fm.scopes || {}).flat()];
+    const braced = [...new Set(patterns.filter((g) => /[{}]/.test(String(g))))];
+    if (braced.length === 0) return;
+    warnings.push(`Brace alternation is not supported and matches nothing - write one pattern per alternative (${braced.join(', ')}): ${file}`);
+  };
+  const checkAppliesTo = (file, fm, bucket) => {
+    if (!fm.appliesToDeclared || fm.appliesTo.length > 0) return;
+    const effect = bucket === 'global'
+      ? 'so this global now applies to EVERY reviewed file instead of the subset you meant'
+      : 'so this local now matches nothing';
+    warnings.push(`\"applies-to\" is declared but no pattern could be read from it (entries must be a block list of \"  - <glob>\" lines), ${effect}: ${file}`);
+  };
+  // An instruction whose checklist has no top-level "- " bullet is never walked:
+  // the reviewer has nothing to tick, so the file is loaded and then ignored.
+  const checkItems = (file) => {
+    if (parseChecklistItems(file).length === 0) {
+      warnings.push(`No checklist items found (items must be top-level \"- \" bullets; \"*\" and \"+\" are not counted), so this instruction is never walked: ${file}`);
+    }
+  };
   const globals = [];
   for (const file of collect('global')) {
     const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
     if (!keep(file, fm)) continue;
-    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate };
+    checkItemScopes(file, fm.scopes);
+    checkAppliesTo(file, fm, 'global');
+    checkBraces(file, fm);
+    checkItems(file);
+    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, itemScopes: fm.scopes };
     globals.push(file);
   }
   const locals = [];
@@ -442,7 +616,11 @@ function loadInstructions(instructionsDirs, audience) {
     if (splitPatterns(fm.appliesTo).include.length === 0) {
       warnings.push(`Local instruction has no including applies-to pattern and will never match: ${file}`);
     }
-    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate };
+    checkItemScopes(file, fm.scopes);
+    checkAppliesTo(file, fm, 'local');
+    checkBraces(file, fm);
+    checkItems(file);
+    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, itemScopes: fm.scopes };
     locals.push({ file, appliesTo: fm.appliesTo });
   }
   return { globals, locals, scopes, warnings };
@@ -646,11 +824,16 @@ function buildContext(options) {
   // Checklist sizes are read once per run and turned into a per-file total, so
   // the reviewer can state coverage as `<checked>/<total>` per file.
   const itemCache = new Map();
-  const itemsOf = (file) => {
-    if (!itemCache.has(file)) itemCache.set(file, countChecklistItems(file));
+  const parsedItemsOf = (file) => {
+    if (!itemCache.has(file)) itemCache.set(file, parseChecklistItems(file));
     return itemCache.get(file);
   };
+  const itemsOf = (file) => parsedItemsOf(file).length;
   const scopes = instructions.scopes || {};
+  // Which items of an instruction a given file walks: the tagged ones whose
+  // scope it falls outside are not its rules and never reach its plan.
+  const itemsFor = (file, filePath) =>
+    matchChecklistItems(parsedItemsOf(file), scopes[file] && scopes[file].itemScopes, filePath);
 
   // Ids are handed out over EVERY loaded instruction, matched or not, so the
   // same instruction keeps the same id no matter what a given diff touches.
@@ -662,10 +845,14 @@ function buildContext(options) {
     takenIds.add(id);
     idOf.set(file, id);
   }
-  // The ticking plan of one file: `general:13` means items general#1..general#13
-  // of that instruction. An instruction with no checklist items is left out —
-  // there is nothing to tick in it.
-  const planOf = (files) => files.filter((f) => itemsOf(f) > 0).map((f) => `${idOf.get(f)}:${itemsOf(f)}`);
+  // The ticking plan of one file: `general:1-13` names the items of that
+  // instruction this file is walked against, `accessibility:6-9,12` a checklist
+  // its scope tags narrowed. An instruction the file takes no item from is left
+  // out — there is nothing to tick in it.
+  const planOf = (files, filePath) => files
+    .map((f) => ({ id: idOf.get(f), numbers: itemsFor(f, filePath) }))
+    .filter((entry) => entry.numbers.length > 0)
+    .map((entry) => `${entry.id}:${formatItemSpec(entry.numbers)}`);
 
   // Every run records the post-image blob of each reviewed file next to the
   // report, so the next `--since-last` run can drop files whose content never
@@ -692,12 +879,28 @@ function buildContext(options) {
           .map((f) => f.path);
         if (unchanged.length > 0) {
           const shown = unchanged.slice(0, 10).join(', ');
-          result.warnings.push(`[${target.branch}] --since-last: ${unchanged.length} file(s) unchanged since the previous review and skipped: ${shown}${unchanged.length > 10 ? `, (+${unchanged.length - 10} more)` : ''}`);
+          result.warnings.push(`[${target.branch}] --since-last: ${unchanged.length} file(s) unchanged since the previous review and skipped: ${shown}${unchanged.length > 10 ? `, (+${unchanged.length - 10} more)` : ''}. The snapshot is written when the context is built, so a previous review that did not finish still marked these as reviewed - re-run without --since-last if that run was interrupted.`);
           target.unchangedSinceLastReview = unchanged;
           target.previousReportPath = previous.reportPath || null;
+          // Skipping a file is only honest while the report that DID review it is still
+          // there to be read: the run says "see the previous report" and the reader has to
+          // be able to. Pruning removes the oldest ones, so after enough reviews of one
+          // branch the snapshot outlives the evidence it points at.
+          if (target.previousReportPath && !fs.existsSync(target.previousReportPath)
+            && !fs.existsSync(target.previousReportPath.replace(/.md$/i, '.html'))) {
+            result.warnings.push(`[${target.branch}] --since-last: the previous report is gone (${target.previousReportPath}), so nothing on disk covers the skipped file(s) any more - re-run this target in full.`);
+          }
           target.files = target.files.filter((f) => !unchanged.includes(f.path));
         }
       }
+    }
+    // Two branches can sanitise to one name (`feature/x` and `feature-x` both become
+    // `feature-x`), and then both targets carry the same reportPath: the second review
+    // overwrites the first, and they share one `--since-last` snapshot. The run asked
+    // for two reviews and would end with one file and no sign of the other.
+    const clash = result.targets.find((t) => t.reportPath === target.reportPath);
+    if (clash) {
+      result.warnings.push(`Branches "${clash.branch}" and "${target.branch}" produce the same report name (${path.basename(target.reportPath)}), so the second review would overwrite the first and both would share one --since-last snapshot. Review them in separate runs.`);
     }
     result.targets.push(target);
   };
@@ -714,10 +917,15 @@ function buildContext(options) {
   // (rangesArgsFor), so the reviewer never derives them from hunks itself;
   // null for added (every line is new) and deleted (no new file) files.
   const makeFiles = (rawFiles, rangesByPath) => rawFiles.map((f) => {
-    const locals = matchLocalInstructions(instructions.locals, f.path);
+    // An instruction whose every item the file's scope tags took away has
+    // nothing to say about it, so it is not one of the file's instructions —
+    // neither to read nor to tick.
+    const applicable = (file) => itemsFor(file, f.path).length > 0;
+    const locals = matchLocalInstructions(instructions.locals, f.path).filter(applicable);
     // Globals are matched per file too: one that declares `applies-to` is
     // narrowed like a local, one that declares none still applies everywhere.
-    const globals = matchGlobalInstructions(instructions.globals, scopes, f.path);
+    const globals = matchGlobalInstructions(instructions.globals, scopes, f.path).filter(applicable);
+    const plan = [...planOf(globals, f.path), ...planOf(locals, f.path)];
     return {
       path: f.path,
       status: f.status,
@@ -728,13 +936,14 @@ function buildContext(options) {
       // The instructions of this file turned into a ticking plan: one
       // `<id>:<items>` entry per instruction, globals first, then the matched
       // locals — the reviewer walks it item by item and ticks each one off.
-      checklist: [...planOf(globals), ...planOf(locals)],
+      checklist: plan,
       // The globals this file's path took it out of, so the plan being shorter
       // than the rulebook reads as a decision instead of an omission.
       globalInstructionsSkipped: instructions.globals.filter((g) => !globals.includes(g)),
       // Matched global + matched local checklist items this file must be walked
       // against; the reviewer reports `<checked>/<checklistTotal>` per file.
-      checklistTotal: globals.reduce((n, p) => n + itemsOf(p), 0) + locals.reduce((n, p) => n + itemsOf(p), 0),
+      checklistTotal: globals.reduce((n, p) => n + itemsFor(p, f.path).length, 0)
+        + locals.reduce((n, p) => n + itemsFor(p, f.path).length, 0),
       changedLines: f.status === 'A' || f.status === 'D'
         ? null
         : (rangesByPath.get(f.path) || ''),
@@ -824,8 +1033,16 @@ function buildContext(options) {
     // whole folder gets the added-file treatment (show template only).
     const rel = String(options.path || '').replace(/\\/g, '/').replace(/\/+$/, '');
     const abs = path.resolve(project, rel);
+    // `path.resolve` happily walks out of the project (`--path=../other`), and every
+    // report path and command below is built as if the file were inside it.
+    const outside = (() => {
+      const inside = path.relative(path.resolve(project), abs);
+      return inside !== '' && (inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside));
+    })();
     if (!rel) {
       result.errors.push('No folder given (expected --path="src/app").');
+    } else if (outside) {
+      result.errors.push(`Folder is outside the reviewed project: ${rel} (use --project=<path> to review another repository)`);
     } else if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
       result.errors.push(`Folder not found: ${rel}`);
     } else {
@@ -876,10 +1093,24 @@ function buildContext(options) {
     for (const file of target.files) for (const p of file.localInstructions) catalog.add(p);
   }
   result.localInstructionsCatalog = [...catalog].sort();
+  // Globals are narrowed to the ones at least one reviewed file actually walks:
+  // a diff of stylesheets never reads the TypeScript rulebook. Every file still
+  // names what it was taken out of in its own `globalInstructionsSkipped`.
+  if (result.targets.length > 0) {
+    const usedGlobals = new Set();
+    for (const target of result.targets) {
+      for (const file of target.files) {
+        for (const g of matchGlobalInstructions(instructions.globals, scopes, file.path)) {
+          if (itemsFor(g, file.path).length > 0) usedGlobals.add(g);
+        }
+      }
+    }
+    result.globalInstructions = instructions.globals.filter((g) => usedGlobals.has(g));
+  }
   // Which instruction each checklist id stands for — only the instructions this
   // run actually loads, so the dictionary matches the rulebook of Step 2.
   result.checklistIds = Object.fromEntries(
-    [...instructions.globals, ...result.localInstructionsCatalog]
+    [...result.globalInstructions, ...result.localInstructionsCatalog]
       .filter((f) => itemsOf(f) > 0)
       .map((f) => [idOf.get(f), f]),
   );
@@ -887,7 +1118,7 @@ function buildContext(options) {
   // answers it once per file before walking that instruction's items: a failed
   // gate collapses the whole instruction into one ticked range line.
   result.checklistGates = Object.fromEntries(
-    [...instructions.globals, ...result.localInstructionsCatalog]
+    [...result.globalInstructions, ...result.localInstructionsCatalog]
       .filter((f) => itemsOf(f) > 0 && scopes[f] && scopes[f].gate)
       .map((f) => [idOf.get(f), scopes[f].gate]),
   );
@@ -934,6 +1165,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { ensureDohGitignore, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();
