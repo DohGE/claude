@@ -679,7 +679,7 @@ through missing real line numbers and rule references.
 - best-practices: `@HostListener` instead of `host: {}`.
 - i18n: greeting built by string concatenation (`buildGreeting(user) + ', ' + this.title`) instead of a translation with params.
 - general: `console.log` calls; commented-out `refresh()` code block.
-- component: enum alias renamed (`statuses = UserStatus` — must keep the enum name, `userStatus`); signals/aliases not `readonly`; member order broken (a setter and getters between fields, handlers before lifecycle hooks, fields interleaved).
+- component: enum alias renamed (`statuses = UserStatus` — must keep the enum name, `userStatus`); signals/aliases not `readonly`.
 - accessibility 2.1.4: `@HostListener('document:keydown.s')` — a single-character shortcut bound to the whole document, always active, with no way to turn it off or remap it (it also steals `s` from every text field).
 - accessibility 2.4.3: `document.getElementById('panel-root')?.focus()` targets a `<div>` that has no `tabindex`, so the focus move silently does nothing and the user is left at the top of the document.
 - accessibility 2.2.2: the second `setInterval` rotates the promo banner every 4 s with no pause/stop/hide control (and, like the polling one, is never cleared).
@@ -810,7 +810,7 @@ through missing real line numbers and rule references.
 - component: input the template cannot render without is plain `input<CardUser>()` (with `!` assertions later) instead of `input.required`.
 - best-practices: `@Input() set` accessor (`highlight`); output as a bare `EventEmitter` field instead of `output()`.
 - performance: mutable field bound in the template (`highlighted`) — stale under OnPush.
-- component: form not `_fb.nonNullable.group`, control without explicit generic; fields not `readonly`; member order broken (an `@Input()` setter between signal inputs and outputs).
+- component: form not `_fb.nonNullable.group`, control without explicit generic; fields not `readonly`.
 - ui-component: `valueChanges` subscription in the constructor without `takeUntilDestroyed`, `debounceTime` (central config) or `distinctUntilChanged` — emits on every keystroke and leaks; the constructor is also supposed to hold `effect()` calls only.
 - general: `as never` cast on the emitted value (also emits the form value typed as `CardUser` — wrong contract).
 - component: `effect()` patching the form without `{ emitEvent: false }` — feedback loop with the subscription.

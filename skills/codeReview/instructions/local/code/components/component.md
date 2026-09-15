@@ -4,9 +4,9 @@ applies-to:
   - "**/*.component.ts"
 ---
 This instruction OWNS the component TS file: file separation, the `@Component` metadata, DI fields,
-member order and visibility, form wiring and subscription teardown. The signals/DI/host APIs themselves
-are owned by the global best-practices instruction, rendering cost by the performance instruction, and
-everything inside the template by the component-template instruction.
+visibility, form wiring and subscription teardown. The signals/DI/host APIs themselves are owned by
+the global best-practices instruction, rendering cost by the performance instruction, and everything
+inside the template by the component-template instruction.
 
 ## Checklist
 - `changeDetection: ChangeDetectionStrategy.OnPush` is set — no exceptions.
@@ -19,8 +19,7 @@ everything inside the template by the component-template instruction.
 - Visibility states the audience: members only the template reads are `protected`, members nothing outside the class reads are `private`, and `public` is reserved for the component API (`input()`/`output()`/`model()`) plus the small surface the spec asserts directly (`dataTestPrefix`, presentational `computed()` values — see the component unit-test instruction). A spec never reaches a member through string-index access to work around visibility.
 - Enum/const aliases exposed for the template keep the enum name in camelCase (`readonly buttonStyle = ButtonStyle`) — the alias name is never changed.
 - Local state uses `signal()` (never a subject or a field with a setter); mutations only via `.set()`/`.update()`.
-- Derived values that can be computed from store state are added as selectors, not computed in the component; `computed()` is reserved for purely presentational composition (e.g. building table UI data from an input signal).
-- Member order is fixed: `inject()` fields → `input()`/`model()` → `output()` → `viewChild`/`contentChild` queries → re-exported facade signals → `computed()` → enum/const aliases → `dataTestPrefix` and const UI helpers → form definition → `constructor` → arrow `compareWith*` fields → lifecycle hooks → public handlers.
+- A derivation whose operands ALL come from store state is added as a selector, not computed in the component; `computed()` is reserved for purely presentational composition (e.g. building table UI data from an input signal) and for derivations that ALSO read data the NgRx state does not hold — a component `input()`, a local `signal()`, a route value, an injected runtime value — which cannot become a selector and therefore stay in the component.
 - The constructor contains only `effect()` calls; loads, dispatches and subscriptions belong to `ngOnInit`.
 - `effect()` is used only for: propagating state to a layout/parent, state→form `patchValue(..., { emitEvent: false })`, enabling/disabling the form from a lock signal (also with `{ emitEvent: false }`), or reacting to a signal change by calling a facade method; never for writing other signals, logging, or replicating `computed()`.
 - Reactive forms are built with `_fb.nonNullable.group({...})`; every control has an explicit generic type and is seeded from the relevant signal; validators are declared in the form definition.

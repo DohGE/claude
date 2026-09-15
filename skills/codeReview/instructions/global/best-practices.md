@@ -10,7 +10,7 @@ scopes:
   markup: ["**/*.html"]
 ---
 This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables,
-host bindings, lazy routes, the forms pattern and RxJS usage. File placement, member order and template
+host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template
 rules belong to the component and component-template instructions; rendering cost and change detection to
 the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility
 instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific
