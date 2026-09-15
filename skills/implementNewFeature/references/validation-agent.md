@@ -75,8 +75,10 @@ JSON object as the last thing in your message:
 {"type":"question","id":"chrome1","text":"<what the user must fix, in {{LANGUAGE}}>","options":["<ready — retry, in {{LANGUAGE}}>"]}
 ```
 
-The answer arrives as the next message. Increment the id on every ask (`chrome1`, `chrome2`, …) —
-a repeated id leaves the stepper UI stuck on the previous answer. Do NOT use AskUserQuestion (no
+The answer arrives as the next message. Increment the id on every ask (`chrome1`, `chrome2`, …): the
+orchestrator logs every answer into the step log as `<id>: <answer>`, so the ids are what tell two
+asks apart there. The panel itself never sticks on a repeated id — the question counter the UI
+re-renders on belongs to the server and moves on every question POST. Do NOT use AskUserQuestion (no
 terminal user). This protocol exists for ONE case: the Chrome extension is unavailable.
 
 ## Two browsers, two jobs

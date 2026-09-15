@@ -11,4 +11,4 @@ applies-to:
 - A disabled/locked input is applied with `effect(() => { if (isDisabled()) form.disable({ emitEvent: false }); })`.
 - A component whose form participates in aggregate validation is marked with the shared form-reference tracking decorator and implements the matching interface.
 - Emitted values are typed with models from `models/`; no local duplicate interfaces.
-- All common component rules apply (OnPush, signal inputs/outputs, member order, readonly fields, separate template/styles).
+- All common component rules apply (OnPush, signal inputs/outputs, readonly fields, separate template/styles).
