@@ -144,7 +144,10 @@ test('runda agenta nie gubi tekstu pisanego w trakcie', async ({ page }) => {
 
 test('pole wiadomości zostaje w kadrze, choć podgląd wypycha stronę w dół',
   async ({ page }) => {
-    await page.setViewportSize({ width: 1000, height: 420 });
+    // 1236 = 1000 px of panel plus the 236 px rail: the width this test is about is the
+    // panel's, and a narrower one wraps the stepper onto another row, which pushes the
+    // panel down until a sticky composer has nowhere left to stick.
+    await page.setViewportSize({ width: 1236, height: 420 });
     await openMockupPanel(page);
     await expect(page.locator('.composer')).toHaveCSS('position', 'sticky');
     await page.evaluate(() => window.scrollTo(0, 0));

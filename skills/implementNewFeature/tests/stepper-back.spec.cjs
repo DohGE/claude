@@ -84,3 +84,28 @@ test('panele postępu i podsumowanie nie mają przycisku powrotu', async ({ page
   await page.waitForSelector('.summary');
   await expect(page.locator('#backToStep1')).toHaveCount(0);
 });
+
+test('niewysłana odpowiedź na pytanie przeżywa powrót na formularz', async ({ page }) => {
+  await state({ step: 2, status: 'in_progress', activeStep: 2,
+    question: { id: 'q1', text: 'Ile ról?' } });
+  await page.goto(base);
+  await page.waitForSelector('#freeAnswer');
+  await page.fill('#freeAnswer', 'Trzy, plus audytor');
+  await page.click('#backToStep1');
+  await expect(page.locator('#branch')).toBeVisible();
+  // Powrót przerysowuje bramę od zera — pytanie jest to samo, więc i odpowiedź zostaje.
+  await page.click('.step[data-step="2"]');
+  await expect(page.locator('#freeAnswer')).toHaveValue('Trzy, plus audytor');
+});
+
+test('niewysłany feedback do planu przeżywa powrót na formularz', async ({ page }) => {
+  await state({ step: 2, status: 'in_progress', activeStep: 2,
+    reviewSummary: { text: 'Plan na trzy zadania' } });
+  await page.goto(base);
+  await page.waitForSelector('#feedback');
+  await page.fill('#feedback', 'Rozbij zadanie 2');
+  await page.click('#backToStep1');
+  await expect(page.locator('#branch')).toBeVisible();
+  await page.click('.step[data-step="2"]');
+  await expect(page.locator('#feedback')).toHaveValue('Rozbij zadanie 2');
+});

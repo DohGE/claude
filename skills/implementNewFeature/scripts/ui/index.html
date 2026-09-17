@@ -13,10 +13,31 @@
   }
   * { box-sizing:border-box; }
   body {
-    margin:0; font-family:'Inter','Segoe UI',system-ui,sans-serif; line-height:1.5;
+    margin:0; padding-left:236px; font-family:'Inter','Segoe UI',system-ui,sans-serif;
+    line-height:1.5; transition:padding-left .15s;
     background:radial-gradient(1100px 550px at 70% -10%, #121728 0%, var(--bg) 55%) fixed;
     color:var(--text);
   }
+  /* A rail on the left for what is not about the step on screen. It is fixed and the
+     body is padded out of its way, so the pipeline column keeps the page to itself —
+     panels inside it position against the viewport (the step-3 composer sticks to the
+     bottom of it) and a wrapper around them would move the goalposts. */
+  .sidebar { position:fixed; left:0; top:0; bottom:0; z-index:10; width:236px;
+          overflow-y:auto; padding:28px 18px; border-right:1px solid var(--border);
+          background:rgba(18,25,39,.55); transition:width .15s, padding .15s; }
+  .sidebar h2 { margin:0 0 12px; font-size:12px; font-weight:700; text-transform:uppercase;
+          letter-spacing:.9px; color:var(--muted); }
+  .sidebar-body button { display:block; width:100%; margin:0 0 10px; text-align:left; }
+  .sidebar .hint { margin:14px 0 0; }
+  .rail-toggle { display:flex; align-items:center; justify-content:center; width:40px;
+          height:40px; margin:0 0 18px; padding:0; background:var(--card-2);
+          border:1px solid var(--border); color:var(--muted); }
+  .rail-toggle:hover:not(:disabled) { color:var(--text); border-color:var(--border-hi);
+          transform:none; filter:none; }
+  /* Collapsed it is just the toggle — the width is the panel's, not the rail's. */
+  html[data-rail=collapsed] .sidebar { width:58px; padding-left:9px; padding-right:9px; }
+  html[data-rail=collapsed] .sidebar-body { display:none; }
+  html[data-rail=collapsed] body { padding-left:58px; }
   .wrap { max-width:980px; margin:0 auto; padding:32px 20px 72px; }
   h1 { font-size:22px; margin:0 0 28px; letter-spacing:.2px; width:fit-content;
        background:linear-gradient(90deg,var(--accent),var(--accent-2));
@@ -224,6 +245,18 @@
 </style>
 </head>
 <body>
+<aside class="sidebar" id="sidebar">
+  <button type="button" id="sidebarToggle" class="rail-toggle" aria-expanded="true"
+    aria-controls="sidebarBody" aria-label="Hide sidebar" title="Hide sidebar"></button>
+  <div class="sidebar-body" id="sidebarBody">
+    <h2>Tasks</h2>
+    <button id="createEmptyTask" class="secondary">New empty task</button>
+    <button id="createTask" class="secondary">Copy of current task</button>
+    <p class="hint">A copy takes step 1 of the task you are on — its text, files and
+      credentials — with an empty branch, because two tasks cannot share one. Either way
+      the new task opens in its own tab and this one keeps running.</p>
+  </div>
+</aside>
 <div class="wrap">
   <h1>implementNewFeature</h1>
   <div class="tabs-bar" id="tabs" hidden></div>
@@ -263,6 +296,12 @@ const COPY_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"'
 const CHECK_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"'
   + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
   + '<path d="M20 6L9 17l-5-5"/></svg>';
+const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none"'
+  + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M15 18l-6-6 6-6"/></svg>';
+const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none"'
+  + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M9 18l6-6-6-6"/></svg>';
 let lastSig = null;
 let serverDown = false; // set when the user shuts the server down from the summary
 // Which tab is open is page state, never server state: parallel pipelines write
@@ -276,18 +315,44 @@ let lastState = null;
 let refreshGate = null;
 let takenBranches = '';
 
+// The step-1 file inputs, in the order the form shows them.
+const STEP1_FILES = ['hints', 'mockups', 'contracts'];
+// Everything else the step-1 form holds, as one list: the draft below and the copy
+// that seeds a new task both carry exactly these, so neither can quietly drift from
+// the form. Credentials are among them — which is why the copy is a page-side affair.
+const STEP1_INPUTS = {
+  taskDescription: '#task', businessRequirements: '#biz', branch: '#branch',
+  contractsText: '#contractsText', hintsNote: '#hintsNote', generateMockups: '#genMockups',
+  authLogin: '#authLogin', authPassword: '#authPassword'
+};
+
 // Whatever is typed into a step-1 form but not submitted yet. Switching tabs or
 // creating a task re-renders the panel, and without this the text would be gone.
+// Credentials belong here too: they reach the server only on submit, so until then
+// a redraw is the one thing that can lose them.
 function snapshotStep1() {
   if (!activeTask || !$('#branch')) return;
-  viewOf(activeTask).draft = {
-    taskDescription: $('#task').value,
-    businessRequirements: $('#biz').value,
-    branch: $('#branch').value,
-    contractsText: $('#contractsText').value,
-    hintsNote: $('#hintsNote').value,
-    generateMockups: $('#genMockups').checked
-  };
+  const v = viewOf(activeTask);
+  v.draft = {};
+  for (const [key, sel] of Object.entries(STEP1_INPUTS)) {
+    const el = $(sel);
+    v.draft[key] = el.type === 'checkbox' ? el.checked : el.value;
+  }
+  // Files are picked long before they are uploaded — that happens on submit — and a
+  // FileList cannot be rebuilt from markup, so the File objects themselves are kept.
+  v.picked = {};
+  for (const cat of STEP1_FILES) v.picked[cat] = [...$(`#${cat}`).files];
+}
+
+// What step 1 of a task says right now, whatever step the task is actually on: its
+// last submission, with anything typed into the form but not sent yet on top. The
+// server-owned keys (file lists, authProvided) are left out — they belong to the
+// state document, and the copy takes those from the server instead.
+function step1Of(task) {
+  const d = { ...(task.step1 || {}), ...(viewOf(task.id).draft || {}) };
+  const out = {};
+  for (const key of Object.keys(STEP1_INPUTS)) out[key] = d[key];
+  return out;
 }
 // Per-task view state, so switching tabs never leaks one task's preview selection
 // or summary toggle into another's. Step 7 runs on demand once the summary exists,
@@ -301,9 +366,11 @@ const viewOf = id => (view[id] || (view[id] = {
   // A file added or removed since the last submission. The form's own lists are
   // rewritten by the server on a removal, so only this remembers it happened.
   filesDirty: false,
-  // What is typed into the mockup composer, and what was already sent from the
-  // panel now on screen — a Send no longer locks, so both must survive a redraw.
-  mockupDraft: '', sent: [], sentSig: null,
+  // What is typed into the mockup composer, and what is typed into or already sent
+  // from the panel now on screen — a Send no longer locks, so all of it must survive
+  // a redraw. sentSig is the panel the last two belong to; the composer's own draft
+  // outlives every mockup round, so it is not tied to one.
+  mockupDraft: '', answerDraft: '', sent: [], sentSig: null,
   // An irreversible decision still locks the panel until the orchestrator moves the
   // state. The lock is remembered per task, because switching tabs re-renders the
   // panel and would otherwise hand back a live button — and a second click would
@@ -828,12 +895,24 @@ function renderStep1(task) {
         aria-label="Show password" title="Show password">${EYE}</button>
     </div>
     ${frozen ? '<p class="hint">Implementation has started — the requirements are frozen for'
-      + ' this task. Create a new task to take the feature in another direction.</p>'
+      + ' this task. Copy it from the sidebar to take the feature in another direction.</p>'
       : `<button id="next" disabled>${
         revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>
     <p class="hint" id="changeHint" hidden>Nothing changed yet — edit a field, add or remove a
-      file, or fill in credentials to re-run refinement.</p>`}
-    <button id="createTask" class="secondary">Create new task</button>`;
+      file, or fill in credentials to re-run refinement.</p>`}`;
+  // What the markup above cannot carry: credentials are deliberately absent from the
+  // state document, and a FileList cannot be written as an attribute. Both are what a
+  // redraw used to drop, so both are put back by hand.
+  $('#authLogin').value = d.authLogin || '';
+  $('#authPassword').value = d.authPassword || '';
+  for (const cat of STEP1_FILES) {
+    const files = (v.picked || {})[cat] || [];
+    if (!files.length) continue;
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(f);
+    $(`#${cat}`).files = dt.files;
+  }
+  $('#hintsNoteBox').hidden = !($('#hints').files.length || (d.hints || []).length);
   $('#togglePassword').addEventListener('click', () => {
     const input = $('#authPassword');
     const btn = $('#togglePassword');
@@ -862,23 +941,6 @@ function renderStep1(task) {
       lastSig = null;
       tick();
     }));
-  // Non-destructive and reversible with the tab's ×, so no confirmation — and it
-  // stays available on a frozen form, which is the way to change direction.
-  $('#createTask').addEventListener('click', async () => {
-    $('#createTask').disabled = true;
-    snapshotStep1();
-    const { id } = await postJson('/api/tasks', { copyFrom: activeTask, values: {
-      taskDescription: $('#task').value, businessRequirements: $('#biz').value,
-      contractsText: $('#contractsText').value, hintsNote: $('#hintsNote').value,
-      generateMockups: $('#genMockups').checked } });
-    if (id) {
-      // A brand-new task sits at waiting; put it straight into its form.
-      await postJson('/api/state', { taskId: id, step: 1, status: 'in_progress', activeStep: 1 });
-      activeTask = id;
-    }
-    lastSig = null;
-    tick();
-  });
   if (frozen) {
     document.querySelectorAll('#panel textarea, #panel input, #panel .rm')
       .forEach(el => { el.disabled = true; });
@@ -923,18 +985,19 @@ function renderStep1(task) {
     $('#next').disabled = !(valid && dirty);
     $('#changeHint').hidden = !(valid && !dirty);
   };
+  // The draft is kept in step with every edit rather than only at the redraws we know
+  // about: a removed file, a failing step, a question arriving — any of them replaces
+  // the panel, and only what was put away survives it.
+  const onEdit = () => { snapshotStep1(); gate(); };
   ['#task', '#biz', '#branch', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
-    .forEach(sel => $(sel).addEventListener('input', gate));
+    .forEach(sel => $(sel).addEventListener('input', onEdit));
   ['#genMockups', '#mockups', '#contracts', '#hints']
-    .forEach(sel => $(sel).addEventListener('change', gate));
+    .forEach(sel => $(sel).addEventListener('change', onEdit));
   gate();   // a form that arrived filled in must enable Next without a keystroke
   refreshGate = gate;
-  // Keep the draft current as the branch is typed, so the open tab's label can
-  // follow it without the bar re-rendering.
-  $('#branch').addEventListener('input', () => {
-    snapshotStep1();
-    syncTabLabel();
-  });
+  // The tab's label is the branch being typed, and onEdit above has already put it in
+  // the draft the label reads — so it can follow along without the bar re-rendering.
+  $('#branch').addEventListener('input', syncTabLabel);
   $('#next').addEventListener('click', async () => {
     const ok = await askConfirm({
       title: revisit ? 'Resubmit the requirements?' : 'Submit requirements?',
@@ -979,7 +1042,10 @@ function renderStep1(task) {
       mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
       authProvided: a.complete || task.authSaved,
       generateMockups: $('#genMockups').checked });
+    // The form is the server's now, credentials included — nothing of it stays on
+    // the page, or the next redraw would hand back files that were already uploaded.
     v.draft = null;
+    v.picked = null;
     v.filesDirty = false;
     // Submitting means "go", so the view rejoins the pipeline wherever it now is.
     v.viewStep = null;
@@ -1001,28 +1067,48 @@ const msgHtml = (role, text) =>
   `<div class="msg ${role === 'user' ? 'user' : 'agent'}">
     <span class="who">${role === 'user' ? 'You' : 'Agent'}</span>${esc(text)}</div>`;
 
+// What belongs to the panel on screen rather than to the task: the messages already
+// sent from it and the one still half-typed in it. A tab switch, a walk back to the
+// requirements and a poll all redraw the same panel — same signature — and both have
+// to come back. A new question or a revised plan is a different panel, and both start
+// empty, because neither would still be an answer to what is being asked.
+function panelView() {
+  const v = viewOf(activeTask);
+  if (v.sentSig !== lastSig) {
+    v.sent = [];
+    v.answerDraft = '';
+    v.sentSig = lastSig;
+  }
+  return v;
+}
+
 // A text message no longer locks the panel, so this trail is what tells the user
 // it went out. It belongs to the panel on screen and is dropped with it — the
 // mockup step has the server's own chat instead and never uses this.
 function renderSentTrail() {
   const box = $('#sentTrail');
   if (!box) return;
-  const v = viewOf(activeTask);
-  if (v.sentSig !== lastSig) {
-    v.sent = [];
-    v.sentSig = lastSig;
-  }
-  box.innerHTML = v.sent.map(t => msgHtml('user', t)).join('');
+  box.innerHTML = panelView().sent.map(t => msgHtml('user', t)).join('');
 }
 
 function pushSent(text) {
-  const v = viewOf(activeTask);
-  if (v.sentSig !== lastSig) {
-    v.sent = [];
-    v.sentSig = lastSig;
-  }
-  v.sent.push(text);
+  panelView().sent.push(text);
   renderSentTrail();
+}
+
+// The composer of a gate that takes free text: what is typed stays with the panel
+// until it is sent, so a redraw hands it straight back.
+function wireComposer(sel) {
+  const v = panelView();
+  const el = $(sel);
+  el.value = v.answerDraft || '';
+  el.addEventListener('input', () => { v.answerDraft = el.value; });
+  // Called once the text is on its way out: the box and the draft empty together.
+  return () => {
+    el.value = '';
+    v.answerDraft = '';
+    autoGrow(el);
+  };
 }
 
 function renderQuestion(q, step) {
@@ -1049,16 +1135,14 @@ function renderQuestion(q, step) {
     <textarea id="freeAnswer"></textarea>
     <button id="send">Send answer</button>
     ${step.id === 2 ? backButton() : ''}`;
+  const clearAnswer = wireComposer('#freeAnswer');
   document.querySelectorAll('[data-opt]').forEach(btn =>
     btn.addEventListener('click', () =>
       submit(q.options[+btn.dataset.opt], () => btn.classList.add('selected'))));
   $('#send').addEventListener('click', () => {
     const value = $('#freeAnswer').value.trim();
     if (!value) return;
-    submit(value, () => {
-      $('#freeAnswer').value = '';
-      autoGrow($('#freeAnswer'));
-    });
+    submit(value, clearAnswer);
   });
   renderSentTrail();
   wireBackButton();
@@ -1074,6 +1158,7 @@ function renderReview(review) {
     <textarea id="feedback"></textarea>
     <button id="sendFeedback" class="secondary">Send feedback</button>
     ${backButton()}`;
+  const clearFeedback = wireComposer('#feedback');
   $('#approve').addEventListener('click', async () => {
     const ok = await askConfirm({
       title: 'Approve the plan?',
@@ -1086,8 +1171,7 @@ function renderReview(review) {
   $('#sendFeedback').addEventListener('click', () => {
     const t = $('#feedback').value.trim();
     if (!t) return;
-    $('#feedback').value = '';
-    autoGrow($('#feedback'));
+    clearFeedback();
     pushSent(t);
     sendAnswer({ kind: 'decision', decision: 'feedback', text: t });
   });
@@ -1387,6 +1471,66 @@ function renderSummary(task) {
       '<p class="muted">Server stopped — you can close this tab.</p>';
   });
 }
+
+// Both ways to start another task. They sit in the rail rather than in the step-1
+// panel, so they work from whatever step the open task is on — and that is also why
+// the copy reads step 1 from the task itself instead of from the DOM: the panel on
+// screen is usually showing something else entirely.
+async function newTask(copy, btn) {
+  const task = currentTask();
+  if (!task) return;
+  btn.disabled = true;
+  // A no-op unless the step-1 form is the panel on screen; when it is, this is what
+  // puts the half-typed version of it into the draft step1Of then reads.
+  snapshotStep1();
+  const v = viewOf(task.id);
+  const from = step1Of(task);
+  // Credentials are deliberately not among the values: they never travel through the
+  // state document. The server copies the source task's auth.json instead, and what
+  // was typed but not submitted rides across in the draft below.
+  const { id } = await postJson('/api/tasks', copy ? { copyFrom: task.id, values: {
+    taskDescription: from.taskDescription, businessRequirements: from.businessRequirements,
+    contractsText: from.contractsText, hintsNote: from.hintsNote,
+    generateMockups: from.generateMockups } } : {});
+  if (id) {
+    // The server copies what it holds — the form and the uploaded files. What only the
+    // page holds, typed credentials and files picked but not uploaded yet, is carried
+    // here. The branch is not: two tasks cannot share one, so the copy starts without it.
+    if (copy) {
+      viewOf(id).draft = { ...from, branch: '' };
+      viewOf(id).picked = { ...v.picked };
+    }
+    // A brand-new task sits at waiting; put it straight into its form.
+    await postJson('/api/state', { taskId: id, step: 1, status: 'in_progress', activeStep: 1 });
+    activeTask = id;
+  }
+  btn.disabled = false;
+  lastSig = null;
+  tick();
+}
+// Non-destructive and reversible with the tab's ×, so neither asks to confirm — and
+// both stay live on a frozen task, which is the way to change direction.
+$('#createTask').addEventListener('click', e => newTask(true, e.currentTarget));
+$('#createEmptyTask').addEventListener('click', e => newTask(false, e.currentTarget));
+
+// The rail is chrome, not pipeline state. Its width is remembered for this page only:
+// the server picks a fresh port every run, so the store dies with the session anyway.
+const SIDEBAR_KEY = 'inf.sidebar.collapsed';
+function setSidebar(collapsed) {
+  const btn = $('#sidebarToggle');
+  document.documentElement.dataset.rail = collapsed ? 'collapsed' : 'open';
+  btn.innerHTML = collapsed ? CHEVRON_RIGHT : CHEVRON_LEFT;
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  const label = collapsed ? 'Show sidebar' : 'Hide sidebar';
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('title', label);
+  try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (_e) { /* blocked */ }
+}
+$('#sidebarToggle').addEventListener('click', () =>
+  setSidebar(document.documentElement.dataset.rail !== 'collapsed'));
+let sidebarCollapsed = false;
+try { sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === '1'; } catch (_e) { /* blocked */ }
+setSidebar(sidebarCollapsed);
 
 setInterval(tick, 1000);
 tick();

@@ -299,7 +299,12 @@ function findOpenPr(project, branch, send = request, findToken = tokenWithSource
 }
 
 function prOf(pr) {
-  return { number: pr.number, url: pr.html_url, base: (pr.base && pr.base.ref) || null };
+  return {
+    number: pr.number,
+    url: pr.html_url,
+    base: (pr.base && pr.base.ref) || null,
+    title: typeof pr.title === 'string' ? pr.title : '',
+  };
 }
 
 // The pull request's own diff, in the format GitHub itself renders it from -

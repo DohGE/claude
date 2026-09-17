@@ -158,8 +158,10 @@ retry, and released when the task leaves step 5 — then start the next task in 
 
 ## Step 1 — Requirements (interactive, per task, repeatable)
 
-The user may click "Create new task" on the form: the server creates it, copies the form and the
-uploaded files, and the browser switches to it and puts it into its own step 1. There is NO barrier —
+The sidebar offers two ways to spin off a task: "Copy of current task" (the server creates it and
+copies the open task step 1 form and its uploaded files) and "New empty task" (a blank form). Both
+work from whatever step that task is on. Either way the browser switches to the new task and puts
+it into its own step 1. There is NO barrier —
 each task starts its own pipeline the moment ITS form is submitted, so the user can launch task 1
 while still writing task 2.
 
