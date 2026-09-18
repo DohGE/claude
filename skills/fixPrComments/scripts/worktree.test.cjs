@@ -214,3 +214,57 @@ test('remove says so plainly when there is nothing to remove', (t) => {
   assert.strictEqual(result.removed, false);
   assert.match(result.warnings[0], /nothing to remove/);
 });
+
+test('a remove with nothing to aim at is refused, not answered with a computed path', () => {
+  assert.throws(() => wt.parseArgs(['--action=remove']), /No branch or worktree given/);
+  assert.deepStrictEqual(
+    wt.parseArgs(['--action=remove', '--worktree=/tmp/w']).worktree, '/tmp/w',
+  );
+  assert.strictEqual(wt.parseArgs(['--action=remove', '--branch=feat']).branch, 'feat');
+});
+
+test('a fast-forward that fails takes its own worktree back down, so the branch can be retried', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feat']);
+  commitFile(dir, 'a.txt', 'a\n', 'remote has this');
+  const head = run(dir, ['rev-parse', 'HEAD']);
+  run(dir, ['reset', '-q', '--hard', 'main']);
+  fakeRemoteBranch(dir, 'feat', head);
+  run(dir, ['checkout', '-q', 'main']);
+
+  const result = wt.add({
+    project: dir,
+    branch: 'feat',
+    bootstrap: false,
+    git: (at, args) => (args[0] === 'merge' ? null : wt.tryGit(at, args)),
+  });
+
+  assert.match(result.errors[0], /could not be fast-forwarded/);
+  assert.strictEqual(result.created, false);
+  assert.strictEqual(fs.existsSync(result.worktree), false, 'the half-made worktree must not survive');
+  // And the proof that it is a retry, not a dead end: the very next run works.
+  const second = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.deepStrictEqual(second.errors, []);
+  assert.strictEqual(run(second.worktree, ['rev-parse', 'HEAD']), head);
+});
+
+test('a worktree that cannot be taken down after a failed fast-forward is named, not hidden', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feat']);
+  commitFile(dir, 'a.txt', 'a\n', 'remote has this');
+  const head = run(dir, ['rev-parse', 'HEAD']);
+  run(dir, ['reset', '-q', '--hard', 'main']);
+  fakeRemoteBranch(dir, 'feat', head);
+  run(dir, ['checkout', '-q', 'main']);
+
+  const result = wt.add({
+    project: dir,
+    branch: 'feat',
+    bootstrap: false,
+    git: (at, args) => ((args[0] === 'merge' || args[1] === 'remove') ? null : wt.tryGit(at, args)),
+  });
+
+  assert.match(result.errors[0], /could not be fast-forwarded/);
+  assert.ok(result.warnings.some((w) => /could not be removed/.test(w)));
+  assert.strictEqual(result.created, true, 'the checkout is still on disk, and the result says so');
+});

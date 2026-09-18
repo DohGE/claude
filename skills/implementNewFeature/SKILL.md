@@ -116,6 +116,36 @@ retry, and released when the task leaves step 5 — then start the next task in 
 4. A run starts with one task, `t1`. POST `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}`
    and enter the event loop.
 
+## Spawning a sub-agent
+
+Every spawn below is the same two moves: render the agent's brief to a file, then spawn an agent
+that reads it. You never build the prompt yourself.
+
+1. **Render** (Bash tool), with every placeholder from the table below:
+
+       node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/<name>-agent.md" --out="<SESSION>/prompts/<name>.md" --set=ROOT=<…> --set=PROJECT=<…> --set=SESSION=<…> --set=TASK_ID=<…> --set=PORT=9999 --set=SKILL_DIR=<…> --set=LANGUAGE=<…> --set=EFFORT=<…>
+
+   `<SESSION>` here is the task's own `{{SESSION}}` — the brief lands beside the artifacts of the
+   task it belongs to, and the next round of the same agent replaces it. `EFFORT` is often empty:
+   pass `--set=EFFORT=` and the paragraph disappears. `errors[]` non-empty → do NOT spawn: the
+   message names the placeholder nobody filled, and the fix is the missing `--set`.
+
+2. **Spawn** with the Agent tool, `model` from `agents(T)` (omit it when empty), prompt:
+
+       Your complete instructions are in the file <out>. Read it in full with the Read tool
+       before doing anything else, then follow it exactly. It is already resolved: every path,
+       port and id it names is final. You are the <step name> agent of task <TASK_ID>, and you
+       end with the single JSON object it specifies.
+
+   Whatever THIS spawn has to add — the failure report of a previous attempt, the notes kept in
+   `notes(T,N)`, a revision paragraph — goes in that prompt, under its own heading, after the
+   pointer. It never goes into the rendered file.
+
+**Never paste an agent file into a prompt yourself.** Reading it in and writing it back out costs
+that file twice per spawn, six times per pipeline and again on every retry — tens of thousands of
+tokens of the context this orchestrator exists to keep clean. The renderer also refuses a brief
+that still holds a placeholder; a hand-made one hands `{{ROOT}}` to the agent as if it were a path.
+
 ## Placeholders passed to every sub-agent
 
 | Placeholder | Value |
@@ -326,8 +356,8 @@ On such an answer, in this order:
        ask only what the change opens, do not re-explore the project, and keep the ## UI design
        section. Reply with the result JSON.
 
-   If SendMessage cannot reach it, spawn a fresh refinement agent with the same prompt plus that
-   paragraph. Then continue at step 2's gate as usual.
+   If SendMessage cannot reach it, spawn a fresh refinement agent — render the brief again and put
+   that paragraph in the spawn prompt. Then continue at step 2's gate as usual.
 4. A changed model or effort needs no message: it is read at the next spawn. It therefore reaches
    only steps that have not started, never the refinement agent this revision continues — say so
    in the terminal if the user asks why step 2 is still on the old one.
@@ -341,7 +371,7 @@ On such an answer, in this order:
 ## Step 2 — Feature Refinement (interactive, proxy Q&A)
 
 1. POST `{"taskId":"T","step":2,"status":"in_progress","activeStep":2,"progress":5,"currentOperation":"Refinement in progress"}`.
-2. Spawn the refinement agent: prompt = contents of `<SKILL_DIR>/references/refinement-agent.md` with the placeholders from the table above substituted.
+2. Spawn the refinement agent from `references/refinement-agent.md`, per "Spawning a sub-agent".
 3. Route this task's answers and its agent's final JSON:
    - `{"type":"question","id","text","options"?}` → POST `{"taskId":"T","question":{...}}`, wait for
      T's `kind=="answer"`, then **immediately** (before contacting the agent) POST
@@ -362,8 +392,7 @@ Runs ONLY when `MOCKUPS(T)`. Otherwise skip the whole step: it stays `enabled:fa
 stepper never shows it, and step 2's gate already moved `activeStep` straight to 4.
 
 1. POST `{"taskId":"T","step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
-2. Spawn the mockup agent: prompt = contents of `<SKILL_DIR>/references/mockup-agent.md` with the
-   usual placeholders substituted.
+2. Spawn the mockup agent from `references/mockup-agent.md`, per "Spawning a sub-agent".
 3. Keep only `mockupRounds(T)`, for the progress bar. The chat transcript and the `rev` the UI
    re-renders on are the SERVER's — never hold either in your context. Loop on the agent's final JSON:
    - `{"type":"mockup","summary","screens":[{"id","title","file"}]}` → `mockupRounds(T)++` and POST
@@ -410,8 +439,8 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
    pipeline keeps using the plugin's own installation in `SKILL_DIR`.
    POST `{"taskId":"T","root":"<ROOT>"}` so the summary can name it.
 2. POST `{"taskId":"T","step":4,"status":"in_progress","activeStep":4,"progress":0}`.
-3. Spawn the implementation agent from `references/implementation-agent.md` (same placeholder
-   substitution, `{{ROOT}}` included). It reports progress itself via POST /api/state and writes code
+3. Spawn the implementation agent from `references/implementation-agent.md`, per "Spawning a
+   sub-agent" (`ROOT` is the one step 4 just fixed). It reports progress itself via POST /api/state and writes code
    against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
 4. Final JSON `{"type":"result","filesChanged":[…],"summary","deviations":[…]}` → POST
    `{"taskId":"T","step":4,"status":"completed","progress":100,"report":"<the summary, then every
@@ -429,7 +458,7 @@ Take `E2E_LOCK` first; if it is held, queue this task as described in the event-
 back when the lock frees.
 
 1. POST `{"taskId":"T","step":5,"status":"in_progress","activeStep":5,"progress":0}`.
-2. Spawn the validation agent from `references/validation-agent.md`. It runs the task's own unit
+2. Spawn the validation agent from `references/validation-agent.md`, per "Spawning a sub-agent". It runs the task's own unit
    suite, then writes and runs the E2E suite on the plugin's own Playwright, and uses the user's
    Chrome (Claude in Chrome extension) for discovery, failure debugging and a UX pass — expect a
    tab to open there during this step. Endpoints the backend does not serve yet are faked in the
@@ -455,7 +484,7 @@ back when the lock frees.
 ## Step 6 — Code Review (view-only)
 
 1. POST `{"taskId":"T","step":6,"status":"in_progress","activeStep":6,"progress":0}`.
-2. Spawn the review agent from `references/review-agent.md` (it reviews exclusively via the `doh:codeReview` skill — no other review method, pointed at this task's `ROOT`, and it runs TWO rounds of `1 full review + up to 2 --since-last re-reviews` unless round 1 came back clean on its first cycle, fixing every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
+2. Spawn the review agent from `references/review-agent.md`, per "Spawning a sub-agent" (it reviews exclusively via the `doh:codeReview` skill — no other review method, pointed at this task's `ROOT`, and it runs TWO rounds of `1 full review + up to 2 --since-last re-reviews` unless round 1 came back clean on its first cycle, fixing every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
 3. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/tasks/T/auth.json` if it exists
    (step 6's regression run is its last consumer, so the credentials die with the step, not with the
    pipeline), then POST completed. `error` → failure protocol.
@@ -468,7 +497,7 @@ It can run any number of times ("Regenerate" is the same step over the same file
 
 1. POST `{"taskId":"T","step":7,"status":"in_progress","activeStep":7,"progress":0}` — this also
    pulls the browser off the summary and onto the step's panel.
-2. Spawn the mockoon agent from `references/mockoon-agent.md` (same placeholder substitution). It
+2. Spawn the mockoon agent from `references/mockoon-agent.md`, per "Spawning a sub-agent". It
    reads spec/plan, the contracts and the implemented code, and writes `<SESSION>/tasks/T/mockoon.json`
    (one environment on `localhost:3000`). The browser fetches that file itself from
    `/api/mockoon?taskId=T` — NEVER read it, never paste it into a message or into `/api/state`.
@@ -486,9 +515,9 @@ It can run any number of times ("Regenerate" is the same step over the same file
    stale question the moment a retry flips the status back to in_progress.
 2. Wait for T's `kind=="decision"`:
    - `retry` → POST `{"taskId":"T","step":N,"status":"in_progress","report":null}`; re-spawn that
-     step's agent **fresh** (new Agent call, same prompt + note about the previous failure report
-     path + every message kept in `notes(T,N)` under `## What the user added after the failure`,
-     which is then cleared). The re-spawn reads `agents(T)` again, so a model changed since the
+     step's agent **fresh**: render its brief again, then a new Agent call whose prompt carries the
+     pointer plus a note about the previous failure report path plus every message kept in
+     `notes(T,N)` under `## What the user added after the failure`, which is then cleared. The re-spawn reads `agents(T)` again, so a model changed since the
      failure takes effect here.
    - `finish` → write that task's final summary (below, including the `auth.json` cleanup) with
      `finalStatus:"Failed at <step name>"` — the NAME (`Implementation`, `Validation & E2E`), never

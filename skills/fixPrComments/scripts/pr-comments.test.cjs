@@ -243,3 +243,41 @@ test('pruneArtifacts caps the stamped dumps and leaves everything else alone', (
   assert.ok(left.includes('notes.json'));
   assert.ok(left.includes('b-2026-09-18-10-00.md'));
 });
+
+test('every target names where its agent brief goes, so the orchestrator computes no path', (t) => {
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-prompt-'));
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    now: new Date(2026, 8, 18, 14, 30),
+    api: fakeApi({ threads: [thread()] }),
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(X): Y', url: 'u', base: 'main' } }),
+  });
+
+  const [target] = result.targets;
+  assert.strictEqual(path.dirname(target.promptPath), path.dirname(target.commentsPath));
+  // Unstamped on purpose: one brief per branch, replaced by the next run.
+  assert.strictEqual(path.basename(target.promptPath), 'feat-a-fix-pr-agent-prompt.md');
+});
+
+test('a conversation longer than the collector pages through is a warning, not a silent short list', (t) => {
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-trunc-'));
+  const api = fakeApi({ threads: [thread()] });
+  api.issueComments = () => ({ comments: [], error: null, truncated: true });
+  api.reviewBodies = () => ({ reviews: [], error: null, truncated: true });
+
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    api,
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(X): Y', url: 'u', base: 'main' } }),
+  });
+
+  assert.strictEqual(result.targets.length, 1);
+  assert.ok(result.warnings.some((w) => /conversation of #7 is longer/.test(w)));
+  assert.ok(result.warnings.some((w) => /review list of #7 is longer/.test(w)));
+});

@@ -226,6 +226,11 @@ function createApp(sessionDir, opts = {}) {
   }
 
   const findTask = id => state.tasks.find(t => t.id === id);
+  // By id, never by position. Ids are the contract every agent prompt hardcodes;
+  // a state file resumed from a version that ordered the steps differently would
+  // send step 3's chat wherever index 2 happens to sit, and a shorter one would
+  // send it to `undefined`. Both are silent - the agent sees 200 either way.
+  const findStep = (task, id) => (task.steps || []).find(s => s.id === id);
   const taskDir = id => path.join(sessionDir, 'tasks', id);
 
   function copyCategory(fromId, toId, category) {
@@ -263,7 +268,7 @@ function createApp(sessionDir, opts = {}) {
     // silence. The step is what the transcript hangs on, so its absence is an error.
     if (body.chat && body.step === undefined) throw new Error('chat requires step');
     if (body.step !== undefined) {
-      const step = task.steps.find(s => s.id === body.step);
+      const step = findStep(task, body.step);
       if (!step) throw new Error(`unknown step ${body.step}`);
       if (body.status !== undefined) {
         if (!STATUSES.includes(body.status)) throw new Error(`bad status ${body.status}`);
@@ -313,7 +318,11 @@ function createApp(sessionDir, opts = {}) {
     }
     // The step-3 composer's own name for the same thing, kept so the mockup agent's
     // prompt needs no step number: it writes to step 3's chat like any other agent.
-    if (body.mockupChat) pushChat(task.steps[MOCKUP_STEP - 1], body.mockupChat);
+    if (body.mockupChat) {
+      const step = findStep(task, MOCKUP_STEP);
+      if (!step) throw new Error(`unknown step ${MOCKUP_STEP}`);
+      pushChat(step, body.mockupChat);
+    }
     if (body.summary !== undefined) task.summary = body.summary;
     persist();
   }
@@ -425,14 +434,16 @@ function createApp(sessionDir, opts = {}) {
           persist();
         }
         if (body.kind === 'mockup' && body.decision === 'feedback') {
-          pushChat(task.steps[MOCKUP_STEP - 1], { role: 'user', text: body.text });
+          const step = findStep(task, MOCKUP_STEP);
+          if (!step) return sendJson(res, 400, { error: `unknown step ${MOCKUP_STEP}` });
+          pushChat(step, { role: 'user', text: body.text });
           persist();
         }
         // A message typed on a step that has no gate of its own: it goes to that step's
         // agent through the orchestrator, and into the step's transcript right now, so
         // the user sees it land without waiting for the poll to come round.
         if (body.kind === 'message') {
-          const step = task.steps.find(st => st.id === Number(body.step));
+          const step = findStep(task, Number(body.step));
           if (!step) return sendJson(res, 400, { error: 'unknown step' });
           pushChat(step, { role: 'user', text: body.text });
           persist();

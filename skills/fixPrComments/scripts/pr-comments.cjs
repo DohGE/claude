@@ -138,10 +138,14 @@ function collectBranch(branch, ctx) {
   const conversation = api.issueComments(project, found.slug, pr.number);
   if (conversation.error) {
     result.warnings.push(`${branch}: could not read the conversation comments of #${pr.number}: ${conversation.error}`);
+  } else if (conversation.truncated) {
+    result.warnings.push(`${branch}: the conversation of #${pr.number} is longer than this run pages through; it covers only the comments it received.`);
   }
   const reviews = api.reviewBodies(project, found.slug, pr.number);
   if (reviews.error) {
     result.warnings.push(`${branch}: could not read the review summaries of #${pr.number}: ${reviews.error}`);
+  } else if (reviews.truncated) {
+    result.warnings.push(`${branch}: the review list of #${pr.number} is longer than this run pages through; it covers only the summaries it received.`);
   }
 
   const candidates = open.length + conversation.comments.length + reviews.reviews.length;
@@ -156,6 +160,11 @@ function collectBranch(branch, ctx) {
   pruneArtifacts(branchDir);
   const commentsPath = path.join(branchDir, `${dir}-fix-pr-comments-${stamp}.json`);
   const reportPath = path.join(branchDir, `${dir}-fix-pr-comments-${stamp}.md`);
+  // Where the branch's agent brief is rendered. Deliberately unstamped: one file
+  // per branch, overwritten by each run, so the orchestrator never computes a
+  // path of its own and the folder does not grow a prompt per run. Two runs
+  // cannot race for it - the worktree guard refuses a second run on one branch.
+  const promptPath = path.join(branchDir, `${dir}-fix-pr-agent-prompt.md`);
   const payload = {
     branch,
     pr: { number: pr.number, title: pr.title, url: pr.url, base: pr.base },
@@ -174,6 +183,7 @@ function collectBranch(branch, ctx) {
     commitMessage,
     commentsPath,
     reportPath,
+    promptPath,
     worktree: worktreePathFor(project, branch),
     counts: {
       openThreads: open.length,

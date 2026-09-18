@@ -150,9 +150,19 @@ function reviewThreads(project, slug, number, send = github.request) {
       const thread = normalizeThread(node);
       const info = (node.comments && node.comments.pageInfo) || {};
       if (info.hasNextPage) {
-        const more = restOfThread(project, node.id, info.endCursor, send);
-        thread.comments.push(...more.comments);
-        if (more.error) thread.commentsTruncated = more.error;
+        // Only for a thread somebody still has to act on. A resolved thread is
+        // finished work whose comments no caller reads - it travels for its
+        // count alone - so paging through the tail of one would be a GraphQL
+        // round trip per page spent on text that is thrown away. The truncation
+        // is recorded rather than hidden: the list IS short, and a caller that
+        // later starts reading resolved threads must see that, not discover it.
+        if (thread.isResolved) {
+          thread.commentsTruncated = 'the thread is resolved, so its comments past the first page were not fetched';
+        } else {
+          const more = restOfThread(project, node.id, info.endCursor, send);
+          thread.comments.push(...more.comments);
+          if (more.error) thread.commentsTruncated = more.error;
+        }
       }
       threads.push(thread);
     }
@@ -174,19 +184,24 @@ function resolveThread(project, threadId, send = github.request) {
 
 // One REST list, paged to exhaustion. `page` is 1-based and a short page is the
 // last one, which is the only end condition that does not need the Link header.
+const restPerPage = 100;
+
 function restList(project, pathFor, send, map) {
   const out = [];
   for (let page = 1; page <= maxPages; page++) {
     const res = send(project, { path: pathFor(page) });
-    if (!res || !res.ok) return { items: out, error: (res && res.error) || 'the request failed' };
+    if (!res || !res.ok) return { items: out, error: (res && res.error) || 'the request failed', truncated: true };
     const nodes = Array.isArray(res.json) ? res.json : [];
     for (const node of nodes) {
       const mapped = map(node);
       if (mapped) out.push(mapped);
     }
-    if (nodes.length < 100) return { items: out, error: null };
+    if (nodes.length < restPerPage) return { items: out, error: null, truncated: false };
   }
-  return { items: out, error: null };
+  // Running out of pages is the same kind of answer as a failed request: the
+  // list is short. Saying so here is what keeps a caller from reading the tail
+  // of a very long conversation as "there was nothing more".
+  return { items: out, error: null, truncated: true };
 }
 
 // The conversation tab: comments that belong to no code line and therefore to
@@ -197,9 +212,9 @@ function restList(project, pathFor, send, map) {
 // travel flagged rather than dropped: a bot that names a concrete defect is
 // still naming a concrete defect.
 function issueComments(project, slug, number, send = github.request) {
-  const { items, error } = restList(
+  const { items, error, truncated } = restList(
     project,
-    (page) => `/repos/${slug.owner}/${slug.repo}/issues/${number}/comments?per_page=100&page=${page}`,
+    (page) => `/repos/${slug.owner}/${slug.repo}/issues/${number}/comments?per_page=${restPerPage}&page=${page}`,
     send,
     (node) => (String(node.body || '').trim() ? {
       id: node.id,
@@ -210,7 +225,7 @@ function issueComments(project, slug, number, send = github.request) {
       url: node.html_url || null,
     } : null),
   );
-  return { comments: items, error };
+  return { comments: items, error, truncated };
 }
 
 // The summary a reviewer writes above their inline comments. Not a thread
@@ -219,9 +234,9 @@ function issueComments(project, slug, number, send = github.request) {
 // a draft its author has not submitted, and reading it would act on words the
 // reviewer has not said out loud yet.
 function reviewBodies(project, slug, number, send = github.request) {
-  const { items, error } = restList(
+  const { items, error, truncated } = restList(
     project,
-    (page) => `/repos/${slug.owner}/${slug.repo}/pulls/${number}/reviews?per_page=100&page=${page}`,
+    (page) => `/repos/${slug.owner}/${slug.repo}/pulls/${number}/reviews?per_page=${restPerPage}&page=${page}`,
     send,
     (node) => (String(node.body || '').trim() && node.state !== 'PENDING' ? {
       id: node.id,
@@ -233,7 +248,7 @@ function reviewBodies(project, slug, number, send = github.request) {
       url: node.html_url || null,
     } : null),
   );
-  return { reviews: items, error };
+  return { reviews: items, error, truncated };
 }
 
 module.exports = {

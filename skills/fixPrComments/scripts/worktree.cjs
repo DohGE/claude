@@ -44,6 +44,13 @@ function parseArgs(argv) {
     throw new Error(`Unknown --action=${args.action} (expected add|remove).`);
   }
   if (!args.branch && args.action === 'add') throw new Error('No branch given (expected --branch=<name>).');
+  // A remove with neither of them has nothing to aim at: the default formula
+  // would compute `fixpr-` from an empty branch name and then report that path
+  // as "nothing to remove", which reads as a successful cleanup of a worktree
+  // that is in fact still sitting on disk.
+  if (!args.branch && !args.worktree && args.action === 'remove') {
+    throw new Error('No branch or worktree given (expected --branch=<name> or --worktree=<path>).');
+  }
   return args;
 }
 
@@ -194,16 +201,21 @@ function copyEnvFiles(project, root, dir = '') {
 
 function add(options) {
   const project = path.resolve(options.project || process.cwd());
+  // The git seam. It exists for the one failure this function has to clean up
+  // after - a fast-forward that does not take - which no arrangement of a real
+  // repository produces: a branch that is strictly behind always fast-forwards.
+  // Everything outside `add` runs the real command.
+  const run = options.git || tryGit;
   const branch = options.branch;
   const result = { action: 'add', branch, project, worktree: null, created: false, warnings: [], errors: [] };
 
-  if (tryGit(project, ['rev-parse', '--git-dir']) === null) {
+  if (run(project, ['rev-parse', '--git-dir']) === null) {
     result.errors.push(`Not a git repository: ${project}`);
     return result;
   }
   // The pull request's branch as GitHub has it is the only correct starting
   // point, and a repository that has not fetched in a week does not have it.
-  if (tryGit(project, ['fetch', 'origin', branch, '--quiet']) === null) {
+  if (run(project, ['fetch', 'origin', branch, '--quiet']) === null) {
     result.warnings.push(`Could not fetch origin/${branch}; working from the refs already in the repository.`);
   }
 
@@ -249,15 +261,30 @@ function add(options) {
   const addArgs = state === 'remote-only'
     ? ['worktree', 'add', worktree, '-b', branch, `origin/${branch}`]
     : ['worktree', 'add', worktree, branch];
-  if (tryGit(project, addArgs) === null) {
+  if (run(project, addArgs) === null) {
     result.errors.push(`git worktree add failed for ${branch} at ${worktree}.`);
     return result;
   }
   result.created = true;
 
   if (state === 'behind') {
-    if (tryGit(worktree, ['merge', '--ff-only', `origin/${branch}`]) === null) {
+    if (run(worktree, ['merge', '--ff-only', `origin/${branch}`]) === null) {
       result.errors.push(`${branch} is ${behind} commit(s) behind origin and could not be fast-forwarded.`);
+      // Take the checkout back down. Nothing has been written into it yet - the
+      // env files and the dependency install both come later - so git removes it
+      // without a --force. Leaving it would turn one failed run into a branch
+      // that can never be started again: the next run finds the directory and
+      // refuses with "already exists", for a state the user never created.
+      if (run(project, ['worktree', 'remove', worktree]) === null) {
+        result.warnings.push(`The worktree at ${worktree} could not be removed after that failure; remove it with git worktree remove before the next run.`);
+      } else {
+        result.created = false;
+        try {
+          fs.rmdirSync(path.dirname(worktree));
+        } catch {
+          // another branch still has a worktree here
+        }
+      }
       return result;
     }
     result.warnings.push(`Fast-forwarded ${branch} onto origin/${branch} (${behind} commit(s)).`);

@@ -146,11 +146,12 @@ write access, and a token without it produces a warning and leaves those threads
 | `scripts/pr-comments.cjs` | argument parsing, the commit message, and the per-branch comment JSON |
 | `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap, removal |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed |
+| `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled, so the orchestrator hands the agent a path instead of carrying the brief twice |
 
 `pr-api.cjs` and `pr-comments.cjs` require `../../codeReview/scripts/github.cjs` and
 `../../codeReview/scripts/review-context.cjs` — the token discovery, the pull request lookup, the HTTP
 primitive and the artifact-path conventions already live there, and the two skills ship in one plugin.
 
-Tests: `node --test skills/fixPrComments/scripts/pr-api.test.cjs skills/fixPrComments/scripts/pr-comments.test.cjs skills/fixPrComments/scripts/worktree.test.cjs skills/fixPrComments/scripts/resolve-threads.test.cjs`
+Tests: `node --test skills/fixPrComments/scripts/pr-api.test.cjs skills/fixPrComments/scripts/pr-comments.test.cjs skills/fixPrComments/scripts/worktree.test.cjs skills/fixPrComments/scripts/resolve-threads.test.cjs scripts/render-agent-prompt.test.cjs`
 No test reaches the network: the GitHub layer is driven through an injected sender, and the git tests
 run against real temporary repositories with their remote refs written by `git update-ref`.

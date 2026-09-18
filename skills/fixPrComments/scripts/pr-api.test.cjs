@@ -181,3 +181,58 @@ test('issueComments surfaces a refusal instead of reporting an empty list', () =
   assert.deepStrictEqual(comments, []);
   assert.match(error, /rate limited/);
 });
+
+test('a resolved thread costs no extra round trip for comments nobody will read', () => {
+  const resolved = threadNode({
+    id: 'T-done',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: true, endCursor: 'C1' },
+      nodes: [{ databaseId: 1, body: 'long argument', author: { login: 'ann' } }],
+    },
+  });
+  // One response only: a second request would throw "unexpected request".
+  const send = sender(threadsPage([resolved]));
+  const [thread] = api.reviewThreads('/p', slug, 7, send).threads;
+  assert.strictEqual(send.calls.length, 1);
+  assert.strictEqual(thread.comments.length, 1);
+  // The list IS short, and the thread says so rather than passing for complete.
+  assert.match(thread.commentsTruncated, /resolved/);
+});
+
+test('an unresolved thread still gets its tail, resolved neighbours notwithstanding', () => {
+  const open = threadNode({
+    id: 'T-open',
+    comments: {
+      pageInfo: { hasNextPage: true, endCursor: 'C1' },
+      nodes: [{ databaseId: 1, body: 'first', author: { login: 'ann' } }],
+    },
+  });
+  const done = threadNode({ id: 'T-done', isResolved: true });
+  const send = sender(
+    threadsPage([done, open]),
+    ok({ data: { node: { comments: { pageInfo: { hasNextPage: false }, nodes: [{ databaseId: 2, body: 'the ask', author: { login: 'ann' } }] } } } }),
+  );
+  const { threads } = api.reviewThreads('/p', slug, 7, send);
+  assert.strictEqual(send.calls.length, 2);
+  assert.deepStrictEqual(threads[1].comments.map((c) => c.body), ['first', 'the ask']);
+});
+
+test('a REST list that runs out of pages says the answer is short', () => {
+  const fullPage = () => ok(Array.from({ length: 100 }, (_, i) => ({
+    id: i, body: `c${i}`, user: { login: 'ann', type: 'User' },
+  })));
+  // 40 full pages: the cap, and never a short one to end on.
+  const send = sender(...Array.from({ length: 40 }, fullPage));
+  const { comments, error, truncated } = api.issueComments('/p', slug, 7, send);
+  assert.strictEqual(error, null);
+  assert.strictEqual(truncated, true);
+  assert.strictEqual(comments.length, 4000);
+});
+
+test('a REST list that ends on a short page is complete, and says so', () => {
+  const send = sender(ok([{ id: 1, body: 'only', user: { login: 'ann', type: 'User' } }]));
+  const { truncated, error } = api.reviewBodies('/p', slug, 7, send);
+  assert.strictEqual(error, null);
+  assert.strictEqual(truncated, false);
+});

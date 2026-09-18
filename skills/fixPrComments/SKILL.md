@@ -58,9 +58,9 @@ Parse the JSON from stdout:
 - `targets` empty → stop here, after reporting. There is nothing to fix.
 
 Each target carries: `branch`, `pr` (`number`, `title`, `url`, `base`), `commitMessage`,
-`commentsPath`, `reportPath`, `worktree`, and `counts` (`openThreads`, `resolvedThreads`,
-`outdatedThreads`, `conversation`, `reviews`, `candidates`). Keep exactly those; the comment bodies
-stay in the file.
+`commentsPath`, `reportPath`, `promptPath`, `worktree`, and `counts` (`openThreads`,
+`resolvedThreads`, `outdatedThreads`, `conversation`, `reviews`, `candidates`). Keep exactly those;
+the comment bodies stay in the file.
 
 Tell the user, in Polish, what was found per branch — the pull request number and title, how many
 threads are open, how many were already resolved and skipped, how many conversation comments and
@@ -89,21 +89,45 @@ the verification gate will be skipped), and the `.env*` files copied in.
 
 ## Step 4 — One background agent per branch
 
-For every branch that got a worktree, spawn a sub-agent with the Agent tool
-(`subagent_type: "general-purpose"`), in the BACKGROUND, all of them before you wait for any of them.
+For every branch that got a worktree: FIRST render its brief, THEN spawn the agent on it. Spawn all
+of them, in the BACKGROUND, before you wait for any of them.
 
-The prompt is the contents of `<SKILL_DIR>/references/fix-agent.md` with every placeholder
-substituted:
+### 4a — Render the brief
 
-| Placeholder | Value |
+    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=COMMIT_MESSAGE=<commitMessage> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=LANGUAGE=<language>
+
+| Value | Where it comes from |
 |---|---|
-| `{{ROOT}}` | the target's `worktree` |
-| `{{BRANCH}}`, `{{PR_NUMBER}}`, `{{PR_URL}}` | from the target |
-| `{{COMMENTS}}`, `{{REPORT}}` | the target's `commentsPath` and `reportPath` |
-| `{{COMMIT_MESSAGE}}` | the target's `commitMessage`, verbatim — never re-derive it yourself |
-| `{{PROJECT}}`, `{{SKILL_DIR}}` | the values from Step 1 |
-| `{{PUSH}}` | `no` when `--no-push` was passed, otherwise `yes` |
-| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved |
+| `ROOT` | the target's `worktree` |
+| `BRANCH`, `PR_NUMBER`, `PR_URL` | from the target |
+| `COMMENTS`, `REPORT` | the target's `commentsPath` and `reportPath` |
+| `COMMIT_MESSAGE` | the target's `commitMessage`, verbatim — never re-derive it yourself |
+| `PROJECT`, `SKILL_DIR` | the values from Step 1 |
+| `PUSH` | `no` when `--no-push` was passed, otherwise `yes` |
+| `LANGUAGE` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved |
+
+`errors[]` non-empty → that branch is OUT of the run, exactly like a refused worktree: report the
+error in Polish, remove the worktree, move on. The commonest one names a placeholder nobody filled,
+and the fix is the missing `--set`, never spawning the agent without it.
+
+**Never assemble that prompt by hand.** Reading `fix-agent.md` into your own context and writing the
+substituted copy back out as the Agent argument costs you the whole file TWICE per branch — the same
+context the comment bodies are kept out of on purpose. The renderer also refuses a brief with an
+unfilled placeholder; a hand-made one delivers `{{ROOT}}` to the agent as if it were a path.
+
+### 4b — Spawn
+
+Agent tool, `subagent_type: "general-purpose"`, background. The prompt is short and points at the
+rendered brief — it never repeats it:
+
+    Your complete instructions are in the file <promptPath>. Read it in full with the Read tool
+    before doing anything else, then follow it exactly. It is already resolved: every path,
+    branch and setting it names is final. You fix the open review comments of pull request
+    #<pr.number> on branch <branch>, and you end with the single JSON object it specifies.
+
+Anything this particular run has to add — a note about a previous failure, something the user said
+after the fact — goes in that spawn prompt, under its own heading, after the pointer. It never goes
+into the rendered file.
 
 Then wait for the completion notifications and handle each branch as it lands. Never predict a
 result that has not arrived, and never summarise a branch whose agent is still running — if the user
@@ -166,3 +190,4 @@ the user has not been told about yet.
 | "The gate failed but the fixes look right" | A red gate means no commit. The worktree stays for the user to inspect — that is the outcome, not a problem to route around. |
 | "Nothing was committed, so I will clean up the worktree" | An uncommitted worktree holds work. Removing it destroys it; git refuses for the same reason. |
 | "The agent is still running, I will summarise what it will probably find" | A result that has not arrived is not a result. Say it is still running. |
+| "I will read `fix-agent.md` and paste it into the prompt myself" | That is the file twice over, per branch, in the context you emptied of comment bodies to make room. Render it with the script and pass the path. |

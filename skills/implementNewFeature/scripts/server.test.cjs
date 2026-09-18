@@ -1079,6 +1079,46 @@ test('stan wczytany sprzed czatu dostaje puste czaty zamiast wywracać panel', a
   assert.strictEqual((await task0(base)).steps[3].chat.length, 1);
 });
 
+test('czat makiet trafia do kroku o id 3, nie na trzecią pozycję listy', async t => {
+  const dir = tmpDir();
+  // Stan z kolejnością kroków inną niż domyślna: id są kontraktem, pozycja nie.
+  const shuffled = { tasks: [{ id: 't1', branch: '', root: null, activeStep: 1,
+    steps: [3, 1, 2, 4, 5, 6, 7].map(id => ({ id, name: `S${id}`, status: 'waiting',
+      progress: null, enabled: true, currentOperation: '', report: null, log: [], chat: [] })),
+    question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0, reviewSummary: null,
+    mockupReview: null, summary: null, step1: null, step1Submitted: false,
+    authSaved: false }], nextTaskId: 2 };
+  fs.writeFileSync(path.join(dir, 'pipeline-state.json'), JSON.stringify(shuffled));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+
+  await postState(base, { mockupChat: { role: 'agent', text: 'makieta gotowa' } });
+  const steps = (await task0(base)).steps;
+  assert.deepStrictEqual(steps.find(s => s.id === 3).chat,
+    [{ role: 'agent', text: 'makieta gotowa' }]);
+  assert.deepStrictEqual(steps.find(s => s.id === 2).chat, [],
+    'trzecia pozycja listy to nie krok 3');
+});
+
+test('czat makiet w stanie bez kroku 3 jest głośnym błędem, nie wywrotką', async t => {
+  const dir = tmpDir();
+  const short = { tasks: [{ id: 't1', branch: '', root: null, activeStep: 1,
+    steps: [1, 2].map(id => ({ id, name: `S${id}`, status: 'waiting', progress: null,
+      enabled: true, currentOperation: '', report: null, log: [], chat: [] })),
+    question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0, reviewSummary: null,
+    mockupReview: null, summary: null, step1: null, step1Submitted: false,
+    authSaved: false }], nextTaskId: 2 };
+  fs.writeFileSync(path.join(dir, 'pipeline-state.json'), JSON.stringify(short));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+
+  const res = await postState(base, { mockupChat: { role: 'agent', text: 'donikąd' } });
+  assert.strictEqual(res.status, 400);
+  assert.match((await res.json()).error, /unknown step 3/);
+});
+
 // --- Stały port 9999 i klucz projektu ------------------------------------------
 
 const DEFAULT_PORT = 9999;
