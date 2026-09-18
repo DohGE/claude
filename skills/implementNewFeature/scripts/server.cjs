@@ -3,6 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 // The session holds auth.json — the user's real credentials — and SKILL.md asks the
 // orchestrator to write the catch-all .gitignore next to it by hand. Doing it here too
 // costs nothing and removes the one prose step whose omission would let step 6's
@@ -18,6 +19,11 @@ const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementa
 // start disabled and the orchestrator enables them from the step-1 answer.
 const OPTIONAL_STEPS = [3];
 const STATUSES = ['waiting', 'in_progress', 'completed', 'failed'];
+// One fixed port, so the stepper always lives at the same URL: the user can keep the
+// tab open across runs, and everything the browser remembers for that origin - the
+// agent settings, the E2E credentials - is still there on the next one.
+const DEFAULT_PORT = 9999;
+const MOCKUP_STEP = 3;
 const MOCKUP_DIR = 'generated-mockups';
 const MOCKOON_FILE = 'mockoon.json';
 const MOCKUP_TYPES = {
@@ -26,10 +32,22 @@ const MOCKUP_TYPES = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.woff2': 'font/woff2'
 };
+// Every sub-agent the pipeline spawns runs on a step, so a per-step override is the
+// finest grain the setting can have. Step 1 has no agent: the form IS step 1.
+const AGENT_STEPS = [2, 3, 4, 5, 6, 7];
+// What the Agent tool accepts as a model override, and the effort levels the
+// orchestrator knows how to turn into a thinking directive. Anything else is stored as
+// '' (inherit): a value the spawn cannot use would only fail halfway through the run.
+const AGENT_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
+const AGENT_EFFORTS = ['low', 'medium', 'high', 'max'];
 const MAX_BODY = 25 * 1024 * 1024;
 // The panel renders the last 15 entries and the whole state document is re-sent to
 // the browser once a second, per task — so the cap sits just above what is visible.
 const MAX_LOG = 20;
+// The chat is a conversation a human reads back, so it is capped far above the log:
+// high enough that no real run reaches it, low enough that a looping agent cannot
+// grow the state document without bound.
+const MAX_CHAT = 200;
 const UPLOAD_CATEGORIES = ['mockups', 'contracts', 'hints'];
 
 // One task is one feature on one branch with its own seven-step pipeline, its own
@@ -40,12 +58,20 @@ function taskState(id) {
     steps: STEP_NAMES.map((name, i) => ({
       id: i + 1, name, status: 'waiting', progress: null,
       enabled: !OPTIONAL_STEPS.includes(i + 1),
-      currentOperation: '', report: null, log: []
+      currentOperation: '', report: null, log: [], chat: []
     })),
     activeStep: 1, question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0,
     reviewSummary: null, mockupReview: null, summary: null,
     step1: null, step1Submitted: false, authSaved: false
   };
+}
+
+// One transcript per step, appended to from three directions: the agent working on
+// the step, the browser's composer, and the orchestrator's own mockup rounds.
+function pushChat(step, msg) {
+  if (!Array.isArray(step.chat)) step.chat = [];
+  step.chat.push({ role: msg.role === 'user' ? 'user' : 'agent', text: text(msg.text) });
+  if (step.chat.length > MAX_CHAT) step.chat.splice(0, step.chat.length - MAX_CHAT);
 }
 
 function initialState() {
@@ -69,6 +95,24 @@ const text = (v) => {
 };
 const names = v => (Array.isArray(v) ? v : []).map(safeName).filter(Boolean).slice(0, 200);
 
+const pick = (allowed, v) => (allowed.includes(String(v == null ? '' : v)) ? String(v) : '');
+
+// Which model each of this task's sub-agents runs on, and how hard it is told to think.
+// Stored as a full shape - every step present, unset values as '' - so the orchestrator
+// reads one key per step instead of guessing whether a missing one means inherit.
+function agentsOf(raw) {
+  const a = raw && typeof raw === 'object' ? raw : {};
+  const steps = a.steps && typeof a.steps === 'object' ? a.steps : {};
+  return {
+    model: pick(AGENT_MODELS, a.model), effort: pick(AGENT_EFFORTS, a.effort),
+    steps: Object.fromEntries(AGENT_STEPS.map(n => {
+      const s = steps[n] && typeof steps[n] === 'object' ? steps[n] : {};
+      return [String(n), { model: pick(AGENT_MODELS, s.model),
+        effort: pick(AGENT_EFFORTS, s.effort) }];
+    }))
+  };
+}
+
 // The step-1 form, and nothing else a client happens to send.
 function formOf(body) {
   return {
@@ -78,7 +122,8 @@ function formOf(body) {
     contractsText: text(body.contractsText),
     hintsNote: text(body.hintsNote),
     mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
-    authProvided: !!body.authProvided, generateMockups: !!body.generateMockups
+    authProvided: !!body.authProvided, generateMockups: !!body.generateMockups,
+    agents: agentsOf(body.agents)
   };
 }
 
@@ -147,6 +192,12 @@ function sendJson(res, code, obj) {
 
 function createApp(sessionDir, opts = {}) {
   const dohDir = path.dirname(path.resolve(sessionDir));
+  // Every run of one project shares this; two projects never do. With a fixed port
+  // the browser has ONE origin for every project on the machine, so anything it
+  // remembers per project - the E2E credentials above all - has to be filed under a
+  // key like this or project A's login would prefill project B's form. Hashed
+  // because a filesystem path has no business sitting in browser storage.
+  const projectKey = crypto.createHash('sha1').update(dohDir).digest('hex').slice(0, 12);
   if (ensureDohGitignore && path.basename(dohDir) === 'doh') {
     try { ensureDohGitignore(dohDir); } catch { /* best effort */ }
   }
@@ -157,6 +208,12 @@ function createApp(sessionDir, opts = {}) {
     // A state file from before tasks existed cannot be migrated meaningfully —
     // its single run has no branch and no task dir. Start clean instead.
     if (!Array.isArray(state.tasks) || !state.tasks.length) state = initialState();
+    // A run resumed from a state file written by an older version has no chats. The
+    // field is read on every render and appended to by every agent, so it is filled
+    // in here rather than defended against at each of those places.
+    for (const t of state.tasks) {
+      for (const st of t.steps || []) if (!Array.isArray(st.chat)) st.chat = [];
+    }
   } catch (_e) {
     // Losing the state silently is the worst outcome: the run reappears at step 1
     // with no sign of what happened. Keep the unreadable file so it can be
@@ -202,6 +259,9 @@ function createApp(sessionDir, opts = {}) {
   function applyUpdate(body) {
     const task = findTask(body.taskId);
     if (!task) throw new Error(`unknown task ${body.taskId}`);
+    // A chat line with nowhere to go used to vanish: the agent sees 200, the user sees
+    // silence. The step is what the transcript hangs on, so its absence is an error.
+    if (body.chat && body.step === undefined) throw new Error('chat requires step');
     if (body.step !== undefined) {
       const step = task.steps.find(s => s.id === body.step);
       if (!step) throw new Error(`unknown step ${body.step}`);
@@ -213,6 +273,7 @@ function createApp(sessionDir, opts = {}) {
       if (body.progress !== undefined) step.progress = body.progress;
       if (body.currentOperation !== undefined) step.currentOperation = body.currentOperation;
       if (body.report !== undefined) step.report = body.report;
+      if (body.chat) pushChat(step, body.chat);
       if (body.logEntry) {
         step.log.push({ time: new Date().toISOString(), text: String(body.logEntry) });
         if (step.log.length > MAX_LOG) step.log.splice(0, step.log.length - MAX_LOG);
@@ -239,28 +300,20 @@ function createApp(sessionDir, opts = {}) {
       };
     }
     if (body.mockupReview !== undefined) {
-      // The chat and the revision counter live here, not in the orchestrator: its
-      // context must not grow with a mockup conversation, and a repeated `rev`
-      // would leave the panel locked on the previous round. A caller may still
-      // pass either explicitly — the tests and a resumed run do.
-      const chat = body.mockupReview && body.mockupReview.chat !== undefined
-        ? body.mockupReview.chat
-        : (task.mockupReview && task.mockupReview.chat) || [];
+      // The revision counter lives here, not in the orchestrator: a repeated `rev`
+      // would leave the panel locked on the previous round. A caller may still pass
+      // one explicitly — the tests and a resumed run do. The conversation is NOT
+      // here: it belongs to the step, so it outlives the panel being cleared and a
+      // revision that sends the mockups round again.
       task.mockupReview = body.mockupReview && {
         ...body.mockupReview,
         rev: body.mockupReview.rev !== undefined ? body.mockupReview.rev
-          : (task.mockupSeq = (task.mockupSeq || 0) + 1),
-        chat
+          : (task.mockupSeq = (task.mockupSeq || 0) + 1)
       };
     }
-    if (body.mockupChat) {
-      if (!task.mockupReview) task.mockupReview = { rev: 0, text: '', screens: [], chat: [] };
-      if (!Array.isArray(task.mockupReview.chat)) task.mockupReview.chat = [];
-      task.mockupReview.chat.push({
-        role: body.mockupChat.role === 'user' ? 'user' : 'agent',
-        text: text(body.mockupChat.text)
-      });
-    }
+    // The step-3 composer's own name for the same thing, kept so the mockup agent's
+    // prompt needs no step number: it writes to step 3's chat like any other agent.
+    if (body.mockupChat) pushChat(task.steps[MOCKUP_STEP - 1], body.mockupChat);
     if (body.summary !== undefined) task.summary = body.summary;
     persist();
   }
@@ -343,7 +396,9 @@ function createApp(sessionDir, opts = {}) {
     }
     try {
       if (req.method === 'GET' && url.pathname === '/api/state') {
-        return sendJson(res, 200, state);
+        // projectKey is computed, never persisted: it follows the directory the
+        // session lives in, so a moved project gets a new one rather than a stale one.
+        return sendJson(res, 200, { ...state, project: projectKey });
       }
       if (req.method === 'POST' && url.pathname === '/api/state') {
         const body = JSON.parse(await readBody(req, res) || '{}');
@@ -369,9 +424,17 @@ function createApp(sessionDir, opts = {}) {
           task.branch = task.step1.branch;
           persist();
         }
-        if (body.kind === 'mockup' && body.decision === 'feedback' && task.mockupReview) {
-          if (!Array.isArray(task.mockupReview.chat)) task.mockupReview.chat = [];
-          task.mockupReview.chat.push({ role: 'user', text: text(body.text) });
+        if (body.kind === 'mockup' && body.decision === 'feedback') {
+          pushChat(task.steps[MOCKUP_STEP - 1], { role: 'user', text: body.text });
+          persist();
+        }
+        // A message typed on a step that has no gate of its own: it goes to that step's
+        // agent through the orchestrator, and into the step's transcript right now, so
+        // the user sees it land without waiting for the poll to come round.
+        if (body.kind === 'message') {
+          const step = task.steps.find(st => st.id === Number(body.step));
+          if (!step) return sendJson(res, 400, { error: 'unknown step' });
+          pushChat(step, { role: 'user', text: body.text });
           persist();
         }
         pushAnswer({ ...body, taskId: task.id });
@@ -590,7 +653,10 @@ function main() {
     process.exit(1);
   }
   const app = createApp(path.resolve(sessionDir), { onShutdown: () => process.exit(0) });
-  const port = parseInt(get('--port') || '0', 10) || 0;
+  // `--port 0` (the tests) still means "any free port"; everything else defaults to
+  // the fixed one.
+  const arg = get('--port');
+  const port = arg === undefined ? DEFAULT_PORT : parseInt(arg, 10) || 0;
   const announce = () => {
     const actual = app.server.address().port;
     fs.mkdirSync(path.resolve(sessionDir), { recursive: true });
@@ -598,13 +664,27 @@ function main() {
       JSON.stringify({ port: actual, pid: process.pid }));
     console.log(JSON.stringify({ port: actual }));
   };
-  // A restart asks for the port it had, so the browser tab the user already has
-  // open keeps working. If something else took it meanwhile, any port will do.
+  // A predecessor killed a moment ago can still hold the socket, so a few retries
+  // ride that out. What must NOT happen is landing on another port: the orchestrator
+  // and every sub-agent prompt carry this number, so a silent move would leave a run
+  // that looks alive with panels that never update again. Say it and stop.
+  let left = 10;
   app.server.on('error', e => {
-    if (e.code !== 'EADDRINUSE' || !port) throw e;
-    app.server.listen(0, '127.0.0.1', announce);
+    if (e.code !== 'EADDRINUSE') throw e;
+    if (left-- > 0) {
+      // No callback here: 'listening' is registered once below, so a retry does not
+      // stack another one-time listener and warn about a leak in the log the user
+      // is about to read for the real reason.
+      setTimeout(() => app.server.listen(port, '127.0.0.1'), 200);
+      return;
+    }
+    console.error(`port ${port} is already in use - another stepper (or another program) `
+      + 'is on it. Close that run from its "Shut down server" button, or stop whatever '
+      + `holds ${port}, then start this one again.`);
+    process.exit(1);
   });
-  app.server.listen(port, '127.0.0.1', announce);
+  app.server.once('listening', announce);
+  app.server.listen(port, '127.0.0.1');
 }
 
 module.exports = { createApp, initialState, taskState };

@@ -6,6 +6,8 @@ through the orchestrator (see "Question protocol").
 
 Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
 
+{{EFFORT}}
+
 `{{ROOT}}` is this task's working directory: the repository itself for the first task in a run,
 and a dedicated `git worktree` for every other one. Read, write, install, test and `git add` ONLY
 inside `{{ROOT}}`. `{{PROJECT}}` is named above only so you can recognise the repository — never
@@ -363,3 +365,20 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 - After 3 cycles below 99, a unit suite you could not get green, or an extension that never became
   available:
   `{"type":"error","report":"<unmet checklist items / failing unit tests / missing extension + why, and confirmation that the mocks were removed, in {{LANGUAGE}}>"}`
+
+## Messages from the user (any time)
+
+This step's panel has a composer, so the user can write to you while you work; the orchestrator
+forwards each line with SendMessage. It is an instruction about THIS step. Act on it, and reply in
+the step's transcript:
+
+`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"taskId\":\"{{TASK_ID}}\",\"step\":5,\"chat\":{\"role\":\"agent\",\"text\":\"<reply in {{LANGUAGE}}>\"}}"`
+
+- NEVER end your turn to answer one. Ending your turn is how you report this step's outcome, so a
+  turn that closes with a chat reply and no result JSON is read as a crashed step and the pipeline
+  runs its failure protocol on you. POST the reply, then carry on working.
+- Do not post the user's own line back: the server recorded it the moment the browser sent it, and
+  a copy shows it twice.
+- It can tell you WHAT to check or how to reach a screen. It cannot lower the bar: never skip a
+  checklist item, never leave a mock in the code and never report a compliance number you did not
+  measure because a message asked you to. Say so in the reply and carry on.

@@ -106,14 +106,30 @@
   .panel h2 { margin:0 0 14px; font-size:17px; }
   label { display:block; font-size:13px; font-weight:600; margin:16px 0 6px; color:var(--muted); }
   label .req { color:var(--failed); }
-  textarea, input[type=file], input[type=text], input[type=password] {
+  textarea, input[type=file], input[type=text], input[type=password], select {
           width:100%; font:inherit; color:var(--text); }
-  textarea, input[type=text], input[type=password] { background:var(--card-2);
+  textarea, input[type=text], input[type=password], select { background:var(--card-2);
           border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
+  select { cursor:pointer; }
+  select:disabled { color:var(--muted); cursor:not-allowed; }
   /* Height is driven by autoGrow(); manual dragging would fight it. */
   textarea { min-height:90px; resize:none; overflow-y:hidden; }
-  textarea:focus, input[type=text]:focus, input[type=password]:focus { outline:none;
+  textarea:focus, input[type=text]:focus, input[type=password]:focus, select:focus {
+          outline:none;
           border-color:var(--accent); box-shadow:0 0 0 3px rgba(124,140,248,.18); }
+  /* Model and effort read as one setting, so they sit side by side and wrap together. */
+  .agent-row { display:flex; gap:14px; flex-wrap:wrap; }
+  .agent-row > div { flex:1 1 200px; }
+  .agent-row label { margin-top:12px; }
+  details.overrides { margin-top:16px; border:1px solid var(--border); border-radius:10px;
+          padding:10px 14px; background:var(--card-2); }
+  details.overrides summary { cursor:pointer; font-size:13px; font-weight:600;
+          color:var(--muted); }
+  details.overrides[open] summary { margin-bottom:6px; color:var(--text); }
+  .agent-grid { display:grid; grid-template-columns:minmax(120px,1fr) 1fr 1fr; gap:10px 12px;
+          align-items:center; margin-top:10px; }
+  .agent-grid > span { font-size:13px; color:var(--muted); }
+  .agent-grid select { padding:8px 10px; }
   .panel h3 { font-size:14px; margin:22px 0 0; color:var(--accent); }
   input[type=file] { background:var(--card-2); border:1px dashed var(--border); border-radius:10px;
           padding:10px; color:var(--muted); }
@@ -281,6 +297,13 @@ const MOCKOON_STEP = 7;
 const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
   completed: 'Completed', failed: 'Failed' };
 const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
+// Step 1 has no agent of its own - the form IS step 1 - so the overrides start at 2.
+const AGENT_STEPS = [2, 3, 4, 5, 6, 7];
+// '' is "inherit": no model override on the spawn, no thinking directive in the prompt.
+const AGENT_MODELS = [['', 'Inherit'], ['opus', 'Opus 5'], ['sonnet', 'Sonnet 5'],
+  ['haiku', 'Haiku 4.5'], ['fable', 'Fable 5.1']];
+const AGENT_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'],
+  ['high', 'High'], ['max', 'Max']];
 const EYE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
   + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
   + '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -323,8 +346,80 @@ const STEP1_FILES = ['hints', 'mockups', 'contracts'];
 const STEP1_INPUTS = {
   taskDescription: '#task', businessRequirements: '#biz', branch: '#branch',
   contractsText: '#contractsText', hintsNote: '#hintsNote', generateMockups: '#genMockups',
-  authLogin: '#authLogin', authPassword: '#authPassword'
+  authLogin: '#authLogin', authPassword: '#authPassword', rememberAuth: '#rememberAuth',
+  agentModel: '#agentModel', agentEffort: '#agentEffort',
+  // One draft key per override, so the whole form still travels as one flat record:
+  // the snapshot, the copy that seeds a new task and the re-render all read it.
+  ...Object.fromEntries(AGENT_STEPS.flatMap(n => [
+    [`agentModel${n}`, `#agentModel-${n}`], [`agentEffort${n}`, `#agentEffort-${n}`]]))
 };
+
+// One setting, two shapes: a draft holds it flat (`agentModel4`), a submitted form
+// holds it nested under `agents`. This reads whichever of the two the record has, so
+// nothing downstream needs to know which one it was handed. Unset is always ''.
+function agentValue(d, key, step) {
+  const flat = d[`agent${key[0].toUpperCase()}${key.slice(1)}${step || ''}`];
+  if (flat !== undefined) return flat;
+  const a = d.agents || {};
+  const from = step ? (a.steps || {})[step] || {} : a;
+  return from[key] || '';
+}
+
+// A whole record - draft, submitted form, or both merged - as the nested shape the
+// server stores. Filled out to the last step, so two of them compare as they stand.
+const agentsOf = d => ({
+  model: agentValue(d, 'model'), effort: agentValue(d, 'effort'),
+  steps: Object.fromEntries(AGENT_STEPS.map(n => [String(n),
+    { model: agentValue(d, 'model', n), effort: agentValue(d, 'effort', n) }]))
+});
+
+// …and the same shape read straight off the form on screen.
+const agentsOnScreen = () => ({
+  model: $('#agentModel').value, effort: $('#agentEffort').value,
+  steps: Object.fromEntries(AGENT_STEPS.map(n => [String(n),
+    { model: $(`#agentModel-${n}`).value, effort: $(`#agentEffort-${n}`).value }]))
+});
+
+// What this browser remembers between runs. The server is on ONE fixed port, so the
+// origin is the same for every run and every project on the machine - which is what
+// makes remembering work at all, and also why the credentials are filed under the
+// project key the server serves: without it, project A's login would prefill
+// project B's form.
+const LS_AGENTS = 'inf.agents';
+const authKey = () => `inf.auth.${(lastState && lastState.project) || 'unknown'}`;
+
+// Storage can throw (private window, blocked site data) and can come back empty at
+// any time, so every read has a fallback and no write is ever depended on.
+function readStore(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (_e) { return fallback; }
+}
+function writeStore(key, value) {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(value));
+  } catch (_e) { /* blocked: the form still works, it just forgets */ }
+}
+
+const isInherit = a => !a.model && !a.effort
+  && AGENT_STEPS.every(n => !a.steps[n].model && !a.steps[n].effort);
+
+// What the agent selects should show. A task that has been submitted, or that
+// carries settings of its own (a copy), shows those; a blank form falls back to
+// what was picked last time. The submitted case matters most: filling a submitted
+// form from storage would make it differ from what was sent, and the panel would
+// offer to re-run refinement over a change the user never made.
+function agentsForForm(task, d) {
+  const own = agentsOf(d);
+  if (task.step1Submitted || !isInherit(own)) return own;
+  return agentsOf({ agents: readStore(LS_AGENTS, null) });
+}
+
+const agentSelect = (id, options, value) =>
+  `<select id="${id}">${options.map(([v, label]) =>
+    `<option value="${v}"${v === value ? ' selected' : ''}>${label}</option>`).join('')}</select>`;
 
 // Whatever is typed into a step-1 form but not submitted yet. Switching tabs or
 // creating a task re-renders the panel, and without this the text would be gone.
@@ -352,6 +447,15 @@ function step1Of(task) {
   const d = { ...(task.step1 || {}), ...(viewOf(task.id).draft || {}) };
   const out = {};
   for (const key of Object.keys(STEP1_INPUTS)) out[key] = d[key];
+  // The submitted form holds the agent settings nested and only a draft holds them
+  // flat, so a task copied from another step - where there is no draft - would lose
+  // them. agentValue reads whichever of the two actually has them.
+  out.agentModel = agentValue(d, 'model');
+  out.agentEffort = agentValue(d, 'effort');
+  for (const n of AGENT_STEPS) {
+    out[`agentModel${n}`] = agentValue(d, 'model', n);
+    out[`agentEffort${n}`] = agentValue(d, 'effort', n);
+  }
   return out;
 }
 // Per-task view state, so switching tabs never leaks one task's preview selection
@@ -371,6 +475,9 @@ const viewOf = id => (view[id] || (view[id] = {
   // a redraw. sentSig is the panel the last two belong to; the composer's own draft
   // outlives every mockup round, so it is not tied to one.
   mockupDraft: '', answerDraft: '', sent: [], sentSig: null,
+  // What is typed into a step's composer but not sent, per step: walking to another
+  // tile and back is a re-render, and the message must still be there.
+  msgDrafts: {},
   // An irreversible decision still locks the panel until the orchestrator moves the
   // state. The lock is remembered per task, because switching tabs re-renders the
   // panel and would otherwise hand back a live button — and a second click would
@@ -466,7 +573,7 @@ function lockPanel(message, remember = true) {
     v.locked = message;
     v.lockedSig = lastSig;
   }
-  document.querySelectorAll('#panel button, #panel textarea, #panel input')
+  document.querySelectorAll('#panel button, #panel textarea, #panel input, #panel select')
     .forEach(el => { el.disabled = true; });
   const n = document.createElement('div');
   n.className = 'notice';
@@ -754,6 +861,12 @@ function renderViewBar(task) {
 // A task stopped at a gate, waiting for the user rather than for an agent.
 const pending = task => !!(task.question || task.reviewSummary || task.mockupReview);
 
+// Whether this step is the one the pipeline is on — so its buttons answer something
+// and its composer reaches an agent. Step 7 is the exception on the summary test: its
+// gate opens after the summary is written.
+const liveOf = (task, step) =>
+  step.id === task.activeStep && (step.id === MOCKOON_STEP || !task.summary);
+
 function sig(task) {
   const v = viewOf(task.id);
   const step = viewedStep(task);
@@ -801,7 +914,7 @@ function renderActive(task, step) {
   // A gate only answers while the orchestrator is actually waiting at it, so a
   // step revisited after the fact shows its panel without its buttons. Step 7 is
   // the exception on the summary test: its gate opens after the summary is written.
-  const live = step.id === task.activeStep && (step.id === MOCKOON_STEP || !task.summary);
+  const live = liveOf(task, step);
   // Mockoon mocks are generated after the pipeline is over, so while step 7 is the
   // one on screen its panel outranks the summary — until the user asks to go back.
   if (step.id === MOCKOON_STEP && !v.showSummary) {
@@ -815,7 +928,7 @@ function renderActive(task, step) {
   if (task.question && live) return renderQuestion(task.question, step);
   if (step.id === 1) return renderStep1(task);
   if (step.id === 2 && task.reviewSummary) return renderReview(task.reviewSummary);
-  if (step.id === 3 && task.mockupReview) return renderMockupReview(task.mockupReview);
+  if (step.id === 3 && task.mockupReview) return renderMockupReview(task.mockupReview, step);
   renderProgress(task, step);
 }
 
@@ -832,6 +945,18 @@ function renderStep1(task) {
   const v = viewOf(task.id);
   const d = { ...(task.step1 || {}), ...(v.draft || {}) };
   const revisit = !!task.step1Submitted;
+  // The agent settings and the credentials are the two things this browser carries
+  // over from the last run; both only ever fill a form that has nothing of its own.
+  const ag = agentsForForm(task, d);
+  const stored = readStore(authKey(), null);
+  // The fields are only ever filled on a form that was never submitted: doing it on a
+  // revisit would make the form differ from what was sent and offer to re-run
+  // refinement over a change the user never made.
+  const savedAuth = revisit ? null : stored;
+  // The switch says what is actually kept - unless the user has just moved it, which
+  // the draft holds. Without that, unticking would spring back on the next redraw and
+  // the following submit would store the password they had just refused to store.
+  const remember = d.rememberAuth !== undefined ? !!d.rememberAuth : (stored ? true : !revisit);
   // Implementation is the point of no return: from there the form is the record of
   // what was asked for, not something the pipeline can still be sent back over.
   const frozen = revisit
@@ -855,6 +980,24 @@ function renderStep1(task) {
     <input type="text" id="branch" placeholder="feature/my-feature" autocomplete="off"
       value="${esc(d.branch || '')}">
     <p class="hint error" id="branchHint" hidden></p>
+    <h3>Agent</h3>
+    <p class="muted">Which model this task's sub-agents run on, and how much thinking they
+      are asked for. Both bind when a step's agent is spawned, so a change here reaches
+      the steps that have not started yet — never the one already running.</p>
+    <div class="agent-row">
+      <div><label for="agentModel">Model</label>
+        ${agentSelect('agentModel', AGENT_MODELS, ag.model)}</div>
+      <div><label for="agentEffort">Effort</label>
+        ${agentSelect('agentEffort', AGENT_EFFORTS, ag.effort)}</div>
+    </div>
+    <details class="overrides" id="agentOverrides">
+      <summary>Per-step overrides</summary>
+      <div class="agent-grid">
+        ${AGENT_STEPS.map(n => `<span>${esc(STEP_NAMES[n - 1])}</span>
+          ${agentSelect(`agentModel-${n}`, AGENT_MODELS, ag.steps[n].model)}
+          ${agentSelect(`agentEffort-${n}`, AGENT_EFFORTS, ag.steps[n].effort)}`).join('')}
+      </div>
+    </details>
     <h3>Additional materials (optional)</h3>
     <p class="muted">Inspirations, screenshots of another app, diagrams, exported designs —
       anything that should guide the refinement questions and the mockup design.</p>
@@ -894,6 +1037,13 @@ function renderStep1(task) {
       <button type="button" id="togglePassword" class="reveal" aria-pressed="false"
         aria-label="Show password" title="Show password">${EYE}</button>
     </div>
+    <div class="switch">
+      <input type="checkbox" id="rememberAuth"${remember ? ' checked' : ''}>
+      <label for="rememberAuth">Remember on this browser</label>
+    </div>
+    <p class="hint">Kept in this browser's storage for this project only, so the next task and
+      the next run start with them filled in. Unticking this deletes them right away; the
+      run's own copy still dies with the pipeline.</p>
     ${frozen ? '<p class="hint">Implementation has started — the requirements are frozen for'
       + ' this task. Copy it from the sidebar to take the feature in another direction.</p>'
       : `<button id="next" disabled>${
@@ -903,8 +1053,11 @@ function renderStep1(task) {
   // What the markup above cannot carry: credentials are deliberately absent from the
   // state document, and a FileList cannot be written as an attribute. Both are what a
   // redraw used to drop, so both are put back by hand.
-  $('#authLogin').value = d.authLogin || '';
-  $('#authPassword').value = d.authPassword || '';
+  // A draft outranks storage: what is half-typed is newer than what was saved.
+  $('#authLogin').value = d.authLogin !== undefined ? d.authLogin
+    : (savedAuth && savedAuth.login) || '';
+  $('#authPassword').value = d.authPassword !== undefined ? d.authPassword
+    : (savedAuth && savedAuth.password) || '';
   for (const cat of STEP1_FILES) {
     const files = (v.picked || {})[cat] || [];
     if (!files.length) continue;
@@ -942,7 +1095,7 @@ function renderStep1(task) {
       tick();
     }));
   if (frozen) {
-    document.querySelectorAll('#panel textarea, #panel input, #panel .rm')
+    document.querySelectorAll('#panel textarea, #panel input, #panel select, #panel .rm')
       .forEach(el => { el.disabled = true; });
     return;
   }
@@ -960,10 +1113,12 @@ function renderStep1(task) {
     if (a.login || a.password) return true;
     const prev = task.step1 || {};
     const same = (sel, key) => $(sel).value.trim() === String(prev[key] || '').trim();
+    const agentsNow = JSON.stringify(agentsOnScreen());
     return !(same('#task', 'taskDescription') && same('#biz', 'businessRequirements')
       && same('#branch', 'branch') && same('#contractsText', 'contractsText')
       && same('#hintsNote', 'hintsNote')
-      && $('#genMockups').checked === !!prev.generateMockups);
+      && $('#genMockups').checked === !!prev.generateMockups
+      && agentsNow === JSON.stringify(agentsOf({ agents: prev.agents })));
   };
   const gate = () => {
     const a = auth();
@@ -993,6 +1148,21 @@ function renderStep1(task) {
     .forEach(sel => $(sel).addEventListener('input', onEdit));
   ['#genMockups', '#mockups', '#contracts', '#hints']
     .forEach(sel => $(sel).addEventListener('change', onEdit));
+  document.querySelectorAll('#panel select').forEach(el => el.addEventListener('change', () => {
+    onEdit();
+    // Remembered as soon as it is picked, not on submit: the point is that the next
+    // form starts there, whether or not this one is ever sent.
+    writeStore(LS_AGENTS, agentsOnScreen());
+  }));
+  // Unticking is a delete, and it happens now rather than at the next submit - a
+  // switch that only takes effect later is not a way to remove a stored password.
+  $('#rememberAuth').addEventListener('change', () => {
+    if ($('#rememberAuth').checked) return;
+    writeStore(authKey(), null);
+    $('#authLogin').value = '';
+    $('#authPassword').value = '';
+    onEdit();
+  });
   gate();   // a form that arrived filled in must enable Next without a keystroke
   refreshGate = gate;
   // The tab's label is the branch being typed, and onEdit above has already put it in
@@ -1033,6 +1203,11 @@ function renderStep1(task) {
       await postJson('/api/auth',
         { taskId: activeTask, login: a.login, password: a.password });
     }
+    // Under the project's own key: one fixed port means one origin for every project
+    // on this machine, and these are the credentials of exactly one of them.
+    if ($('#rememberAuth').checked && a.complete) {
+      writeStore(authKey(), { login: a.login, password: a.password });
+    }
     await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
       businessRequirements: $('#biz').value.trim(),
@@ -1041,7 +1216,8 @@ function renderStep1(task) {
       hintsNote: $('#hintsNote').value.trim(),
       mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
       authProvided: a.complete || task.authSaved,
-      generateMockups: $('#genMockups').checked });
+      generateMockups: $('#genMockups').checked,
+      agents: agentsOnScreen() });
     // The form is the server's now, credentials included — nothing of it stays on
     // the page, or the next redraw would hand back files that were already uploaded.
     v.draft = null;
@@ -1205,7 +1381,7 @@ function drawPreview(review) {
     <p class="hint"><a href="${esc(url)}" target="_blank" rel="noopener">Open in a new tab ↗</a></p>`;
 }
 
-function renderMockupReview(review) {
+function renderMockupReview(review, step) {
   const screens = review.screens || [];
   const v = viewOf(activeTask);
   if (v.mockupScreen >= screens.length) v.mockupScreen = 0;
@@ -1223,7 +1399,7 @@ function renderMockupReview(review) {
       <div class="tabs">${viewports}</div>
     </div>
     <div id="preview"></div>
-    <div class="chat" id="mockupChat">${chatHtml(review.chat || [])}</div>
+    <div class="chat" id="stepChat">${chatHtml(step.chat || [])}</div>
     <div class="gate-actions">
       <button id="approveMockup">Approve mockups</button>
       ${backButton()}
@@ -1282,12 +1458,51 @@ function renderMockupReview(review) {
 
 const chatHtml = msgs => msgs.map(m => msgHtml(m.role, m.text)).join('');
 
-// Appended rather than re-rendered: rebuilding the panel would reload the preview
-// iframe and throw away whatever is half-typed in the composer.
-function updateMockupChat(review) {
-  const box = $('#mockupChat');
+// Every step's panel carries the conversation with that step's agent. The steps that
+// ask something of their own (a question, a plan gate, the mockup review) bring their
+// own field and are given the transcript alone; the rest get the composer too — that
+// is the only way to say anything to an agent that is already running.
+const chatBlock = (step, live) => `
+  <div class="chat" id="stepChat">${chatHtml(step.chat || [])}</div>
+  ${live ? `<div class="composer">
+    <textarea id="stepMessage" data-max-vh="30" rows="1"
+      placeholder="Write to the agent — Ctrl+Enter sends"></textarea>
+    <button id="sendStepMessage" class="secondary">Send</button>
+  </div>` : ''}`;
+
+// Sending does not lock the panel and does not move the step: the agent keeps working
+// and answers in the same transcript, so a second thought can follow the first.
+function wireChat(step) {
+  const el = $('#stepMessage');
+  if (!el) return;
+  const drafts = viewOf(activeTask).msgDrafts;
+  el.value = drafts[step.id] || '';
+  el.addEventListener('input', () => { drafts[step.id] = el.value; });
+  const send = async () => {
+    const t = el.value.trim();
+    if (!t) return;
+    el.value = '';
+    drafts[step.id] = '';
+    autoGrow(el);
+    // The server records the line as it arrives, so it shows without waiting for
+    // the orchestrator to come back round the poll.
+    await sendAnswer({ kind: 'message', step: step.id, text: t });
+    tick();
+  };
+  el.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    send();
+  });
+  $('#sendStepMessage').addEventListener('click', send);
+}
+
+// Appended rather than re-rendered: rebuilding the panel would reload the mockup
+// preview iframe and throw away whatever is half-typed in the composer.
+function updateChat(step) {
+  const box = $('#stepChat');
   if (!box) return;
-  const msgs = review.chat || [];
+  const msgs = step.chat || [];
   const have = box.childElementCount;
   if (have === msgs.length) return;
   if (have > msgs.length) {
@@ -1298,18 +1513,21 @@ function updateMockupChat(review) {
 }
 
 function renderProgress(task, step) {
+  const live = liveOf(task, step);
   $('#panel').innerHTML = `
     <h2>${esc(step.name)}</h2>
     <div class="bar"><div id="barFill"></div></div>
     <div class="op" id="op"></div>
-    <ul class="log" id="log"></ul>`;
+    <ul class="log" id="log"></ul>
+    ${chatBlock(step, live)}`;
+  wireChat(step);
   updateDynamic(task, step);
 }
 
 // Runs on every tick of a view-only step, which is most of a long run — so each
 // piece is written only when its own value actually moved.
 function updateDynamic(task, step) {
-  if (step.id === 3 && task.mockupReview) updateMockupChat(task.mockupReview);
+  updateChat(step);
   const fill = $('#barFill');
   if (fill) {
     const indeterminate = step.progress == null && step.status === 'in_progress';
@@ -1341,15 +1559,20 @@ function renderFailed(step, live) {
     $('#panel').innerHTML = `
       <h2>${esc(step.name)} — failed</h2>
       <pre class="report">${esc(step.report || 'No report provided.')}</pre>
-      <p class="muted">The pipeline is no longer waiting on this step.</p>`;
+      <p class="muted">The pipeline is no longer waiting on this step.</p>
+      ${chatBlock(step, false)}`;
     return;
   }
+  // The agent that failed is gone, so what is typed here is not for it: the
+  // orchestrator holds it and hands it to the fresh agent a retry spawns.
   $('#panel').innerHTML = `
     <h2>${esc(step.name)} — failed</h2>
     <pre class="report">${esc(step.report || 'No report provided.')}</pre>
     <button id="retry" class="danger">Retry step</button>
     <button id="${isMockoon ? 'backToSummary' : 'finish'}" class="secondary">${
-      isMockoon ? 'Back to summary' : 'Finish'}</button>`;
+      isMockoon ? 'Back to summary' : 'Finish'}</button>
+    ${chatBlock(step, true)}`;
+  wireChat(step);
   $('#retry').addEventListener('click', () => {
     lockPanel('Retrying the step…');
     sendAnswer({ kind: 'decision', decision: 'retry' });
@@ -1491,7 +1714,7 @@ async function newTask(copy, btn) {
   const { id } = await postJson('/api/tasks', copy ? { copyFrom: task.id, values: {
     taskDescription: from.taskDescription, businessRequirements: from.businessRequirements,
     contractsText: from.contractsText, hintsNote: from.hintsNote,
-    generateMockups: from.generateMockups } } : {});
+    generateMockups: from.generateMockups, agents: agentsOf(from) } } : {});
   if (id) {
     // The server copies what it holds — the form and the uploaded files. What only the
     // page holds, typed credentials and files picked but not uploaded yet, is carried

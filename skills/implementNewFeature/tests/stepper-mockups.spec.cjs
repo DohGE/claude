@@ -48,8 +48,8 @@ async function openMockupPanel(page) {
   fs.writeFileSync(path.join(d, 'login.html'), '<!doctype html><h1 id="mk">Logowanie</h1>');
   fs.writeFileSync(path.join(d, 'list.html'), '<!doctype html><h1 id="mk">Lista</h1>');
   await postState({ step: 3, enabled: true, status: 'in_progress', activeStep: 3,
-    mockupReview: { rev: 1, text: 'Dwa ekrany', screens: SCREENS,
-      chat: [{ role: 'agent', text: 'Pierwsza wersja' }] } });
+    mockupReview: { rev: 1, text: 'Dwa ekrany', screens: SCREENS },
+    mockupChat: { role: 'agent', text: 'Pierwsza wersja' } });
   await page.goto(base);
   await page.waitForSelector('#mockupFrame');
 }
@@ -136,8 +136,8 @@ test('kolejna wiadomość idzie, zanim agent odpowie na poprzednią', async ({ p
 test('runda agenta nie gubi tekstu pisanego w trakcie', async ({ page }) => {
   await openMockupPanel(page);
   await page.fill('#mockupFeedback', 'Jeszcze piszę…');
-  await postState({ step: 3, mockupReview: { rev: 2, text: 'Poprawione',
-    screens: SCREENS, chat: [{ role: 'agent', text: 'Druga wersja' }] } });
+  await postState({ step: 3, mockupReview: { rev: 2, text: 'Poprawione', screens: SCREENS },
+    mockupChat: { role: 'agent', text: 'Druga wersja' } });
   await expect(page.locator('.summary-text')).toHaveText('Poprawione');
   await expect(page.locator('#mockupFeedback')).toHaveValue('Jeszcze piszę…');
 });
