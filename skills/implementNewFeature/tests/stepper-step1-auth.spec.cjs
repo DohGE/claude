@@ -31,6 +31,10 @@ async function fillRequired(page) {
   await page.fill('#branch', 'feature/test');
 }
 
+const post = (path, body) => fetch(`${base}${path}`, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+});
+
 // Submit w krokach 1-3 przechodzi przez własny dialog potwierdzenia (stepper-confirm.spec.cjs).
 async function submit(page, sel) {
   await page.click(sel);
@@ -99,4 +103,63 @@ test('submit bez credentials wysyła authProvided:false i nie tworzy auth.json',
   expect(got.answer.kind).toBe('step1');
   expect(got.answer.authProvided).toBe(false);
   expect(fs.existsSync(path.join(dir, 'tasks', 't1', 'auth.json'))).toBe(false);
+});
+
+
+test('wpisane credentials przeżywają utworzenie nowego taska i są do niego kopiowane', async ({ page }) => {
+  await fillRequired(page);
+  await page.fill('#authLogin', 'qa@example.com');
+  await page.fill('#authPassword', 'S3kret!');
+  await page.click('#createTask');
+  await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
+  // Credentials nie przechodzą przez dokument stanu, więc kopiuje je sama strona.
+  await expect(page.locator('#authLogin')).toHaveValue('qa@example.com');
+  await expect(page.locator('#authPassword')).toHaveValue('S3kret!');
+  // Źródłowy formularz też ich nie zgubił — przerysowanie panelu to nie kasowanie.
+  await page.click('#tabs .tab[data-task=t1]');
+  await expect(page.locator('#authLogin')).toHaveValue('qa@example.com');
+  await expect(page.locator('#authPassword')).toHaveValue('S3kret!');
+});
+
+test('skopiowane credentials zapisują się do auth.json nowego taska', async ({ page }) => {
+  await fillRequired(page);
+  await page.fill('#authLogin', 'qa@example.com');
+  await page.fill('#authPassword', 'S3kret!');
+  await page.click('#createTask');
+  await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
+  await page.fill('#branch', 'feature/drugi');
+  await submit(page, '#next');
+  const got = await (await fetch(`${base}/api/answer?wait=10&taskId=t2`)).json();
+  expect(got.answer.authProvided).toBe(true);
+  expect(JSON.stringify(got.answer)).not.toContain('S3kret!');
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'tasks', 't2', 'auth.json'), 'utf8'));
+  expect(saved).toEqual({ login: 'qa@example.com', password: 'S3kret!' });
+});
+
+test('New empty task startuje bez credentials', async ({ page }) => {
+  await fillRequired(page);
+  await page.fill('#authLogin', 'qa@example.com');
+  await page.fill('#authPassword', 'S3kret!');
+  await page.click('#createEmptyTask');
+  await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
+  await expect(page.locator('#authLogin')).toHaveValue('');
+  await expect(page.locator('#authPassword')).toHaveValue('');
+});
+
+test('usunięcie wgranego pliku nie czyści wpisanych pól', async ({ page }) => {
+  await post('/api/upload', { taskId: 't1', category: 'hints', filename: 'ekran.png',
+    dataBase64: Buffer.from('png').toString('base64') });
+  await post('/api/answer', { taskId: 't1', kind: 'step1', taskDescription: 'Opis',
+    businessRequirements: 'Wymagania', branch: 'feature/pierwszy', hints: ['ekran.png'] });
+  await page.reload();
+  await page.waitForSelector('#files-hints');
+  await page.fill('#task', 'Opis po zmianie');
+  await page.fill('#authLogin', 'qa@example.com');
+  await page.fill('#authPassword', 'S3kret!');
+  // Usunięcie pliku przerysowuje formularz ze stanu serwera — a ten o tych polach nie wie.
+  await page.click('#files-hints .rm');
+  await expect(page.locator('#files-hints')).toHaveCount(0);
+  await expect(page.locator('#task')).toHaveValue('Opis po zmianie');
+  await expect(page.locator('#authLogin')).toHaveValue('qa@example.com');
+  await expect(page.locator('#authPassword')).toHaveValue('S3kret!');
 });

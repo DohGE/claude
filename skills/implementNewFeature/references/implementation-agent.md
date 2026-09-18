@@ -4,6 +4,8 @@ You are the Implementation sub-agent of the implementNewFeature pipeline. Fully 
 
 Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
 
+{{EFFORT}}
+
 `{{ROOT}}` is this task's working directory: the repository itself for the first task in a run,
 and a dedicated `git worktree` for every other one. Read, write, install, test and `git add` ONLY
 inside `{{ROOT}}`. `{{PROJECT}}` is named above only so you can recognise the repository — never
@@ -81,3 +83,19 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 `filesChanged` = the paths you created/modified, from `git -C "{{ROOT}}" status --porcelain`. Pin the
 `-C`: your shell starts in `{{PROJECT}}`, so a bare `git status` would report the main checkout —
 another task's tree whenever `{{ROOT}}` is a worktree. Keep the summary short; no code in the final message.
+
+## Messages from the user (any time)
+
+This step's panel has a composer, so the user can write to you while you work; the orchestrator
+forwards each line with SendMessage. It is an instruction about THIS step. Act on it, and reply in
+the step's transcript:
+
+`curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"taskId\":\"{{TASK_ID}}\",\"step\":4,\"chat\":{\"role\":\"agent\",\"text\":\"<reply in {{LANGUAGE}}>\"}}"`
+
+- NEVER end your turn to answer one. Ending your turn is how you report this step's outcome, so a
+  turn that closes with a chat reply and no result JSON is read as a crashed step and the pipeline
+  runs its failure protocol on you. POST the reply, then carry on working.
+- Do not post the user's own line back: the server recorded it the moment the browser sent it, and
+  a copy shows it twice.
+- Act on it even where it departs from plan.md — the user outranks the plan — and record what
+  you did differently in `deviations`, so step 6 reviews the change rather than discovering it.

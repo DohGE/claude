@@ -1,5 +1,6 @@
-// Testy UI steppera implementNewFeature — równoległe taski: Create new task kopiuje
-// formularz, zakładki pojawiają się od drugiego taska i przełączają widok.
+// Testy UI steppera implementNewFeature — równoległe taski: "Copy of current task"
+// kopiuje formularz, "New empty task" zakłada pusty, zakładki pojawiają się od drugiego
+// taska i przełączają widok. Oba przyciski żyją w sidebarze (stepper-sidebar.spec.cjs).
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -12,6 +13,14 @@ const state = body => fetch(`${base}/api/state`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body)
 });
+
+// 1x1 px PNG — wystarczy, by input miał plik
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64');
+const file = name => ({ name, mimeType: 'image/png', buffer: PNG });
+// Pliki wybrane, a jeszcze niewgrane — istnieją tylko jako FileList w przeglądarce.
+const picked = (page, sel) => page.locator(sel).evaluate(el => [...el.files].map(f => f.name));
 
 test.beforeEach(async ({ page }) => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inf-tasks-'));
@@ -33,7 +42,7 @@ test('jeden task nie pokazuje zakładek', async ({ page }) => {
   await expect(page.locator('#tabs')).toBeHidden();
 });
 
-test('Create new task kopiuje formularz, pokazuje zakładki i czyści branch', async ({ page }) => {
+test('Copy of current task kopiuje formularz, pokazuje zakładki i czyści branch', async ({ page }) => {
   await page.fill('#task', 'Zaproszenia');
   await page.fill('#biz', 'Admin zaprasza');
   await page.fill('#contractsText', 'POST /invites');
@@ -222,4 +231,57 @@ test('zamknięcie otwartej zakładki wraca na pierwszy task', async ({ page }) =
   await page.click('#tabs .tab[data-task=t2] .close');
   await page.click('#confirmOk');
   await expect(page.locator('#task')).toHaveValue('Pierwszy');
+});
+
+test('New empty task zakłada task bez kopiowania formularza', async ({ page }) => {
+  await page.fill('#task', 'Zaproszenia');
+  await page.fill('#biz', 'Admin zaprasza');
+  await page.fill('#contractsText', 'POST /invites');
+  await page.fill('#branch', 'feature/zaproszenia');
+  await page.check('#genMockups');
+  await page.setInputFiles('#hints', [file('ekran.png')]);
+  await page.click('#createEmptyTask');
+  await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
+  await expect(page.locator('#task')).toHaveValue('');
+  await expect(page.locator('#biz')).toHaveValue('');
+  await expect(page.locator('#contractsText')).toHaveValue('');
+  await expect(page.locator('#branch')).toHaveValue('');
+  await expect(page.locator('#genMockups')).not.toBeChecked();
+  expect(await picked(page, '#hints')).toEqual([]);
+  // Formularz źródła czeka nietknięty pod swoją zakładką — pusty task go nie zabiera.
+  await page.click('#tabs .tab[data-task=t1]');
+  await expect(page.locator('#task')).toHaveValue('Zaproszenia');
+  await expect(page.locator('#branch')).toHaveValue('feature/zaproszenia');
+  expect(await picked(page, '#hints')).toEqual(['ekran.png']);
+});
+
+test('wybrane, jeszcze niewgrane pliki przeżywają kopię i lądują na dysku nowego taska', async ({ page }) => {
+  await page.fill('#task', 'Opis');
+  await page.fill('#biz', 'Wymagania');
+  await page.setInputFiles('#hints', [file('ekran.png')]);
+  await page.fill('#hintsNote', 'Układ kart z ekranu');
+  await page.click('#createTask');
+  // Plik istnieje tylko w przeglądarce — serwer nie ma czego skopiować, więc FileList
+  // musi przejechać do nowego taska po tej stronie.
+  expect(await picked(page, '#hints')).toEqual(['ekran.png']);
+  await expect(page.locator('#hintsNote')).toBeVisible();
+  await expect(page.locator('#hintsNote')).toHaveValue('Układ kart z ekranu');
+  await page.fill('#branch', 'feature/drugi');
+  await page.click('#next');
+  await page.click('#confirmOk');
+  const got = await (await fetch(`${base}/api/answer?wait=10&taskId=t2`)).json();
+  expect(got.answer.hints).toEqual(['ekran.png']);
+  expect(fs.existsSync(path.join(dir, 'tasks', 't2', 'hints', 'ekran.png'))).toBe(true);
+});
+
+test('niewysłana odpowiedź na pytanie przeżywa przełączenie zakładek', async ({ page }) => {
+  await page.click('#createTask');
+  await state({ taskId: 't1', step: 2, status: 'in_progress', activeStep: 2,
+    question: { id: 'q1', text: 'Ile ról?' } });
+  await page.click('#tabs .tab[data-task=t1]');
+  await page.fill('#freeAnswer', 'Trzy, plus audytor');
+  await page.click('#tabs .tab[data-task=t2]');
+  await expect(page.locator('#branch')).toBeVisible();
+  await page.click('#tabs .tab[data-task=t1]');
+  await expect(page.locator('#freeAnswer')).toHaveValue('Trzy, plus audytor');
 });

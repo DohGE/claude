@@ -372,9 +372,10 @@ function sender(...responses) {
 
 test('findOpenPr asks for the branch head and reports the PR it targets', (t) => {
   const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
-  const send = sender({ ok: true, status: 200, json: [{ number: 12, html_url: 'u', base: { ref: 'develop' } }], error: null });
+  const send = sender({ ok: true, status: 200, json: [{ number: 12, html_url: 'u', title: 'Panel użytkownika', base: { ref: 'develop' } }], error: null });
   const found = gh.findOpenPr(dir, 'feature/x', send);
-  assert.deepStrictEqual(found.pr, { number: 12, url: 'u', base: 'develop' });
+  // The title travels with the number: the report header names the pull request, not only its branch.
+  assert.deepStrictEqual(found.pr, { number: 12, url: 'u', base: 'develop', title: 'Panel użytkownika' });
   assert.strictEqual(found.error, null);
   assert.strictEqual(send.calls.length, 1, 'the direct query answers, no scan needed');
   assert.match(send.calls[0], /^\/repos\/DohGE\/claude\/pulls\?state=open&per_page=1&head=DohGE%3Afeature%2Fx$/);
@@ -384,10 +385,10 @@ test('findOpenPr falls back to a scan for a pull request opened from a fork', (t
   const dir = repoWithRemote(t, 'https://github.com/DohGE/claude.git');
   const send = sender(
     { ok: true, status: 200, json: [], error: null },
-    { ok: true, status: 200, json: [{ number: 3, html_url: 'u3', head: { ref: 'other' }, base: { ref: 'main' } }, { number: 4, html_url: 'u4', head: { ref: 'feature/x' }, base: { ref: 'develop' } }], error: null },
+    { ok: true, status: 200, json: [{ number: 3, html_url: 'u3', head: { ref: 'other' }, base: { ref: 'main' } }, { number: 4, html_url: 'u4', title: 'Fork fix', head: { ref: 'feature/x' }, base: { ref: 'develop' } }], error: null },
   );
   const found = gh.findOpenPr(dir, 'feature/x', send);
-  assert.deepStrictEqual(found.pr, { number: 4, url: 'u4', base: 'develop' });
+  assert.deepStrictEqual(found.pr, { number: 4, url: 'u4', base: 'develop', title: 'Fork fix' });
   assert.match(send.calls[1], /per_page=100&sort=updated/);
 });
 

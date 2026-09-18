@@ -1015,10 +1015,10 @@ test('detectPullRequest returns the open pull request', () => {
   const calls = [];
   const findPr = (root, branch) => {
     calls.push(branch);
-    return { pr: { number: 7, url: 'https://github.com/acme/repo/pull/7', base: 'main' }, error: null };
+    return { pr: { number: 7, url: 'https://github.com/acme/repo/pull/7', base: 'main', title: 'Panel użytkownika' }, error: null };
   };
   assert.deepStrictEqual(rr.detectPullRequest('/repo', 'feature/x', findPr), {
-    pr: { number: 7, url: 'https://github.com/acme/repo/pull/7' },
+    pr: { number: 7, url: 'https://github.com/acme/repo/pull/7', title: 'Panel użytkownika' },
     warning: null,
   });
   assert.deepStrictEqual(calls, ['feature/x']);
@@ -1094,6 +1094,133 @@ test('renderHtml offers the PR button only when a pull request was found', () =>
   assert.match(html, /id="pr-comments">Dodaj komentarze do PR #7</);
   assert.match(embeddedPayload(html).postCommand, /post-pr-comments\.cjs/);
   assert.deepStrictEqual(embeddedPayload(html).pr, { number: 7, url: 'https://example.test/pull/7' });
+});
+
+test('changedFiles reads the whole change, renames included, not just what was reported on', (t) => {
+  const dir = tempDir(t, 'cr-tree-');
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'test@test.local']);
+  run(['config', 'user.name', 'Test']);
+  run(['config', 'commit.gpgsign', 'false']);
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'keep.ts'), 'one\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'src', 'gone.ts'), 'two\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'src', 'old name.ts'), 'a\nb\nc\nd\ne\nf\n', 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'base']);
+  run(['checkout', '-q', '-b', 'feature']);
+  fs.writeFileSync(path.join(dir, 'src', 'keep.ts'), 'ONE\n', 'utf8');
+  fs.unlinkSync(path.join(dir, 'src', 'gone.ts'));
+  fs.renameSync(path.join(dir, 'src', 'old name.ts'), path.join(dir, 'src', 'new name.ts'));
+  fs.writeFileSync(path.join(dir, 'src', 'fresh.ts'), 'new\n', 'utf8');
+  run(['add', '-A']);
+  run(['commit', '-q', '-m', 'change']);
+  run(['checkout', '-q', 'main']);
+
+  const changed = rr.changedFiles(dir, { mode: 'branch', base: 'main', branch: 'feature' });
+  const byPath = Object.fromEntries(changed.map((entry) => [entry.path, entry.status]));
+  assert.strictEqual(byPath['src/fresh.ts'], 'A', 'a file nobody reported on is still part of the change');
+  assert.strictEqual(byPath['src/keep.ts'], 'M');
+  assert.strictEqual(byPath['src/gone.ts'], 'D');
+  // A rename names both sides; only the path the change ends with can be clicked.
+  assert.strictEqual(byPath['src/new name.ts'], 'R', 'a space in a path survives the -z parse');
+  assert.ok(!('src/old name.ts' in byPath), 'the old name is not part of the new structure');
+
+  // A folder review is not a change, so it has no structure of its own.
+  assert.deepStrictEqual(rr.changedFiles(dir, { mode: 'folder' }), []);
+});
+
+test('the file tree lists the whole change, minus what it deleted, plus anything reported', () => {
+  const report = rr.parseReport(reportOf(['## src/b.ts', ''], findingOf()));
+  report.changed = [
+    { path: 'src/b.ts', status: 'M' },
+    { path: 'src/a.ts', status: 'A' },
+    { path: 'src/dropped.ts', status: 'D' },
+  ];
+  assert.deepStrictEqual(rr.treeEntries(report), [
+    { path: 'src/a.ts', status: 'A' },
+    { path: 'src/b.ts', status: 'M' },
+  ], 'sorted by path, and a deleted file is not part of the structure left behind');
+
+  // The diff and the report disagreeing must never cost a finding its row.
+  report.changed = [{ path: 'src/a.ts', status: 'A' }, { path: 'src/b.ts', status: 'D' }];
+  assert.deepStrictEqual(rr.treeEntries(report), [
+    { path: 'src/a.ts', status: 'A' },
+    { path: 'src/b.ts', status: 'D' },
+  ]);
+  report.changed = [];
+  assert.deepStrictEqual(rr.treeEntries(report), [{ path: 'src/b.ts', status: '' }]);
+});
+
+test('the sidebar is drawn from the change, and its rows outlive their findings', () => {
+  const report = rr.parseReport(reportOf(['## src/b.ts', ''], findingOf()));
+  report.changed = [{ path: 'src/a.ts', status: 'A' }, { path: 'src/b.ts', status: 'M' }];
+  const html = rr.renderHtml(report, 'r.html');
+  assert.deepStrictEqual(embeddedPayload(html).tree, [
+    { path: 'src/a.ts', status: 'A' },
+    { path: 'src/b.ts', status: 'M' },
+  ]);
+  assert.match(html, /reportData\.tree && reportData\.tree\.length/, 'the tree is built from that list');
+  // The counts follow the filters; the structure does not. A row that vanished
+  // with its last visible finding would stop being a map of the change.
+  assert.doesNotMatch(html, /entry\.row\.hidden = count === 0/);
+  assert.doesNotMatch(html, /entry\.row\.hidden = total === 0/);
+  assert.match(html, /entry\.row\.classList\.toggle\('tr-quiet', count === 0\)/);
+});
+
+test('the tree says what the change did to a file separately from what was found in it', () => {
+  const report = rr.parseReport(reportOf(['## src/b.ts', ''], findingOf()));
+  report.changed = [{ path: 'src/a.ts', status: 'A' }, { path: 'src/b.ts', status: 'M' }];
+  const html = rr.renderHtml(report, 'r.html');
+  // Introduced, touched, removed - three colours, and every status that is not
+  // one of the first two still reads as touched rather than as unchanged.
+  assert.match(html, /file\.status === 'A' \? ' tr-added'/);
+  assert.match(html, /file\.status === 'D' \? ' tr-deleted' : \(file\.status \? ' tr-changed' : ''\)/);
+  assert.match(html, /\.tr-file\.tr-added>\.tr-name\{color:var\(--add-fg\)\}/);
+  assert.match(html, /\.tr-file\.tr-changed>\.tr-name\{color:var\(--mod-fg\)\}/);
+  // It belongs to the diff palette, so it is defined in every place that palette
+  // is - a colour missing from one theme is simply invisible in it.
+  assert.strictEqual((html.match(/--mod-fg:/g) || []).length, (html.match(/--add-fg:/g) || []).length);
+  // The badge is the finding's own, so a file written about is marked with the
+  // worst of what the filters currently leave in it - and an untouched file
+  // keeps the empty slot, which is what holds the names in line.
+  assert.match(html, /entry\.mark\.textContent = badge \? badge\.emoji : ''/);
+  assert.match(html, /var badge = count \? severityByKey\[worst\[filePath\]\] : null/);
+  assert.match(html, /\.tr-mark\{flex:0 0 auto;width:14px/);
+});
+
+test('the report title carries the pull request title, in the tab too', () => {
+  const report = rr.parseReport(REPORT);
+  const plain = rr.renderHtml(report, 'r.html');
+  assert.match(plain, /<title>Code Review: feature\/x → master<\/title>/, 'no PR, nothing appended');
+
+  report.pr = { number: 7, url: 'https://example.test/pull/7', title: 'Panel <użytkownika>' };
+  report.postCommand = 'node post-pr-comments.cjs --report=r.html';
+  const html = rr.renderHtml(report, 'r.html');
+  // The tab is where the branch names alone say the least, so the title goes there as well.
+  assert.match(html, /<title>Code Review: feature\/x → master — Panel &lt;użytkownika&gt;<\/title>/);
+  assert.match(html, /<h1>Code Review: feature\/x → master<span class="h1-pr">Panel &lt;użytkownika&gt; <span class="h1-pr-n">#7<\/span><\/span><\/h1>/,
+    'a PR title is someone else\'s text: it reaches the page escaped');
+});
+
+test('the accepted pool is copyable as bare ids and the command takes ordinary selection', () => {
+  const report = rr.parseReport(REPORT);
+  const html = rr.renderHtml(report, 'r.html');
+  // The id button belongs to accepting, not to posting, so it is there with no PR too.
+  assert.ok(!html.includes('id="pr-comments"'), 'this report has no PR');
+  assert.match(html, /<button[^>]*id="copy-ids"[^>]*disabled[^>]*>Kopiuj ID</,
+    'nothing accepted, nothing to copy');
+  assert.match(html, /id="accepted-count"[\s\S]{0,260}id="copy-ids"/, 'it sits next to the count it copies');
+  assert.match(html, /byId\('copy-ids'\)\.disabled = state\.accepted\.size === 0/,
+    'the button follows the pool');
+  // Bare ids, from the same list the PR command carries - two buttons disagreeing
+  // about the pool would be worse than one of them missing.
+  assert.match(html, /flashCopy\(this, acceptedIds\(\)\.join\(','\)\)/);
+  assert.match(html, /--include="' \+ ids\.join\(','\) \+ '"/);
+  // Selecting part of the command, or a word inside it, has to work like anywhere
+  // else on the page; the whole line is what the copy button is for.
+  assert.ok(!html.includes('user-select:all'), 'no forced whole-block selection');
 });
 
 test('parseReport reads coverage markers without letting them into a finding', () => {

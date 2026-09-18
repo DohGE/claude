@@ -644,7 +644,7 @@ function detectPullRequest(projectRoot, branch, findPr = github.findOpenPr) {
         + `Ustaw GH_TOKEN na token z uprawnieniem \`repo\`. ${tail}`;
     return { pr: null, warning };
   }
-  return { pr: pr ? { number: pr.number, url: pr.url } : null, warning: null };
+  return { pr: pr ? { number: pr.number, url: pr.url, title: pr.title || '' } : null, warning: null };
 }
 
 function postCommandFor(projectRoot, outPath) {
@@ -670,6 +670,57 @@ function diffReader(projectRoot, source) {
     cache.set(filePath, diff);
     return diff;
   };
+}
+
+// The sidebar maps the change, not the findings, so it needs the diff's own file
+// list - the files nobody had anything to say about included. `-z` keeps the
+// paths raw: NUL-separated and never quoted, so a space or a non-ASCII character
+// in a path survives the trip.
+function changedFiles(projectRoot, source) {
+  const root = path.resolve(projectRoot);
+  const mode = source && source.mode;
+  const ref = mode === 'branch' ? resolveRef(root, source.branch) : '';
+  let args = null;
+  if (mode === 'branch' && ref && source.base) args = ['diff', '--name-status', '-z', '-M', `${source.base}...${ref}`];
+  else if (mode === 'staged') args = ['diff', '--name-status', '-z', '-M', '--cached'];
+  // A folder review is not a change at all, so it has no structure to draw.
+  if (!args) return [];
+  const parts = String(gitText(root, args) || '').split('\0');
+  const files = [];
+  let i = 0;
+  while (i < parts.length) {
+    const status = parts[i];
+    if (!status) { i += 1; continue; }
+    const letter = status[0];
+    // A rename or a copy spells out both paths; the review only ever sees the new one.
+    const pair = letter === 'R' || letter === 'C';
+    const filePath = pair ? parts[i + 2] : parts[i + 1];
+    i += pair ? 3 : 2;
+    if (filePath) files.push({ path: filePath, status: letter });
+  }
+  return files;
+}
+
+// What the file tree lists: every path the change leaves behind, plus - whatever
+// the diff said - every path that drew a finding, because a finding with no row
+// to click would be worse than an over-full tree. A deleted file is not part of
+// the structure the change ends with, so it is left out unless it did draw one.
+function treeEntries(report) {
+  const reported = new Set(report.files.map((file) => file.path));
+  const seen = new Set();
+  const entries = [];
+  for (const entry of report.changed || []) {
+    if (seen.has(entry.path)) continue;
+    if (entry.status === 'D' && !reported.has(entry.path)) continue;
+    seen.add(entry.path);
+    entries.push({ path: entry.path, status: entry.status });
+  }
+  for (const file of report.files) {
+    if (seen.has(file.path)) continue;
+    seen.add(file.path);
+    entries.push({ path: file.path, status: '' });
+  }
+  return entries.sort((a, b) => a.path.localeCompare(b.path, 'pl'));
 }
 
 // A file that moved, vanished or is binary simply renders without a snippet -
@@ -769,6 +820,8 @@ function buildPayload(report, reportName) {
       .filter((s) => allFindings.some((f) => f.severity === s.key))
       .map(({ key, label, emoji }) => ({ key, label, emoji })),
     ruleGroups,
+    // The file tree's own list: the whole change, not just what was reported on.
+    tree: treeEntries(report),
     // The walked checklists, in the order the files were analyzed: what the
     // page shows under "Pokrycie checklist".
     coverage: report.coverage.map((entry) => ({
@@ -805,7 +858,7 @@ const darkTokens = `
   --accent:#6ea8fe;--code-bg:#282d34;--shadow:none;
   --sev-critical:#c58f59;--sev-high:#f0736a;--sev-medium:#e0b341;--sev-low:#98a2b0;--sev-missing-unit-test:#6ea8fe;
   --snip-bg:#181b1f;--snip-gutter:#1f2329;--hit-bg:#3a3320;--hit-gutter:#463c22;
-  --add-bg:#12261e;--add-fg:#3fb950;--del-bg:#2d1618;--del-fg:#f85149;
+  --add-bg:#12261e;--add-fg:#3fb950;--del-bg:#2d1618;--del-fg:#f85149;--mod-fg:#d29922;
   --accepted-bg:#16241b;--accepted-line:#3fb950`;
 
 const pageCss = `
@@ -815,7 +868,7 @@ const pageCss = `
   --accent:#2563eb;--code-bg:#eceff3;--shadow:0 1px 2px rgba(16,22,32,.06);
   --sev-critical:#8a5a2b;--sev-high:#c0392b;--sev-medium:#b0761a;--sev-low:#78808d;--sev-missing-unit-test:#2563eb;
   --snip-bg:#fbfcfd;--snip-gutter:#f1f3f6;--hit-bg:#fff6d9;--hit-gutter:#ffeeb8;
-  --add-bg:#e6ffec;--add-fg:#1a7f37;--del-bg:#ffebe9;--del-fg:#cf222e;
+  --add-bg:#e6ffec;--add-fg:#1a7f37;--del-bg:#ffebe9;--del-fg:#cf222e;--mod-fg:#9a6700;
   --accepted-bg:#eef8f0;--accepted-line:#1a7f37}
 /* The system preference rules until the reader picks a side; that pick is
    \`data-theme\` on the root and it wins in both directions. */
@@ -843,6 +896,10 @@ button{font:inherit;color:inherit}
   background:none;text-align:left;font-size:13px;cursor:pointer}
 .ctxmenu button:hover:not(:disabled),.ctxmenu button:focus-visible{background:var(--panel-2)}
 .ctxmenu button:disabled{color:var(--muted);cursor:default}
+/* Its own line under the branch names: a pull request title is prose, and long
+   enough to push everything else off the first one. */
+.head .h1-pr{display:block;margin-top:5px;font-size:15.5px;font-weight:500;letter-spacing:0}
+.head .h1-pr-n{color:var(--muted);font-weight:400}
 .head .meta{margin-top:6px;color:var(--muted);font-size:13.5px}
 .head .skipped{margin-top:8px;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
 /* Louder than .skipped: this one is not a note about the review, it is the
@@ -921,8 +978,27 @@ button{font:inherit;color:inherit}
 .tr-row[hidden],.tr-kids[hidden]{display:none}
 .tr-name{flex:1 1 auto;overflow-wrap:anywhere}
 .tr-dir>.tr-name{color:var(--muted)}
-.tr-file{padding-left:22px}
+/* The icon slot plus the row gap indent a file under its directory, so the
+   padding only has to make up the rest. */
+.tr-file{padding-left:2px}
 .tr-file.active{background:var(--hit-bg);color:var(--text)}
+/* Nothing to jump to, so the row reads as a landmark rather than a target -
+   it still marks where the file sits in the change. */
+.tr-quiet{cursor:default}
+.tr-quiet>.tr-name{color:var(--muted)}
+.tr-quiet.tr-row:hover{background:none}
+.tr-dir.tr-quiet:hover,.tr-quiet .twisty-sm{cursor:pointer}
+.tr-dir.tr-quiet:hover{background:var(--panel-2)}
+/* What the change did to the file, in the diff's own colours - green for what
+   it introduced, yellow for what it touched, struck red for what it removed.
+   Whether the file drew a finding is the icon's job, so the name's colour and
+   the icon never compete to say the same thing. */
+.tr-file.tr-added>.tr-name{color:var(--add-fg)}
+.tr-file.tr-changed>.tr-name{color:var(--mod-fg)}
+.tr-file.tr-deleted>.tr-name{color:var(--del-fg);text-decoration:line-through}
+/* Every file row reserves the slot, filled only where there is something to
+   mark, so one icon never pushes its neighbours' names out of line. */
+.tr-mark{flex:0 0 auto;width:14px;text-align:center;font-size:11px;line-height:1}
 .tr-kids{margin-left:9px;padding-left:5px;border-left:1px solid var(--border)}
 .twisty-sm{width:12px;flex:0 0 auto;border:0;background:none;color:var(--muted);cursor:pointer;padding:0;font-size:10px}
 @media (max-width:1180px){.cols{grid-template-columns:minmax(0,1fr)}.sidebar{position:static;max-height:420px}}
@@ -932,7 +1008,7 @@ button{font:inherit;color:inherit}
 .cmd-info{margin:0 0 8px;font-size:13px;color:var(--muted)}
 .cmd{margin:0 0 8px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--code-bg);
   font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;font-size:12.5px;
-  white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
+  white-space:pre-wrap;overflow-wrap:anywhere}
 .cmd-actions{display:flex;align-items:center;gap:10px;font-size:13px}
 
 .filesec{margin-bottom:16px}
@@ -1066,6 +1142,47 @@ const pageJs = `
   var host = byId('findings');
 
   function note(text) { var n = el('div', 'note'); n.textContent = text; return n; }
+
+  // The synchronous path answers at once and is the only one allowed on file://
+  // in every browser; the Clipboard API defers its promise until the window is
+  // focused again, which can leave a button saying nothing at all. The textarea
+  // is borrowed for the one gesture and the reader's own selection put back.
+  function copyBySelection(text) {
+    if (!document.execCommand) return false;
+    var selection = window.getSelection();
+    var ranges = [];
+    for (var i = 0; i < selection.rangeCount; i++) ranges.push(selection.getRangeAt(i));
+    var focused = document.activeElement;
+    var area = el('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '-1000px';
+    document.body.appendChild(area);
+    area.select();
+    var done = false;
+    try { done = document.execCommand('copy'); } catch (e) { done = false; }
+    document.body.removeChild(area);
+    selection.removeAllRanges();
+    ranges.forEach(function (range) { selection.addRange(range); });
+    if (focused && focused.focus) focused.focus();
+    return done;
+  }
+
+  // One place decides what a copy button says afterwards, so a refused copy is
+  // never mistaken for a silent success and the label always comes back.
+  function flashCopy(button, text) {
+    var label = button.getAttribute('data-label');
+    if (label === null) { label = button.textContent; button.setAttribute('data-label', label); }
+    function say(message) {
+      button.textContent = message;
+      clearTimeout(button.flashTimer);
+      button.flashTimer = setTimeout(function () { button.textContent = label; }, 1500);
+    }
+    if (copyBySelection(text)) { say('Skopiowano'); return; }
+    if (!navigator.clipboard || !navigator.clipboard.writeText) { say('Nie udało się skopiować'); return; }
+    navigator.clipboard.writeText(text).then(function () { say('Skopiowano'); }, function () { say('Nie udało się skopiować'); });
+  }
 
   // Backtick spans become real <code> elements and every other value goes in as
   // a text node, so no report text is ever treated as markup.
@@ -1426,20 +1543,30 @@ const pageJs = `
   window.addEventListener('resize', closeCtxMenu);
   window.addEventListener('blur', closeCtxMenu);
 
+  // Report order, and the one list both the PR command and the id button read,
+  // so what is copied can never disagree with what would be posted.
+  function acceptedIds() {
+    return allFindings.filter(function (f) { return state.accepted.has(f.id); })
+      .map(function (f) { return f.id; });
+  }
+
+  byId('copy-ids').addEventListener('click', function () {
+    flashCopy(this, acceptedIds().join(','));
+  });
+
   // The page cannot post to GitHub itself, so the button hands over the exact
   // command that does - carrying the accepted pool as the list of ids to post.
   if (byId('pr-comments')) {
     byId('pr-comments').addEventListener('click', function () {
-      var acceptedIds = allFindings.filter(function (f) { return state.accepted.has(f.id); })
-        .map(function (f) { return f.id; });
-      var command = reportData.postCommand + ' --include="' + acceptedIds.join(',') + '"';
+      var ids = acceptedIds();
+      var command = reportData.postCommand + ' --include="' + ids.join(',') + '"';
       var box = byId('cmdbox');
       box.textContent = '';
       box.hidden = false;
 
       var info = el('p', 'cmd-info');
-      info.textContent = acceptedIds.length
-        ? 'Do PR #' + reportData.pr.number + ' trafi ' + acceptedIds.length + ' z ' + allFindings.length
+      info.textContent = ids.length
+        ? 'Do PR #' + reportData.pr.number + ' trafi ' + ids.length + ' z ' + allFindings.length
           + ' znalezisk — dokładnie te zaakceptowane przyciskiem „Akceptuj",'
           + ' filtry widoku nie mają na to wpływu. Uruchom w terminalu:'
         : 'Żadne znalezisko nie zostało zaakceptowane, więc do PR #' + reportData.pr.number
@@ -1450,12 +1577,7 @@ const pageJs = `
       var copy = el('button', 'act');
       copy.type = 'button';
       copy.textContent = 'Kopiuj polecenie';
-      copy.addEventListener('click', function () {
-        // Clipboard access is refused on file:// in some browsers; the command
-        // stays selectable on the page, which is the fallback.
-        if (!navigator.clipboard) return;
-        navigator.clipboard.writeText(command).then(function () { copy.textContent = 'Skopiowano'; }, function () {});
-      });
+      copy.addEventListener('click', function () { flashCopy(copy, command); });
       var link = el('a');
       link.href = reportData.pr.url;
       link.target = '_blank';
@@ -1466,7 +1588,7 @@ const pageJs = `
       box.appendChild(info);
       // With an empty pool there is nothing to run, so the command is not
       // offered at all - only the note saying why.
-      if (acceptedIds.length) {
+      if (ids.length) {
         box.appendChild(code);
         box.appendChild(actions);
       }
@@ -1487,9 +1609,9 @@ const pageJs = `
   });
 
   // ---------- file tree ----------
-  // One row per reviewed path, nested by directory, counting only what the
-  // current filters leave visible - the sidebar is a map of the review, so it
-  // has to shrink with it.
+  // One row per path the change touches - every one of them, not only the files
+  // that drew a finding - nested by directory. The counts are what the current
+  // filters leave visible, so the numbers move while the structure stands still.
   var fileRows = {};
   var dirRows = [];
   var sectionNodes = {};
@@ -1497,20 +1619,30 @@ const pageJs = `
 
   function treeNode(name) { return { name: name, dirs: {}, order: [], files: [] }; }
 
+  var statusLabels = {
+    A: 'Dodany w tej zmianie', M: 'Zmieniony', D: 'Usunięty',
+    R: 'Przeniesiony lub zmieniona nazwa', C: 'Skopiowany', T: 'Zmieniony typ pliku'
+  };
+
   function buildTreeModel() {
     var root = treeNode('');
     var seen = {};
-    reportData.files.forEach(function (file) {
-      if (seen[file.path]) return;
-      seen[file.path] = true;
-      var parts = String(file.path).split('/');
+    // An older report, rendered before the tree carried the change itself, still
+    // has its reported files - one row each is better than an empty sidebar.
+    var entries = (reportData.tree && reportData.tree.length)
+      ? reportData.tree
+      : reportData.files.map(function (file) { return { path: file.path, status: '' }; });
+    entries.forEach(function (entry) {
+      if (seen[entry.path]) return;
+      seen[entry.path] = true;
+      var parts = String(entry.path).split('/');
       var leaf = parts.pop();
       var node = root;
       parts.forEach(function (part) {
         if (!node.dirs[part]) { node.dirs[part] = treeNode(part); node.order.push(part); }
         node = node.dirs[part];
       });
-      node.files.push({ name: leaf, path: file.path });
+      node.files.push({ name: leaf, path: entry.path, status: entry.status || '' });
     });
     return root;
   }
@@ -1559,15 +1691,22 @@ const pageJs = `
       renderTree(dir, kids);
     });
     node.files.forEach(function (file) {
-      var row = el('div', 'tr-row tr-file');
+      // What the change did to the file is worth a glance while scanning the
+      // tree: what it introduced reads differently from what it only touched.
+      var state = file.status === 'A' ? ' tr-added'
+        : (file.status === 'D' ? ' tr-deleted' : (file.status ? ' tr-changed' : ''));
+      var row = el('div', 'tr-row tr-file' + state);
+      if (file.status) row.title = statusLabels[file.status] || '';
+      var mark = el('span', 'tr-mark');
       var name = el('span', 'tr-name');
       name.textContent = file.name;
       var n = el('span', 'n');
+      row.appendChild(mark);
       row.appendChild(name);
       row.appendChild(n);
       row.addEventListener('click', function () { focusFile(file.path); });
       host.appendChild(row);
-      fileRows[file.path] = { row: row, n: n };
+      fileRows[file.path] = { row: row, n: n, mark: mark };
     });
   }
 
@@ -1577,20 +1716,29 @@ const pageJs = `
     entry.twisty.textContent = collapsed ? '▸' : '▾';
   }
 
+  // Only the numbers react here. A row that disappeared as soon as its findings
+  // were filtered away would stop being a map of the change - which is the one
+  // thing the tree is for - so a file with nothing to show is dimmed instead,
+  // and its count left blank rather than set to a zero nobody needs to read.
   function updateTree(counts, worst) {
     Object.keys(fileRows).forEach(function (filePath) {
       var entry = fileRows[filePath];
       var count = counts[filePath] || 0;
-      entry.n.textContent = count;
+      entry.n.textContent = count || '';
       entry.n.style.color = count ? 'var(--sev-' + worst[filePath] + ')' : '';
-      entry.row.hidden = count === 0;
+      // The same badge the finding itself carries, so the tree says at a glance
+      // both that a file was written about and how bad the worst of it is.
+      var badge = count ? severityByKey[worst[filePath]] : null;
+      entry.mark.textContent = badge ? badge.emoji : '';
+      entry.mark.title = badge ? badge.label : '';
+      entry.row.classList.toggle('tr-quiet', count === 0);
     });
     dirRows.forEach(function (entry) {
       var total = 0;
       entry.paths.forEach(function (filePath) { total += counts[filePath] || 0; });
-      entry.n.textContent = total;
-      entry.row.hidden = total === 0;
-      entry.kids.hidden = total === 0 || entry.collapsed;
+      entry.n.textContent = total || '';
+      entry.row.classList.toggle('tr-quiet', total === 0);
+      entry.kids.hidden = entry.collapsed;
     });
   }
 
@@ -1945,6 +2093,7 @@ const pageJs = `
     var ignored = state.ignored.size;
     byId('ignored-count').textContent = 'Zignorowane: ' + ignored;
     byId('accepted-count').textContent = 'Zaakceptowane: ' + state.accepted.size;
+    byId('copy-ids').disabled = state.accepted.size === 0;
     byId('restore').disabled = ignored === 0;
     byId('restore-all').disabled = ignored === 0;
     renderList(counts);
@@ -1977,6 +2126,14 @@ function renderHtml(report, reportName) {
   const prButton = report.pr
     ? `\n        <button type="button" class="act" id="pr-comments">Dodaj komentarze do PR #${escapeHtml(String(report.pr.number))}</button>`
     : '';
+  // The branch names say which change this is, the pull request's own title says
+  // what it is about - and the tab, where only the title survives, is exactly
+  // where that matters most, so it goes into both.
+  const prTitle = (report.pr && report.pr.title) || '';
+  const docTitle = (report.title || 'Code Review') + (prTitle ? ` — ${prTitle}` : '');
+  const prTitleLine = prTitle
+    ? `<span class="h1-pr">${escapeHtml(prTitle)} <span class="h1-pr-n">#${escapeHtml(String(report.pr.number))}</span></span>`
+    : '';
   const toolbar = report.emptyState ? '' : `
     <section class="toolbar" id="toolbar">
       <div class="row">
@@ -2005,6 +2162,7 @@ function renderHtml(report, reportName) {
         <span id="visible-count"></span>
         <span class="grow"></span>
         <span id="accepted-count" class="accepted-count"></span>
+        <button type="button" class="act" id="copy-ids" title="Kopiuj identyfikatory zaakceptowanych znalezisk, oddzielone przecinkami" disabled>Kopiuj ID</button>
         <span id="ignored-count"></span>
         <button type="button" class="act" id="restore" title="Przywróć ostatnio ukryte znalezisko" disabled>Przywróć</button>
         <button type="button" class="act" id="restore-all" disabled>Przywróć wszystkie</button>
@@ -2048,7 +2206,7 @@ function renderHtml(report, reportName) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(report.title || 'Code Review')}</title>
+<title>${escapeHtml(docTitle)}</title>
 <style>${pageCss}</style>
 <script>/* Before the first paint, so a remembered theme never flashes the other one. */
 try{var t=localStorage.getItem('doh-code-review:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
@@ -2057,7 +2215,7 @@ try{var t=localStorage.getItem('doh-code-review:theme');if(t==='dark'||t==='ligh
   <div class="wrap">
     <header class="head">
       <button type="button" class="act theme-toggle" id="theme-toggle">Tryb ciemny</button>
-      <h1>${escapeHtml(report.title || 'Code Review')}</h1>
+      <h1>${escapeHtml(report.title || 'Code Review')}${prTitleLine}</h1>
       <p class="meta">${meta}</p>${skipped}${prWarning}
     </header>
 ${toolbar}    <noscript><div class="note">Ten raport wymaga włączonego JavaScriptu.</div></noscript>
@@ -2090,7 +2248,9 @@ function main(argv) {
   const report = parseReport(markdown);
   const projectRoot = projectRootFor(args.report, args.project);
   warnUnknownChecklistIds(report, projectRoot);
-  attachSnippets(report, projectRoot, { mode: args.mode, base: args.base, branch: args.branch });
+  const source = { mode: args.mode, base: args.base, branch: args.branch };
+  attachSnippets(report, projectRoot, source);
+  report.changed = changedFiles(projectRoot, source);
   const pullRequest = report.emptyState ? { pr: null, warning: null } : detectPullRequest(projectRoot, args.branch);
   report.pr = pullRequest.pr;
   report.prWarning = pullRequest.warning || '';
@@ -2129,7 +2289,8 @@ function main(argv) {
 
 module.exports = {
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
-  projectRootFor, attachSnippets, warnUnknownChecklistIds, buildPayload, renderHtml, detectPullRequest, main,
+  projectRootFor, attachSnippets, warnUnknownChecklistIds, buildPayload, renderHtml, detectPullRequest,
+  changedFiles, treeEntries, main,
 };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

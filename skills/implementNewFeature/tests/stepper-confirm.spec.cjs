@@ -183,3 +183,27 @@ test('feedback do planu też zostawia bramę czynną', async ({ page }) => {
   await expect(page.locator('#sentTrail .msg.user')).toContainText('Rozbij zadanie 2');
   await expect(page.locator('#approve')).toBeEnabled();
 });
+
+test('nowe pytanie czyści niewysłaną odpowiedź na poprzednie', async ({ page }) => {
+  await postState({ step: 2, status: 'in_progress', activeStep: 2,
+    question: { id: 'q1', text: 'Pierwsze pytanie?' } });
+  await page.goto(base);
+  await page.waitForSelector('#freeAnswer');
+  await page.fill('#freeAnswer', 'Odpowiedź na pierwsze');
+  await postState({ question: null });
+  await postState({ step: 2, question: { id: 'q2', text: 'Drugie pytanie?' } });
+  await expect(page.locator('#panel p').first()).toHaveText('Drugie pytanie?');
+  // Tekst odpowiadał na co innego — nowa brama zaczyna pusta, tak jak ślad wysłanych.
+  await expect(page.locator('#freeAnswer')).toHaveValue('');
+});
+
+test('zrewidowany plan czyści niewysłany feedback', async ({ page }) => {
+  await postState({ step: 2, status: 'in_progress', activeStep: 2,
+    reviewSummary: { rev: 1, text: 'Plan na trzy zadania' } });
+  await page.goto(base);
+  await page.waitForSelector('#feedback');
+  await page.fill('#feedback', 'Rozbij zadanie 2');
+  await postState({ step: 2, reviewSummary: { rev: 2, text: 'Plan na cztery zadania' } });
+  await expect(page.locator('.summary-text')).toHaveText('Plan na cztery zadania');
+  await expect(page.locator('#feedback')).toHaveValue('');
+});

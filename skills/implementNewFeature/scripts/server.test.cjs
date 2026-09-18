@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const http = require('http');
 const { createApp } = require('./server.cjs');
 
 function tmpDir() {
@@ -94,7 +95,7 @@ test('POST /api/state enables the Mockups step and round-trips mockupReview', as
   assert.equal((await task0(base)).mockupReview, null);
 });
 
-test('the server owns the mockup rev and the chat, not the orchestrator', async t => {
+test('the server owns the mockup rev, and the step owns the chat', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);
   t.after(() => app.server.close());
@@ -103,25 +104,24 @@ test('the server owns the mockup rev and the chat, not the orchestrator', async 
   // Round 1: the orchestrator sends the round, never a counter and never the chat.
   await postState(base, { mockupReview: { text: 'Pierwsza wersja', screens },
     mockupChat: { role: 'agent', text: 'Pierwsza wersja' } });
-  let r = (await task0(base)).mockupReview;
-  assert.equal(r.rev, 1);
-  assert.deepEqual(r.chat, [{ role: 'agent', text: 'Pierwsza wersja' }]);
+  const chatOf = async () => (await task0(base)).steps[2].chat;
+  assert.equal((await task0(base)).mockupReview.rev, 1);
+  assert.deepEqual(await chatOf(), [{ role: 'agent', text: 'Pierwsza wersja' }]);
   // The user's feedback appends without resending anything.
-  await postState(base, { mockupChat: { role: 'user', text: 'Szerszy przycisk' } });
-  r = (await task0(base)).mockupReview;
-  assert.equal(r.rev, 1, 'feedback is not a new round');
-  assert.equal(r.chat.length, 2);
+  await postState(base, { step: 3, mockupChat: { role: 'user', text: 'Szerszy przycisk' } });
+  assert.equal((await task0(base)).mockupReview.rev, 1, 'feedback is not a new round');
+  assert.equal((await chatOf()).length, 2);
   // Round 2 carries the chat forward and moves the counter the UI re-renders on.
-  await postState(base, { mockupReview: { text: 'Druga wersja', screens },
+  await postState(base, { step: 3, mockupReview: { text: 'Druga wersja', screens },
     mockupChat: { role: 'agent', text: 'Druga wersja' } });
-  r = (await task0(base)).mockupReview;
-  assert.equal(r.rev, 2);
-  assert.deepEqual(r.chat.map(m => m.role), ['agent', 'user', 'agent']);
-  // Clearing the panel and starting over keeps the counter monotonic.
+  assert.equal((await task0(base)).mockupReview.rev, 2);
+  assert.deepEqual((await chatOf()).map(m => m.role), ['agent', 'user', 'agent']);
+  // Clearing the panel and starting over keeps the counter monotonic - and keeps the
+  // conversation, which belongs to the step the user held it on, not to one round.
   await postState(base, { mockupReview: null });
   await postState(base, { mockupReview: { text: 'Trzecia', screens } });
   assert.equal((await task0(base)).mockupReview.rev, 3);
-  assert.deepEqual((await task0(base)).mockupReview.chat, []);
+  assert.equal((await chatOf()).length, 3);
 });
 
 function writeMockup(dir, taskId, name, body) {
@@ -676,12 +676,12 @@ test('POST /api/answer records mockup feedback in the chat as it arrives', async
     mockupReview: { text: 'Two screens', screens: [] } });
   await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'feedback',
     text: 'Wider button' });
-  const chat = (await task0(base)).mockupReview.chat;
-  assert.deepStrictEqual(chat, [{ role: 'user', text: 'Wider button' }],
+  assert.deepStrictEqual((await task0(base)).steps[2].chat,
+    [{ role: 'user', text: 'Wider button' }],
     'the browser gets its message back without waiting for the orchestrator');
   // Approve is not a chat message.
   await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'approve' });
-  assert.strictEqual((await task0(base)).mockupReview.chat.length, 1);
+  assert.strictEqual((await task0(base)).steps[2].chat.length, 1);
 });
 
 test('POST /api/state stamps reviewSummary with a fresh rev every round', async t => {
@@ -926,4 +926,270 @@ test('a body that will not parse is a caller error, not a server error', async t
   assert.match((await res.json()).error, /malformed JSON body/);
   const ok = await postState(base, { step: 1, status: 'completed' });
   assert.strictEqual(ok.status, 200, 'a good body still goes through');
+});
+
+// --- Model, effort i czat per krok ---------------------------------------------
+
+const AGENTS_FORM = {
+  model: 'opus', effort: 'high',
+  steps: {
+    2: { model: 'sonnet', effort: 'low' }, 3: { model: '', effort: '' },
+    4: { model: '', effort: 'max' }, 5: { model: '', effort: '' },
+    6: { model: 'haiku', effort: '' }, 7: { model: '', effort: '' }
+  }
+};
+
+const step1 = (base, extra) => post(base, '/api/answer', { taskId: 't1', kind: 'step1',
+  taskDescription: 'Opis', businessRequirements: 'Wymagania', branch: 'feature/x', ...extra });
+
+test('krok 1 zapamiętuje model i effort agenta, globalnie i per krok', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { agents: AGENTS_FORM });
+  const { agents } = (await task0(base)).step1;
+  assert.strictEqual(agents.model, 'opus');
+  assert.strictEqual(agents.effort, 'high');
+  assert.deepStrictEqual(agents.steps['2'], { model: 'sonnet', effort: 'low' });
+  assert.deepStrictEqual(agents.steps['4'], { model: '', effort: 'max' });
+  assert.deepStrictEqual(agents.steps['6'], { model: 'haiku', effort: '' });
+  // Kroki bez nadpisania dziedziczą — w stanie stoją jako puste, nie jako brak klucza.
+  assert.deepStrictEqual(Object.keys(agents.steps), ['2', '3', '4', '5', '6', '7']);
+});
+
+test('model i effort spoza listy schodzą do dziedziczenia, nie lecą do agenta', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  // Wartość, której narzędzie Agent nie zna, wywaliłaby spawn w połowie runu.
+  await step1(base, { agents: { model: 'gpt-4', effort: 'ultra',
+    steps: { 4: { model: 'sonnet-5-mega', effort: 'wysoki' } } } });
+  const { agents } = (await task0(base)).step1;
+  assert.strictEqual(agents.model, '');
+  assert.strictEqual(agents.effort, '');
+  assert.deepStrictEqual(agents.steps['4'], { model: '', effort: '' });
+});
+
+test('formularz bez ustawień agenta daje pełny, pusty zestaw', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, {});
+  const { agents } = (await task0(base)).step1;
+  assert.strictEqual(agents.model, '');
+  assert.strictEqual(agents.effort, '');
+  assert.deepStrictEqual(agents.steps['5'], { model: '', effort: '' });
+});
+
+test('każdy krok startuje z pustym czatem', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.ok((await task0(base)).steps.every(s => Array.isArray(s.chat) && s.chat.length === 0));
+});
+
+test('POST /api/state dopisuje linię agenta do czatu wskazanego kroku', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 4, status: 'in_progress', activeStep: 4,
+    chat: { role: 'agent', text: 'Robię to inaczej — bez migracji.' } });
+  const task = await task0(base);
+  assert.deepStrictEqual(task.steps[3].chat,
+    [{ role: 'agent', text: 'Robię to inaczej — bez migracji.' }]);
+  assert.deepStrictEqual(task.steps[4].chat, [], 'czat należy do kroku, nie do taska');
+  // Rola inna niż user jest agentem: przeglądarka rysuje tylko te dwie.
+  await postState(base, { step: 4, chat: { role: 'system', text: 'x' } });
+  assert.strictEqual((await task0(base)).steps[3].chat[1].role, 'agent');
+});
+
+test('czat bez podanego kroku jest odrzucany, nie ginie po cichu', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const res = await postState(base, { chat: { role: 'agent', text: 'donikąd' } });
+  assert.strictEqual(res.status, 400);
+  assert.match((await res.json()).error, /chat/);
+});
+
+test('mockupChat pisze do czatu kroku 3, a runda mockupów go nie kasuje', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const screens = [{ id: 'login', title: 'Logowanie', file: 'login.html' }];
+  await postState(base, { step: 3, enabled: true });
+  await postState(base, { step: 3, mockupReview: { text: 'Pierwsza wersja', screens },
+    mockupChat: { role: 'agent', text: 'Pierwsza wersja' } });
+  assert.deepStrictEqual((await task0(base)).steps[2].chat,
+    [{ role: 'agent', text: 'Pierwsza wersja' }]);
+  await postState(base, { step: 3, mockupReview: { text: 'Druga wersja', screens },
+    mockupChat: { role: 'agent', text: 'Druga wersja' } });
+  const task = await task0(base);
+  assert.strictEqual(task.mockupReview.rev, 2);
+  assert.deepStrictEqual(task.steps[2].chat.map(m => m.text),
+    ['Pierwsza wersja', 'Druga wersja'], 'transkrypcja przeżywa kolejne rundy');
+  assert.strictEqual(task.mockupReview.chat, undefined,
+    'czat ma jedno miejsce — krok, nie panel recenzji');
+});
+
+test('POST /api/answer kind=message dopisuje linię użytkownika i budzi pętlę', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 4, status: 'in_progress', activeStep: 4 });
+  const waiting = fetch(`${base}/api/answer?wait=5`).then(r => r.json());
+  await post(base, '/api/answer',
+    { taskId: 't1', kind: 'message', step: 4, text: 'Pomiń cache, zrób to synchronicznie' });
+  const { answer } = await waiting;
+  assert.strictEqual(answer.kind, 'message');
+  assert.strictEqual(answer.step, 4);
+  assert.strictEqual(answer.taskId, 't1');
+  assert.deepStrictEqual((await task0(base)).steps[3].chat,
+    [{ role: 'user', text: 'Pomiń cache, zrób to synchronicznie' }],
+    'przeglądarka widzi swoją wiadomość bez czekania na orkiestratora');
+});
+
+test('message do nieistniejącego kroku jest odrzucany', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const res = await post(base, '/api/answer',
+    { taskId: 't1', kind: 'message', step: 9, text: 'halo' });
+  assert.strictEqual(res.status, 400);
+  const { answer } = await (await fetch(`${base}/api/answer`)).json();
+  assert.strictEqual(answer, null, 'odrzucona wiadomość nie trafia do kolejki');
+});
+
+test('stan wczytany sprzed czatu dostaje puste czaty zamiast wywracać panel', async t => {
+  const dir = tmpDir();
+  // Dokładnie to, co leży na dysku po runie z poprzedniej wersji skilla.
+  const old = { tasks: [{ id: 't1', branch: '', root: null, activeStep: 4,
+    steps: [1, 2, 3, 4, 5, 6, 7].map(id => ({ id, name: `S${id}`, status: 'waiting',
+      progress: null, enabled: true, currentOperation: '', report: null, log: [] })),
+    question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0, reviewSummary: null,
+    mockupReview: null, summary: null, step1: null, step1Submitted: false,
+    authSaved: false }], nextTaskId: 2 };
+  fs.writeFileSync(path.join(dir, 'pipeline-state.json'), JSON.stringify(old));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.ok((await task0(base)).steps.every(s => Array.isArray(s.chat)));
+  const res = await postState(base, { step: 4, chat: { role: 'agent', text: 'wracam' } });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual((await task0(base)).steps[3].chat.length, 1);
+});
+
+test('czat makiet trafia do kroku o id 3, nie na trzecią pozycję listy', async t => {
+  const dir = tmpDir();
+  // Stan z kolejnością kroków inną niż domyślna: id są kontraktem, pozycja nie.
+  const shuffled = { tasks: [{ id: 't1', branch: '', root: null, activeStep: 1,
+    steps: [3, 1, 2, 4, 5, 6, 7].map(id => ({ id, name: `S${id}`, status: 'waiting',
+      progress: null, enabled: true, currentOperation: '', report: null, log: [], chat: [] })),
+    question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0, reviewSummary: null,
+    mockupReview: null, summary: null, step1: null, step1Submitted: false,
+    authSaved: false }], nextTaskId: 2 };
+  fs.writeFileSync(path.join(dir, 'pipeline-state.json'), JSON.stringify(shuffled));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+
+  await postState(base, { mockupChat: { role: 'agent', text: 'makieta gotowa' } });
+  const steps = (await task0(base)).steps;
+  assert.deepStrictEqual(steps.find(s => s.id === 3).chat,
+    [{ role: 'agent', text: 'makieta gotowa' }]);
+  assert.deepStrictEqual(steps.find(s => s.id === 2).chat, [],
+    'trzecia pozycja listy to nie krok 3');
+});
+
+test('czat makiet w stanie bez kroku 3 jest głośnym błędem, nie wywrotką', async t => {
+  const dir = tmpDir();
+  const short = { tasks: [{ id: 't1', branch: '', root: null, activeStep: 1,
+    steps: [1, 2].map(id => ({ id, name: `S${id}`, status: 'waiting', progress: null,
+      enabled: true, currentOperation: '', report: null, log: [], chat: [] })),
+    question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0, reviewSummary: null,
+    mockupReview: null, summary: null, step1: null, step1Submitted: false,
+    authSaved: false }], nextTaskId: 2 };
+  fs.writeFileSync(path.join(dir, 'pipeline-state.json'), JSON.stringify(short));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+
+  const res = await postState(base, { mockupChat: { role: 'agent', text: 'donikąd' } });
+  assert.strictEqual(res.status, 400);
+  assert.match((await res.json()).error, /unknown step 3/);
+});
+
+// --- Stały port 9999 i klucz projektu ------------------------------------------
+
+const DEFAULT_PORT = 9999;
+
+// Uruchomienie server.cjs tak, jak robi to launcher, i poczekanie na server.json.
+function spawnServer(t, dir, args) {
+  const child = spawn(process.execPath,
+    [path.join(__dirname, 'server.cjs'), '--session-dir', dir, ...(args || [])],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  let err = '';
+  child.stderr.on('data', c => { err += c; });
+  const dead = new Promise(r => child.on('exit', r));
+  t.after(async () => { try { child.kill(); } catch (_e) {} await dead; });
+  return {
+    child,
+    stderr: () => err,
+    exit: (ms = 8000) => Promise.race([
+      new Promise(r => child.on('exit', code => r(code))),
+      new Promise(r => setTimeout(() => r('still running'), ms))
+    ]),
+    async info(ms = 5000) {
+      const file = path.join(dir, 'server.json');
+      for (let i = 0; i < ms / 50 && !fs.existsSync(file); i++) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+    }
+  };
+}
+
+test('bez --port serwer siada na 9999, bo tam użytkownik ma otwartą kartę', async t => {
+  const srv = spawnServer(t, tmpDir());
+  const info = await srv.info();
+  assert.ok(info, 'server.json powstał: ' + srv.stderr());
+  assert.strictEqual(info.port, DEFAULT_PORT);
+});
+
+test('zajęty 9999 to głośna awaria, nie ciche przeniesienie na inny port', async t => {
+  // Cicha zmiana portu jest gorsza niż brak startu: orkiestrator i wszystkie prompty
+  // sub-agentów niosą 9999, więc run wyglądałby na żywy, a panele stałyby martwe.
+  const squatter = http.createServer((_q, r) => r.end());
+  await new Promise(r => squatter.listen(DEFAULT_PORT, '127.0.0.1', r));
+  t.after(() => new Promise(r => squatter.close(r)));
+  const dir = tmpDir();
+  const srv = spawnServer(t, dir);
+  const code = await srv.exit();
+  assert.notStrictEqual(code, 0, 'proces kończy się błędem');
+  assert.match(srv.stderr(), /9999/, 'komunikat nazywa port, o który chodzi');
+  assert.ok(!fs.existsSync(path.join(dir, 'server.json')),
+    'nie zostaje server.json, który kłamałby o żywym serwerze');
+});
+
+test('GET /api/state niesie klucz projektu, stały w obrębie jednego doh/', async t => {
+  const root = tmpDir();
+  const doh = path.join(root, '.claude', 'doh');
+  const mk = async ts => {
+    const dir = path.join(doh, ts);
+    fs.mkdirSync(dir, { recursive: true });
+    const app = createApp(dir);
+    const base = await listen(app);
+    t.after(() => app.server.close());
+    return (await getState(base)).project;
+  };
+  const a = await mk('20260918-100000');
+  const b = await mk('20260918-110000');
+  assert.ok(a && typeof a === 'string', 'klucz jest w odpowiedzi');
+  assert.strictEqual(a, b, 'dwa runy tego samego projektu dzielą klucz');
+  const other = createApp(tmpDir());
+  const otherBase = await listen(other);
+  t.after(() => other.server.close());
+  assert.notStrictEqual((await getState(otherBase)).project, a, 'inny projekt, inny klucz');
+  // Klucz nie jest ścieżką: w localStorage przeglądarki nie ma po co trzymać dysku.
+  assert.ok(!a.includes(path.sep) && !a.includes('/'), 'klucz jest nieprzezroczysty');
 });
