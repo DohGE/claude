@@ -1119,6 +1119,37 @@ test('czat makiet w stanie bez kroku 3 jest głośnym błędem, nie wywrotką', 
   assert.match((await res.json()).error, /unknown step 3/);
 });
 
+test('literówka w nazwie pola to głośny błąd, nie ciche 200', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+
+  const res = await postState(base, { step: 4, currentOperationn: 'Piszę kod' });
+  assert.strictEqual(res.status, 400);
+  assert.match((await res.json()).error, /unknown field.* currentOperationn/);
+  // I nic z takiego ciała nie zostaje zastosowane — nawet pola, które są poprawne.
+  const task = await task0(base);
+  assert.strictEqual(task.steps[3].currentOperation, '');
+  assert.strictEqual(task.steps[3].status, 'waiting');
+});
+
+test('poprawne ciało przechodzi w całości, z każdym polem kontraktu', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+
+  const res = await postState(base, {
+    step: 4, status: 'in_progress', enabled: true, progress: 40,
+    currentOperation: 'Task 2/5', report: null, logEntry: 'zrobione',
+    chat: { role: 'agent', text: 'lecę dalej' }, activeStep: 4, branch: 'feature/x',
+    root: null, question: null, reviewSummary: null, mockupReview: null, summary: null,
+  });
+  assert.strictEqual(res.status, 200);
+  const task = await task0(base);
+  assert.strictEqual(task.steps[3].currentOperation, 'Task 2/5');
+  assert.strictEqual(task.branch, 'feature/x');
+});
+
 // --- Stały port 9999 i klucz projektu ------------------------------------------
 
 const DEFAULT_PORT = 9999;

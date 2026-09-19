@@ -908,6 +908,35 @@ test('parseDiff reads additions and anchors removals on the new file', () => {
   assert.strictEqual(rr.parseDiff('diff --git a/x b/x\n'), null, 'a header-only diff carries no change');
 });
 
+test('a changed line whose own text starts with ++ or -- is content, not a header', () => {
+  // `++i;` added is written `+` + `++i;` = `+++i;`, and `--x;` removed is `---x;`.
+  // Skipped as headers, they were dropped from the diff AND left the cursor
+  // behind, so every later line of the hunk was highlighted one row off.
+  const added = rr.parseDiff([
+    'diff --git a/src/a.ts b/src/a.ts',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,0 +2,3 @@',
+    '+++i;',
+    '+second',
+    '+third',
+    '',
+  ].join(String.fromCharCode(10)));
+  assert.deepStrictEqual([...added.added].sort((a, b) => a - b), [2, 3, 4]);
+
+  const removed = rr.parseDiff([
+    'diff --git a/src/a.ts b/src/a.ts',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -5,2 +5,0 @@',
+    '---x;',
+    '-second',
+    '',
+  ].join(String.fromCharCode(10)));
+  assert.deepStrictEqual([...removed.removed.entries()],
+    [[6, [{ n: 5, text: '--x;' }, { n: 6, text: 'second' }]]],
+    'both removed lines are kept, and the old numbering does not skip one');
+});
 test('parseDiff tracks how far the old numbering runs ahead of the new one', () => {
   // Two lines added at new 2-3, one line dropped at old 8: from new line 4 on
   // the old file is 2 lines behind, from new line 10 on only 1.
@@ -1498,4 +1527,20 @@ test('each report keeps its accepted and ignored pools to itself', () => {
   // on the expression the page runs rather than on the name sitting in the data.
   assert.match(a, /storeKey = 'doh-code-review:' [+] reportData[.]reportName/,
     'the storage key is derived from the report name, not a constant');
+});
+
+test('a second coverage marker for one file is named, like a second checklist block', () => {
+  // Two markers list the file twice under "Pokrycie checklist", and a reader
+  // counting proof lines gets a number no file backs. A duplicate BLOCK was
+  // already named at parse time; the marker beside it was not.
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '',
+    findingOf({}),
+    checklistOf('src/a.ts', ['[x] general#1 nazwy — OK (L1)']),
+    '<!-- coverage: src/a.ts 1/1 -->',
+    '<!-- coverage: src/a.ts 1/1 -->',
+  ));
+  assert.ok(report.warnings.some((w) => /drugi marker coverage/.test(w)),
+    `expected a duplicate-marker warning, got: ${JSON.stringify(report.warnings)}`);
 });

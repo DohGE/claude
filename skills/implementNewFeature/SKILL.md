@@ -58,6 +58,11 @@ Two server caps bound what a form can carry: a request body over 25 MB is answer
 visible `[…ucięte…]` marker at the end. A pasted OpenAPI contract can reach that: when you see the
 marker in `requirements.md`, say so to the user instead of passing the half document on.
 
+POST `/api/state` takes only the fields listed in its contract, and a body carrying any other name
+is answered `400 unknown field(s) <name> - expected one of …` with NOTHING applied. Read that as a
+typo in the body you just sent, never as a broken server: a mistyped field used to come back 200
+while the panel quietly stopped following the run.
+
 **Which step a user is LOOKING at is never an event.** The stepper's tiles walk them back and forth
 over the steps a task has already reached, and the requirements form is one of those tiles. None of
 that reaches you, so never expect a "went back" message and never move `activeStep` to follow the

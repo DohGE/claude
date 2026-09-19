@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Deterministic mechanics for the doh:fixPrComments skill: argument parsing,
+// Deterministic mechanics for the doh:fixPr skill: argument parsing,
 // the commit message derived from the pull request title, and the per-branch
 // JSON of everything a reviewer said that is still open.
 //
@@ -48,14 +48,23 @@ function parseArgs(argv) {
 // inventing one from the branch name.
 // A title that OPENS with the colon leaves an empty prefix, and `: CR` names
 // nothing at all; the leading colons are dropped and the rest used instead.
-function commitMessageFor(title) {
+function commitPrefixFor(title) {
   const text = String(title == null ? '' : title).trim();
   if (!text) return null;
   const at = text.indexOf(':');
   const prefix = (at === -1 ? text : text.slice(0, at)).trim();
-  if (prefix) return `${prefix}: CR`;
+  if (prefix) return prefix;
   const rest = text.replace(/^:+/, '').trim();
-  return rest ? `${rest}: CR` : null;
+  return rest || null;
+}
+
+// The `CR` form, for a run that fixed at least one review comment. A run that
+// fixed only red checks builds `<prefix>: Fix <labels>` instead, and it can only
+// do that once the work is done - which is why the prefix travels to the agent
+// beside this ready-made message rather than the message alone.
+function commitMessageFor(title) {
+  const prefix = commitPrefixFor(title);
+  return prefix ? `${prefix}: CR` : null;
 }
 
 function isDirectory(p) {
@@ -77,7 +86,10 @@ function pruneArtifacts(branchDir, retain = artifactsRetain) {
     return;
   }
   const stamped = names
-    .filter((name) => /-fix-pr-comments-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/.test(name))
+    // Both spellings: runs before the skill was renamed wrote
+    // `-fix-pr-comments-<stamp>.json`, and a pattern that no longer matched them
+    // would leave every one of those files in the folder for good.
+    .filter((name) => /-fix-pr-(comments-)?\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/.test(name))
     .map((name) => {
       const full = path.join(branchDir, name);
       let mtime = 0;
@@ -149,22 +161,29 @@ function collectBranch(branch, ctx) {
   }
 
   const candidates = open.length + conversation.comments.length + reviews.reviews.length;
+  // Not a reason to drop the branch any more. A run is responsible for the whole
+  // pull request, and one with every comment resolved can still be sitting on a
+  // red build - which is exactly the branch a reviewer expects this skill to
+  // finish off. The warning says what the run narrowed to, not that it stopped.
   if (candidates === 0) {
-    result.warnings.push(`${branch}: pull request #${pr.number} has nothing open to fix${resolvedCount ? ` (${resolvedCount} thread(s) already resolved)` : ''}; skipped.`);
-    return null;
+    result.warnings.push(`${branch}: pull request #${pr.number} has no open comments${resolvedCount ? ` (${resolvedCount} thread(s) already resolved)` : ''}; this run will only bring its checks green.`);
   }
 
   const dir = sanitizeBranchName(branch);
   const branchDir = path.join(reportsDir, dir);
   fs.mkdirSync(branchDir, { recursive: true });
   pruneArtifacts(branchDir);
-  const commentsPath = path.join(branchDir, `${dir}-fix-pr-comments-${stamp}.json`);
-  const reportPath = path.join(branchDir, `${dir}-fix-pr-comments-${stamp}.md`);
+  const commentsPath = path.join(branchDir, `${dir}-fix-pr-${stamp}.json`);
+  const reportPath = path.join(branchDir, `${dir}-fix-pr-${stamp}.md`);
   // Where the branch's agent brief is rendered. Deliberately unstamped: one file
   // per branch, overwritten by each run, so the orchestrator never computes a
   // path of its own and the folder does not grow a prompt per run. Two runs
   // cannot race for it - the worktree guard refuses a second run on one branch.
   const promptPath = path.join(branchDir, `${dir}-fix-pr-agent-prompt.md`);
+  // Where checks.cjs writes one log per gate step. Unstamped for the same reason
+  // as the brief, and outside the worktree for the same reason as the report: a
+  // build log written inside the checkout is a file the commit could pick up.
+  const checksDir = path.join(branchDir, `${dir}-fix-pr-checks`);
   const payload = {
     branch,
     pr: { number: pr.number, title: pr.title, url: pr.url, base: pr.base },
@@ -181,9 +200,11 @@ function collectBranch(branch, ctx) {
     branch,
     pr: payload.pr,
     commitMessage,
+    commitPrefix: commitPrefixFor(pr.title),
     commentsPath,
     reportPath,
     promptPath,
+    checksDir,
     worktree: worktreePathFor(project, branch),
     counts: {
       openThreads: open.length,
@@ -262,6 +283,6 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, commitMessageFor, pruneArtifacts, collectBranch, collect };
+module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect };
 
 if (require.main === module) main();

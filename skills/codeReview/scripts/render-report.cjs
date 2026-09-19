@@ -326,6 +326,12 @@ function parseReport(markdown) {
       }
       const coverageMatch = line.match(reCoverage);
       if (coverageMatch) {
+        // Named for the same reason a second checklist block is: two markers for
+        // one path list the file twice under "Pokrycie checklist", and a reader
+        // counting proof lines gets a number no file backs.
+        if (report.coverage.some((c) => c.path === coverageMatch[1])) {
+          report.warnings.push(`${coverageMatch[1]}: drugi marker coverage dla tego samego pliku (linia ${lineNo}).`);
+        }
         if (coverageMatch[2] === 'mechanical') {
           // A narrowed walk is the complete proof for such a file, not a gap.
           report.coverage.push({ path: coverageMatch[1], checked: null, total: null, mechanical: true });
@@ -546,9 +552,20 @@ function parseDiff(diffText) {
   let cursor = 0;
   let anchor = 0;
   let oldCursor = 0;
+  // Inside a hunk every line carries a one-character prefix, so `+++i;` is the
+  // added source line `++i;` and `---x;` is the removed `--x;`. Skipping those as
+  // if they were the `+++ b/path` header dropped the line from the diff AND left
+  // the cursor behind, so every later line of the hunk was highlighted one row
+  // off in the report. Headers exist only before the first hunk of a file.
+  let inHunk = false;
   for (const line of String(diffText).split(/\r?\n/)) {
+    if (line.startsWith('diff --git ')) {
+      inHunk = false;
+      continue;
+    }
     const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunk) {
+      inHunk = true;
       const oldStart = Number(hunk[1]);
       const oldCount = hunk[2] === undefined ? 1 : Number(hunk[2]);
       const start = Number(hunk[3]);
@@ -562,7 +579,7 @@ function parseDiff(diffText) {
       shifts.push({ from: afterNew, delta: (oldCount === 0 ? oldStart + 1 : oldStart + oldCount) - afterNew });
       continue;
     }
-    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (!inHunk) continue;
     if (line.startsWith('+')) {
       added.add(cursor);
       cursor++;

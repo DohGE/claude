@@ -49,6 +49,31 @@ test('globToRegExp supports the documented subset', () => {
   assert.ok(!rc.globToRegExp('**/*.component.ts').test('src/app/x.service.ts'));
 });
 
+test('one pattern is compiled once, and the shared regex answers the same every time', () => {
+  const first = rc.globToRegExp('**/*.spec.ts');
+  assert.strictEqual(rc.globToRegExp('**/*.spec.ts'), first, 'the compiled glob is reused');
+  // A `g` or `y` flag would make the shared object stateful: `test` would then
+  // walk lastIndex and return true, false, true for one unchanging path, and a
+  // review would drop every other file from an instruction's scope.
+  assert.strictEqual(first.flags, '');
+  for (let i = 0; i < 4; i++) {
+    assert.ok(first.test('src/a.spec.ts'), `call ${i} must answer the same`);
+    assert.ok(!first.test('src/a.ts'));
+  }
+});
+
+test('splitPatterns answers the same on every call, cached or not', () => {
+  const patterns = ['**/*.ts', '!**/*.spec.ts'];
+  const first = rc.splitPatterns(patterns);
+  assert.deepStrictEqual(first, { include: ['**/*.ts'], exclude: ['**/*.spec.ts'] });
+  assert.deepStrictEqual(rc.splitPatterns(patterns), first);
+  // A fresh array with the same content is a different scope list, and gets its
+  // own answer rather than the first one's.
+  assert.deepStrictEqual(rc.splitPatterns(['**/*.ts', '!**/*.spec.ts']), first);
+  assert.deepStrictEqual(rc.splitPatterns([]), { include: [], exclude: [] });
+  assert.deepStrictEqual(rc.splitPatterns(undefined), { include: [], exclude: [] });
+});
+
 test('parseFrontmatter extracts applies-to globs and audience', () => {
   const md = '---\nname: Angular TS\napplies-to:\n  - "**/*.component.ts"\n  - \'**/*.service.ts\'\n---\n## Checklist\n- rule\n';
   assert.deepStrictEqual(rc.parseFrontmatter(md).appliesTo, ['**/*.component.ts', '**/*.service.ts']);
@@ -156,6 +181,34 @@ test('detectBaseBranch honors origin/HEAD and origin-only branches', (t) => {
   assert.strictEqual(rc.detectBaseBranch(dir, 'feature/z', 'feature/z').ref, 'origin/release');
 });
 
+test('the one-call distances agree with asking each ref on its own', (t) => {
+  // detectForkBase reads every candidate's distance out of a single
+  // `for-each-ref %(ahead-behind:...)`, which replaced sixty `rev-list --count`
+  // spawns. The two must answer identically for every shape a repo can have -
+  // a candidate the branch is ahead of, one that contains it, and one it has
+  // diverged from - or the base a review diffs against silently changes.
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'develop']);
+  commitFile(dir, 'd.txt', 'd', 'develop work');
+  run(dir, ['checkout', '-q', '-b', 'sibling']);
+  commitFile(dir, 's.txt', 's', 'sibling work');
+  run(dir, ['checkout', '-q', 'develop']);
+  run(dir, ['checkout', '-q', '-b', 'feature/x']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  commitFile(dir, 'f2.txt', 'f2', 'more feature work');
+  run(dir, ['update-ref', 'refs/remotes/origin/develop', 'develop']);
+  run(dir, ['branch', 'contains-it', 'feature/x']);
+
+  const counts = rc.aheadCounts(dir, 'feature/x');
+  assert.ok(counts && counts.size > 0, 'this git can answer in one call');
+  for (const [ref, count] of counts) {
+    const alone = Number(rc.tryGit(dir, ['rev-list', '--count', 'feature/x', `^${ref}`]));
+    assert.strictEqual(count, alone, `${ref}: one call said ${count}, rev-list said ${alone}`);
+  }
+  // And the base itself is still the branch it forked from, not a sibling and
+  // not a branch made FROM it.
+  assert.strictEqual(rc.detectForkBase(dir, 'feature/x', 'feature/x'), 'develop');
+});
 // A findOpenPr stub, same shape as github.cjs returns, so no test ever reaches
 // the network. github.test.cjs covers the real lookup and its gating.
 function prStub(pr, error = null) {

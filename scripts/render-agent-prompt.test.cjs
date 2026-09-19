@@ -164,8 +164,9 @@ test('every shipped agent template renders with the placeholders its skill docum
     SKILL_DIR: '/k', LANGUAGE: 'Polish', EFFORT: '',
     BRANCH: 'feature/a', PR_NUMBER: '7', PR_URL: 'https://gh/p/7',
     COMMENTS: '/c.json', REPORT: '/r.md', COMMIT_MESSAGE: 'feat(X): CR', PUSH: 'yes',
+    CHECKS_DIR: '/c/checks', COMMIT_PREFIX: 'feat(X)', INSTALLED: 'yes',
   };
-  const refs = ['implementNewFeature', 'fixPrComments'].flatMap((skill) => {
+  const refs = ['implementNewFeature', 'fixPr'].flatMap((skill) => {
     const refDir = path.join(__dirname, '..', 'skills', skill, 'references');
     return fs.readdirSync(refDir).filter((n) => n.endsWith('-agent.md')).map((n) => path.join(refDir, n));
   });

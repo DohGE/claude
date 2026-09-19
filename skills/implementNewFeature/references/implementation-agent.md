@@ -33,8 +33,9 @@ write code that already complies. The matcher below reuses the review-time match
 output is authoritative.
 
 1. Once, before the first task, run
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` and read
-   EVERY file listed in `globals` — those rules bind all code you write. When `projectInstructionsDir`
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` to learn the
+   rulebook `globals` lists. Read them as the files below bind them, not all of them up front:
+   most declare `applies-to`, so which ones bind a given file is a per-file answer. When `projectInstructionsDir`
    is not null the list also carries the repository's own rules, read from `{{ROOT}}/.claude/doh/instructions/`
    (the matcher resolves them under the `--project` you passed, so in a worktree it reads the
    worktree's copy); they bind exactly like the skill's. A worktree is checked out from HEAD, so it
@@ -43,9 +44,12 @@ output is authoritative.
    outside `{{ROOT}}` for it.
 2. Before writing or editing any file, run it again with every file the task touches:
    `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative paths, comma-separated>"`
-   and read each returned `localInstructions` file (skip ones you already read — they stay binding).
+   and read each file it returns under `globalInstructions` AND `localInstructions` for that path
+   (skip ones you already read — they stay binding for the files that listed them).
    Files you only discover mid-task get the same treatment before you write them.
-3. Write the code to satisfy EVERY checklist item of the global + matched local instructions.
+3. Write each file to satisfy EVERY checklist item of the instructions THAT file was given. An
+   instruction a file's path took it out of is not its rule: step 6 narrows the globals the same way,
+   so writing a stylesheet against the test-coverage checklist is effort nothing will ever check.
    They override your own style preferences and generic conventions; `plan.md` still decides WHAT
    to build. A real conflict between an instruction and the plan → follow the instruction for HOW,
    the plan for WHAT, and record it as a deviation.

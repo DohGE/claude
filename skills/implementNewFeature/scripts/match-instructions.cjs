@@ -71,7 +71,7 @@ function buildOutput(options) {
   const hasProjectInstructions = fs.existsSync(projectInstructionsDir)
     && fs.statSync(projectInstructionsDir).isDirectory();
   out.projectInstructionsDir = hasProjectInstructions ? projectInstructionsDir : null;
-  const { globals, locals, warnings } = reviewContext.loadInstructions(
+  const { globals, locals, warnings, scopes } = reviewContext.loadInstructions(
     hasProjectInstructions ? [dir, projectInstructionsDir] : dir, 'implement');
   out.warnings = warnings;
   if (globals.length === 0 && locals.length === 0) {
@@ -79,8 +79,16 @@ function buildOutput(options) {
   }
   const files = options.files || [];
   if (files.length > 0) {
+    // Globals are matched per file, exactly as `buildContext` matches them at
+    // review time. Six of the eight shipped ones declare `applies-to`, so
+    // "every global binds every file" was never true of the review: a
+    // stylesheet was written against test-coverage.md and a file under
+    // `models/` against security.md, and step 6 then checked neither. The whole
+    // point of this script is that what the code is written against is what it
+    // is later reviewed against, and until now that held for locals only.
     out.files = files.map((p) => ({
       path: p,
+      globalInstructions: reviewContext.matchGlobalInstructions(globals, scopes || {}, p),
       localInstructions: reviewContext.matchLocalInstructions(locals, p),
     }));
   } else {

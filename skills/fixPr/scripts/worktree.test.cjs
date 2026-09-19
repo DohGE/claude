@@ -184,6 +184,46 @@ test('installDependencies skips a project with no lockfile instead of guessing',
   assert.deepStrictEqual(wt.installDependencies(dir), { manager: null, error: null });
 });
 
+test('detectPackageManager reads the lockfile the project committed, in precedence order', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-pm-'));
+  assert.strictEqual(wt.detectPackageManager(dir), null);
+  fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}\n');
+  assert.strictEqual(wt.detectPackageManager(dir), 'npm');
+  fs.writeFileSync(path.join(dir, 'yarn.lock'), '\n');
+  assert.strictEqual(wt.detectPackageManager(dir), 'yarn');
+  // pnpm wins over both, so a repository migrating between managers is read as
+  // the one it migrated TO rather than the leftover lockfile it forgot to delete.
+  fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '\n');
+  assert.strictEqual(wt.detectPackageManager(dir), 'pnpm');
+});
+
+test('add reports installed:false, with a reason, for a package.json that has no lockfile', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'package.json', '{"name":"x","scripts":{"lint":"true"}}\n', 'add package.json');
+  fakeRemoteBranch(dir, 'feat');
+  // bootstrap is left ON: with no lockfile there is nothing to install, so no
+  // package manager is ever spawned and the test stays offline.
+  const result = wt.add({ project: dir, branch: 'feat' });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.installed, false);
+  assert.ok(result.warnings.some((w) => /No lockfile/.test(w)), result.warnings.join(' | '));
+});
+
+test('add reports installed:false when the bootstrap was skipped entirely', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const result = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.installed, false);
+});
+
+test('a refused branch still carries installed:false rather than leaving the field absent', (t) => {
+  const dir = makeRepo(t);
+  const result = wt.add({ project: dir, branch: 'never-existed' });
+  assert.match(result.errors[0], /exists neither locally nor on origin/);
+  assert.strictEqual(result.installed, false);
+});
+
 test('remove takes the worktree away once it is clean', (t) => {
   const dir = makeRepo(t);
   fakeRemoteBranch(dir, 'feat');
@@ -267,4 +307,30 @@ test('a worktree that cannot be taken down after a failed fast-forward is named,
   assert.match(result.errors[0], /could not be fast-forwarded/);
   assert.ok(result.warnings.some((w) => /could not be removed/.test(w)));
   assert.strictEqual(result.created, true, 'the checkout is still on disk, and the result says so');
+});
+
+test('taking a worktree down never removes a parent directory the caller owns', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  // An explicit --worktree puts the checkout somewhere of the caller's choosing.
+  const mine = fs.realpathSync(tempDir(t, 'fpc-mine-'));
+  const at = path.join(mine, 'checkout');
+  const added = wt.add({ project: dir, branch: 'feat', worktree: at, bootstrap: false });
+  assert.deepStrictEqual(added.errors, []);
+
+  const gone = wt.remove({ project: dir, branch: 'feat', worktree: at });
+  assert.strictEqual(gone.removed, true);
+  assert.strictEqual(fs.existsSync(at), false, 'the worktree itself goes');
+  assert.strictEqual(fs.existsSync(mine), true, 'the directory it was put in stays');
+});
+
+test('the skill still tidies away its OWN empty worktrees directory', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const added = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.strictEqual(path.dirname(added.worktree), wt.worktreesDirFor(dir));
+
+  wt.remove({ project: dir, branch: 'feat' });
+  assert.strictEqual(fs.existsSync(wt.worktreesDirFor(dir)), false,
+    'the last worktree out turns the light off');
 });

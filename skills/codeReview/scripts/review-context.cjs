@@ -85,7 +85,24 @@ function parseArgs(argv) {
   return args;
 }
 
+// The compiled globs of one run, keyed by the pattern text. The rulebook holds a
+// few dozen patterns and a review asks about every one of them for every changed
+// file, three times over (does this instruction apply, which of its items does
+// this file walk, how many is that) - so an uncached compile here is tens of
+// thousands of `new RegExp` calls for one context build, and half a second of a
+// 300-file diff went nowhere else. The returned regexes carry no `g`/`y` flag, so
+// they hold no lastIndex and sharing one between callers is safe.
+const globCache = new Map();
+
 function globToRegExp(pattern) {
+  const cached = globCache.get(pattern);
+  if (cached) return cached;
+  const compiled = compileGlob(pattern);
+  globCache.set(pattern, compiled);
+  return compiled;
+}
+
+function compileGlob(pattern) {
   const segments = pattern.replace(/\\/g, '/').split('/').filter((s) => s !== '');
   const parts = [];
   for (let i = 0; i < segments.length; i++) {
@@ -262,13 +279,42 @@ function branchRefs(project, branchName) {
 // or already merged into it" and an empty diff is the honest answer. The same
 // zero from a feature branch means that branch was created FROM the reviewed
 // one, and letting a branch's own child become its base would review nothing.
+// How far the branch runs ahead of every candidate, in ONE git call.
+// `%(ahead-behind:<commit>)` prints "<ahead> <behind>" per ref, and `behind` -
+// the commits <commit> has that the ref does not - is exactly what the per-ref
+// `rev-list --count <branch> ^<ref>` below computes. Sixty candidates used to be
+// sixty process spawns, which on Windows is most of a second per reviewed
+// branch, paid again for every branch in a `--branches=a,b,c` run.
+// The atom needs git 2.41; an older one fails the whole call, and a line that
+// does not parse means the answer is not trustworthy as a whole - either way
+// the caller falls back to asking ref by ref.
+function aheadCounts(project, branchRef) {
+  const out = tryGit(project, ['for-each-ref',
+    `--format=%(refname:short) %(ahead-behind:${branchRef})`,
+    '--sort=-committerdate', `--count=${forkCandidateLimit}`,
+    'refs/heads/', 'refs/remotes/origin/']);
+  if (out === null) return null;
+  const counts = new Map();
+  for (const line of out.split('\n')) {
+    const text = line.trim();
+    if (!text) continue;
+    const m = text.match(/^(\S+) (\d+) (\d+)$/);
+    if (!m) return null;
+    counts.set(m[1], Number(m[3]));
+  }
+  return counts.size ? counts : null;
+}
+
 function detectForkBase(project, branchRef, branchName) {
   const preferred = baseCandidates(project);
+  const counts = aheadCounts(project, branchRef);
   let best = null;
   for (const ref of branchRefs(project, branchName)) {
     // Commits the branch has and the candidate does not: 0 means the candidate
     // contains the branch, anything else is how far the branch ran ahead of it.
-    const count = Number(tryGit(project, ['rev-list', '--count', branchRef, `^${ref}`]));
+    const count = counts && counts.has(ref)
+      ? counts.get(ref)
+      : Number(tryGit(project, ['rev-list', '--count', branchRef, `^${ref}`]));
     if (!Number.isFinite(count)) continue;
     const rank = preferred.indexOf(ref.replace(/^origin\//, ''));
     if (count === 0 && rank === -1) continue;
@@ -630,15 +676,29 @@ function loadInstructions(instructionsDirs, audience) {
 // them apart is what lets a broad instruction carve out a folder it has nothing
 // to say about (`test-coverage` over every `.ts` except `**/models/**`) without
 // enumerating every folder it does cover.
+// Keyed by the array itself: a scope list belongs to one loaded instruction and
+// is asked about once per changed file, so splitting it again per file is work
+// whose answer cannot have changed. A WeakMap keeps a rulebook that is reloaded
+// (the tests build several) from pinning the old one in memory.
+const splitCache = new WeakMap();
+
 function splitPatterns(patterns) {
+  if (!patterns) return { include: [], exclude: [] };
+  // Only an object can key a WeakMap, and every caller passes the array a
+  // frontmatter scope list parsed to. Anything else still works, uncached.
+  const cacheable = typeof patterns === 'object';
+  const cached = cacheable ? splitCache.get(patterns) : null;
+  if (cached) return cached;
   const include = [];
   const exclude = [];
-  for (const raw of patterns || []) {
+  for (const raw of patterns) {
     const p = String(raw).trim();
     if (p.startsWith('!')) exclude.push(p.slice(1).trim());
     else include.push(p);
   }
-  return { include, exclude };
+  const split = { include, exclude };
+  if (cacheable) splitCache.set(patterns, split);
+  return split;
 }
 
 // Does this file fall inside the instruction's declared scope? `emptyIncludes`
@@ -832,8 +892,20 @@ function buildContext(options) {
   const scopes = instructions.scopes || {};
   // Which items of an instruction a given file walks: the tagged ones whose
   // scope it falls outside are not its rules and never reach its plan.
-  const itemsFor = (file, filePath) =>
-    matchChecklistItems(parsedItemsOf(file), scopes[file] && scopes[file].itemScopes, filePath);
+  // Memoised per pair, because `makeFiles` asks the same question three times
+  // for every one of them - is this instruction applicable, which items go in
+  // the plan, how many items is that - and the answer cannot differ between
+  // those three. The key separator is a newline: no path or file name holds one.
+  const itemsCache = new Map();
+  const itemsFor = (file, filePath) => {
+    const key = `${file}\n${filePath}`;
+    let items = itemsCache.get(key);
+    if (items === undefined) {
+      items = matchChecklistItems(parsedItemsOf(file), scopes[file] && scopes[file].itemScopes, filePath);
+      itemsCache.set(key, items);
+    }
+    return items;
+  };
 
   // Ids are handed out over EVERY loaded instruction, matched or not, so the
   // same instruction keeps the same id no matter what a given diff touches.
@@ -887,7 +959,7 @@ function buildContext(options) {
           // be able to. Pruning removes the oldest ones, so after enough reviews of one
           // branch the snapshot outlives the evidence it points at.
           if (target.previousReportPath && !fs.existsSync(target.previousReportPath)
-            && !fs.existsSync(target.previousReportPath.replace(/.md$/i, '.html'))) {
+            && !fs.existsSync(target.previousReportPath.replace(/\.md$/i, '.html'))) {
             result.warnings.push(`[${target.branch}] --since-last: the previous report is gone (${target.previousReportPath}), so nothing on disk covers the skipped file(s) any more - re-run this target in full.`);
           }
           target.files = target.files.filter((f) => !unchanged.includes(f.path));
@@ -1165,6 +1237,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { ensureDohGitignore, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { ensureDohGitignore, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();
