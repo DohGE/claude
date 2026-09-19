@@ -31,12 +31,14 @@ missing test hook — is reviewed in step 6 by the `doh:codeReview` skill agains
 checklists, exactly like the step-4 code. Follow the same rulebook the implementation agent followed:
 
 1. Once, before your first application fix, run
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` and read EVERY file
-   listed in `globals` (when `projectInstructionsDir` is not null the list also carries the project's
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` to learn the rulebook
+   `globals` lists (when `projectInstructionsDir` is not null the list also carries the project's
    own rules from `<PROJECT>/.claude/doh/instructions/` — they bind exactly like the skill's).
+   Do not read them all here: most declare `applies-to`, so which bind a file is a per-file answer.
 2. Before editing an application file, run it again with that file:
    `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative paths>"`
-   and read each returned `localInstructions` file (ones you already read stay binding).
+   and read each file it returns under `globalInstructions` AND `localInstructions` for that path
+   (ones you already read stay binding).
 3. Fix the app so it satisfies those checklists — never "just enough to make the test go green".
    A quick fix that breaks a rule does not save time, it moves the work into step 6.
 4. The `DOH-MOCK` code of the mocks section is the one exception: temporary, stripped before this

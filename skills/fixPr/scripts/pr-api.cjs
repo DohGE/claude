@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Everything fixPrComments needs from GitHub that codeReview's github.cjs does
+// Everything fixPr needs from GitHub that codeReview's github.cjs does
 // not already provide: the review THREADS of a pull request, and the two REST
 // lists holding the rest of its discussion.
 //

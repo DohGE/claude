@@ -127,6 +127,32 @@ test('a global declaring applies-to stays a narrowed global, not a local', (t) =
   );
 });
 
+test('every file is given the globals its own path binds, exactly as the review narrows them', (t) => {
+  const dir = makeInstructionsDir(t);
+  writeFile(dir, path.join('global', 'narrowed.md'), REDUCER_INSTRUCTION);
+  const out = mi.buildOutput({ instructionsDir: dir, files: ['x.reducer.ts', 'x.component.scss'] });
+
+  const named = (p) => out.files.find((f) => f.path === p).globalInstructions.map((f) => path.basename(f));
+  // general.md and extra.md declare no applies-to, so they bind everywhere.
+  assert.deepStrictEqual(named('x.reducer.ts').sort(), ['extra.md', 'general.md', 'narrowed.md']);
+  assert.deepStrictEqual(named('x.component.scss').sort(), ['extra.md', 'general.md'],
+    'a global the file falls outside is not one of its rules');
+});
+
+test('the shipped rulebook narrows per file, so a stylesheet is not written against the TS globals', () => {
+  const out = mi.buildOutput({ files: ['src/a.component.scss', 'src/models/user.model.ts'] });
+  assert.deepStrictEqual(out.errors, []);
+  const named = (p) => out.files.find((f) => f.path === p).globalInstructions.map((f) => path.basename(f));
+  const styles = named('src/a.component.scss');
+  assert.ok(!styles.includes('test-coverage.md'), 'a stylesheet carries no spec checklist');
+  assert.ok(!styles.includes('performance.md'));
+  assert.ok(styles.includes('accessibility.md'), 'and it does carry the ones that bite it');
+  const model = named('src/models/user.model.ts');
+  for (const excluded of ['security.md', 'performance.md', 'test-coverage.md']) {
+    assert.ok(!model.includes(excluded), `models/** is excluded from ${excluded}`);
+  }
+});
+
 test('buildOutput reports missing instructions directory as error', (t) => {
   const dir = tempDir(t, 'mi-none-');
   const out = mi.buildOutput({ instructionsDir: path.join(dir, 'nope'), files: ['a.ts'] });

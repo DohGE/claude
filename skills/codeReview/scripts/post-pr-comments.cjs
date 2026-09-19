@@ -61,13 +61,37 @@ function parsePayload(html) {
 // GitHub only accepts an inline comment on a line the diff actually shows, so
 // the RIGHT side of every hunk (added and context lines) is what can be
 // commented on. Everything else has to travel in the review body.
+// Inside a hunk EVERY line carries a one-character prefix, so `+++i;` there is
+// the added source line `++i;` and not a file header, and `@@` there is the next
+// hunk. Reading those as headers is how a file that adds a line starting with
+// `++` used to lose its anchors: `+++ bullet` matched the header pattern, the
+// name did not start with `b/`, and the rest of the file silently stopped being
+// commentable - while `+++i;` was skipped without advancing the cursor, so every
+// later line of that hunk was off by one and comments landed on the wrong code.
+// Headers therefore count only BEFORE the first hunk of a file section, and
+// `diff --git` is what starts the next section.
+const hunkHeader = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
 function commentableLines(diffText) {
   const byPath = new Map();
   let current = null;
   let cursor = 0;
+  let inHunk = false;
   for (const line of String(diffText || '').split(/\r?\n/)) {
-    const header = line.match(/^\+\+\+ (.*)$/);
-    if (header) {
+    if (line.startsWith('diff --git ')) {
+      current = null;
+      inHunk = false;
+      continue;
+    }
+    const hunk = line.match(hunkHeader);
+    if (hunk) {
+      cursor = Number(hunk[1]);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) {
+      const header = line.match(/^\+\+\+ (.*)$/);
+      if (!header) continue;
       // A deleted file has no right side (`+++ /dev/null`); leaving `current`
       // pointing at the previous file would file its lines under that path.
       const name = header[1].trim();
@@ -75,12 +99,9 @@ function commentableLines(diffText) {
       if (current) byPath.set(name.slice(2), current);
       continue;
     }
-    const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (hunk) {
-      cursor = Number(hunk[1]);
-      continue;
-    }
-    if (!current || line.startsWith('---') || line.startsWith('+++')) continue;
+    if (!current) continue;
+    // `\ No newline at end of file` and a removed line leave the right side
+    // where it was; everything the new file keeps or gains advances it.
     if (line.startsWith('+') || line.startsWith(' ')) {
       current.add(cursor);
       cursor++;
@@ -181,16 +202,30 @@ function summaryBodies(payload, comments, leftovers) {
         ? summaryBody(payload, comments, rest.slice(0, take))
         : continuedBody(payload, rest.slice(0, take), bodies.length + 1);
     }
+    // One finding whose own text is longer than a whole review body cannot be
+    // halved any further. Posting it as-is is a 422 AFTER the earlier reviews
+    // have already landed on the pull request - the very failure this splitting
+    // exists to prevent - so it goes out cut, with the cut named.
+    if (body.length > maxReviewBody) body = truncateBody(body);
     bodies.push(body);
     rest = rest.slice(take);
   }
   return bodies;
 }
 
+const truncationNote = '\n\n_Cut here: this finding is longer than one review body can carry — read it in the report._';
+
+function truncateBody(body) {
+  return body.slice(0, maxReviewBody - truncationNote.length) + truncationNote;
+}
+
+// English like every other string that reaches the pull request. The report is
+// Polish and the reader is; the pull request is read by whoever opens it, and a
+// continuation heading was the one place Polish still crossed over.
 function continuedBody(payload, leftovers, part) {
   const full = summaryBody(payload, [], leftovers).split(String.fromCharCode(10));
-  full[0] = `## Code review — ${payload.title} (cd. ${part})`;
-  full.splice(2, 1, 'Dalsze znaleziska spoza diffa PR-a:');
+  full[0] = `## Code review — ${payload.title} (part ${part})`;
+  full.splice(2, 1, 'Further findings outside the PR diff:');
   return full.join(String.fromCharCode(10));
 }
 
@@ -232,7 +267,12 @@ function main(argv, api = github) {
   const findings = [];
   for (const file of payload.files || []) {
     for (const finding of file.findings || []) {
-      if (included ? !included.has(finding.id) : excluded.has(finding.id)) continue;
+      // An exclusion always subtracts, `--include` or not. Reading it only in
+      // the absence of a pool meant `--include=a,b --exclude=b` posted b - and
+      // this is the one flag whose whole purpose is to keep a finding off the
+      // pull request, which is not a thing to get wrong quietly.
+      if (excluded.has(finding.id)) continue;
+      if (included && !included.has(finding.id)) continue;
       findings.push(Object.assign({ path: file.path }, finding));
     }
   }
@@ -246,7 +286,8 @@ function main(argv, api = github) {
   // re-rendered after the pool was saved in the browser.
   if (included) {
     const posted = new Set(findings.map((f) => f.id));
-    const missing = [...included].filter((id) => !posted.has(id));
+    // An id the caller excluded on purpose is not one the report lost.
+    const missing = [...included].filter((id) => !posted.has(id) && !excluded.has(id));
     if (missing.length) {
       process.stderr.write(`Uwaga: ${missing.length} z ${included.size} zaakceptowanych id nie ma w raporcie i NIE zostanie wysłanych: ${missing.join(', ')}. Raport mógł zostać przerenderowany po zaakceptowaniu.\n`);
     }

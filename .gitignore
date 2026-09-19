@@ -2,4 +2,4 @@ docs/
 .idea/
 skills/codeReview/reports/
 .claude/agents/
-skills/fixPrComments/reports/
+skills/fixPr/reports/

@@ -49,6 +49,17 @@ const MAX_LOG = 20;
 // grow the state document without bound.
 const MAX_CHAT = 200;
 const UPLOAD_CATEGORIES = ['mockups', 'contracts', 'hints'];
+// Everything POST /api/state accepts. A body carrying anything else used to be
+// answered 200 with nothing applied: an agent that wrote `currentOperationn`
+// saw success, the panel stopped tracking its run, and the first sign of it was
+// a step that sat at the same operation for twenty minutes. The prompts are
+// hand-written and copied between six agents, which is exactly where a typo
+// comes from, so the body is checked against this list instead.
+// /api/answer is deliberately NOT checked this way: it is a pipe to the
+// orchestrator, and what travels through it belongs to whoever reads it.
+const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
+  'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root',
+  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary']);
 
 // One task is one feature on one branch with its own seven-step pipeline, its own
 // artifacts under tasks/<id>/ and its own sub-agents. A run holds one or more.
@@ -262,6 +273,11 @@ function createApp(sessionDir, opts = {}) {
   }
 
   function applyUpdate(body) {
+    // Checked before anything is applied, so a rejected body changes nothing.
+    const unknown = Object.keys(body).filter((k) => !STATE_FIELDS.has(k));
+    if (unknown.length) {
+      throw new Error(`unknown field(s) ${unknown.join(', ')} - expected one of ${[...STATE_FIELDS].join(', ')}`);
+    }
     const task = findTask(body.taskId);
     if (!task) throw new Error(`unknown task ${body.taskId}`);
     // A chat line with nowhere to go used to vanish: the agent sees 200, the user sees

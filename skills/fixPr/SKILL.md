@@ -1,9 +1,9 @@
 ---
-name: fixPrComments
-description: Use when the user wants the open review comments of one or more pull requests fixed - takes a list of branches separated by `;` or `,` like codeReview, pulls every UNRESOLVED review thread plus the pull request conversation from the GitHub API, fixes them in a background sub-agent per branch inside its own git worktree, verifies with the project's own lint/test/build, and lands one commit named after the pull request title up to its first colon plus `CR`
+name: fixPr
+description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title
 ---
 
-# fixPrComments — background fixing of open pull request comments
+# fixPr — background fixing of open pull request comments and red checks
 
 You are the **orchestrator**. You never read a comment body, never open a project file and never fix
 a line of code yourself: one background sub-agent per branch does all of that inside its own git
@@ -14,9 +14,14 @@ repository and removed afterwards, so the tree the user is standing in keeps wha
 
 ## Hard rules
 
-- NEVER read `commentsPath`, the project's files or the worktree's files into your own context — pass
-  **paths** to the agent. A review of a busy pull request runs to tens of thousands of words, and
-  reading one branch's comments is what makes the third branch run out of room.
+- NEVER read `commentsPath`, `checksDir`, the project's files or the worktree's files into your own
+  context — pass **paths** to the agent. A review of a busy pull request runs to tens of thousands of
+  words and a failing test suite's log to hundreds of kilobytes; reading one branch's is what makes
+  the third branch run out of room.
+- A run is responsible for the WHOLE pull request: the open comments and the red commands alike. A
+  branch with every comment resolved and a red build still has work, and it is not skipped.
+- Never run `lint`, `test` or `build` yourself, in the user's checkout or anywhere else. The gate
+  belongs to the agent, inside its worktree, through `checks.cjs`.
 - Branches run in PARALLEL, one background agent each. Never fix a branch yourself, not for a single
   comment, not to save time, not because only one branch was named.
 - A resolved thread is finished work. The collector already dropped them; never reach for the REST
@@ -40,7 +45,7 @@ repository and removed afterwards, so the tree the user is standing in keeps wha
    - `--keep-worktree` → leave every worktree in place after the run.
 3. Everything REMAINING is the branch list, verbatim. The collector splits it on `,` and `;`.
    No arguments at all → stop and say, in Polish, that the skill needs at least one branch name
-   (`/doh:fixPrComments feature/a;feature/b`). Never fall back to the current branch: a run that
+   (`/doh:fixPr feature/a;feature/b`). Never fall back to the current branch: a run that
    guesses its own target commits to a branch nobody named.
 
 ## Step 2 — Collect the open comments (one call, all branches)
@@ -53,20 +58,23 @@ Parse the JSON from stdout:
 
 - Report every `errors[]` entry to the user immediately, in Polish. Each one names the branch it
   belongs to and drops only that branch.
-- Report every `warnings[]` entry, in Polish. A branch whose pull request had nothing open is a
-  warning, not an error — say so plainly rather than letting it look like a failure.
-- `targets` empty → stop here, after reporting. There is nothing to fix.
+- Report every `warnings[]` entry, in Polish. A branch whose pull request has no open comments is a
+  warning about SCOPE, not a failure: that branch still runs, for its gate alone. Say it that way.
+- `targets` empty → stop here, after reporting. Every branch was dropped by an error.
 
 Each target carries: `branch`, `pr` (`number`, `title`, `url`, `base`), `commitMessage`,
-`commentsPath`, `reportPath`, `promptPath`, `worktree`, and `counts` (`openThreads`,
-`resolvedThreads`, `outdatedThreads`, `conversation`, `reviews`, `candidates`). Keep exactly those;
-the comment bodies stay in the file.
+`commitPrefix`, `commentsPath`, `reportPath`, `promptPath`, `checksDir`, `worktree`, and `counts`
+(`openThreads`, `resolvedThreads`, `outdatedThreads`, `conversation`, `reviews`, `candidates`). Keep
+exactly those; the comment bodies stay in the file.
 
 Tell the user, in Polish, what was found per branch — the pull request number and title, how many
 threads are open, how many were already resolved and skipped, how many conversation comments and
-review summaries there are.
+review summaries there are. `candidates: 0` is reported as "no open comments; this branch runs for its
+checks only", never as a skip.
 
-**`--dry-run` stops here**, after that listing.
+**`--dry-run` stops here**, after that listing. It stays comment-only on purpose: reporting on the
+gate would need a worktree and a dependency install, which is exactly what `--dry-run` exists not to
+do. Say so if the user expected the checks in it.
 
 ## Step 3 — One worktree per branch
 
@@ -84,8 +92,11 @@ of them is something to work around:
 - the worktree directory is already there from an earlier run.
 
 Never pass `--force` to git, never delete the directory in the way, and never re-run the command
-hoping for a different answer. Report `warnings[]` too — a fast-forward, an install that failed (so
-the verification gate will be skipped), and the `.env*` files copied in.
+hoping for a different answer. Report `warnings[]` too — a fast-forward, an install that failed or a
+missing lockfile (either way the gate will be skipped), and the `.env*` files copied in.
+
+Keep each branch's `installed` from this JSON: it becomes `INSTALLED` in Step 4a, and it is the one
+thing that decides whether the agent runs the gate at all.
 
 ## Step 4 — One background agent per branch
 
@@ -94,16 +105,17 @@ of them, in the BACKGROUND, before you wait for any of them.
 
 ### 4a — Render the brief
 
-    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=COMMIT_MESSAGE=<commitMessage> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=LANGUAGE=<language>
+    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language>
 
 | Value | Where it comes from |
 |---|---|
 | `ROOT` | the target's `worktree` |
 | `BRANCH`, `PR_NUMBER`, `PR_URL` | from the target |
-| `COMMENTS`, `REPORT` | the target's `commentsPath` and `reportPath` |
-| `COMMIT_MESSAGE` | the target's `commitMessage`, verbatim — never re-derive it yourself |
+| `COMMENTS`, `REPORT`, `CHECKS_DIR` | the target's `commentsPath`, `reportPath` and `checksDir` |
+| `COMMIT_MESSAGE`, `COMMIT_PREFIX` | the target's `commitMessage` and `commitPrefix`, verbatim — never re-derive either yourself. The agent picks between them: the `CR` message when it fixed a comment, the prefix plus `Fix <labels>` when it only repaired checks. |
 | `PROJECT`, `SKILL_DIR` | the values from Step 1 |
 | `PUSH` | `no` when `--no-push` was passed, otherwise `yes` |
+| `INSTALLED` | `yes` when this branch's Step 3 returned `installed: true`, otherwise `no`. `no` tells the agent to skip the gate rather than spend the run repairing a missing `node_modules`. |
 | `LANGUAGE` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved |
 
 `errors[]` non-empty → that branch is OUT of the run, exactly like a refused worktree: report the
@@ -123,7 +135,8 @@ rendered brief — it never repeats it:
     Your complete instructions are in the file <promptPath>. Read it in full with the Read tool
     before doing anything else, then follow it exactly. It is already resolved: every path,
     branch and setting it names is final. You fix the open review comments of pull request
-    #<pr.number> on branch <branch>, and you end with the single JSON object it specifies.
+    #<pr.number> on branch <branch> and bring its lint/typecheck/test/build gate green, and you
+    end with the single JSON object it specifies.
 
 Anything this particular run has to add — a note about a previous failure, something the user said
 after the fact — goes in that spawn prompt, under its own heading, after the pointer. It never goes
@@ -155,8 +168,11 @@ On `{"type":"result", …}`:
        node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"
 
    A refusal here means the worktree still holds uncommitted files: report the path in Polish and
-   leave it alone. Never reach for `--force` — that would delete the very work the verification gate
-   protected.
+   leave it alone. Never reach for `--force` — that would delete the very work the gate protected.
+
+The agent reports the commit message it actually used as `commitMessage` — `<prefix>: CR` when it
+fixed a comment, `<prefix>: Fix <labels>` when it only repaired checks. Print that string; never
+re-derive it from the target, which only ever holds the `CR` form.
 
 On `{"type":"error", …}`: resolve nothing, remove nothing. Report the branch as failed, with the
 agent's report and the path of the worktree the user can go and inspect.
@@ -165,12 +181,14 @@ agent's report and the path of the worktree the user can go and inspect.
 
 After every branch has landed, print one summary, in Polish, and nothing else:
 
-- one row per branch: pull request number and title, commit message and sha (or why no commit was
-  made), whether it was pushed, how many comments were fixed / rejected / left without action, and
-  how many threads were resolved on GitHub;
+- one row per branch: pull request number and title, the agent's `commitMessage` and the sha (or why
+  no commit was made), whether it was pushed, how many comments were fixed / rejected / left without
+  action, and how many threads were resolved on GitHub;
 - for every REJECTED comment, its one-line ground — this is the part the user has to act on, and it
   exists nowhere else in their terminal;
-- the verification result per branch (which commands ran, which passed, which were skipped and why);
+- the gate per branch: which commands the agent repaired (`checksFixed`), which passed, which were
+  skipped and why, and which are STILL red — a red one is the reason there is no commit, so it is
+  named with the path of its log rather than summarised;
 - where the report is (`reportPath`) and, for a branch whose worktree survived, where the worktree is
   and why it is still there;
 - every error and warning from Steps 1–5 that has not already been reported.
@@ -188,6 +206,9 @@ the user has not been told about yet.
 | "The push was rejected, I will rebase and retry" | Every state that cannot fast-forward was refused before the agent started, so a rejection means the remote moved during the run. Leave the commit local and say so. |
 | "The thread is obviously handled, resolve it too" | Only ids the agent returned in `fixedThreadIds`, and only after a push. Everything else is a public claim you cannot back. |
 | "The gate failed but the fixes look right" | A red gate means no commit. The worktree stays for the user to inspect — that is the outcome, not a problem to route around. |
+| "This branch has no open comments, there is nothing to do" | A run is responsible for the whole pull request. A branch with every comment resolved and a red build is precisely the one the user wants finished; it gets a worktree and an agent like any other. |
+| "The gate is red — let me run `npm test` and see" | You never run the project's commands. That is the agent's work, inside its worktree; running them in the user's checkout uses the wrong tree and puts the output in the context you keep empty on purpose. |
+| "The agent only repaired the build, I will still call the commit `CR`" | The message is whatever the agent reported in `commitMessage`. Renaming it in the summary describes a commit that is not in the branch. |
 | "Nothing was committed, so I will clean up the worktree" | An uncommitted worktree holds work. Removing it destroys it; git refuses for the same reason. |
 | "The agent is still running, I will summarise what it will probably find" | A result that has not arrived is not a result. Say it is still running. |
 | "I will read `fix-agent.md` and paste it into the prompt myself" | That is the file twice over, per branch, in the context you emptied of comment bodies to make room. Render it with the script and pass the path. |

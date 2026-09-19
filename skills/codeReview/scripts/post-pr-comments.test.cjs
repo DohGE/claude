@@ -68,6 +68,63 @@ test('commentableLines keeps the right side of every hunk and skips deleted file
   assert.strictEqual(lines.has('src/gone.ts'), false, 'a deleted file has no commentable right side');
 });
 
+test('a line whose own text starts with ++ is content, not a file header', () => {
+  // The source line is `++i;`, so the diff writes `+` + `++i;` = `+++i;`. Read as a
+  // header it used to be skipped WITHOUT advancing the cursor, and every later
+  // line of the hunk was then off by one - a comment for line 5 landed on 4.
+  const diff = [
+    'diff --git a/src/a.ts b/src/a.ts',
+    '--- a/src/a.ts',
+    '+++ b/src/a.ts',
+    '@@ -1,3 +1,5 @@',
+    ' one',
+    '+++i;',
+    ' three',
+    ' four',
+    '+five',
+    '',
+  ].join(String.fromCharCode(10));
+  const lines = pr.commentableLines(diff);
+  assert.deepStrictEqual([...lines.get('src/a.ts')].sort((a, b) => a - b), [1, 2, 3, 4, 5]);
+});
+
+test('a line starting with "++ " does not silently end the file it is in', () => {
+  // `+++ bullet` matched the `+++ <name>` header pattern, the name did not start
+  // with `b/`, and every following line of that file stopped being commentable:
+  // its findings all fell through to the summary with no sign why.
+  const diff = [
+    'diff --git a/docs/b.md b/docs/b.md',
+    '--- a/docs/b.md',
+    '+++ b/docs/b.md',
+    '@@ -1,2 +1,4 @@',
+    ' one',
+    '+++ bullet',
+    ' three',
+    '+four',
+    '',
+  ].join(String.fromCharCode(10));
+  const lines = pr.commentableLines(diff);
+  assert.deepStrictEqual([...lines.get('docs/b.md')].sort((a, b) => a - b), [1, 2, 3, 4]);
+});
+
+test('a removed line reading --- stays content, and the next hunk still re-anchors', () => {
+  const diff = [
+    'diff --git a/x.md b/x.md',
+    '--- a/x.md',
+    '+++ b/x.md',
+    '@@ -1,1 +1,3 @@',
+    ' a',
+    '+--- not a header',
+    ' b',
+    '@@ -10,1 +11,2 @@',
+    ' j',
+    '+k',
+    '',
+  ].join(String.fromCharCode(10));
+  assert.deepStrictEqual([...pr.commentableLines(diff).get('x.md')].sort((a, b) => a - b),
+    [1, 2, 3, 11, 12]);
+});
+
 test('anchorFor spans a whole range in the diff and otherwise picks a line that is', () => {
   const lines = new Set([1, 2, 3, 4]);
   assert.deepStrictEqual(pr.anchorFor(findingOf({ lines: '2-3' }), lines), { start_line: 2, line: 3 });
@@ -211,6 +268,24 @@ test('main skips excluded findings and honours --dry-run', (t) => {
   assert.match(result.out, /acme\/repo PR #7: 1 komentarzy w kodzie, 0 w podsumowaniu/);
 });
 
+test('an exclusion subtracts from the accepted pool too, and is not called a lost id', (t) => {
+  // --exclude used to be read only when there was no --include, so a reviewer who
+  // accepted a pool in the page and then took one finding back out on the command
+  // line published it anyway - the one flag whose entire job is to keep a finding
+  // off the pull request.
+  const api = apiStub();
+  const result = capture(() => pr.main([
+    `--report=${reportFile(t, PAYLOAD)}`, '--project=/repo',
+    '--include=aaaa1111,bbbb2222', '--exclude=bbbb2222',
+  ], api));
+  assert.strictEqual(result.code, 0, result.err);
+  assert.strictEqual(api.posted.length, 1);
+  assert.deepStrictEqual(api.posted[0].review.comments.map((c) => c.line), [2]);
+  assert.ok(!/Outside the diff./.test(api.posted[0].review.body),
+    'the excluded finding reaches the PR neither inline nor in the summary');
+  assert.ok(!/bbbb2222/.test(result.err),
+    'an id taken out on purpose is not one the report lost');
+});
 test('main reports a repository or an API that will not answer', (t) => {
   const noRepo = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], apiStub({ repoSlug: () => null })));
   assert.strictEqual(noRepo.code, 1);
@@ -246,7 +321,12 @@ test('a summary too long for one review is split, not rejected by GitHub', () =>
   assert.ok(split.length > 1, 'a long one is split');
   for (const body of split) assert.ok(body.length <= 65536, 'every part fits: ' + body.length);
   assert.match(split[0], /## Code review — feature\/x → main/, 'the first part keeps the heading');
-  assert.match(split[1], /\(cd\. 2\)/, 'later parts say which part they are');
+  assert.match(split[1], /\(part 2\)/, 'later parts say which part they are');
+  // Everything that reaches the pull request is English: the report is the
+  // Polish artifact, the PR is read by whoever opens it.
+  for (const body of split) {
+    assert.ok(!/\bcd\.\s|Dalsze znaleziska/.test(body), 'no Polish crosses over to the PR');
+  }
   const listed = split.join(String.fromCharCode(10)).match(/\*\*Line\(s\)/g) || [];
   assert.strictEqual(listed.length, many.length, 'and no finding is dropped in the split');
 });
