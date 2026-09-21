@@ -1,5 +1,14 @@
 ---
 name: Code quality — duplication, dead code, boilerplate & consistency
+# Everything except a snapshot. A `.snap` is machine-written and repetitive by
+# construction, so its duplication is not a defect in it — and a finding there is not
+# actionable either: you do not edit a snapshot, you fix the component and regenerate.
+# That is the same ground on which the context script skips generated clients outright.
+# Snapshots are still reviewed, for the things that ARE theirs: the unit-tests
+# instruction owns their location and their conscious `-u` update, and the security
+# instruction still asks whether one captured a secret.
+applies-to:
+  - "!**/*.snap"
 scopes:
   code: ["**/*.ts", "**/*.html", "**/*.scss", "**/*.css", "**/*.js"]
   logic: ["**/*.ts", "**/*.html"]

@@ -22,7 +22,7 @@
 // and those belong to the mockup, not to this script.
 //
 // This lives at the plugin root rather than inside one skill because
-// implementNewFeature and fixPrComments both spawn sub-agents from reference
+// implementNewFeature and fixPr both spawn sub-agents from reference
 // files, and a second copy of the substitution rules would drift from the first.
 
 const fs = require('node:fs');

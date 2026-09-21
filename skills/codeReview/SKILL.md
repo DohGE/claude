@@ -59,9 +59,9 @@ scope gate).
 
 ## Step 2 — Load the rulebook (once per run)
 
-1. Read EVERY file listed in `globalInstructions` — the globals at least one reviewed file is
-   actually walked against, not every global the skill ships.
-2. Read EVERY file listed in `localInstructionsCatalog` (already deduplicated across targets;
+1. Read the `path` of EVERY entry of `globalInstructions` — the globals at least one reviewed file
+   is actually walked against, not every global the skill ships.
+2. Read the `path` of EVERY entry of `localInstructionsCatalog` (deduplicated across targets;
    per-file `localInstructions` are INDEXES into this catalog).
 3. If `claudeMd` is not null, read it and treat it as one more global instruction.
 4. Issue every Read of points 1–3 as parallel tool calls in ONE message — the whole rulebook
@@ -79,13 +79,16 @@ Never skip or skim any of these files — they are the review rulebook.
 
 Every checklist item has an address, and Step 3 ticks the items off one by one under it:
 `<id>#<n>` is the n-th top-level `- ` bullet of that instruction's body, counted from 1 in file
-order — the only numbering there is. `checklistIds` (top level of the context JSON) says which
-instruction file each `<id>` stands for; number the bullets of every instruction as you read it.
-Each file of a target carries its own plan: `checklist` lists one `<id>:<items>` entry per
-instruction that applies to that file — the globals first, then its matched locals — where `<items>`
-names WHICH items of that instruction this file is walked against (`general:1-13`, and
-`accessibility:6-9,12-14,17,20` for a file whose kind takes it out of the markup-only rules).
-`checklistTotal` is their sum, the number of items the file must be walked against.
+order — the only numbering there is. Each entry of the two catalogs above carries the `id` its
+items are addressed by beside its `path`; number the bullets of every instruction as you read it.
+Each file of a target carries `plan`, an INDEX into `checklistPlans` (top level of the context
+JSON) — files of one kind share one plan, so the catalog holds a handful of entries for a diff of
+hundreds of files, exactly like `localInstructionsCatalog` below. `checklistPlans[file.plan].checklist`
+lists one `<id>:<items>` entry per instruction that applies to that file — the globals first, then
+its matched locals — where `<items>` names WHICH items of that instruction this file is walked
+against (`general:1-13`, and `accessibility:6-9,12-14,17,20` for a file whose kind takes it out of
+the markup-only rules). `checklistTotal`, which stays on the FILE, is their sum: the number of items
+that file must be walked against.
 The plan is the authority on that: walk exactly the numbers it lists, under the addresses it gives
 them, and never renumber a narrowed instruction from 1 — `accessibility#12` is the twelfth bullet of
 the file, whether or not `#1-11` are in this file's plan.
@@ -95,8 +98,8 @@ exactly like a local, one that declares none still applies to every file, and a 
 `!` excludes what it matches and always wins over an include. A single item is narrowed by a leading
 scope tag — `- {styles} Contrast ratios …` walks only for the file kinds the instruction's `scopes:`
 frontmatter maps that name to (an untagged item walks wherever its instruction does). So a plan shorter
-than the rulebook is a decision, not an omission — `globalInstructionsSkipped` names the globals this
-file's path took it out of, an instruction that is not in the plan is never walked or ticked, and an
+than the rulebook is a decision, not an omission — the plan's `globalInstructionsSkipped` names, by
+`<id>`, the globals this file's path took it out of, an instruction that is not in the plan is never walked or ticked, and an
 item the plan does not list is not this file's rule: it is never walked, never ticked and never
 reported, not even when the file happens to break it.
 `checklistGates` (top level of the context JSON) holds the `gate:` sentence of every instruction that
@@ -145,8 +148,8 @@ small it looks — a changed condition, argument, operator, default, lifecycle h
      snapshot) were not renamed to match; a moved file now sitting in the wrong layer or outside its
      canonical location; an import edge whose direction or form (barrel vs concrete path) now breaks
      the architecture instruction; a reformat that leaves the file against the style rules.
-- The rename pair is `oldPath → path` on the file entry (`status: 'R'`; `oldPath` is `null` for every
-  other status) — that pair, not the diff, is what the naming and location checks compare. A
+- The rename pair is `oldPath → path` on the file entry; `oldPath` is there when `status` is `R`
+  and absent otherwise — that pair, not the diff, is what the naming and location checks compare. A
   path-limited diff renders any rename as a brand-new file, so "the diff shows the whole file as new"
   never means "review the whole file as new" when `status` is `R`. A pure rename changes no content at
   all: `changedLines` is `""` while `status` is `R`, which is a rename, not the deletion-only case
@@ -217,7 +220,8 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    While the file's content is open, append its import lines to a running import ledger
    (`importing file → imported module`, one entry per import) — the cross-file layering question
    consumes this ledger after the per-file pass.
-   With the file's diff and content in front of you, turn its `checklist` into the ticking list of
+   With the file's diff and content in front of you, turn its plan's `checklist`
+   (`checklistPlans[file.plan].checklist`) into the ticking list of
    this file: every instruction of the plan, in plan order, expanded to exactly the item numbers its
    `<items>` spec names (`component:1-27` is `#1`…`#27`; `accessibility:6-9,12` is four items, and
    `#1-5`, `#10-11` are not this file's rules) — that list, and nothing shorter or wider, is what
@@ -358,7 +362,9 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    - `NARUSZENIE` is the one verdict word the renderer MATCHES, exactly and case-sensitively, to mark
      an item as broken in the coverage section. Write it in capitals and in that exact form: a
      `naruszenie`, `NARUSZONO` or `VIOLATION` parses as a clean item, so the page would show the rule
-     as ✓ compliant directly under the finding that reports it breaking. (`BRAMKA` and
+     as ✓ compliant directly under the finding that reports it breaking. The renderer NAMES such a
+     line as a warning, which keeps the Markdown — so a near miss costs the HTML report instead of
+     passing unnoticed, and the fix is the exact word, never ticking a different item instead. (`BRAMKA` and
      `NIEZWERYFIKOWANE` are read by humans only — the `[ ]` box is what records an unverified item.)
    - Collapse only what genuinely shares a verdict. `NARUSZENIE` and `NIEZWERYFIKOWANE` lines carry
      their own reason, so they stay separate — a range is for the OK run around them and for a

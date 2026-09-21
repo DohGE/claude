@@ -54,6 +54,19 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    `sed -e "/^<!--[[:space:]]*checklist:/,/-->/d" -e "/^<!--[[:space:]]*coverage:/d" "<reportPath>"`
    so neither reaches your context: those lines grow with the rulebook rather than with the
    findings, so on a clean review they are most of the file.
+   **The rulebook is read ONCE across the whole loop, not once per cycle.** The skill's step 2
+   sends you to read every file of `globalInstructions` and `localInstructionsCatalog`; its rule
+   against working from memory is there so nobody reviews from RECOLLECTION, and inside this loop
+   the files are not a recollection — they are sitting in your context verbatim from the cycle that
+   read them. Measured on a 200-file diff: the full cycle's rulebook is ~23 000 tokens and even a
+   narrow `--since-last` cycle still matches ~15 000 of it, so six cycles that each re-read their own
+   come to ~107 000 tokens against ~23 000 read once — about 84 000 tokens of the context you need
+   for the code itself, spent on files you already have.
+   So on every cycle after the first, read only what you do NOT already have: compare the two lists
+   the fresh context JSON prints against the files you have read this run and open the difference —
+   a `--since-last` cycle narrows the catalogs, and round 2's full pass can widen them again past
+   what round 1 ever matched. Everything else per cycle IS fresh and IS read every time: the context
+   JSON, the report, and the files under review.
    This is the ONLY permitted review method:
    - never review the diff manually, "quickly", or as a "sanity check";
    - never use any other review skill or tool;
@@ -144,9 +157,11 @@ unfinished; use the "review complete" wording above.
 
 - NEVER `git commit` — the pipeline ends with changes staged, nothing more.
 - Verify `{{SESSION}}/checklist.md` compliance is still ≥ 99% after your fixes (the suite re-run covers `verify: e2e` items).
-- Write `{{SESSION}}/review-report.md`: one section per round listing every finding from the
-  `doh:codeReview` reports with how you fixed it, plus the `## Rejected findings` list with the
-  ground for each rejection.
+- Write `{{SESSION}}/review-report.md` in ONE write — the Write tool, or a single Bash heredoc if
+  your harness refuses a `.md` write from a sub-agent. One write either way: a report assembled
+  from several appends is one that ends half-written when anything goes wrong. It holds one section
+  per round listing every finding from the `doh:codeReview` reports with how you fixed it, plus
+  the `## Rejected findings` list with the ground for each rejection.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
 never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the

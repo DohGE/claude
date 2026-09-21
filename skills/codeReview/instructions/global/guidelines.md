@@ -12,16 +12,19 @@ This is the canonical shape of a modern component in this project — separate t
 
 ```ts
 import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
+import { TranslatePipe } from '{{translate-package}}';
 
 @Component({
   selector: '{{app-prefix}}-{{tag-name}}',
   templateUrl: '{{tag-name}}.component.html',
   styleUrl: '{{tag-name}}.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TranslatePipe],
 })
 export class {{ClassName}}Component {
+  readonly dataTestPrefix = 'server-status-';
+
   protected readonly isServerRunning = signal(true);
-  protected readonly dataTestPrefix = 'server-status-';
 
   protected toggleServerStatus(): void {
     this.isServerRunning.update((isServerRunning) => !isServerRunning);
@@ -30,33 +33,44 @@ export class {{ClassName}}Component {
 ```
 
 ```scss
-.container {
+.server-status {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100vh;
 
-  button {
+  &__toggle {
     margin-top: 10px;
   }
 }
 ```
 
 ```html
-<section class="container">
+<section class="server-status">
   @if (isServerRunning()) {
     <span>{{ 'page.server.labels.runningInfo' | translate }}</span>
   } @else {
     <span>{{ 'page.server.labels.stoppedInfo' | translate }}</span>
   }
-  <button type="button" (click)="toggleServerStatus()" [attr.data-test]="dataTestPrefix + 'toggle-server'">
+  <button class="server-status__toggle" type="button" (click)="toggleServerStatus()" [attr.data-test]="dataTestPrefix + 'toggle-server'">
     {{ 'page.server.actions.toggleServerStatus' | translate }}
   </button>
 </section>
 ```
 
 When you update a component, be sure to put the logic in the ts file, the styles in the scss file and the html template in the html file.
+
+Three details of that shape are rules the review enforces, not incidentals, and a component
+copied without them is reported back at you in step 6:
+
+- the `imports` array lists every symbol the template uses — here the translate pipe. A missing
+  entry does not degrade, it breaks the template at runtime;
+- `dataTestPrefix` is PUBLIC. The component spec asserts its value directly, and a `protected`
+  one forces the spec into the string-index workaround the rules forbid. Everything only the
+  template reads stays `protected`, everything nobody outside the class reads stays `private`;
+- the stylesheet's root block is the COMPONENT's name, with BEM elements under it — never a
+  generic `.container` and never a bare element selector like `button { … }`.
 
 ## Resources
 

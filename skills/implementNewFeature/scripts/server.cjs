@@ -49,6 +49,17 @@ const MAX_LOG = 20;
 // grow the state document without bound.
 const MAX_CHAT = 200;
 const UPLOAD_CATEGORIES = ['mockups', 'contracts', 'hints'];
+// Everything POST /api/state accepts. A body carrying anything else used to be
+// answered 200 with nothing applied: an agent that wrote `currentOperationn`
+// saw success, the panel stopped tracking its run, and the first sign of it was
+// a step that sat at the same operation for twenty minutes. The prompts are
+// hand-written and copied between six agents, which is exactly where a typo
+// comes from, so the body is checked against this list instead.
+// /api/answer is deliberately NOT checked this way: it is a pipe to the
+// orchestrator, and what travels through it belongs to whoever reads it.
+const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
+  'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root',
+  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary']);
 
 // One task is one feature on one branch with its own seven-step pipeline, its own
 // artifacts under tasks/<id>/ and its own sub-agents. A run holds one or more.
@@ -70,7 +81,16 @@ function taskState(id) {
 // the step, the browser's composer, and the orchestrator's own mockup rounds.
 function pushChat(step, msg) {
   if (!Array.isArray(step.chat)) step.chat = [];
-  step.chat.push({ role: msg.role === 'user' ? 'user' : 'agent', text: text(msg.text) });
+  // Timed, because a transcript is also the only durable record of what the user wrote to a
+  // step whose agent had already died. The orchestrator keeps such a line to hand to the
+  // retry, and its own memory is summarised away on a long run - so the line has to be
+  // recoverable from here, and recovering it means knowing which side of the failure it
+  // fell on. Log entries have carried a time all along; these now do too.
+  step.chat.push({
+    role: msg.role === 'user' ? 'user' : 'agent',
+    text: text(msg.text, MAX_CHAT_TEXT),
+    time: new Date().toISOString(),
+  });
   if (step.chat.length > MAX_CHAT) step.chat.splice(0, step.chat.length - MAX_CHAT);
 }
 
@@ -84,14 +104,23 @@ function safeName(raw) {
 }
 
 const MAX_FIELD = 200 * 1024;
+// A chat line is one message a human reads back in a transcript, not a pasted
+// document, so it is capped far below the step-1 form. MAX_CHAT above says it keeps a
+// looping agent from growing the state document without bound - and at the form's
+// 200 KB it did not: 200 entries x 200 KB is 40 MB for ONE step, re-sent to the
+// browser every second and rewritten to disk on every update. Measured, an ordinary
+// chatty step (40 lines of 2 KB) weighs 82 KB, so this cap costs a real run nothing
+// and bounds the runaway at 1.6 MB.
+const MAX_CHAT_TEXT = 8 * 1024;
 // Truncation has to be visible. A pasted OpenAPI contract or a long requirement that
 // runs past the cap used to be cut mid-sentence with nothing said, and the refinement
 // agent then designed against half a document it had no way to know was half. The
-// marker travels into requirements.md and into the chat, where a human reads it.
-const TRUNCATED = " […ucięte: pole przekroczyło 200 KB…]";
-const text = (v) => {
+// marker travels into requirements.md and into the chat, where a human reads it, and
+// it names the cap it hit so the two are told apart.
+const text = (v, limit = MAX_FIELD) => {
   const value = String(v == null ? '' : v);
-  return value.length <= MAX_FIELD ? value : value.slice(0, MAX_FIELD) + TRUNCATED;
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)} […ucięte: pole przekroczyło ${Math.round(limit / 1024)} KB…]`;
 };
 const names = v => (Array.isArray(v) ? v : []).map(safeName).filter(Boolean).slice(0, 200);
 
@@ -262,6 +291,11 @@ function createApp(sessionDir, opts = {}) {
   }
 
   function applyUpdate(body) {
+    // Checked before anything is applied, so a rejected body changes nothing.
+    const unknown = Object.keys(body).filter((k) => !STATE_FIELDS.has(k));
+    if (unknown.length) {
+      throw new Error(`unknown field(s) ${unknown.join(', ')} - expected one of ${[...STATE_FIELDS].join(', ')}`);
+    }
     const task = findTask(body.taskId);
     if (!task) throw new Error(`unknown task ${body.taskId}`);
     // A chat line with nowhere to go used to vanish: the agent sees 200, the user sees
@@ -276,11 +310,18 @@ function createApp(sessionDir, opts = {}) {
       }
       if (body.enabled !== undefined) step.enabled = !!body.enabled;
       if (body.progress !== undefined) step.progress = body.progress;
-      if (body.currentOperation !== undefined) step.currentOperation = body.currentOperation;
-      if (body.report !== undefined) step.report = body.report;
+      // Through `text()`, like the step-1 form and the chat: `GET /api/state` re-sends
+      // the WHOLE document to the browser once a second and `persist()` rewrites it on
+      // every update, so one oversized post here is paid again every tick for the rest
+      // of the run. A report is where that happens - an agent that pastes its findings
+      // instead of a summary - and the marker is what tells the reader it was cut.
+      if (body.currentOperation !== undefined) step.currentOperation = text(body.currentOperation);
+      // `report` is nullable on purpose (null clears the panel), so the cap must not
+      // turn that null into an empty string.
+      if (body.report !== undefined) step.report = body.report == null ? null : text(body.report);
       if (body.chat) pushChat(step, body.chat);
       if (body.logEntry) {
-        step.log.push({ time: new Date().toISOString(), text: String(body.logEntry) });
+        step.log.push({ time: new Date().toISOString(), text: text(body.logEntry) });
         if (step.log.length > MAX_LOG) step.log.splice(0, step.log.length - MAX_LOG);
       }
     }
@@ -336,8 +377,14 @@ function createApp(sessionDir, opts = {}) {
   };
 
   function pushAnswer(a) {
-    // A waiter with no taskId is the orchestrator's event loop: it takes anything.
-    const i = waiters.findIndex(w => !w.taskId || w.taskId === a.taskId);
+    // A waiter with no taskId is the orchestrator's event loop: it takes anything, so it
+    // is served LAST. An answer carries the task it was written for, and the agent parked
+    // on that task is the one that asked the question. Taking the first match let the
+    // catch-all swallow it: the agent waited out its whole timeout and then re-polled
+    // into an empty queue, because the answer had already been consumed elsewhere. The
+    // user had watched it send, and the pipeline sat still with nothing to show why.
+    let i = waiters.findIndex(w => w.taskId && w.taskId === a.taskId);
+    if (i === -1) i = waiters.findIndex(w => !w.taskId);
     if (i !== -1) {
       const [w] = waiters.splice(i, 1);
       clearTimeout(w.timer);
@@ -476,8 +523,12 @@ function createApp(sessionDir, opts = {}) {
             task.authSaved = true;
           }
         }
-        // Everything the form holds except the branch: two tasks cannot share one,
-        // and an empty required field forces a deliberate name.
+        // The form fields come from the CALLER, never from `src`: the page holds a
+        // half-typed version of the form the server has never seen, and copying the last
+        // SUBMITTED one instead would silently drop whatever the user was in the middle
+        // of writing. `src` is read for the two things only the server has - the uploaded
+        // files and auth.json. The branch is dropped whatever the caller sent: two tasks
+        // cannot share one, and an empty required field forces a deliberate name.
         task.step1 = formOf({ ...v, ...copied, branch: '', authProvided: task.authSaved });
         state.tasks.push(task);
         persist();
@@ -559,6 +610,12 @@ function createApp(sessionDir, opts = {}) {
         for (const t of state.tasks) {
           try { fs.rmSync(path.join(taskDir(t.id), 'auth.json'), { force: true }); } catch {}
         }
+        // And neither does the pid. `server.json` is what a launcher reads to find the
+        // instance it must stop, so leaving it behind after a clean exit advertises a
+        // pid the OS is free to hand to something else - and the next launcher run then
+        // aims a kill at whatever inherited it. The launchers check what they are about
+        // to stop, but the file has no business outliving the process it describes.
+        try { fs.rmSync(path.join(path.resolve(sessionDir), 'server.json'), { force: true }); } catch {}
         // Flush the response first, then close; keep-alive sockets would
         // otherwise hold the server open, so force-close them.
         res.on('finish', () => setImmediate(() => {

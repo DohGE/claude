@@ -21,12 +21,26 @@ mkdir -p "$SESSION_DIR"
 # while the user's open tab talks to the one the orchestrator no longer polls.
 if [ -f "$SESSION_DIR/server.json" ]; then
   PREV_PID=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).pid||0)}catch(e){console.log(0)}" "$SESSION_DIR/server.json")
+  # Only ever kill a process we can PROVE is this server. A clean shutdown removes
+  # server.json, but a crash does not, and a pid the OS has since handed to something
+  # else looks exactly like a live server from here - killing it blind takes down
+  # whatever inherited it. When the check cannot confirm, nothing is killed: a server
+  # that really died is not holding the port anyway, and one that is holding it makes
+  # the new instance exit with the line that says so.
   if [ "$PREV_PID" != "0" ] && kill -0 "$PREV_PID" 2>/dev/null; then
-    kill "$PREV_PID" 2>/dev/null || true
-    for _ in $(seq 1 25); do
-      kill -0 "$PREV_PID" 2>/dev/null || break
-      sleep 0.2
-    done
+    PREV_CMD=$(ps -p "$PREV_PID" -o args= 2>/dev/null || true)
+    case "$PREV_CMD" in
+      *server.cjs*)
+        kill "$PREV_PID" 2>/dev/null || true
+        for _ in $(seq 1 25); do
+          kill -0 "$PREV_PID" 2>/dev/null || break
+          sleep 0.2
+        done
+        ;;
+      *)
+        echo "server.json names pid $PREV_PID, which is not this server - leaving it alone" >&2
+        ;;
+    esac
   fi
   rm -f "$SESSION_DIR/server.json"
 fi

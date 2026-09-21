@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Deterministic mechanics for the doh:fixPrComments skill: argument parsing,
+// Deterministic mechanics for the doh:fixPr skill: argument parsing,
 // the commit message derived from the pull request title, and the per-branch
 // JSON of everything a reviewer said that is still open.
 //
@@ -48,14 +48,66 @@ function parseArgs(argv) {
 // inventing one from the branch name.
 // A title that OPENS with the colon leaves an empty prefix, and `: CR` names
 // nothing at all; the leading colons are dropped and the rest used instead.
-function commitMessageFor(title) {
+// The brief holds what `references/fix-agent.md` names, and nothing else. A field the
+// contract does not mention is weight the agent pays for on every run and, worse, policy
+// it may invent a use for. On a real forty-thread pull request the unnamed ones came to
+// nearly a fifth of the file. Two of them could not mean anything to a fixer even in
+// principle: `isResolved` is false for every thread here - the resolved ones are filtered
+// out above - and `viewerCanResolve` describes the token this run holds, not the work.
+// `createdAt` and the comment id say nothing the order of the list and the url do not.
+function briefComment(comment) {
+  const out = {
+    author: comment.author,
+    isBot: Boolean(comment.isBot),
+    body: comment.body,
+    url: comment.url,
+  };
+  // Present only where it differs from the thread anchor, which is where it matters.
+  if ('diffHunk' in comment) out.diffHunk = comment.diffHunk;
+  return out;
+}
+
+function briefThread(thread) {
+  const out = {
+    id: thread.id,
+    path: thread.path,
+    line: thread.line,
+    originalLine: thread.originalLine,
+    isOutdated: thread.isOutdated,
+    diffSide: thread.diffSide,
+    diffHunk: thread.diffHunk,
+    comments: (thread.comments || []).map(briefComment),
+  };
+  // A multi-line anchor is the one case where the span says something the single line
+  // does not, so it travels exactly then rather than as a null on every thread.
+  if (thread.startLine != null) out.startLine = thread.startLine;
+  if (thread.originalStartLine != null) out.originalStartLine = thread.originalStartLine;
+  return out;
+}
+
+function briefNote(note) {
+  const out = { author: note.author, isBot: Boolean(note.isBot), body: note.body, url: note.url };
+  if (note.state) out.state = note.state;
+  return out;
+}
+
+function commitPrefixFor(title) {
   const text = String(title == null ? '' : title).trim();
   if (!text) return null;
   const at = text.indexOf(':');
   const prefix = (at === -1 ? text : text.slice(0, at)).trim();
-  if (prefix) return `${prefix}: CR`;
+  if (prefix) return prefix;
   const rest = text.replace(/^:+/, '').trim();
-  return rest ? `${rest}: CR` : null;
+  return rest || null;
+}
+
+// The `CR` form, for a run that fixed at least one review comment. A run that
+// fixed only red checks builds `<prefix>: Fix <labels>` instead, and it can only
+// do that once the work is done - which is why the prefix travels to the agent
+// beside this ready-made message rather than the message alone.
+function commitMessageFor(title) {
+  const prefix = commitPrefixFor(title);
+  return prefix ? `${prefix}: CR` : null;
 }
 
 function isDirectory(p) {
@@ -77,7 +129,10 @@ function pruneArtifacts(branchDir, retain = artifactsRetain) {
     return;
   }
   const stamped = names
-    .filter((name) => /-fix-pr-comments-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/.test(name))
+    // Both spellings: runs before the skill was renamed wrote
+    // `-fix-pr-comments-<stamp>.json`, and a pattern that no longer matched them
+    // would leave every one of those files in the folder for good.
+    .filter((name) => /-fix-pr-(comments-)?\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/.test(name))
     .map((name) => {
       const full = path.join(branchDir, name);
       let mtime = 0;
@@ -149,31 +204,51 @@ function collectBranch(branch, ctx) {
   }
 
   const candidates = open.length + conversation.comments.length + reviews.reviews.length;
+  // Not a reason to drop the branch any more. A run is responsible for the whole
+  // pull request, and one with every comment resolved can still be sitting on a
+  // red build - which is exactly the branch a reviewer expects this skill to
+  // finish off. The warning says what the run narrowed to, not that it stopped.
   if (candidates === 0) {
-    result.warnings.push(`${branch}: pull request #${pr.number} has nothing open to fix${resolvedCount ? ` (${resolvedCount} thread(s) already resolved)` : ''}; skipped.`);
-    return null;
+    result.warnings.push(`${branch}: pull request #${pr.number} has no open comments${resolvedCount ? ` (${resolvedCount} thread(s) already resolved)` : ''}; this run will only bring its checks green.`);
+  }
+
+  // A review bot can open dozens of threads on its own, and counted with the reviewers
+  // they look like a pull request somebody asked for changes on. Saying so is not a
+  // reason to skip them - an inline bot comment sits on a real line - but it is what
+  // tells the reader that no person has written anything here yet, which changes what
+  // a green run at the end of it actually means. A thread counts as a person's the
+  // moment one of its comments is, replies included.
+  const humanCandidates = open.filter((thread) => !thread.comments.length || thread.comments.some((c) => !c.isBot)).length
+    + conversation.comments.filter((c) => !c.isBot).length
+    + reviews.reviews.filter((r) => !r.isBot).length;
+  if (candidates > 0 && humanCandidates === 0) {
+    result.warnings.push(`${branch}: every open comment on #${pr.number} came from a GitHub App - no reviewer has written one. They are still fixed on their merits; nobody is waiting on the result.`);
   }
 
   const dir = sanitizeBranchName(branch);
   const branchDir = path.join(reportsDir, dir);
   fs.mkdirSync(branchDir, { recursive: true });
   pruneArtifacts(branchDir);
-  const commentsPath = path.join(branchDir, `${dir}-fix-pr-comments-${stamp}.json`);
-  const reportPath = path.join(branchDir, `${dir}-fix-pr-comments-${stamp}.md`);
+  const commentsPath = path.join(branchDir, `${dir}-fix-pr-${stamp}.json`);
+  const reportPath = path.join(branchDir, `${dir}-fix-pr-${stamp}.md`);
   // Where the branch's agent brief is rendered. Deliberately unstamped: one file
   // per branch, overwritten by each run, so the orchestrator never computes a
   // path of its own and the folder does not grow a prompt per run. Two runs
   // cannot race for it - the worktree guard refuses a second run on one branch.
   const promptPath = path.join(branchDir, `${dir}-fix-pr-agent-prompt.md`);
+  // Where checks.cjs writes one log per gate step. Unstamped for the same reason
+  // as the brief, and outside the worktree for the same reason as the report: a
+  // build log written inside the checkout is a file the commit could pick up.
+  const checksDir = path.join(branchDir, `${dir}-fix-pr-checks`);
   const payload = {
     branch,
     pr: { number: pr.number, title: pr.title, url: pr.url, base: pr.base },
     commitMessage,
     generatedAt: new Date(ctx.now).toISOString(),
     resolvedThreadCount: resolvedCount,
-    threads: open,
-    conversation: conversation.comments,
-    reviews: reviews.reviews,
+    threads: open.map(briefThread),
+    conversation: conversation.comments.map(briefNote),
+    reviews: reviews.reviews.map(briefNote),
   };
   fs.writeFileSync(commentsPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 
@@ -181,9 +256,11 @@ function collectBranch(branch, ctx) {
     branch,
     pr: payload.pr,
     commitMessage,
+    commitPrefix: commitPrefixFor(pr.title),
     commentsPath,
     reportPath,
     promptPath,
+    checksDir,
     worktree: worktreePathFor(project, branch),
     counts: {
       openThreads: open.length,
@@ -192,6 +269,7 @@ function collectBranch(branch, ctx) {
       conversation: conversation.comments.length,
       reviews: reviews.reviews.length,
       candidates,
+      humanCandidates,
     },
   };
 }
@@ -262,6 +340,6 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, commitMessageFor, pruneArtifacts, collectBranch, collect };
+module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote };
 
 if (require.main === module) main();

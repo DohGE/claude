@@ -8,6 +8,7 @@ const { execFileSync } = require('node:child_process');
 
 const wt = require('./worktree.cjs');
 const { tempDir } = require('../../codeReview/scripts/test-helpers.cjs');
+const { countOf } = require('../../codeReview/scripts/review-context.cjs');
 
 function run(dir, args) {
   return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -35,6 +36,17 @@ function makeRepo(t) {
 function fakeRemoteBranch(dir, branch, ref = 'HEAD') {
   run(dir, ['update-ref', `refs/remotes/origin/${branch}`, ref]);
 }
+
+test('branchState reads its counts through countOf, so a failed one is not in-sync', () => {
+  // The bug this pins: `Number(null)` is 0 and passes `Number.isFinite`, so a
+  // rev-list that never ran used to come back as "identical to origin" and the run
+  // went on to fix, commit and push on top of a branch it had not compared.
+  const source = fs.readFileSync(path.join(__dirname, 'worktree.cjs'), 'utf8');
+  const body = source.slice(source.indexOf('function branchState'), source.indexOf('function detectPackageManager'));
+  assert.ok(!body.includes('Number(tryGit'), 'counts are parsed by countOf, never by Number()');
+  assert.strictEqual(body.split('countOf(tryGit').length - 1, 2, 'both the ahead and the behind count');
+  assert.ok(Number.isNaN(countOf(null)), 'and countOf answers NaN for a call that failed');
+});
 
 test('parseArgs defaults, parses and refuses unknown flags', () => {
   assert.deepStrictEqual(
@@ -178,10 +190,78 @@ test('add copies every .env file, including one nested in a package', (t) => {
   assert.strictEqual(result.envFiles.length, 2);
 });
 
+test('a failed install is reported by its diagnosis, not by its usage help', () => {
+  // Verbatim shape of `npm ci` against a lockfile out of sync, which is the ordinary way
+  // a worktree install fails. npm puts the cause in its first lines and then forty lines
+  // of flag documentation, so keeping the LAST five handed the reader
+  // "aliases: clean-install, ic, install-clean" as the reason their gate cannot run.
+  const stderr = [
+    'npm error code EUSAGE',
+    'npm error',
+    'npm error `npm ci` can only install packages when your package.json and package-lock.json are in sync.',
+    'npm error',
+    'npm error Missing: left-pad@1.3.0 from lock file',
+    'npm error',
+    'npm error Usage:',
+    'npm error npm ci',
+    'npm error aliases: clean-install, ic, install-clean, isntall-clean',
+    'npm error A complete log of this run can be found in: C:\\x.log',
+  ].join(String.fromCharCode(10));
+  const message = wt.installFailure({ stderr });
+  assert.match(message, /EUSAGE/, 'the code the reader searches for survives');
+  assert.match(message, /in sync/, 'and so does the cause');
+  assert.match(message, /left-pad@1.3.0/, 'and the package it names');
+  assert.ok(!/aliases|complete log/.test(message), 'the boilerplate tail does not');
+  // The blank `npm error` separators carry nothing, so they never eat one of the five.
+  assert.ok(!/npm error npm error/.test(message));
+  // A spawn that never produced stderr still says something.
+  assert.strictEqual(wt.installFailure(new Error('spawn pnpm ENOENT')), 'spawn pnpm ENOENT');
+});
+
 test('installDependencies skips a project with no lockfile instead of guessing', (t) => {
   const dir = fs.realpathSync(tempDir(t, 'fpc-deps-'));
   fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"x"}\n');
   assert.deepStrictEqual(wt.installDependencies(dir), { manager: null, error: null });
+});
+
+test('detectPackageManager reads the lockfile the project committed, in precedence order', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-pm-'));
+  assert.strictEqual(wt.detectPackageManager(dir), null);
+  fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}\n');
+  assert.strictEqual(wt.detectPackageManager(dir), 'npm');
+  fs.writeFileSync(path.join(dir, 'yarn.lock'), '\n');
+  assert.strictEqual(wt.detectPackageManager(dir), 'yarn');
+  // pnpm wins over both, so a repository migrating between managers is read as
+  // the one it migrated TO rather than the leftover lockfile it forgot to delete.
+  fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '\n');
+  assert.strictEqual(wt.detectPackageManager(dir), 'pnpm');
+});
+
+test('add reports installed:false, with a reason, for a package.json that has no lockfile', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'package.json', '{"name":"x","scripts":{"lint":"true"}}\n', 'add package.json');
+  fakeRemoteBranch(dir, 'feat');
+  // bootstrap is left ON: with no lockfile there is nothing to install, so no
+  // package manager is ever spawned and the test stays offline.
+  const result = wt.add({ project: dir, branch: 'feat' });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.installed, false);
+  assert.ok(result.warnings.some((w) => /No lockfile/.test(w)), result.warnings.join(' | '));
+});
+
+test('add reports installed:false when the bootstrap was skipped entirely', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const result = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.installed, false);
+});
+
+test('a refused branch still carries installed:false rather than leaving the field absent', (t) => {
+  const dir = makeRepo(t);
+  const result = wt.add({ project: dir, branch: 'never-existed' });
+  assert.match(result.errors[0], /exists neither locally nor on origin/);
+  assert.strictEqual(result.installed, false);
 });
 
 test('remove takes the worktree away once it is clean', (t) => {
@@ -267,4 +347,30 @@ test('a worktree that cannot be taken down after a failed fast-forward is named,
   assert.match(result.errors[0], /could not be fast-forwarded/);
   assert.ok(result.warnings.some((w) => /could not be removed/.test(w)));
   assert.strictEqual(result.created, true, 'the checkout is still on disk, and the result says so');
+});
+
+test('taking a worktree down never removes a parent directory the caller owns', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  // An explicit --worktree puts the checkout somewhere of the caller's choosing.
+  const mine = fs.realpathSync(tempDir(t, 'fpc-mine-'));
+  const at = path.join(mine, 'checkout');
+  const added = wt.add({ project: dir, branch: 'feat', worktree: at, bootstrap: false });
+  assert.deepStrictEqual(added.errors, []);
+
+  const gone = wt.remove({ project: dir, branch: 'feat', worktree: at });
+  assert.strictEqual(gone.removed, true);
+  assert.strictEqual(fs.existsSync(at), false, 'the worktree itself goes');
+  assert.strictEqual(fs.existsSync(mine), true, 'the directory it was put in stays');
+});
+
+test('the skill still tidies away its OWN empty worktrees directory', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const added = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.strictEqual(path.dirname(added.worktree), wt.worktreesDirFor(dir));
+
+  wt.remove({ project: dir, branch: 'feat' });
+  assert.strictEqual(fs.existsSync(wt.worktreesDirFor(dir)), false,
+    'the last worktree out turns the light off');
 });

@@ -34,6 +34,10 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
 2. Cover: ambiguities, edge cases, UI behavior, business logic, impact on existing modules, test scope.
 3. Stop asking when you are ≥95% confident the requirements are complete and implementable without further questions.
 4. Write `{{SESSION}}/spec.md` — full spec; the FIRST LINE must be `# <feature title>` (reports and the run summary quote it; the branch name comes from the step-1 form, not from this line).
+   This file and the two written in points 5 and 6 each go out in ONE write — the Write tool, or a
+   single Bash heredoc if your harness refuses a `.md` write from a sub-agent. One write either
+   way: a file assembled from several appends is one that ends half-written when anything goes
+   wrong, and the step after it reads the half.
 5. Apply the `superpowers:writing-plans` methodology to write `{{SESSION}}/plan.md`: bite-sized TDD tasks with exact paths into `{{PROJECT}}`, complete code, run commands, no placeholders. NO git commit steps — the pipeline never commits.
    Head every task with `### Task <n>: <name>` — that exact English spelling, at that exact level,
    even though the plan's prose is in {{LANGUAGE}}. It is a FIXED IDENTIFIER, not a title to

@@ -1,8 +1,17 @@
 ---
 name: Unit tests (common)
+# Unit specs only, as the name says. An end-to-end suite is also written in `.spec.ts`
+# files, and every item below is about Jest and ng-mocks — `MockBuilder`, `MockRender`,
+# `ngMocks.faster()`, a state-restoring `afterEach` — none of which an E2E spec has or
+# wants. Without these exclusions a committed `e2e/` suite was walked against all
+# twenty-five of them, and item 1 reported every file for not living in a `tests/`
+# folder next to the code under test. `e2e/` is the convention this plugin's own
+# pipeline writes into, and `.e2e-spec.ts` is the Angular CLI one.
 applies-to:
   - "**/*.spec.ts"
   - "**/tests/**"
+  - "!**/e2e/**"
+  - "!**/*.e2e-spec.ts"
 scopes:
   spec: ["**/*.spec.ts"]
   testcode: ["**/*.spec.ts", "**/tests/**/*.ts"]

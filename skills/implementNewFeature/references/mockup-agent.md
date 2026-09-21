@@ -30,11 +30,12 @@ and the translation keys. So the copy is final copy, and the names are the app's
 
 1. Run the matcher twice — once bare for the rules that bind everything, once for the files this
    feature will create:
-   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` → read the
-     `globals` it lists; the naming and consistency rules live there.
+   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` → the `globals`
+     catalogue; the naming and consistency rules live there.
    - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<the project's base i18n file>,<one template path from plan.md>"`
-     → read every file under `localInstructions`; the Translations and template checklists are
-     exactly what step 6 will judge the result by.
+     → read every file under `globalInstructions` and `localInstructions` of those two paths; the
+     globals are narrowed there the way step 6 narrows them, and the Translations and template
+     checklists are exactly what step 6 will judge the result by.
    Both runs layer the project's OWN rulebook from `{{PROJECT}}/.claude/doh/instructions/` on top of
    the skill's (reported as `projectInstructionsDir`): when it is not null those files are in the
    lists you just read, and a project file replaces the skill file of the same name — a repo that
@@ -141,6 +142,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 ## Rules
 
 - Write ONLY inside `{{SESSION}}` (`generated-mockups/`, plus spec/plan/checklist after approval).
+- Each `.md` you rewrite after the approval goes out in ONE write — the Write tool, or a single
+  Bash heredoc if your harness refuses a `.md` write from a sub-agent. One write either way: a
+  file assembled from several appends is one that ends half-written when anything goes wrong.
   Never touch `{{PROJECT}}`, never `git commit`, never change branch — no implementation happens here.
 - Never read or reference `{{SESSION}}/auth.json`; mockups show placeholder credentials at most.
 - Delete files of screens you drop between rounds, so `generated-mockups/` always matches the manifest.

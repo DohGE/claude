@@ -236,3 +236,64 @@ test('a REST list that ends on a short page is complete, and says so', () => {
   assert.strictEqual(error, null);
   assert.strictEqual(truncated, false);
 });
+
+test('normalizeThread carries the hunk once, as the thread own', () => {
+  // GitHub repeats the anchor hunk on every reply of a thread. On an ordinary review
+  // round that is about a sixth of the brief the fixing agent reads, spent re-reading
+  // text it already has. The hunk travels on the thread instead - and a reply keeps a
+  // copy only where it genuinely differs, so hoisting it can never lose one.
+  const hunk = '@@ -40,3 +40,4 @@ function handler() {';
+  const thread = api.normalizeThread({
+    id: 'PRRT_1', isResolved: false, isOutdated: false, viewerCanResolve: true,
+    path: 'src/handler.ts', line: 41, diffSide: 'RIGHT',
+    comments: { pageInfo: { hasNextPage: false }, nodes: [
+      { databaseId: 1, body: 'extract this', diffHunk: hunk, author: { login: 'ann' } },
+      { databaseId: 2, body: 'agreed', diffHunk: hunk, author: { login: 'bob' } },
+      { databaseId: 3, body: 'done', diffHunk: hunk, author: { login: 'ann' } },
+    ] },
+  });
+  assert.strictEqual(thread.diffHunk, hunk);
+  assert.deepStrictEqual(thread.comments.map((c) => 'diffHunk' in c), [false, false, false]);
+
+  // The rare reply whose hunk is not the thread one keeps it, because dropping that
+  // would send the agent to the wrong lines with nothing saying so.
+  const moved = api.normalizeThread({
+    id: 'PRRT_2',
+    comments: { pageInfo: { hasNextPage: false }, nodes: [
+      { databaseId: 4, body: 'here', diffHunk: hunk, author: { login: 'ann' } },
+      { databaseId: 5, body: 'and here', diffHunk: '@@ -90,2 +90,3 @@ other', author: { login: 'bob' } },
+    ] },
+  });
+  assert.strictEqual(moved.diffHunk, hunk);
+  assert.ok(!('diffHunk' in moved.comments[0]));
+  assert.strictEqual(moved.comments[1].diffHunk, '@@ -90,2 +90,3 @@ other');
+
+  // A thread whose comments all sit past the first page has no anchor to hoist yet.
+  const bare = api.normalizeThread({ id: 'PRRT_3', comments: { nodes: [] } });
+  assert.strictEqual(bare.diffHunk, null);
+  assert.deepStrictEqual(bare.comments, []);
+});
+
+
+test('a review bot is flagged on an inline thread, not only in the conversation', () => {
+  // Review bots post inline now: one run of one can open forty threads beside a human
+  // reviewer's three. Flagged only in the conversation list, they reached the fixing
+  // agent looking exactly like a person asking for a change, and nothing in the brief
+  // could tell the two apart. The flag says who is speaking; what the comment is worth
+  // stays the agent call, because a bot anchored to a real line often names a real defect.
+  const thread = api.normalizeThread({
+    id: 'PRRT_bot', path: 'src/a.ts', line: 3,
+    comments: { pageInfo: { hasNextPage: false }, nodes: [
+      { databaseId: 1, body: 'nit: prefer const', diffHunk: '@@ a @@', author: { login: 'coderabbitai', __typename: 'Bot' } },
+      { databaseId: 2, body: 'agreed', diffHunk: '@@ a @@', author: { login: 'ann', __typename: 'User' } },
+      { databaseId: 3, body: 'no actor at all', diffHunk: '@@ a @@', author: null },
+    ] },
+  });
+  assert.deepStrictEqual(thread.comments.map((c) => c.isBot), [true, false, false]);
+  assert.deepStrictEqual(thread.comments.map((c) => c.author), ['coderabbitai', 'ann', null]);
+
+  // The flag is only as good as the query behind it: both ask for the actor type.
+  assert.ok(api.threadsQuery.includes('author{login __typename}'));
+  assert.ok(api.threadCommentsQuery.includes('author{login __typename}'));
+});
+

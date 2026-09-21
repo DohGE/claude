@@ -144,8 +144,8 @@ A global with only excluding patterns covers everything except them; a local sti
 
 ## Checklist coverage
 
-The context script hands every file its own ticking plan: `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-9,12-14,17,20` for one the file's kind narrowed. `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for.
-Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and `globalInstructionsSkipped` names them per file so a shorter plan reads as a decision rather than an omission; `globalInstructions` itself lists only the globals at least one reviewed file walks, so a diff of stylesheets never loads the TypeScript rulebook.
+The context script hands every file a `plan` index into `checklistPlans` — files of one kind share one entry, so a 200-file diff carries about eight plans instead of two hundred copies (measured: 53% off the whole context JSON). A plan's `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-9,12-14,17,20` for one the file's kind narrowed. `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for.
+Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and the plan's `globalInstructionsSkipped` names them — by checklist id, the same address the report ticks items under, because an absolute path repeated once per file per skipped global was two fifths of the context JSON — so a shorter plan reads as a decision rather than an omission; `globalInstructions` itself lists only the globals at least one reviewed file walks, so a diff of stylesheets never loads the TypeScript rulebook.
 Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under, whether or not the file walks every neighbour.
 
 The reviewer walks that list item by item and writes the result next to the file's findings, as one HTML comment block per file:
@@ -205,7 +205,7 @@ The token is looked up in this order, and the first hit wins:
 
 1. `GH_TOKEN`, then `GITHUB_TOKEN` from the environment.
 2. The credential git already stores for github.com — any HTTPS push puts one there (Windows Credential Manager, macOS keychain, `git credential-store`). Asked with `credential.interactive=false`, so a missing credential can never pop a prompt mid-review. Asked twice: once carrying the repository path, which is the only shape a `credential.useHttpPath=true` store matches, then once with the bare host.
-3. `~/.netrc` (`_netrc` on Windows) — the `machine github.com` entry. This is the first source that can answer for a repository cloned over SSH, since `git@github.com:` remotes never write an HTTPS credential.
+3. `~/.netrc` (`_netrc` on Windows) — the `machine api.github.com` entry first, since that is the host these calls go to and the one a netrc written for the API names, then `machine github.com`, and only if neither is present the `default` catch-all. An explicit GitHub entry always outranks `default` whatever the file order, because handing another service's catch-all secret to GitHub is the one mistake this order exists to prevent. This is the first source that can answer for a repository cloned over SSH, since `git@github.com:` remotes never write an HTTPS credential.
 4. gh's own `hosts.yml` (`GH_CONFIG_DIR`, `XDG_CONFIG_HOME/gh`, `%AppData%\GitHub CLI`, `~/.config/gh`) — so a machine that was once authenticated with gh keeps working after the binary leaves the PATH.
 5. `gh auth token`, if the CLI happens to be installed.
 
@@ -289,7 +289,7 @@ Run it by hand with `node scripts/post-pr-comments.cjs --report=<path.html> --in
 A comment body carries the finding's English `PR Problem` and `PR Expected` wording (`**Expected result:** …`) plus its `PR Locations` list (`**Where to change:** …`), so the reviewer sees what is wrong, what the result should be and which files and symbols the fix touches — but no severity, no violated rule and no Polish; the Polish report keeps all of that for the reader.
 Findings anchored on lines the PR diff shows become inline review comments (a whole cited range becomes a multi-line comment); the rest are listed in the review body, because GitHub rejects an inline comment outside the diff. Reviews are posted in batches of 50 comments. A summary too long for one review body (GitHub caps it at 65 536 characters, which a folder review of a large area can reach) is split across further reviews, and the posts are spaced a second apart so GitHub's secondary rate limit does not land half of them. If one is refused anyway, the message says how many already reached the PR.
 
-The button is tied to the *branch*, not to the review mode: a `--staged` or `--path` review run on a branch that has an open PR gets it too.
+The button is tied to the *branch*, not to the review mode: a `staged` or `folder <path>` review run on a branch that has an open PR gets it too.
 That is intentional but worth knowing — those modes review code the PR diff need not contain, so most or all of their findings end up in the review body rather than pinned to lines.
 
 Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs`

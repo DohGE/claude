@@ -14,7 +14,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { sanitizeBranchName } = require('../../codeReview/scripts/review-context.cjs');
+const { sanitizeBranchName, countOf } = require('../../codeReview/scripts/review-context.cjs');
 
 const bootstrapTimeoutMs = 10 * 60 * 1000;
 
@@ -74,9 +74,27 @@ function tryGit(project, gitArgs, options = {}) {
 // implementNewFeature uses - worktrees sit NEXT TO the repository, never inside
 // it, so nothing a run creates can ever be picked up as a project file, staged
 // by a `git add -A`, or walked by a test runner.
-function worktreePathFor(project, branch) {
+function worktreesDirFor(project) {
   const root = path.resolve(project);
-  return path.join(path.dirname(root), `${path.basename(root)}-worktrees`, `fixpr-${sanitizeBranchName(branch)}`);
+  return path.join(path.dirname(root), `${path.basename(root)}-worktrees`);
+}
+
+function worktreePathFor(project, branch) {
+  return path.join(worktreesDirFor(project), `fixpr-${sanitizeBranchName(branch)}`);
+}
+
+// The parent is tidied away only when it is the one this skill invents. With an
+// explicit `--worktree=<path>` the parent belongs to the caller - an empty
+// directory of theirs is still theirs, and removing it is not part of taking a
+// worktree down.
+function removeOwnParent(project, worktree) {
+  const parent = path.dirname(path.resolve(worktree));
+  if (parent !== worktreesDirFor(project)) return;
+  try {
+    fs.rmdirSync(parent);
+  } catch {
+    // another branch still has a worktree here
+  }
 }
 
 function isDirectory(p) {
@@ -129,8 +147,11 @@ function branchState(project, branch) {
   if (!local && !remote) return { state: 'missing' };
   if (!local) return { state: 'remote-only' };
   if (!remote) return { state: 'local-only' };
-  const ahead = Number(tryGit(project, ['rev-list', '--count', `origin/${branch}..${branch}`]));
-  const behind = Number(tryGit(project, ['rev-list', '--count', `${branch}..origin/${branch}`]));
+  // Through `countOf`, never `Number()`: `tryGit` answers null on a failed call and
+  // `Number(null)` is 0, so a rev-list that never ran would report the branch as
+  // in-sync with origin and the run would fix on top of code the reviewer never saw.
+  const ahead = countOf(tryGit(project, ['rev-list', '--count', `origin/${branch}..${branch}`]));
+  const behind = countOf(tryGit(project, ['rev-list', '--count', `${branch}..origin/${branch}`]));
   if (!Number.isFinite(ahead) || !Number.isFinite(behind)) return { state: 'unknown' };
   if (ahead === 0 && behind === 0) return { state: 'in-sync', ahead, behind };
   if (ahead === 0) return { state: 'behind', ahead, behind };
@@ -138,25 +159,61 @@ function branchState(project, branch) {
   return { state: 'diverged', ahead, behind };
 }
 
+// Which package manager the project is pinned to, decided by the lockfile it
+// committed. `null` means there is no lockfile at all: nothing to install from,
+// and a caller that only needs to RUN a script (checks.cjs) supplies its own
+// fallback rather than having one guessed here.
+function detectPackageManager(root) {
+  const has = (name) => fs.existsSync(path.join(root, name));
+  if (has('pnpm-lock.yaml')) return 'pnpm';
+  if (has('yarn.lock')) return 'yarn';
+  if (has('package-lock.json')) return 'npm';
+  return null;
+}
+
+const installCommands = {
+  pnpm: ['install', '--frozen-lockfile'],
+  yarn: ['install', '--immutable'],
+  npm: ['ci'],
+};
+
+// Why the HEAD of a failed install and not its tail: every package manager prints its
+// diagnosis first and its usage help last. `npm ci` on a lockfile out of sync names the
+// missing package in its third line and then forty lines of flag documentation, so the
+// last five lines handed the reader "aliases: clean-install, ic, install-clean" as the
+// reason their gate cannot run. The prefix-only lines every manager emits between
+// paragraphs carry nothing, so dropping them keeps the five that travel real ones.
+function installFailure(err) {
+  const text = String((err && err.stderr) || (err && err.message) || err);
+  return text.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(npm|pnpm|yarn)?\s*(error|warn|ERR!)?\s*$/i.test(line))
+    .slice(0, 5)
+    .join(' ')
+    .trim();
+}
+
 // A worktree is created from HEAD of the branch, so it carries neither
 // `node_modules` nor the gitignored local config the project needs - and the
-// verification gate before the commit runs the project's own lint and tests.
+// gate before the commit runs the project's own lint, tests and build.
 // Without this the gate would fail on every branch for want of a dependency
 // tree, which reads as "the fixes broke the build".
 function installDependencies(root) {
-  const has = (name) => fs.existsSync(path.join(root, name));
-  const run = (cmd, cmdArgs) => {
-    try {
-      execFileSync(cmd, cmdArgs, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: bootstrapTimeoutMs, shell: process.platform === 'win32' });
-      return null;
-    } catch (err) {
-      return String((err && err.stderr) || (err && err.message) || err).split(/\r?\n/).slice(-5).join(' ').trim();
-    }
-  };
-  if (has('pnpm-lock.yaml')) return { manager: 'pnpm', error: run('pnpm', ['install', '--frozen-lockfile']) };
-  if (has('yarn.lock')) return { manager: 'yarn', error: run('yarn', ['install', '--immutable']) };
-  if (has('package-lock.json')) return { manager: 'npm', error: run('npm', ['ci']) };
-  return { manager: null, error: null };
+  const manager = detectPackageManager(root);
+  if (!manager) return { manager: null, error: null };
+  try {
+    // A shell is needed on Windows, where every package manager is a `.cmd` shim - and
+    // with one, the finished command line is the documented form: Node deprecates
+    // concatenating a separate args array into it without escaping (DEP0190). Joining is
+    // lossless here because both halves are literals of this file: the manager name and
+    // its entry in `installCommands`, neither of which holds a space.
+    const useShell = process.platform === 'win32';
+    const argv = installCommands[manager];
+    execFileSync(useShell ? [manager, ...argv].join(' ') : manager, useShell ? [] : argv, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: bootstrapTimeoutMs, shell: useShell });
+    return { manager, error: null };
+  } catch (err) {
+    return { manager, error: installFailure(err) };
+  }
 }
 
 // Folders that never hold a hand-written `.env` and are the ones big enough to
@@ -207,7 +264,11 @@ function add(options) {
   // Everything outside `add` runs the real command.
   const run = options.git || tryGit;
   const branch = options.branch;
-  const result = { action: 'add', branch, project, worktree: null, created: false, warnings: [], errors: [] };
+  // `installed` answers the one question the gate depends on: does this worktree
+  // have a dependency tree it can run lint/test/build against? Every early
+  // return below leaves it false, which is the truth for a worktree that was
+  // never created.
+  const result = { action: 'add', branch, project, worktree: null, created: false, installed: false, warnings: [], errors: [] };
 
   if (run(project, ['rev-parse', '--git-dir']) === null) {
     result.errors.push(`Not a git repository: ${project}`);
@@ -279,11 +340,7 @@ function add(options) {
         result.warnings.push(`The worktree at ${worktree} could not be removed after that failure; remove it with git worktree remove before the next run.`);
       } else {
         result.created = false;
-        try {
-          fs.rmdirSync(path.dirname(worktree));
-        } catch {
-          // another branch still has a worktree here
-        }
+        removeOwnParent(project, worktree);
       }
       return result;
     }
@@ -300,11 +357,18 @@ function add(options) {
   }
   const deps = installDependencies(worktree);
   result.dependencies = deps;
+  result.installed = Boolean(deps.manager) && !deps.error;
   if (deps.error) {
     // Not fatal: the fixing itself needs no dependency tree, only the
     // verification gate does. It reports its own failure, and saying so here is
     // what keeps that failure from reading as "the fixes broke the build".
     result.warnings.push(`${deps.manager} install failed in the worktree, so lint/test/build will not run: ${deps.error}`);
+  } else if (!deps.manager && fs.existsSync(path.join(worktree, 'package.json'))) {
+    // A package.json with no lockfile next to it: nothing could be installed, so
+    // the worktree has no node_modules and the gate would fail on a missing
+    // dependency rather than on the code. Saying so is what turns a silent
+    // "gate skipped" in the summary into something the user can act on.
+    result.warnings.push('No lockfile in the worktree, so no dependencies were installed and lint/test/build will not run. Commit a lockfile to have the gate run.');
   }
   return result;
 }
@@ -325,13 +389,9 @@ function remove(options) {
     return result;
   }
   result.removed = true;
-  // The parent only ever holds this skill's worktrees, so an empty one is
+  // The skill's own parent only ever holds its worktrees, so an empty one is
   // litter; rmdir fails harmlessly while another run still has one.
-  try {
-    fs.rmdirSync(path.dirname(worktree));
-  } catch {
-    // another branch still has a worktree here
-  }
+  removeOwnParent(project, worktree);
   return result;
 }
 
@@ -348,8 +408,8 @@ function main() {
 }
 
 module.exports = {
-  parseArgs, worktreePathFor, worktreeHolding, branchState, refExists,
-  installDependencies, copyEnvFiles, add, remove, git, tryGit,
+  parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
+  detectPackageManager, installDependencies, installFailure, copyEnvFiles, add, remove, git, tryGit,
 };
 
 if (require.main === module) main();

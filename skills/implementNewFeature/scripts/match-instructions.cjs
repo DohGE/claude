@@ -71,7 +71,7 @@ function buildOutput(options) {
   const hasProjectInstructions = fs.existsSync(projectInstructionsDir)
     && fs.statSync(projectInstructionsDir).isDirectory();
   out.projectInstructionsDir = hasProjectInstructions ? projectInstructionsDir : null;
-  const { globals, locals, warnings } = reviewContext.loadInstructions(
+  const { globals, locals, warnings, scopes } = reviewContext.loadInstructions(
     hasProjectInstructions ? [dir, projectInstructionsDir] : dir, 'implement');
   out.warnings = warnings;
   if (globals.length === 0 && locals.length === 0) {
@@ -79,9 +79,28 @@ function buildOutput(options) {
   }
   const files = options.files || [];
   if (files.length > 0) {
+    // Globals are matched per file, exactly as `buildContext` matches them at
+    // review time. Six of the eight shipped ones declare `applies-to`, so
+    // "every global binds every file" was never true of the review: a
+    // stylesheet was written against test-coverage.md and a file under
+    // `models/` against security.md, and step 6 then checked neither. The whole
+    // point of this script is that what the code is written against is what it
+    // is later reviewed against, and until now that held for locals only.
+    // An instruction whose every item this file's scope tags took away has nothing
+    // to say about it. `buildContext` drops such an instruction from the file's review
+    // plan outright, so leaving it in here handed the agent a rulebook file to read
+    // and obey that step 6 then never walks or ticks - the same mismatch the comment
+    // above describes for globals, one level further down. `general.md` against an
+    // `assets/i18n/*.json` file is the shipped example.
+    const walked = (file, p) => reviewContext.matchChecklistItems(
+      reviewContext.parseChecklistItems(file), (scopes || {})[file] && scopes[file].itemScopes, p,
+    ).length > 0;
     out.files = files.map((p) => ({
       path: p,
-      localInstructions: reviewContext.matchLocalInstructions(locals, p),
+      globalInstructions: reviewContext.matchGlobalInstructions(globals, scopes || {}, p)
+        .filter((file) => walked(file, p)),
+      localInstructions: reviewContext.matchLocalInstructions(locals, p)
+        .filter((file) => walked(file, p)),
     }));
   } else {
     out.globals = globals;

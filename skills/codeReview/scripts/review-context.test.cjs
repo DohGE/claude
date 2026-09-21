@@ -49,6 +49,31 @@ test('globToRegExp supports the documented subset', () => {
   assert.ok(!rc.globToRegExp('**/*.component.ts').test('src/app/x.service.ts'));
 });
 
+test('one pattern is compiled once, and the shared regex answers the same every time', () => {
+  const first = rc.globToRegExp('**/*.spec.ts');
+  assert.strictEqual(rc.globToRegExp('**/*.spec.ts'), first, 'the compiled glob is reused');
+  // A `g` or `y` flag would make the shared object stateful: `test` would then
+  // walk lastIndex and return true, false, true for one unchanging path, and a
+  // review would drop every other file from an instruction's scope.
+  assert.strictEqual(first.flags, '');
+  for (let i = 0; i < 4; i++) {
+    assert.ok(first.test('src/a.spec.ts'), `call ${i} must answer the same`);
+    assert.ok(!first.test('src/a.ts'));
+  }
+});
+
+test('splitPatterns answers the same on every call, cached or not', () => {
+  const patterns = ['**/*.ts', '!**/*.spec.ts'];
+  const first = rc.splitPatterns(patterns);
+  assert.deepStrictEqual(first, { include: ['**/*.ts'], exclude: ['**/*.spec.ts'] });
+  assert.deepStrictEqual(rc.splitPatterns(patterns), first);
+  // A fresh array with the same content is a different scope list, and gets its
+  // own answer rather than the first one's.
+  assert.deepStrictEqual(rc.splitPatterns(['**/*.ts', '!**/*.spec.ts']), first);
+  assert.deepStrictEqual(rc.splitPatterns([]), { include: [], exclude: [] });
+  assert.deepStrictEqual(rc.splitPatterns(undefined), { include: [], exclude: [] });
+});
+
 test('parseFrontmatter extracts applies-to globs and audience', () => {
   const md = '---\nname: Angular TS\napplies-to:\n  - "**/*.component.ts"\n  - \'**/*.service.ts\'\n---\n## Checklist\n- rule\n';
   assert.deepStrictEqual(rc.parseFrontmatter(md).appliesTo, ['**/*.component.ts', '**/*.service.ts']);
@@ -156,6 +181,34 @@ test('detectBaseBranch honors origin/HEAD and origin-only branches', (t) => {
   assert.strictEqual(rc.detectBaseBranch(dir, 'feature/z', 'feature/z').ref, 'origin/release');
 });
 
+test('the one-call distances agree with asking each ref on its own', (t) => {
+  // detectForkBase reads every candidate's distance out of a single
+  // `for-each-ref %(ahead-behind:...)`, which replaced sixty `rev-list --count`
+  // spawns. The two must answer identically for every shape a repo can have -
+  // a candidate the branch is ahead of, one that contains it, and one it has
+  // diverged from - or the base a review diffs against silently changes.
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'develop']);
+  commitFile(dir, 'd.txt', 'd', 'develop work');
+  run(dir, ['checkout', '-q', '-b', 'sibling']);
+  commitFile(dir, 's.txt', 's', 'sibling work');
+  run(dir, ['checkout', '-q', 'develop']);
+  run(dir, ['checkout', '-q', '-b', 'feature/x']);
+  commitFile(dir, 'f.txt', 'f', 'feature work');
+  commitFile(dir, 'f2.txt', 'f2', 'more feature work');
+  run(dir, ['update-ref', 'refs/remotes/origin/develop', 'develop']);
+  run(dir, ['branch', 'contains-it', 'feature/x']);
+
+  const counts = rc.aheadCounts(dir, 'feature/x');
+  assert.ok(counts && counts.size > 0, 'this git can answer in one call');
+  for (const [ref, count] of counts) {
+    const alone = Number(rc.tryGit(dir, ['rev-list', '--count', 'feature/x', `^${ref}`]));
+    assert.strictEqual(count, alone, `${ref}: one call said ${count}, rev-list said ${alone}`);
+  }
+  // And the base itself is still the branch it forked from, not a sibling and
+  // not a branch made FROM it.
+  assert.strictEqual(rc.detectForkBase(dir, 'feature/x', 'feature/x'), 'develop');
+});
 // A findOpenPr stub, same shape as github.cjs returns, so no test ever reaches
 // the network. github.test.cjs covers the real lookup and its gating.
 function prStub(pr, error = null) {
@@ -471,6 +524,65 @@ test('a global with only excluding patterns covers everything else - unlike a lo
   assert.strictEqual(hit('src/app/models/user.model.ts'), 0, 'and only the exclusion is carved out');
 });
 
+// `plan` is an index into `checklistPlans`: files of one kind share one entry, so a wide diff
+// carries a handful of plans instead of one copy per file. Every assertion below resolves
+// it exactly the way SKILL.md tells the reviewer to.
+const planOf = (ctx, file) => ctx.checklistPlans[file.plan];
+const checklistOf = (ctx, file) => planOf(ctx, file).checklist;
+const skippedOf = (ctx, file) => planOf(ctx, file).globalInstructionsSkipped;
+
+test('files of one kind share one plan, so a wide diff carries a catalog not copies', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/wide']);
+  // Four kinds, five files each: the plan is decided by the path patterns and the scope
+  // tags, so twenty files can only produce four plans.
+  for (let i = 0; i < 5; i++) {
+    commitFile(dir, `src/app/a${i}/x.component.ts`, 'export class X {}' + String.fromCharCode(10), 'c');
+    commitFile(dir, `src/app/a${i}/x.component.html`, '<div></div>' + String.fromCharCode(10), 'h');
+    commitFile(dir, `src/app/a${i}/models/m.interface.ts`, 'export interface M { id: string }' + String.fromCharCode(10), 'm');
+    commitFile(dir, `src/app/a${i}/x.util.ts`, 'export const u = 1;' + String.fromCharCode(10), 'u');
+  }
+  const skillDir = makeSkillDir(t, {}, {
+    'markup.md': '---' + String.fromCharCode(10) + 'name: Markup' + String.fromCharCode(10) + 'applies-to:' + String.fromCharCode(10) + '  - "**/*.html"' + String.fromCharCode(10) + '---' + String.fromCharCode(10) + '- m1' + String.fromCharCode(10),
+    'code.md': '---' + String.fromCharCode(10) + 'name: Code' + String.fromCharCode(10) + 'applies-to:' + String.fromCharCode(10) + '  - "**/*.ts"' + String.fromCharCode(10) + '  - "!**/models/**"' + String.fromCharCode(10) + '---' + String.fromCharCode(10) + '- c1' + String.fromCharCode(10) + '- c2' + String.fromCharCode(10),
+    'all.md': '---' + String.fromCharCode(10) + 'name: All' + String.fromCharCode(10) + '---' + String.fromCharCode(10) + '- a1' + String.fromCharCode(10),
+  });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const files = ctx.targets[0].files;
+  assert.ok(files.length >= 20, `expected the whole diff, got ${files.length}`);
+
+  // Every file points at a plan that exists, and every plan is pointed at.
+  for (const f of files) assert.ok(ctx.checklistPlans[f.plan], `${f.path} has no plan`);
+  const used = new Set(files.map((f) => f.plan));
+  assert.strictEqual(used.size, ctx.checklistPlans.length, 'the catalog holds no entry nobody uses');
+  assert.ok(ctx.checklistPlans.length <= 4, `four kinds, so at most four plans, got ${ctx.checklistPlans.length}`);
+
+  // Same kind, same plan INDEX - that identity is the whole saving.
+  const components = files.filter((f) => f.path.endsWith('.component.ts'));
+  assert.ok(components.length >= 5);
+  assert.strictEqual(new Set(components.map((f) => f.plan)).size, 1, 'five components, one plan');
+
+  // And the plan a file points at still sums to its own total.
+  for (const f of files) {
+    const expanded = checklistOf(ctx, f).reduce((n, entry) => n + countSpec(entry.split(':')[1]), 0);
+    assert.strictEqual(expanded, f.checklistTotal, `${f.path}: plan and total disagree`);
+  }
+});
+
+test('a count that could not be read is NaN, not a finite zero', () => {
+  // `tryGit` answers null when the command failed, and every caller guards the
+  // result with `Number.isFinite`. `Number(null)` is 0, so that guard used to pass
+  // for a call that never ran - and zero commits apart is exactly what makes a
+  // wrong candidate look like the right base branch.
+  assert.ok(Number.isNaN(rc.countOf(null)), 'a failed git call is not a count');
+  assert.ok(Number.isNaN(rc.countOf(undefined)));
+  assert.ok(Number.isNaN(rc.countOf('')), 'and neither is empty output');
+  assert.ok(Number.isNaN(rc.countOf('   ')));
+  assert.ok(Number.isNaN(rc.countOf('fatal: bad revision')));
+  assert.strictEqual(rc.countOf('0'), 0, 'a real zero still reads as zero');
+  assert.strictEqual(rc.countOf(' 3 '), 3, 'and git output keeps its surrounding whitespace out of it');
+});
+
 test('a global excludes a folder it has nothing to say about', (t) => {
   const dir = makeRepo(t);
   run(dir, ['checkout', '-q', '-b', 'feature/exclude']);
@@ -484,10 +596,11 @@ test('a global excludes a folder it has nothing to say about', (t) => {
   const files = ctx.targets[0].files;
   const code = files.find((f) => f.path === 'src/a.service.ts');
   const model = files.find((f) => f.path === 'src/models/user.interface.ts');
-  assert.deepStrictEqual(code.checklist, ['coverage:1-2', 'naming:1']);
-  assert.deepStrictEqual(model.checklist, ['naming:1'], 'the excluded global is out of the plan');
+  assert.deepStrictEqual(checklistOf(ctx, code), ['coverage:1-2', 'naming:1']);
+  assert.deepStrictEqual(checklistOf(ctx, model), ['naming:1'], 'the excluded global is out of the plan');
   assert.strictEqual(model.checklistTotal, 1);
-  assert.deepStrictEqual(model.globalInstructionsSkipped.map((f) => path.basename(f)), ['coverage.md']);
+  assert.deepStrictEqual(skippedOf(ctx, model), ['coverage'], 'named by checklist id, not by path');
+  assert.notStrictEqual(code.plan, model.plan, 'two different plans are two catalog entries');
 });
 
 test('a gate sentence reaches the context under the instruction id', (t) => {
@@ -643,7 +756,7 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   const modified = t0.files.find((f) => f.path === 'config/app.json');
   assert.strictEqual(modified.status, 'M');
   assert.strictEqual(modified.changedLines, '2', 'script precomputes new-file changed lines');
-  assert.deepStrictEqual(ctx.localInstructionsCatalog.map((f) => path.basename(f)), ['ts.md']);
+  assert.deepStrictEqual(ctx.localInstructionsCatalog.map((e) => path.basename(e.path)), ['ts.md']);
   assert.deepStrictEqual(added.localInstructions, [0], 'per-file matches are catalog indexes');
   assert.deepStrictEqual(modified.localInstructions, []);
   assert.strictEqual(ctx.claudeMd, null);
@@ -836,7 +949,7 @@ test('buildContext layers the project rulebook and keeps it committable', (t) =>
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   assert.deepStrictEqual(ctx.errors, []);
   assert.strictEqual(ctx.projectInstructionsDir, projectInstructions);
-  assert.deepStrictEqual(ctx.globalInstructions.map((f) => path.basename(f)), ['house-style.md', 'naming.md']);
+  assert.deepStrictEqual(ctx.globalInstructions.map((e) => path.basename(e.path)), ['house-style.md', 'naming.md']);
   const ignored = (rel) => spawnSync('git', ['-C', dir, 'check-ignore', '-q', rel]).status === 0;
   assert.ok(ignored('.claude/doh/20260708-1000/plan.md'), 'run artifacts stay out of git');
   assert.ok(!ignored('.claude/doh/instructions/global/house-style.md'), 'the rulebook stays committable');
@@ -876,26 +989,32 @@ test('every file carries its ticking plan: instruction id + item numbers, global
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   const files = ctx.targets[0].files;
   const code = files.find((f) => f.path === 'src/a.ts');
-  assert.deepStrictEqual(code.checklist, ['naming:1-3', 'runtime:1-2', 'ts:1-2'], 'globals first, then the matched locals');
-  assert.deepStrictEqual(code.globalInstructionsSkipped, [], 'a .ts file is in scope of both globals');
+  assert.deepStrictEqual(checklistOf(ctx, code), ['naming:1-3', 'runtime:1-2', 'ts:1-2'], 'globals first, then the matched locals');
+  assert.deepStrictEqual(skippedOf(ctx, code), [], 'a .ts file is in scope of both globals');
   const doc = files.find((f) => f.path === 'config/app.json');
-  assert.deepStrictEqual(doc.checklist, ['naming:1-3'], 'a scoped global drops out of a file it does not apply to');
+  assert.deepStrictEqual(checklistOf(ctx, doc), ['naming:1-3'], 'a scoped global drops out of a file it does not apply to');
   assert.strictEqual(doc.checklistTotal, 3, 'the total counts only the globals this file is walked against');
   assert.deepStrictEqual(
-    doc.globalInstructionsSkipped.map((f) => path.basename(f)),
-    ['runtime.md'],
+    skippedOf(ctx, doc),
+    ['runtime'],
     'the skipped globals are named, so a shorter plan reads as a decision',
   );
   assert.strictEqual(
-    code.checklist.reduce((n, entry) => n + countSpec(entry.split(':')[1]), 0),
+    checklistOf(ctx, code).reduce((n, entry) => n + countSpec(entry.split(':')[1]), 0),
     code.checklistTotal,
     'the plan sums to the checklist total',
   );
+  // Every instruction the run loads travels with the id its items are addressed by,
+  // beside the path Step 2 reads it from - one entry, not a list and a parallel map.
   assert.deepStrictEqual(
-    Object.fromEntries(Object.entries(ctx.checklistIds).map(([id, file]) => [id, path.basename(file)])),
+    Object.fromEntries([...ctx.globalInstructions, ...ctx.localInstructionsCatalog]
+      .map((e) => [e.id, path.basename(e.path)])),
     { naming: 'naming.md', runtime: 'runtime.md', ts: 'ts.md' },
-    'an instruction with no checklist items is left out of the plan and the dictionary',
+    'an instruction with no checklist items is left out of the plan and the catalog',
   );
+  // The same guarantee read from the other side: no plan addresses it either.
+  const planned = new Set(ctx.checklistPlans.flatMap((p) => p.checklist.map((e) => e.split(':')[0])));
+  assert.ok(!planned.has('empty'), [...planned].join(', '));
 });
 
 test('formatItemSpec collapses consecutive item numbers into ranges', () => {
@@ -979,9 +1098,9 @@ test('item scope tags narrow the plan and the total, and a fully out-of-scope in
   const files = ctx.targets[0].files;
   const styles = files.find((f) => f.path === 'src/a.component.scss');
   const code = files.find((f) => f.path === 'src/a.component.ts');
-  assert.deepStrictEqual(styles.checklist, ['mixed:1-2,4'], 'the TS-only items and the TS-only instruction are gone');
+  assert.deepStrictEqual(checklistOf(ctx, styles), ['mixed:1-2,4'], 'the TS-only items and the TS-only instruction are gone');
   assert.strictEqual(styles.checklistTotal, 3);
-  assert.deepStrictEqual(code.checklist, ['mixed:1,3-4', 'tsonly:1-2']);
+  assert.deepStrictEqual(checklistOf(ctx, code), ['mixed:1,3-4', 'tsonly:1-2']);
   assert.strictEqual(code.checklistTotal, 5);
   assert.deepStrictEqual(
     styles.localInstructions,
@@ -1009,11 +1128,11 @@ test('globalInstructions lists only the globals some reviewed file actually walk
   });
   const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
   assert.deepStrictEqual(
-    ctx.globalInstructions.map((f) => path.basename(f)),
+    ctx.globalInstructions.map((e) => path.basename(e.path)),
     ['everywhere.md'],
     'a rulebook no file in this diff walks is not loaded',
   );
-  assert.deepStrictEqual(Object.keys(ctx.checklistIds), ['everywhere']);
+  assert.deepStrictEqual(ctx.globalInstructions.map((e) => e.id), ['everywhere']);
 });
 
 test('the shipped rulebook loads clean: every scope tag resolves and every scope is used', () => {
