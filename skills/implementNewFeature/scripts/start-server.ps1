@@ -20,11 +20,23 @@ if (Test-Path $serverJson) {
     $prev = Get-Content $serverJson -Raw | ConvertFrom-Json
     $prevPid = $prev.pid
   } catch { $prevPid = 0 }
+  # Only ever stop a process we can PROVE is this server. A clean shutdown removes
+  # server.json, but a crash does not, and a pid Windows has since handed to something
+  # else looks exactly like a live server from here - stopping it blind takes down
+  # whatever inherited it. When the check cannot confirm, nothing is stopped: a server
+  # that really died is not holding the port anyway, and one that is holding it makes
+  # the new instance exit with the line that says so.
   if ($prevPid -gt 0) {
-    try { Stop-Process -Id $prevPid -Force -ErrorAction Stop } catch { }
-    $stopBy = (Get-Date).AddSeconds(5)
-    while ((Get-Process -Id $prevPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $stopBy) {
-      Start-Sleep -Milliseconds 200
+    $prevCmd = ''
+    try { $prevCmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$prevPid" -ErrorAction Stop).CommandLine } catch { $prevCmd = '' }
+    if ($prevCmd -and $prevCmd -like '*server.cjs*') {
+      try { Stop-Process -Id $prevPid -Force -ErrorAction Stop } catch { }
+      $stopBy = (Get-Date).AddSeconds(5)
+      while ((Get-Process -Id $prevPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $stopBy) {
+        Start-Sleep -Milliseconds 200
+      }
+    } elseif (Get-Process -Id $prevPid -ErrorAction SilentlyContinue) {
+      Write-Warning "server.json names pid $prevPid, which is not this server - leaving it alone"
     }
   }
   Remove-Item $serverJson -Force

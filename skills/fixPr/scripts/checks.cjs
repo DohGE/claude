@@ -74,22 +74,86 @@ function parseArgs(argv) {
 // `shell` is the caller's decision, not this function's: npm, pnpm and yarn are
 // `.cmd` shims on Windows and cannot be spawned without one, while a bare
 // executable whose path holds a space cannot be spawned WITH one.
+//
+// With a shell the command LINE is what gets parsed, so Node deprecates handing it a
+// separate args array as well - it concatenates the two without escaping (DEP0190), and
+// the deprecation is only invisible today because `main` exits before Node flushes the
+// warning. Passing the finished line and no args is the documented form. Joining is
+// lossless HERE because every token comes from this file and none holds a space or a
+// shell metacharacter: the package manager name, one of the script names `gateSteps`
+// lists, `--`, and the fixed flag arrays of `watchFlags`. Keep it that way - a token with
+// a space would have to go back to an args array and a shell-less spawn.
+// A timeout kills the shell spawnSync started and returns - and on Windows the runner
+// underneath is not dragged into that kill. It keeps running: holding the dev port, a
+// browser, the CPU, while the report says the step timed out and the next branch's run
+// fails for a reason nothing on screen explains. `taskkill /T` cannot repair it after
+// the fact either, because the pid spawnSync hands back is already gone. What does
+// survive is the recorded parent chain, so the tree is walked from that dead pid.
+//
+// Windows only, because this is where it was reproduced and a process reaper is not
+// something to ship untested for a platform it cannot be exercised on.
+function processTable() {
+  const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+    'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }'],
+    { encoding: 'utf8', windowsHide: true, timeout: 30 * 1000, maxBuffer: 8 * 1024 * 1024 });
+  if (res.status !== 0 || !res.stdout) return null;
+  const LF = String.fromCharCode(10);
+  return res.stdout.split(LF)
+    .map((line) => line.trim().split(' ').filter(Boolean).map(Number))
+    .filter((pair) => pair.length === 2 && Number.isFinite(pair[0]) && Number.isFinite(pair[1]))
+    .map(([pid, ppid]) => ({ pid, ppid }));
+}
+
+function reapTree(rootPid) {
+  if (process.platform !== 'win32' || !rootPid) return [];
+  const rows = processTable();
+  if (!rows) return [];
+  // A LIVE process holding the pid we spawned means Windows has reused it since the
+  // shell died, and the stale children under it belong to a stranger. An orphan left
+  // running is bad; killing somebody else's process is worse. So nothing happens.
+  if (rows.some((row) => row.pid === rootPid)) return [];
+  const children = new Map();
+  for (const row of rows) {
+    if (!children.has(row.ppid)) children.set(row.ppid, []);
+    children.get(row.ppid).push(row.pid);
+  }
+  const doomed = [];
+  const seen = new Set([rootPid]);
+  const queue = [rootPid];
+  while (queue.length > 0) {
+    for (const pid of children.get(queue.shift()) || []) {
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      doomed.push(pid);
+      queue.push(pid);
+    }
+  }
+  for (const pid of doomed) {
+    try {
+      spawnSync('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true, timeout: 10 * 1000 });
+    } catch {}
+  }
+  return doomed;
+}
+
 function defaultRun(command, args, options) {
-  const res = spawnSync(command, args, {
+  const useShell = Boolean(options.shell);
+  const res = spawnSync(useShell ? [command, ...args].join(' ') : command, useShell ? [] : args, {
     cwd: options.cwd,
     env: options.env,
     encoding: 'utf8',
     timeout: options.timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
-    shell: Boolean(options.shell),
+    shell: useShell,
     windowsHide: true,
   });
   const timedOut = Boolean(res.error && (res.error.code === 'ETIMEDOUT' || res.signal));
+  const orphans = timedOut ? reapTree(res.pid) : [];
   const parts = [];
   if (res.stdout) parts.push(res.stdout);
   if (res.stderr) parts.push(res.stderr);
   if (res.error && !timedOut) parts.push(`${res.error.message}\n`);
-  return { exitCode: res.status, timedOut, output: parts.join('') };
+  return { exitCode: res.status, timedOut, output: parts.join(''), orphans };
 }
 
 // The tail is what holds a runner's failure summary - the count, the stack, the
@@ -236,6 +300,7 @@ function runChecks(options) {
     }
 
     const timedOut = Boolean(outcome.timedOut);
+    const orphans = outcome.orphans || [];
     result.steps.push({
       step: spec.step,
       label: spec.label,
@@ -244,14 +309,31 @@ function runChecks(options) {
       status: timedOut || outcome.exitCode !== 0 ? 'failed' : 'passed',
       exitCode: outcome.exitCode === undefined ? null : outcome.exitCode,
       timedOut,
+      orphansKilled: orphans,
       durationMs,
       logPath,
       truncated: log.truncated,
-      reason: timedOut ? `the command timed out after ${timeoutMs}ms` : '',
+      // What the reaper did belongs in the reason, not only in the logs: a step that
+      // timed out AND left something running is a different problem from one that just
+      // took too long, and the difference decides whether the next run can even start.
+      reason: timedOut
+        ? `the command timed out after ${timeoutMs}ms`
+          + (orphans.length > 0
+            ? `; ${orphans.length} process(es) it had left running were killed (${orphans.join(', ')})`
+            : '')
+        : '',
     });
   }
 
   if (result.steps.some((s) => s.status === 'failed')) result.gate = 'red';
+  // A `--only` pass never looked at every command, so "nothing failed here" is not the
+  // answer "the gate is green". Saying green is the one answer this script must never give
+  // by accident - the same reason a misspelled `--only` throws above - because the fixing
+  // agent's decision table sends a green gate straight to commit-and-push, while the steps
+  // this pass skipped can still be red: their logs from the previous pass are on disk right
+  // next to this one, saying so. The brief asks for a full last pass; this is what makes
+  // that ask checkable instead of a promise.
+  else if (only.length > 0 && gateSteps.some((spec) => !only.includes(spec.step))) result.gate = 'partial';
   else if (result.steps.some((s) => s.status === 'passed')) result.gate = 'green';
   else result.gate = 'skipped';
   return result;
@@ -259,7 +341,9 @@ function runChecks(options) {
 
 // A red gate and a script that could not run are different answers, and an agent
 // reading only the exit code must not confuse "your code is broken" with "I never
-// got as far as your code".
+// got as far as your code". A `partial` gate exits 0 like a green one: nothing failed and
+// the script ran fine. What it is NOT is a verdict on the whole gate, and that lives in
+// the JSON, where the caller reads it.
 function exitCodeFor(result) {
   if (result.errors && result.errors.length > 0) return 2;
   return result.gate === 'red' ? 1 : 0;
@@ -280,7 +364,7 @@ function main() {
 }
 
 module.exports = {
-  parseArgs, defaultRun, truncateLog, extraArgsFor, runChecks, exitCodeFor, gateSteps,
+  parseArgs, defaultRun, truncateLog, extraArgsFor, runChecks, exitCodeFor, gateSteps, reapTree,
 };
 
 if (require.main === module) main();

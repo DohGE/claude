@@ -158,6 +158,28 @@ test('a finding without PR Locations still renders a comment, just without the p
   assert.ok(!body.includes('Where to change'));
 });
 
+test('the PR heading does not repeat a title that already says Code Review', () => {
+  // The header SKILL.md Step 4 fixes is `# Code Review: <branch> → <base> | <date>`, so
+  // the parsed title always opens with those words. Prefixing them again put
+  // "## Code review — Code Review: feature/x → main" on the pull request. Both
+  // fixtures below are real shapes: the first is what the skill writes.
+  assert.strictEqual(
+    pr.summaryHeading('Code Review: feature/x → main'),
+    '## Code Review: feature/x → main',
+  );
+  assert.strictEqual(
+    pr.summaryHeading('Code Review: folder src/app (main)', 3),
+    '## Code Review: folder src/app (main) (part 3)',
+  );
+  // A title that does not name itself still gets the words, so an older report
+  // or a hand-made payload keeps a heading that reads as one.
+  assert.strictEqual(pr.summaryHeading('feature/x → main'), '## Code review — feature/x → main');
+  assert.strictEqual(pr.summaryHeading(''), '## Code review');
+  // And the body built from a real title carries it exactly once.
+  const body = pr.summaryBody({ title: 'Code Review: feature/x → main' }, [], []);
+  assert.strictEqual((body.match(/Code Review/gi) || []).length, 1);
+});
+
 test('summaryBody lists the leftovers grouped by file', () => {
   const payload = { title: 'Code Review: x' };
   const leftovers = [
@@ -235,6 +257,35 @@ test('main posts one review through the injected client', (t) => {
   assert.deepStrictEqual(api.posted[0].review.comments.map((c) => [c.path, c.line]), [['src/a.ts', 2]]);
   assert.match(api.posted[0].review.body, /Outside the diff\./, 'the finding outside the diff travels in the body');
   assert.match(result.out, /Wysłano do acme\/repo PR #7/);
+});
+
+test('past fifty comments every review still opens with the same heading', (t) => {
+  // Sixty findings is two reviews, and the second one carries comments but no summary:
+  // its body used to be the bare paragraph "Code review — continued (2/2)." - a third
+  // spelling of the heading, naming neither the review it continues nor its comments.
+  const lines = Array.from({ length: 60 }, (_, i) => `@@ -${i + 1} +${i + 1} @@` + String.fromCharCode(10) + '+const x = 1;').join(String.fromCharCode(10));
+  const diff = 'diff --git a/src/a.ts b/src/a.ts' + String.fromCharCode(10)
+    + '--- a/src/a.ts' + String.fromCharCode(10) + '+++ b/src/a.ts' + String.fromCharCode(10) + lines;
+  const payload = {
+    title: 'Code Review: feature/big → main',
+    pr: { number: 7 },
+    files: [{
+      path: 'src/a.ts',
+      findings: Array.from({ length: 60 }, (_, i) => findingOf({ id: 'id' + i, lines: String(i + 1) })),
+    }],
+  };
+  const api = apiStub({ pullRequestDiff: () => ({ diff, error: null }) });
+  const result = capture(() => pr.main([`--report=${reportFile(t, payload)}`, '--project=/repo', '--all'], api));
+  assert.strictEqual(result.code, 0, result.err);
+  assert.strictEqual(api.posted.length, 2, 'fifty per review, so sixty is two reviews');
+  assert.deepStrictEqual(api.posted.map((p) => p.review.comments.length), [50, 10]);
+  for (const [i, post] of api.posted.entries()) {
+    assert.match(post.review.body.split(String.fromCharCode(10))[0], /^## Code Review: feature\/big → main/,
+      `review ${i + 1} opens with the heading`);
+  }
+  assert.match(api.posted[1].review.body, /\(part 2\)/, 'and the second says which part it is');
+  assert.match(api.posted[1].review.body, /Inline comments: \*\*10\*\*/, 'and how many comments it carries');
+  assert.ok(!/continued \(2\/2\)/.test(api.posted[1].review.body), 'the third spelling is gone');
 });
 
 test('main posts the accepted pool alone and refuses to post without one', (t) => {

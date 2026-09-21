@@ -156,9 +156,20 @@ function buildComments(findings, commentable) {
   return { comments, leftovers };
 }
 
+// The report title ALWAYS opens with `Code Review: ` - SKILL.md Step 4 fixes that
+// header - so prefixing it again put `## Code review — Code Review: feature/x → main`
+// at the top of the pull request. Only a title that does not already name itself gets
+// the words added; the fixtures that pinned this heading used a bare `feature/x → main`,
+// which is a shape the skill never writes, so nothing caught the stutter.
+function summaryHeading(title, part) {
+  const text = String(title == null ? '' : title).trim() || 'Code review';
+  const named = /^code\s*review\b/i.test(text) ? text : `Code review — ${text}`;
+  return `## ${named}${part ? ` (part ${part})` : ''}`;
+}
+
 function summaryBody(payload, comments, leftovers) {
   const head = [
-    `## Code review — ${payload.title}`,
+    summaryHeading(payload.title),
     '',
     `Inline comments: **${comments.length}**.`,
   ];
@@ -224,7 +235,7 @@ function truncateBody(body) {
 // continuation heading was the one place Polish still crossed over.
 function continuedBody(payload, leftovers, part) {
   const full = summaryBody(payload, [], leftovers).split(String.fromCharCode(10));
-  full[0] = `## Code review — ${payload.title} (part ${part})`;
+  full[0] = summaryHeading(payload.title, part);
   full.splice(2, 1, 'Further findings outside the PR diff:');
   return full.join(String.fromCharCode(10));
 }
@@ -317,8 +328,18 @@ function main(argv, api = github) {
   // run posts as many as the longer of the two needs and pairs them index by index.
   const summaries = summaryBodies(payload, comments, leftovers);
   const reviews = Math.max(batches.length, summaries.length, 1);
+  // A review carrying only inline comments still needs a body, and it gets the SAME
+  // heading as every other part - the summary's own continuations already read
+  // `## <title> (part N)`. A bare "Code review — continued (2/2)." was a third spelling
+  // of one idea, it skipped `summaryHeading` so it never named the review it continues,
+  // and it was a paragraph where every other body opens with a heading. Sixty findings
+  // is two reviews, so this is the ordinary path for a large diff, not a corner.
   const bodies = Array.from({ length: reviews }, (_, i) => summaries[i]
-    || `Code review — continued (${i + 1}/${reviews}).`);
+    || [
+      summaryHeading(payload.title, i + 1),
+      '',
+      `Inline comments: **${(batches[i] || []).length}** (part ${i + 1} of ${reviews}).`,
+    ].join(String.fromCharCode(10)));
 
   if (args.dryRun) {
     process.stdout.write(`${repo} PR #${number}: ${comments.length} komentarzy w kodzie, ${leftovers.length} w podsumowaniu, ${reviews} review.\n`);
@@ -351,5 +372,5 @@ function main(argv, api = github) {
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
-  parseArgs, parsePayload, commentableLines, anchorFor, renderBody, buildComments, summaryBody, summaryBodies, chunk, main,
+  parseArgs, parsePayload, commentableLines, anchorFor, renderBody, buildComments, summaryHeading, summaryBody, summaryBodies, chunk, main,
 };

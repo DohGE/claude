@@ -7,7 +7,7 @@
     {
       "name": "doh",
       "source": "./",
-      "description": "Skills: /implementNewFeature (pipeline with stepper UI), /codeReview (instruction-driven review, interactive HTML reports)"
+      "description": "Skills: /implementNewFeature (pipeline with stepper UI), /codeReview (instruction-driven review, interactive HTML reports) and /fixPr (fixes a pull request's open comments and its red lint/typecheck/test/build in a worktree per branch)"
     }
   ]
 }

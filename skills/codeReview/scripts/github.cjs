@@ -39,16 +39,27 @@ function git(project, args) {
 // owner/repo read off the remote URL itself - no CLI and no API call needed to
 // know which repository this is. Both URL shapes git uses are accepted; only
 // github.com counts, because api.github.com is the only host addressed here.
+// `origin` wins when it is one of them. `git remote -v` prints its remotes in
+// ALPHABETICAL order, so taking the first github.com line resolved a checkout that
+// also has a `fork` remote to the fork - and everything downstream (which pull
+// request is open, whose diff is fetched, where the review is posted) then aimed at
+// the wrong repository. Every other script here already speaks in terms of
+// `origin/<branch>`, so that is the remote they all mean.
 function repoSlug(project) {
+  let fallback = null;
   for (const line of String(git(project, ['remote', '-v']) || '').split('\n')) {
+    const name = line.split(/\s+/)[0] || '';
     const url = line.split(/\s+/)[1] || '';
     // The trailing slash is the one shape git keeps verbatim but the pattern used to
     // refuse: `git remote add origin https://github.com/acme/repo/` then read as no
     // GitHub remote at all, which is the opposite of what the message would say.
     const m = url.match(/^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?github\.com[/:]+([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
-    if (m) return { owner: m[1], repo: m[2] };
+    if (!m) continue;
+    const slug = { owner: m[1], repo: m[2] };
+    if (name === 'origin') return slug;
+    if (!fallback) fallback = slug;
   }
-  return null;
+  return fallback;
 }
 
 // The API token, in the order that asks the least of the user. Each source is
@@ -137,22 +148,29 @@ function netrcToken(options = {}) {
     // netrc is one flat stream of whitespace-separated words, so the entry ends
     // wherever the next `machine` begins - line breaks carry no meaning.
     const words = text.split(/\s+/).filter(Boolean);
-    // `default` is the catch-all, so an explicit `machine github.com` outranks it
-    // wherever the two sit relative to each other. Taking whichever came first would
-    // send another service's secret to GitHub, and the refusal that follows points the
-    // reader at the github.com entry - the one line that is not the problem.
-    let fallback = null;
+    // Three pools, ranked by how specifically an entry answers THIS caller:
+    // `api.github.com` is the host the requests actually go to and the one a netrc
+    // written for the API names; `github.com` is what a git credential is filed under;
+    // `default` is netrc's catch-all and only answers when neither is present.
+    // The ranking is the point, not a nicety: taking whichever entry came first, or
+    // reading only `github.com`, sends ANOTHER SERVICE'S catch-all secret to GitHub while
+    // the right token sits in the file unread. Within one pool the first password wins,
+    // which is netrc's own rule.
+    const found = { api: null, web: null, fallback: null };
     let entry = null;
     for (let i = 0; i < words.length; i++) {
       if (words[i] === 'machine' || words[i] === 'default') {
-        entry = words[i] === 'default' ? 'default' : (words[i + 1] === 'github.com' ? 'github' : null);
+        if (words[i] === 'default') entry = 'fallback';
+        else if (words[i + 1] === 'api.github.com') entry = 'api';
+        else if (words[i + 1] === 'github.com') entry = 'web';
+        else entry = null;
         continue;
       }
       if (!entry || words[i] !== 'password' || !words[i + 1]) continue;
-      if (entry === 'github') return words[i + 1];
-      if (fallback === null) fallback = words[i + 1];
+      if (found[entry] === null) found[entry] = words[i + 1];
     }
-    if (fallback !== null) return fallback;
+    const token = found.api || found.web || found.fallback;
+    if (token !== null) return token;
   }
   return null;
 }
@@ -193,6 +211,7 @@ function ghConfigToken(options = {}) {
     const indentOf = (line) => line.match(/^\s*/)[0].length;
     const base = block.length ? Math.min(...block.map(indentOf)) : 0;
     const userTokens = new Map();
+    const userNames = new Set();
     let activeUser = null;
     let hostToken = null;
     let currentUser = null;
@@ -210,14 +229,21 @@ function ghConfigToken(options = {}) {
       }
       if (!inUsers) continue;
       const name = body.match(/^([^:\s]+):$/);
-      if (name) { currentUser = name[1]; continue; }
+      if (name) { currentUser = name[1]; userNames.add(currentUser); continue; }
       const token = body.match(/^oauth_token:\s*(\S+)/);
       if (token && currentUser) userTokens.set(currentUser, token[1]);
     }
     if (activeUser && userTokens.has(activeUser)) return userTokens.get(activeUser);
+    // user: names the account gh is signed in as. Once a users: map exists the file tracks
+    // tokens per account, so the active one missing from it means its token sits in the
+    // system keychain - and whatever the file still holds was written for somebody else.
+    // Reviewing under a stranger comments as them, so the honest answer is no token here:
+    // the caller falls through to the env or the netrc, or reports that nothing authorises.
+    if (activeUser && userNames.size) return null;
     // One account is the ordinary case: its own entry is the maintained one, while the
     // host-level copy is what older gh versions wrote and can go stale after a re-auth.
     if (userTokens.size === 1) return [...userTokens.values()][0];
+    // An unlisted active account predates the users: map, so the host-level token is its own.
     if (hostToken) return hostToken;
     if (userTokens.size) return [...userTokens.values()][0];
   }

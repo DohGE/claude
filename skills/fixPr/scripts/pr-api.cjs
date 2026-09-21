@@ -36,7 +36,7 @@ const threadsQuery = `query($owner:String!,$repo:String!,$number:Int!,$threads:I
           path line startLine originalLine originalStartLine diffSide
           comments(first:$comments){
             pageInfo{hasNextPage endCursor}
-            nodes{databaseId url createdAt body diffHunk author{login}}
+            nodes{databaseId url createdAt body diffHunk author{login __typename}}
           }
         }
       }
@@ -49,7 +49,7 @@ const threadCommentsQuery = `query($id:ID!,$comments:Int!,$cursor:String){
     ... on PullRequestReviewThread{
       comments(first:$comments,after:$cursor){
         pageInfo{hasNextPage endCursor}
-        nodes{databaseId url createdAt body diffHunk author{login}}
+        nodes{databaseId url createdAt body diffHunk author{login __typename}}
       }
     }
   }
@@ -78,6 +78,12 @@ function normalizeComment(node) {
   return {
     id: node && node.databaseId != null ? node.databaseId : null,
     author: (node && node.author && node.author.login) || null,
+    // A GitHub App is a `Bot` actor in GraphQL, which is the same marker REST spells
+    // `user.type === 'Bot'`. Review bots post INLINE now - a single run of one can open
+    // forty threads next to a reviewer's three - so a brief that cannot say who is
+    // speaking makes them weigh the same. The flag travels; the verdict stays the
+    // agent's, because a bot anchored to a real line is often naming a real defect.
+    isBot: Boolean(node && node.author && node.author.__typename === 'Bot'),
     body: (node && node.body) || '',
     createdAt: (node && node.createdAt) || null,
     url: (node && node.url) || null,
@@ -89,7 +95,21 @@ function normalizeComment(node) {
 // GitHub reports `null` there while keeping `originalLine`. Both travel, so the
 // fixer can tell "line 42 of the file as it stands" from "line 42 of a diff
 // that no longer applies" instead of trusting a number that means neither.
+// `diffHunk` belongs to the thread, not to each of its comments: it is the hunk the
+// thread is anchored to, and GitHub repeats it verbatim on every reply. On an ordinary
+// review round that repetition is about a sixth of the whole brief the fixing agent
+// reads, spent on text it has already seen. It travels once, as the thread own, and a
+// comment keeps a copy only where it genuinely differs - so nothing can be lost here.
+function stripAnchor(comments, anchor) {
+  for (const comment of comments) {
+    if (comment.diffHunk === anchor) delete comment.diffHunk;
+  }
+  return comments;
+}
+
 function normalizeThread(node) {
+  const comments = ((node.comments && node.comments.nodes) || []).filter(Boolean).map(normalizeComment);
+  const diffHunk = comments.length ? comments[0].diffHunk : null;
   return {
     id: node.id,
     isResolved: Boolean(node.isResolved),
@@ -101,7 +121,8 @@ function normalizeThread(node) {
     originalLine: node.originalLine == null ? null : node.originalLine,
     originalStartLine: node.originalStartLine == null ? null : node.originalStartLine,
     diffSide: node.diffSide || null,
-    comments: ((node.comments && node.comments.nodes) || []).filter(Boolean).map(normalizeComment),
+    diffHunk,
+    comments: stripAnchor(comments, diffHunk),
   };
 }
 
@@ -160,7 +181,7 @@ function reviewThreads(project, slug, number, send = github.request) {
           thread.commentsTruncated = 'the thread is resolved, so its comments past the first page were not fetched';
         } else {
           const more = restOfThread(project, node.id, info.endCursor, send);
-          thread.comments.push(...more.comments);
+          thread.comments.push(...stripAnchor(more.comments, thread.diffHunk));
           if (more.error) thread.commentsTruncated = more.error;
         }
       }
@@ -253,6 +274,6 @@ function reviewBodies(project, slug, number, send = github.request) {
 
 module.exports = {
   graphql, reviewThreads, restOfThread, resolveThread, issueComments, reviewBodies,
-  normalizeThread, normalizeComment,
+  normalizeThread, normalizeComment, stripAnchor,
   threadsQuery, threadCommentsQuery, resolveMutation,
 };

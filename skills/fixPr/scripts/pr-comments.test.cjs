@@ -171,7 +171,7 @@ test('collect writes one artifact holding exactly the open work, and never the r
   const [target] = result.targets;
   assert.strictEqual(target.commitMessage, 'feat(TASK-1): CR');
   assert.deepStrictEqual(target.counts, {
-    openThreads: 2, resolvedThreads: 1, outdatedThreads: 1, conversation: 1, reviews: 1, candidates: 4,
+    openThreads: 2, resolvedThreads: 1, outdatedThreads: 1, conversation: 1, reviews: 1, candidates: 4, humanCandidates: 4,
   });
   assert.match(path.basename(target.commentsPath), /^feat-a-fix-pr-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/);
   assert.strictEqual(path.dirname(target.commentsPath), path.join(skillDir, 'reports', 'feat-a'));
@@ -335,3 +335,78 @@ test('a conversation longer than the collector pages through is a warning, not a
   assert.ok(result.warnings.some((w) => /conversation of #7 is longer/.test(w)));
   assert.ok(result.warnings.some((w) => /review list of #7 is longer/.test(w)));
 });
+
+test('a pull request only a bot has commented on says so', (t) => {
+  // Counted together with reviewers, forty threads from one review bot look like a
+  // pull request somebody asked for changes on. They are still fixed on their merits -
+  // an inline bot comment sits on a real line - but the reader has to be told that no
+  // person has written anything yet, because that is what a green run at the end means.
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-skill-'));
+  const botComment = { id: 1, author: 'coderabbitai', isBot: true, body: 'nit: prefer const', createdAt: 'd', url: 'u' };
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    api: fakeApi({
+      threads: [thread({ comments: [botComment] }), thread({ id: 'T2', comments: [botComment] })],
+      conversation: [{ id: 9, author: 'github-actions', isBot: true, body: 'coverage fell 0.2%', createdAt: 'd', url: 'u' }],
+    }),
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(X): t', url: 'u', base: 'main' } }),
+  });
+  assert.strictEqual(result.targets.length, 1);
+  assert.strictEqual(result.targets[0].counts.candidates, 3);
+  assert.strictEqual(result.targets[0].counts.humanCandidates, 0);
+  assert.ok(result.warnings.some((w) => /every open comment on #7 came from a GitHub App/.test(w)), result.warnings.join(' | '));
+
+  // One human reply anywhere in a thread makes the whole pull request a person work
+  // again, and the warning must go: the reviewer IS waiting on this one.
+  const mixed = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    api: fakeApi({
+      threads: [thread({ comments: [botComment, { id: 2, author: 'ann', isBot: false, body: 'yes, do that', createdAt: 'd', url: 'u' }] })],
+    }),
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(X): t', url: 'u', base: 'main' } }),
+  });
+  assert.strictEqual(mixed.targets[0].counts.humanCandidates, 1);
+  assert.ok(!mixed.warnings.some((w) => /came from a GitHub App/.test(w)), mixed.warnings.join(' | '));
+});
+
+
+test('the brief holds the agent contract and nothing else', () => {
+  // Measured on a real forty-thread pull request: the fields no line of
+  // references/fix-agent.md names came to nearly a fifth of the file the agent reads
+  // every run. Two of them could not mean anything to a fixer even in principle -
+  // every thread in this file is unresolved by construction, and viewerCanResolve is a
+  // property of the token, not of the work. Anything unnamed is also policy the agent
+  // can invent a use for, which is the part that does not show up as a byte count.
+  const brief = pc.briefThread({
+    id: 'T1', isResolved: false, isOutdated: true, viewerCanResolve: false,
+    path: 'src/a.ts', line: null, startLine: null, originalLine: 10, originalStartLine: null,
+    diffSide: 'RIGHT', diffHunk: '@@ anchor @@',
+    comments: [
+      { id: 1, author: 'ann', isBot: false, body: 'extract this', createdAt: '2026-09-19T10:00:00Z', url: 'u1' },
+      { id: 2, author: 'bot', isBot: true, body: 'nit', createdAt: '2026-09-19T11:00:00Z', url: 'u2', diffHunk: '@@ elsewhere @@' },
+    ],
+  });
+  assert.deepStrictEqual(Object.keys(brief).sort(),
+    ['comments', 'diffHunk', 'diffSide', 'id', 'isOutdated', 'line', 'originalLine', 'path']);
+  assert.deepStrictEqual(Object.keys(brief.comments[0]).sort(), ['author', 'body', 'isBot', 'url']);
+  // A comment whose hunk is not the thread one keeps it; that is the only case it rides.
+  assert.strictEqual(brief.comments[1].diffHunk, '@@ elsewhere @@');
+
+  // A multi-line anchor says something the single line does not, so its span travels.
+  const span = pc.briefThread({ id: 'T2', line: 14, startLine: 10, originalLine: 14, originalStartLine: 10, comments: [] });
+  assert.strictEqual(span.startLine, 10);
+  assert.strictEqual(span.originalStartLine, 10);
+
+  // Conversation entries and review summaries answer to the same rule, and a review
+  // keeps the one field that is its own: the verdict it was submitted under.
+  assert.deepStrictEqual(
+    pc.briefNote({ id: 9, author: 'bob', isBot: false, body: 'rename it', createdAt: 'd', url: 'u' }),
+    { author: 'bob', isBot: false, body: 'rename it', url: 'u' });
+  assert.strictEqual(pc.briefNote({ author: 'bob', body: 'b', url: 'u', state: 'CHANGES_REQUESTED' }).state, 'CHANGES_REQUESTED');
+});
+

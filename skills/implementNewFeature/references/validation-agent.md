@@ -341,7 +341,10 @@ afterwards.
   message — pass them only via env vars, set for the single test-run command (never exported into
   the persistent shell profile or written to `.env`/config files). Leave `auth.json` in place — the
   review agent's regression run still needs it; the orchestrator deletes it when step 6 ends.
-- Write `{{SESSION}}/validation-report.md`. Its three headings are FIXED IDENTIFIERS, written in
+- Write `{{SESSION}}/validation-report.md` — and every other `.md` this step writes — in ONE
+  write: the Write tool, or a single Bash heredoc if your harness refuses a `.md` write from a
+  sub-agent. One write either way: a report assembled from several appends is one that ends
+  half-written when anything goes wrong. Its three headings are FIXED IDENTIFIERS, written in
   English exactly as spelled below even though the prose under them is in {{LANGUAGE}}: step 6 reads
   `## Unit tests` to recover the unit-test command, so a translated or reworded heading leaves the
   review agent unable to run the suite it must green before it finishes. Heading verbatim, content in

@@ -89,6 +89,26 @@ test('repoSlug reads owner and repo off every remote URL shape git writes', (t) 
   assert.deepStrictEqual(gh.repoSlug(repoWithRemote(t, "https://github.com/DohGE/claude/")), { owner: "DohGE", repo: "claude" });
 });
 
+test('repoSlug picks origin, not whichever remote git lists first', (t) => {
+  const dir = tempDir(t, 'cr-gh-');
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-q', '-b', 'main']);
+  // git prints its remotes alphabetically, so "fork" comes out above "origin" - and
+  // the first github.com line used to win. Everything downstream (which pull request
+  // is open, whose diff is fetched, where the review is posted) then addressed the
+  // fork instead of the repository the branch actually belongs to.
+  run(['remote', 'add', 'fork', 'https://github.com/someone-else/claude.git']);
+  run(['remote', 'add', 'origin', 'https://github.com/DohGE/claude.git']);
+  assert.deepStrictEqual(gh.repoSlug(dir), { owner: 'DohGE', repo: 'claude' });
+
+  // With no origin at all the first github.com remote is still the best answer there is.
+  const noOrigin = tempDir(t, 'cr-gh-');
+  const run2 = (args) => execFileSync('git', ['-C', noOrigin, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run2(['init', '-q', '-b', 'main']);
+  run2(['remote', 'add', 'upstream', 'https://github.com/acme/repo.git']);
+  assert.deepStrictEqual(gh.repoSlug(noOrigin), { owner: 'acme', repo: 'repo' });
+});
+
 test('repoSlug ignores repositories that are not on github.com', (t) => {
   assert.strictEqual(gh.repoSlug(repoWithRemote(t, 'git@gitlab.com:acme/repo.git')), null);
   assert.strictEqual(gh.repoSlug(repoWithRemote(t, 'https://bitbucket.org/acme/repo.git')), null);
@@ -215,6 +235,36 @@ test('an explicit github.com entry outranks a default one, wherever it sits', (t
   assert.strictEqual(gh.netrcToken({ home: only }), 'catch-all', 'with no github.com entry the catch-all still answers');
 });
 
+test('netrcToken reads the api.github.com entry, which is the host it calls', (t) => {
+  const NL = String.fromCharCode(10);
+  // Every request this module makes goes to https://api.github.com, and that is the
+  // machine a netrc written for the API names - it is what `curl --netrc` matches.
+  // Reading only `github.com` left that token unread.
+  const api = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(api, '.netrc'), 'machine api.github.com' + NL + '  login me' + NL + '  password api-token' + NL);
+  assert.strictEqual(gh.netrcToken({ home: api }), 'api-token');
+
+  // And the worse half: with a catch-all present, the API token being invisible meant
+  // ANOTHER SERVICE'S secret went to GitHub while the right one sat in the same file.
+  const both = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(both, '.netrc'),
+    'default login anon password catch-all' + NL + 'machine api.github.com login me password api-token' + NL);
+  assert.strictEqual(gh.netrcToken({ home: both }), 'api-token', 'an explicit GitHub entry outranks the catch-all');
+
+  // With both GitHub spellings present the API host is the more specific answer for
+  // a caller that talks to the API.
+  const pair = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(pair, '.netrc'),
+    'machine github.com login me password web-token' + NL + 'machine api.github.com login me password api-token' + NL);
+  assert.strictEqual(gh.netrcToken({ home: pair }), 'api-token');
+
+  // File order must not decide it.
+  const reversed = tempDir(t, 'cr-netrc-');
+  fs.writeFileSync(path.join(reversed, '.netrc'),
+    'machine api.github.com login me password api-token' + NL + 'machine github.com login me password web-token' + NL);
+  assert.strictEqual(gh.netrcToken({ home: reversed }), 'api-token');
+});
+
 test('netrcToken ignores a machine that is not github.com', (t) => {
   const home = tempDir(t, 'cr-netrc-');
   fs.writeFileSync(path.join(home, '.netrc'), 'machine example.com login me password nope\n');
@@ -275,6 +325,52 @@ test('ghConfigToken picks the account gh has active, not the first one listed', 
     '',
   ].join(String.fromCharCode(10)));
   assert.strictEqual(gh.ghConfigToken({ configDir: ambiguous }), 'host-copy');
+});
+
+test('ghConfigToken hands over no token rather than a stranger token', (t) => {
+  // gh stores the token in the system keychain by default, leaving the account named in
+  // hosts.yml with no oauth_token under it. An account signed in earlier, before that
+  // default, still has its token sitting in the file. Falling through to it would post the
+  // review as a person who never ran it - the one wrong answer worse than having none,
+  // because it cannot be read off the failure. Reporting nothing lets the env or the netrc
+  // answer instead, and lets the token-source message say plainly that nothing authorises.
+  const configDir = tempDir(t, "cr-ghcfg-");
+  fs.writeFileSync(path.join(configDir, "hosts.yml"), [
+    'github.com:',
+    '    users:',
+    '        active-account:',
+    '        retired-account:',
+    '            oauth_token: retired-token',
+    '    git_protocol: https',
+    '    user: active-account',
+    '    oauth_token: legacy-copy',
+    '',
+  ].join(String.fromCharCode(10)));
+  assert.strictEqual(gh.ghConfigToken({ configDir }), null, 'the retired account never stands in');
+
+  // Same rule when the active account is missing from the map altogether: the map is the
+  // file saying it tracks tokens per account, so a token under another name is not ours.
+  const unlisted = tempDir(t, 'cr-ghcfg-');
+  fs.writeFileSync(path.join(unlisted, 'hosts.yml'), [
+    'github.com:',
+    '    users:',
+    '        somebody-else:',
+    '            oauth_token: their-token',
+    '    user: active-account',
+    '',
+  ].join(String.fromCharCode(10)));
+  assert.strictEqual(gh.ghConfigToken({ configDir: unlisted }), null);
+
+  // A named account with no map at all predates per-account storage, so the host-level
+  // token is that account own and stays readable - this rule narrows nothing else.
+  const legacy = tempDir(t, 'cr-ghcfg-');
+  fs.writeFileSync(path.join(legacy, 'hosts.yml'), [
+    'github.com:',
+    '    user: active-account',
+    '    oauth_token: legacy-token',
+    '',
+  ].join(String.fromCharCode(10)));
+  assert.strictEqual(gh.ghConfigToken({ configDir: legacy }), 'legacy-token');
 });
 
 test('ghConfigToken stays out of another host section', (t) => {

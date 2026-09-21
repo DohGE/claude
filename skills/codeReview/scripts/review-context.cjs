@@ -314,7 +314,7 @@ function detectForkBase(project, branchRef, branchName) {
     // contains the branch, anything else is how far the branch ran ahead of it.
     const count = counts && counts.has(ref)
       ? counts.get(ref)
-      : Number(tryGit(project, ['rev-list', '--count', branchRef, `^${ref}`]));
+      : countOf(tryGit(project, ['rev-list', '--count', branchRef, `^${ref}`]));
     if (!Number.isFinite(count)) continue;
     const rank = preferred.indexOf(ref.replace(/^origin\//, ''));
     if (count === 0 && rank === -1) continue;
@@ -339,7 +339,7 @@ function detectCandidateBase(project, branchRef, branchName) {
     if (!ref || ref === branchRef) continue;
     const mergeBase = tryGit(project, ['merge-base', ref, branchRef]);
     if (!mergeBase) continue;
-    const count = Number(tryGit(project, ['rev-list', '--count', `${mergeBase}..${branchRef}`]));
+    const count = countOf(tryGit(project, ['rev-list', '--count', `${mergeBase}..${branchRef}`]));
     if (!Number.isFinite(count)) continue;
     if (!best || count < best.count) best = { ref, count };
   }
@@ -367,6 +367,17 @@ function detectBaseBranch(project, branchRef, branchName, findPr = github.findOp
   if (fork) return { ref: fork, source: 'fork', ...rest };
   const candidate = detectCandidateBase(project, branchRef, branchName);
   return { ref: candidate, source: candidate ? 'candidate' : null, ...rest };
+}
+
+// `tryGit` answers null when the command failed, and `Number(null)` is 0: a
+// perfectly finite count that every `Number.isFinite` guard below waves through.
+// A shallow clone whose history does not reach the merge base is the ordinary way
+// to get there, and the answer it produces - zero commits apart - is exactly the
+// one that makes a wrong branch look like the right base. Counts are parsed here
+// instead, where a failed call stays NaN and the caller skips that candidate.
+function countOf(out) {
+  const text = out === null || out === undefined ? '' : String(out).trim();
+  return text === '' ? NaN : Number(text);
 }
 
 function q(s) {
@@ -823,7 +834,7 @@ function buildContext(options) {
     outputFormat: wantsHtml ? 'html' : 'md',
     globalInstructions: [],
     localInstructionsCatalog: [],
-    checklistIds: {},
+    checklistPlans: [],
     checklistGates: {},
     projectInstructionsDir: null,
     claudeMd: null,
@@ -988,6 +999,26 @@ function buildContext(options) {
   // changedLines: new-file line ranges precomputed from `git diff -U0`
   // (rangesArgsFor), so the reviewer never derives them from hunks itself;
   // null for added (every line is new) and deleted (no new file) files.
+  // Files of one KIND get byte-identical plans - the plan is decided by the path
+  // patterns and the scope tags, nothing else - so a 200-file diff repeats about eight
+  // distinct plans twenty-five times each. Measured there: 36 850 B of `checklist` plus
+  // 10 775 B of `globalInstructionsSkipped`, against 2 274 B as a catalog and an index -
+  // roughly 13 000 tokens of the orchestrator's own context, which is the thing this
+  // whole architecture exists to protect. Same move as `localInstructionsCatalog` right
+  // below, and the reviewer resolves it the same way.
+  const planCatalog = [];
+  const planIndex = new Map();
+  const planFor = (checklist, skipped) => {
+    const key = `${checklist.join('|')}` + String.fromCharCode(10) + skipped.join('|');
+    let at = planIndex.get(key);
+    if (at === undefined) {
+      at = planCatalog.length;
+      planCatalog.push({ checklist, globalInstructionsSkipped: skipped });
+      planIndex.set(key, at);
+    }
+    return at;
+  };
+
   const makeFiles = (rawFiles, rangesByPath) => rawFiles.map((f) => {
     // An instruction whose every item the file's scope tags took away has
     // nothing to say about it, so it is not one of the file's instructions —
@@ -1003,15 +1034,13 @@ function buildContext(options) {
       status: f.status,
       // Only a rename/copy has one; the mechanical-change gate compares the two
       // names (and their folders) against the naming instructions.
-      oldPath: f.oldPath || null,
+      ...(f.oldPath ? { oldPath: f.oldPath } : {}),
       localInstructions: locals,
-      // The instructions of this file turned into a ticking plan: one
-      // `<id>:<items>` entry per instruction, globals first, then the matched
-      // locals — the reviewer walks it item by item and ticks each one off.
-      checklist: plan,
-      // The globals this file's path took it out of, so the plan being shorter
-      // than the rulebook reads as a decision instead of an omission.
-      globalInstructionsSkipped: instructions.globals.filter((g) => !globals.includes(g)),
+      // An INDEX into `checklistPlans`, which holds this file's ticking plan (one
+      // `<id>:<items>` entry per instruction, globals first, then the matched locals)
+      // and the globals its path took it out of, named by checklist id so a shorter
+      // plan reads as a decision instead of an omission.
+      plan: planFor(plan, instructions.globals.filter((g) => !globals.includes(g)).map((g) => idOf.get(g))),
       // Matched global + matched local checklist items this file must be walked
       // against; the reviewer reports `<checked>/<checklistTotal>` per file.
       checklistTotal: globals.reduce((n, p) => n + itemsFor(p, f.path).length, 0)
@@ -1165,6 +1194,7 @@ function buildContext(options) {
     for (const file of target.files) for (const p of file.localInstructions) catalog.add(p);
   }
   result.localInstructionsCatalog = [...catalog].sort();
+  result.checklistPlans = planCatalog;
   // Globals are narrowed to the ones at least one reviewed file actually walks:
   // a diff of stylesheets never reads the TypeScript rulebook. Every file still
   // names what it was taken out of in its own `globalInstructionsSkipped`.
@@ -1179,13 +1209,9 @@ function buildContext(options) {
     }
     result.globalInstructions = instructions.globals.filter((g) => usedGlobals.has(g));
   }
-  // Which instruction each checklist id stands for — only the instructions this
-  // run actually loads, so the dictionary matches the rulebook of Step 2.
-  result.checklistIds = Object.fromEntries(
-    [...result.globalInstructions, ...result.localInstructionsCatalog]
-      .filter((f) => itemsOf(f) > 0)
-      .map((f) => [idOf.get(f), f]),
-  );
+  // An id and the file it stands for are one fact, so they travel as one entry of the
+  // catalog that already lists the file. Kept apart they were the same thirty-five paths
+  // written twice - a fifth of a real context - and two places to look one thing up in.
   // The `gate:` sentence of every instruction that declares one. The reviewer
   // answers it once per file before walking that instruction's items: a failed
   // gate collapses the whole instruction into one ticked range line.
@@ -1200,6 +1226,11 @@ function buildContext(options) {
       file.localInstructions = file.localInstructions.map((p) => indexOf.get(p));
     }
   }
+
+  // Done last: everything above addresses these two lists by path.
+  const withId = (p) => ({ id: idOf.get(p), path: p });
+  result.globalInstructions = result.globalInstructions.map(withId);
+  result.localInstructionsCatalog = result.localInstructionsCatalog.map(withId);
 
   if (result.targets.length > 0) {
     fs.mkdirSync(reportsDir, { recursive: true });
@@ -1237,6 +1268,6 @@ function main() {
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { ensureDohGitignore, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { ensureDohGitignore, countOf, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

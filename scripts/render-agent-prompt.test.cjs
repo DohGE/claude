@@ -157,6 +157,15 @@ test('rendering twice over the same path replaces the prompt, leaving no .tmp be
 
 // ---------- the real reference files ----------
 
+// The values come from the SKILL.md `--set` list, never from a table written here: a
+// hand-kept table fills a placeholder the skill forgot to pass, so the template renders
+// green in the test and the renderer REFUSES it mid-pipeline, where the failure costs a
+// spawned step. Reading the documented list is what makes this test the contract.
+function documentedSets(skill) {
+  const md = fs.readFileSync(path.join(__dirname, '..', 'skills', skill, 'SKILL.md'), 'utf8');
+  return [...new Set([...md.matchAll(/--set=([A-Z][A-Z0-9_]*)=/g)].map((m) => m[1]))];
+}
+
 test('every shipped agent template renders with the placeholders its skill documents', (t) => {
   const dir = tempDir(t, 'rap-real-');
   const values = {
@@ -166,17 +175,26 @@ test('every shipped agent template renders with the placeholders its skill docum
     COMMENTS: '/c.json', REPORT: '/r.md', COMMIT_MESSAGE: 'feat(X): CR', PUSH: 'yes',
     CHECKS_DIR: '/c/checks', COMMIT_PREFIX: 'feat(X)', INSTALLED: 'yes',
   };
-  const refs = ['implementNewFeature', 'fixPr'].flatMap((skill) => {
+  let count = 0;
+  for (const skill of ['implementNewFeature', 'fixPr']) {
+    // Only what that skill's own SKILL.md says it passes. A placeholder the template
+    // needs and the skill never sets is then an unresolved one, and renderFile refuses.
+    const documented = documentedSets(skill);
+    assert.ok(documented.length > 0, `${skill}/SKILL.md documents no --set at all`);
+    const passed = Object.fromEntries(documented.map((name) => [name, values[name] !== undefined ? values[name] : `<${name}>`]));
     const refDir = path.join(__dirname, '..', 'skills', skill, 'references');
-    return fs.readdirSync(refDir).filter((n) => n.endsWith('-agent.md')).map((n) => path.join(refDir, n));
-  });
-  assert.ok(refs.length >= 7, `expected the shipped agent templates, found ${refs.length}`);
-  for (const template of refs) {
-    const result = rap.renderFile({ template, out: path.join(dir, path.basename(template)), values });
-    assert.deepStrictEqual(result.errors, [], `${path.basename(template)}: ${result.errors.join(' ')}`);
-    assert.ok(!/\{\{[A-Z][A-Z0-9_]*\}\}/.test(fs.readFileSync(path.join(dir, path.basename(template)), 'utf8')),
-      `${path.basename(template)} still holds an UPPER_SNAKE placeholder after rendering`);
+    for (const name of fs.readdirSync(refDir).filter((n) => n.endsWith('-agent.md'))) {
+      const template = path.join(refDir, name);
+      const out = path.join(dir, `${skill}-${name}`);
+      const result = rap.renderFile({ template, out, values: passed });
+      assert.deepStrictEqual(result.errors, [],
+        `${skill}/references/${name}: ${result.errors.join(' ')} — add the missing --set to ${skill}/SKILL.md`);
+      assert.ok(!/\{\{[A-Z][A-Z0-9_]*\}\}/.test(fs.readFileSync(out, 'utf8')),
+        `${name} still holds an UPPER_SNAKE placeholder after rendering`);
+      count++;
+    }
   }
+  assert.ok(count >= 7, `expected the shipped agent templates, rendered ${count}`);
 });
 
 // ---------- the CLI ----------

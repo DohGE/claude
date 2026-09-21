@@ -48,6 +48,49 @@ function parseArgs(argv) {
 // inventing one from the branch name.
 // A title that OPENS with the colon leaves an empty prefix, and `: CR` names
 // nothing at all; the leading colons are dropped and the rest used instead.
+// The brief holds what `references/fix-agent.md` names, and nothing else. A field the
+// contract does not mention is weight the agent pays for on every run and, worse, policy
+// it may invent a use for. On a real forty-thread pull request the unnamed ones came to
+// nearly a fifth of the file. Two of them could not mean anything to a fixer even in
+// principle: `isResolved` is false for every thread here - the resolved ones are filtered
+// out above - and `viewerCanResolve` describes the token this run holds, not the work.
+// `createdAt` and the comment id say nothing the order of the list and the url do not.
+function briefComment(comment) {
+  const out = {
+    author: comment.author,
+    isBot: Boolean(comment.isBot),
+    body: comment.body,
+    url: comment.url,
+  };
+  // Present only where it differs from the thread anchor, which is where it matters.
+  if ('diffHunk' in comment) out.diffHunk = comment.diffHunk;
+  return out;
+}
+
+function briefThread(thread) {
+  const out = {
+    id: thread.id,
+    path: thread.path,
+    line: thread.line,
+    originalLine: thread.originalLine,
+    isOutdated: thread.isOutdated,
+    diffSide: thread.diffSide,
+    diffHunk: thread.diffHunk,
+    comments: (thread.comments || []).map(briefComment),
+  };
+  // A multi-line anchor is the one case where the span says something the single line
+  // does not, so it travels exactly then rather than as a null on every thread.
+  if (thread.startLine != null) out.startLine = thread.startLine;
+  if (thread.originalStartLine != null) out.originalStartLine = thread.originalStartLine;
+  return out;
+}
+
+function briefNote(note) {
+  const out = { author: note.author, isBot: Boolean(note.isBot), body: note.body, url: note.url };
+  if (note.state) out.state = note.state;
+  return out;
+}
+
 function commitPrefixFor(title) {
   const text = String(title == null ? '' : title).trim();
   if (!text) return null;
@@ -169,6 +212,19 @@ function collectBranch(branch, ctx) {
     result.warnings.push(`${branch}: pull request #${pr.number} has no open comments${resolvedCount ? ` (${resolvedCount} thread(s) already resolved)` : ''}; this run will only bring its checks green.`);
   }
 
+  // A review bot can open dozens of threads on its own, and counted with the reviewers
+  // they look like a pull request somebody asked for changes on. Saying so is not a
+  // reason to skip them - an inline bot comment sits on a real line - but it is what
+  // tells the reader that no person has written anything here yet, which changes what
+  // a green run at the end of it actually means. A thread counts as a person's the
+  // moment one of its comments is, replies included.
+  const humanCandidates = open.filter((thread) => !thread.comments.length || thread.comments.some((c) => !c.isBot)).length
+    + conversation.comments.filter((c) => !c.isBot).length
+    + reviews.reviews.filter((r) => !r.isBot).length;
+  if (candidates > 0 && humanCandidates === 0) {
+    result.warnings.push(`${branch}: every open comment on #${pr.number} came from a GitHub App - no reviewer has written one. They are still fixed on their merits; nobody is waiting on the result.`);
+  }
+
   const dir = sanitizeBranchName(branch);
   const branchDir = path.join(reportsDir, dir);
   fs.mkdirSync(branchDir, { recursive: true });
@@ -190,9 +246,9 @@ function collectBranch(branch, ctx) {
     commitMessage,
     generatedAt: new Date(ctx.now).toISOString(),
     resolvedThreadCount: resolvedCount,
-    threads: open,
-    conversation: conversation.comments,
-    reviews: reviews.reviews,
+    threads: open.map(briefThread),
+    conversation: conversation.comments.map(briefNote),
+    reviews: reviews.reviews.map(briefNote),
   };
   fs.writeFileSync(commentsPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 
@@ -213,6 +269,7 @@ function collectBranch(branch, ctx) {
       conversation: conversation.comments.length,
       reviews: reviews.reviews.length,
       candidates,
+      humanCandidates,
     },
   };
 }
@@ -283,6 +340,6 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect };
+module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote };
 
 if (require.main === module) main();

@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const mi = require('./match-instructions.cjs');
+const rc = require('../../codeReview/scripts/review-context.cjs');
 
 const SCRIPT = path.join(__dirname, 'match-instructions.cjs');
 
@@ -52,6 +53,19 @@ test('parseArgs splits, trims and dedupes files; supports instructions-dir overr
   // A mistyped flag must stop the run: silently ignored, it would leave the agent
   // reading the whole rulebook instead of the file's own rules.
   assert.throws(() => mi.parseArgs(['--file=a.ts']), /Unknown argument/);
+});
+
+test('an instruction whose every item this file is out of scope for is not its rulebook', (t) => {
+  // The review plan drops it (buildContext filters on the same question), so handing
+  // it to the implementation agent would have it write against a rule nobody checks.
+  const dir = tempDir(t, 'mi-scope-');
+  writeFile(dir, path.join('global', 'markup-only.md'),
+    '---\nname: Markup\nscopes:\n  markup: ["**/*.html"]\n---\n- {markup} only for templates\n');
+  writeFile(dir, path.join('global', 'always.md'), '---\nname: Always\n---\n- everywhere\n');
+  const out = mi.buildOutput({ instructionsDir: dir, project: dir, files: ['src/a.ts', 'src/a.html'] });
+  const names = (i) => out.files[i].globalInstructions.map((f) => path.basename(f)).sort();
+  assert.deepStrictEqual(names(0), ['always.md'], 'the .ts file never walks the markup-only rule');
+  assert.deepStrictEqual(names(1), ['always.md', 'markup-only.md'], 'the template walks both');
 });
 
 test('buildOutput with --files prints only per-file matches and warnings', (t) => {
@@ -227,4 +241,69 @@ test('a .claude/doh/instructions that is not a directory is ignored, not fatal',
   const out = mi.buildOutput({ instructionsDir: dir, project, files: [] });
   assert.strictEqual(out.projectInstructionsDir, null);
   assert.deepStrictEqual(out.globals.map((f) => path.basename(f)), ['general.md', 'extra.md']);
+});
+
+test('what the implementer is given is what the review walks, on the shipped rulebook', (t) => {
+  // The whole reason this script exists. Both sides answer it with their own code -
+  // this one for the agent about to write the file, buildContext for the review that
+  // comes after - and the only thing keeping them in step was that they were written
+  // to agree. Asserted in prose until now: a filter changed on one side and not the
+  // other hands an agent a rule nobody checks, or checks it against one it never saw.
+  // `audience: implement` is the one difference that IS the design, so it is excluded.
+  const dir = tempDir(t, 'mi-invariant-');
+  const git = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.local');
+  git('config', 'user.name', 'T');
+  git('config', 'commit.gpgsign', 'false');
+  const write = (rel, body) => {
+    fs.mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), body);
+  };
+  // Staged mode diffs against HEAD, so the tree needs a commit to be staged against.
+  write('.gitkeep', '');
+  git('add', '.');
+  git('commit', '-q', '-m', 'initial');
+
+  // One file of each kind the shipped rulebook routes differently.
+  write('src/app/feature/feature-user.component.ts', 'export class C {}');
+  write('src/app/feature/feature-user.component.html', '<div></div>');
+  write('src/app/feature/feature-user.component.scss', '.a { color: red; }');
+  write('src/app/feature/feature-user.component.spec.ts', 'describe(1, () => {});');
+  write('src/app/state/user.actions.ts', 'export const a = 1;');
+  write('src/app/models/user.model.ts', 'export interface U {}');
+  write('assets/i18n/en.json', '{"a":"b"}');
+  write('README.md', '# hi');
+
+  const skillDir = path.join(__dirname, '..', '..', 'codeReview');
+  const ctx = rc.buildContext({ mode: 'staged', project: dir, skillDir });
+  const target = ctx.targets[0];
+  assert.ok(target && target.files.length > 0, 'the fixture produced something to review');
+
+  const reviewed = new Map(target.files.map((file) => [file.path,
+    new Set(ctx.checklistPlans[file.plan].checklist.map((e) => e.split(':')[0]))]));
+  const out = mi.buildOutput({
+    files: target.files.map((file) => file.path),
+    instructionsDir: path.join(skillDir, 'instructions'),
+    project: dir,
+  });
+
+  const idOf = (p) => path.basename(p, '.md');
+  // Frontmatter without a regex: the block between the first two fence lines.
+  const audienceOf = (p) => {
+    const lines = fs.readFileSync(p, 'utf8').split(String.fromCharCode(10)).map((l) => l.trim());
+    if (lines[0] !== '---') return null;
+    for (let i = 1; i < lines.length && lines[i] !== '---'; i++) {
+      if (!lines[i].startsWith('audience:')) continue;
+      return lines[i].slice('audience:'.length).trim().replace(/^["']|["']$/g, '');
+    }
+    return null;
+  };
+  for (const entry of out.files) {
+    const given = [...entry.globalInstructions, ...entry.localInstructions]
+      .filter((p) => audienceOf(p) !== 'implement').map(idOf).sort();
+    const walked = [...(reviewed.get(entry.path) || [])].sort();
+    assert.deepStrictEqual(given, walked, entry.path
+      + ': given ' + given.join(', ') + ' | reviewed ' + walked.join(', '));
+  }
 });

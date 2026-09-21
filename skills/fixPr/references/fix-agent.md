@@ -27,16 +27,17 @@ into a message.
 
 - `threads[]` — the inline review threads that are still UNRESOLVED. The skill already removed every
   resolved one, so each entry here is open work. Fields: `id` (the GraphQL thread id you report
-  back), `path`, `line`, `originalLine`, `isOutdated`, `diffSide`, and `comments[]` in order, each
-  with `author`, `body` and `diffHunk`.
+  back), `path`, `line`, `originalLine`, `isOutdated`, `diffSide`, `diffHunk`, and `comments[]` in
+  order, each with `author`, `isBot` and `body`. The hunk belongs to the THREAD, which is what it is
+  anchored to; a comment carries a `diffHunk` of its own only where it genuinely differs.
 - `conversation[]` — comments on the pull request itself, which belong to no code line. GitHub has no
   resolved state for them, so ALL of them are here, including ones already dealt with and ones that
   were never a request. Step 2 is what sorts them out.
 - `reviews[]` — the summary a reviewer wrote above their inline comments, with its `state`.
 
 `isOutdated: true` means the code moved under the thread: `line` is `null` and `originalLine` points
-into a diff that no longer applies. Find the subject by the CONTENT of `diffHunk`, never by the
-number — a line number from a stale diff points at whatever now happens to sit there.
+into a diff that no longer applies. Find the subject by the CONTENT of the thread's `diffHunk`,
+never by the number — a line number from a stale diff points at whatever now sits there.
 
 ## Step 2 — Give every item a verdict
 
@@ -52,6 +53,9 @@ skipped, and "there were a lot of them" is not a verdict.
   discussion that ended in "never mind", or a comment already satisfied by the code as it stands.
   A `conversation[]` entry with `isBot: true` is CI noise and is `answered` by default — unless it
   names a concrete defect in the code, in which case it is treated like any other request.
+  That default is for `conversation[]` alone. An inline thread with `isBot: true` sits on a real
+  line and gets the same reading as any other thread - the flag says who is speaking, not what
+  the comment is worth.
 
 A thread is one unit of work: read it to the LAST comment before deciding. Reviewers routinely open
 with a complaint and close with "actually, leave it" — verdicting on the first comment alone is how a
@@ -81,7 +85,7 @@ Otherwise run, from anywhere:
 
     node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}"
 
-It prints ONE JSON object: `gate` (`green` / `red` / `skipped`) and a `steps[]` entry per command with
+It prints ONE JSON object: `gate` (`green` / `red` / `partial` / `skipped`) and a `steps[]` entry per command with
 `step`, `label`, `command`, `status`, `reason`, `logPath` and `truncated`. Never assemble these
 commands yourself — the script is where the package manager, the non-interactive flags and the
 timeouts are decided, and a hand-built `npm test` is how a watcher gets left running.
@@ -89,6 +93,9 @@ timeouts are decided, and a hand-built `npm test` is how a watcher gets left run
 - `gate: "skipped"` — the project has no `package.json`, so there was nothing to run. Record the
   reason and go to step 4. **A skipped gate is not a red one.**
 - `gate: "green"` — go to step 4.
+- `gate: "partial"` — this was a `--only` pass, so nothing failed among the commands it RAN and the
+  rest were not looked at. It is not a green gate and it is not a licence to commit: run the full
+  gate and act on that answer.
 - `gate: "red"` — for each `failed` step, read its `logPath` with the Read tool and repair the CAUSE.
   Read it with a `limit`: these logs run to hundreds of kilobytes, the failure summary is at the END,
   and you never need the whole file. Never paste a log back into a message. Then run the gate again.
@@ -97,8 +104,8 @@ timeouts are decided, and a hand-built `npm test` is how a watcher gets left run
 worktree exactly as it is so the user can inspect it, write the report, and end with the `error` JSON.
 
 To re-run one command after a fix, `--only=lint` (or `typecheck`, `test`, `build`) runs just that one
-and leaves the other logs untouched. Your LAST pass must be a full run: what you report as green has
-to be green together, not one step at a time.
+and leaves the other logs untouched. Such a pass answers `partial`, never `green` — your LAST pass
+must be a full run, because what you report as green has to be green together, not one step at a time.
 
 `checksFixed` is the list of `label`s of the steps that were `failed` in your FIRST pass and `passed`
 in your LAST. A step that only went red in pass two because a fix of yours broke it is NOT in that

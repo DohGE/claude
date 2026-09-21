@@ -11,6 +11,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const github = require('./github.cjs');
+const { checklistIdOf } = require('./review-context.cjs');
 
 // Order is the display order and the sort rank of the flat global list.
 // `missing-unit-test` sorts last: it is orthogonal to the severity ladder, and
@@ -44,7 +45,14 @@ const reField = /^-\s+\*\*(Linia|Problem|Reguła|Expected Result|PR Problem|PR E
 // that file's rulebook actually got a verdict, against how many exist - or
 // `mechanical` for a file the mechanical-change gate narrowed to its two
 // questions, which by design never walks the full checklist.
-const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(mechanical|\d+\s*\/\s*\d+)\s*-->$/;
+// The path is matched lazily rather than as a run of non-space characters: a
+// repository folder may hold a space, the context reads paths straight from git
+// with `core.quotepath=false`, and a non-space path pattern simply failed to match
+// such a line. The coverage marker then vanished without a word and the checklist
+// block was reported as malformed - so the one file whose proof went missing was
+// also the one the warning pointed away from. Both ends are anchored, so nothing
+// else can widen with it.
+const reCoverage = /^<!--\s*coverage:\s*(.+?)\s+(mechanical|\d+\s*\/\s*\d+)\s*-->$/;
 // The ticked checklist behind that marker: one multi-line comment per analyzed
 // file, opened by `<!-- checklist: <path>`, one line per verdict, closed by
 // `-->`. `[x]` is an item the reviewer reached a verdict on, `[ ]` one it could
@@ -53,12 +61,20 @@ const reCoverage = /^<!--\s*coverage:\s*(\S+)\s+(mechanical|\d+\s*\/\s*\d+)\s*--
 // share one verdict are collapsed into a single line, so a clean instruction
 // costs one line instead of thirty. Ranges are expanded here, which keeps every
 // count downstream - ticked, total, per-item state - working per item.
-const reChecklistOpen = /^<!--\s*checklist:\s*(\S+)\s*$/;
+const reChecklistOpen = /^<!--\s*checklist:\s*(.+?)\s*$/;
 const reChecklistItem = /^\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)#(\d+(?:-\d+)?(?:\s*,\s*#?\d+(?:-\d+)?)*)\s+(.+)$/;
 // Widest range a single line may collapse: a guard against `#1-99999` silently
 // inflating a block into a million items.
 const maxItemSpan = 500;
 const reViolationVerdict = /(^|[^\p{L}])NARUSZENIE([^\p{L}]|$)/u;
+// The same word in any other spelling. `NARUSZENIE` is matched case-sensitively on
+// purpose - it is a FIXED IDENTIFIER the reviewer writes verbatim - but a near miss was
+// the one format drift that passed in SILENCE, while every other one in a checklist
+// block already warns. Its consequence is the worst of them: the item parses as clean,
+// so the page shows the rule as compliant directly under the finding that reports it
+// broken. The non-letter boundaries are what keep an honest `brak naruszenia — OK` line
+// out of it: there the word is followed by a letter and neither pattern matches.
+const reViolationNearMiss = /(^|[^\p{L}])(NARUSZENIE|NARUSZONO|VIOLATION)([^\p{L}]|$)/iu;
 // What a bare instruction reference - or the violated point's name, which Step 4
 // allows instead - may consist of. Quotes, backticks and brackets, or anything
 // longer than a name, mean the arrow belongs to quoted rule text.
@@ -269,6 +285,10 @@ function parseReport(markdown) {
           const text = item[4].trim();
           const ok = item[1] !== ' ';
           const state = !ok ? 'open' : (reViolationVerdict.test(text) ? 'violation' : 'ok');
+          // Once per line, not once per item the range spans.
+          if (state === 'ok' && reViolationNearMiss.test(text)) {
+            report.warnings.push(`${block.path}: ${item[2]}#${item[3]} ma werdykt zapisany inaczej niż NARUSZENIE (linia ${lineNo}) - renderer czyta tę pozycję jako czystą, więc strona pokaże regułę jako spełnioną pod znaleziskiem, które ją łamie.`);
+          }
           for (const n of numbers) {
             const id = `${item[2]}#${n}`;
             // A collapsed range that overlaps another line would inflate the
@@ -462,20 +482,38 @@ function parseLineRanges(value) {
 // its diff kind and - for anything the diff did not add - the number it had in
 // the old file. Removed lines have no place in the new file at all, so they are
 // emitted in front of the new line they used to precede.
-function rowsFor(sourceLines, diff, from, to, hit) {
+// How many removed lines a SNIPPET may show in front of one new line. The full view
+// passes no cap - there the whole file is the subject and every removal belongs.
+// `git diff -U0` anchors an entire deletion block at ONE new-file line, so a window that
+// happened to include that line inherited the whole block: a finding on line 5 of a
+// rewritten class rendered 400 deleted lines in front of the seven it was about, while
+// the SAME finding on line 200 of the SAME file rendered a clean seven. What is left out
+// is announced with the gap row the fragment view already uses for skipped lines.
+const maxRemovedPerAnchor = 12;
+
+function rowsFor(sourceLines, diff, from, to, hit, removedCap) {
   const rows = [];
   const removedBefore = (n) => (diff && diff.removed.get(n)) || [];
   const removedRow = ({ n, text }) => ({ n: null, oldN: n, text, kind: 'del', hit: false });
+  const emitRemoved = (n) => {
+    const all = removedBefore(n);
+    const shown = removedCap && all.length > removedCap ? all.slice(0, removedCap) : all;
+    for (const gone of shown) rows.push(removedRow(gone));
+    if (shown.length < all.length) {
+      rows.push({
+        n: null, oldN: null, kind: 'gap', hit: false,
+        text: `… ${all.length - shown.length} dalszych usuniętych linii pominięto w tym fragmencie — otwórz „Cały plik”, żeby zobaczyć wszystkie`,
+      });
+    }
+  };
   for (let n = from; n <= to; n++) {
-    for (const gone of removedBefore(n)) rows.push(removedRow(gone));
+    emitRemoved(n);
     const kind = diff && diff.added.has(n) ? 'add' : 'ctx';
     rows.push({ n, oldN: kind === 'add' ? null : oldLineOf(diff, n), text: sourceLines[n - 1], kind, hit: hit ? hit.has(n) : false });
   }
   // Lines dropped at the very end of the file are anchored past the last one,
   // where the loop above can no longer reach them.
-  if (to === sourceLines.length) {
-    for (const gone of removedBefore(sourceLines.length + 1)) rows.push(removedRow(gone));
-  }
+  if (to === sourceLines.length) emitRemoved(sourceLines.length + 1);
   return rows;
 }
 
@@ -499,7 +537,7 @@ function buildSnippet(sourceLines, linesField, diff) {
   }
   // A cited range is shown whole, however long: a finding that spans a file is
   // exactly the one whose code the reader needs in full.
-  const hunks = windows.map((window) => ({ lines: rowsFor(sourceLines, diff, window.from, window.to, hit) }));
+  const hunks = windows.map((window) => ({ lines: rowsFor(sourceLines, diff, window.from, window.to, hit, maxRemovedPerAnchor) }));
   // The full view highlights the same lines, and it renders from the file's
   // rows rather than from these, so it needs the numbers, not the marked rows.
   return hunks.length ? { hunks, hits: [...hit].sort((a, b) => a - b) } : null;
@@ -519,10 +557,10 @@ function withoutTrailingBlank(lines) {
   return lines.length && lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines;
 }
 
-function gitText(root, args) {
+function gitText(root, args, maxBuffer = maxSourceBytes) {
   try {
     return execFileSync('git', args, {
-      cwd: root, encoding: 'utf8', maxBuffer: maxSourceBytes, stdio: ['ignore', 'pipe', 'ignore'],
+      cwd: root, encoding: 'utf8', maxBuffer, stdio: ['ignore', 'pipe', 'ignore'],
     });
   } catch (err) {
     return null;
@@ -611,6 +649,9 @@ function sourceReader(projectRoot, source) {
   const mode = source && source.mode;
   const ref = mode === 'branch' ? resolveRef(root, source.branch) : '';
   const cache = new Map();
+  // Whether this mode has a revision to read from at all. Folder mode (and a run with
+  // no --mode) has none, and only THOSE read the working tree.
+  const readsGit = (mode === 'branch' && ref) || mode === 'staged';
   const fromGit = (filePath) => {
     if (mode === 'branch' && ref) return gitText(root, ['show', `${ref}:${filePath}`]);
     if (mode === 'staged') return gitText(root, ['show', `:${filePath}`]);
@@ -629,7 +670,14 @@ function sourceReader(projectRoot, source) {
     if (cache.has(filePath)) return cache.get(filePath);
     let lines = null;
     try {
-      const text = fromGit(filePath) ?? fromDisk(filePath);
+      // NOT a fallback chain. `git show` answering nothing in a revision-backed mode means
+      // the file is not in the reviewed revision - a DELETED one, above all - and falling
+      // through to the disk then showed whatever sits at that path in the tree the user
+      // happens to have checked out, labelled as the code this review read. With an
+      // uncommitted edit there it showed the user their own unsaved work as the branch's.
+      // A deleted file has no content to show, which is what the skill already says: its
+      // review comes from the diff alone.
+      const text = readsGit ? fromGit(filePath) : fromDisk(filePath);
       if (text !== null && text.indexOf(String.fromCharCode(0)) === -1) lines = withoutTrailingBlank(text.split(/\r?\n/));
     } catch (err) {
       lines = null;
@@ -669,24 +717,47 @@ function postCommandFor(projectRoot, outPath) {
   return `node "${script}" --report="${path.resolve(outPath).replace(/\\/g, '/')}" --project="${projectRoot.replace(/\\/g, '/')}"`;
 }
 
+// ONE `git diff -U0` for the whole range, split by path here - not one git process
+// per reported file. Measured on a 122-file branch: 1 818 ms of git spawns against
+// 43 ms for the single call. The context script already solved the identical problem
+// the identical way (see its `parseDiffRangesByPath`). `core.quotepath=false` so a
+// non-ASCII path arrives spelled the way the report spells it, and the buffer is
+// raised because the cap that fits one file's diff does not fit a whole branch's.
+const maxDiffBytes = 64 * 1024 * 1024;
+
 function diffReader(projectRoot, source) {
   const root = path.resolve(projectRoot);
   const mode = source && source.mode;
   const ref = mode === 'branch' ? resolveRef(root, source.branch) : '';
-  const cache = new Map();
-  const argsFor = (filePath) => {
-    if (mode === 'branch' && ref && source.base) return ['diff', '-U0', `${source.base}...${ref}`, '--', filePath];
-    if (mode === 'staged') return ['diff', '-U0', '--cached', '--', filePath];
+  const quiet = ['-c', 'core.quotepath=false'];
+  const argsForRange = () => {
+    if (mode === 'branch' && ref && source.base) return [...quiet, 'diff', '-U0', `${source.base}...${ref}`];
+    if (mode === 'staged') return [...quiet, 'diff', '-U0', '--cached'];
     // Folder reviews have no diff at all: their snippets stay a plain file view.
     return null;
   };
-  return (filePath) => {
-    if (cache.has(filePath)) return cache.get(filePath);
-    const args = argsFor(filePath);
-    const diff = args ? parseDiff(gitText(root, args)) : null;
-    cache.set(filePath, diff);
-    return diff;
+  let byPath = null;
+  const load = () => {
+    if (byPath) return byPath;
+    byPath = new Map();
+    const args = argsForRange();
+    const text = args ? gitText(root, args, maxDiffBytes) : null;
+    if (!text) return byPath;
+    // Sections come from the `diff --git` headers and the new path is read off
+    // `+++ b/<path>`; `/dev/null` there marks a deletion, which has no new side to show.
+    for (const section of text.split(/^diff --git /m).slice(1)) {
+      const m = section.match(/^\+\+\+ (.*)$/m);
+      if (!m) continue;
+      let target = m[1].trim();
+      if (target === '/dev/null') continue;
+      if (target.startsWith('"') && target.endsWith('"')) {
+        target = target.slice(1, -1).replace(/\\(.)/g, '$1');
+      }
+      byPath.set(target.replace(/^b\//, ''), parseDiff(section));
+    }
+    return byPath;
   };
+  return (filePath) => load().get(filePath) || null;
 }
 
 // The sidebar maps the change, not the findings, so it needs the diff's own file
@@ -755,7 +826,18 @@ function knownChecklistIds(projectRoot) {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.isFile() && entry.name.endsWith('.md')) ids.add(entry.name.replace(/.md$/i, '').toLowerCase());
+      // Through the context builder's own `checklistIdOf`, never a second spelling of
+      // it: the id is a SLUG of the file name, and on a collision it falls back to the
+      // parent folder as a prefix (a project rulebook adding its own `security.md` under
+      // `local/` gets `local-security`). A lowercased file name was neither, so every
+      // tick under such an id was reported as covering nothing - a warning about the
+      // report that was really a bug here. Both forms are registered, because which one
+      // a run hands out depends on the rest of the rulebook.
+      else if (entry.isFile() && entry.name.endsWith('.md')) {
+        const bare = checklistIdOf(full, new Set());
+        ids.add(bare);
+        ids.add(checklistIdOf(full, new Set([bare])));
+      }
     }
   };
   walk(path.join(__dirname, '..', 'instructions'));

@@ -106,6 +106,52 @@ test('a project with no package.json skips the whole gate rather than failing it
   assert.ok(result.warnings.some((w) => /no package\.json/i.test(w)), result.warnings.join(' | '));
 });
 
+test('a shell run still delivers every argument to the child', () => {
+  // The gate spawns through a shell on Windows because npm, pnpm and yarn are .cmd
+  // shims. With a shell the command LINE is what gets parsed, so the args travel joined
+  // into it rather than as a separate array - Node deprecates the two together
+  // (DEP0190). What must not change is that the child still receives them: a dropped
+  // `--run` leaves a test runner watching, which is a hang, not a pass.
+  const opts = { cwd: process.cwd(), env: process.env, timeoutMs: 30000 };
+  const bare = checks.defaultRun('node', ['--version'], { ...opts, shell: false });
+  assert.strictEqual(bare.exitCode, 0, bare.output);
+  assert.match(bare.output.trim(), /^v\d+\./, 'without a shell the args array is spawned');
+
+  const shelled = checks.defaultRun('node', ['--version'], { ...opts, shell: true });
+  assert.strictEqual(shelled.exitCode, 0, shelled.output);
+  assert.match(shelled.output.trim(), /^v\d+\./, 'with a shell the finished line is');
+
+  // Two arguments, the second only reachable if the first was passed through.
+  const flagged = checks.defaultRun('node', ['-p', '6*7'], { ...opts, shell: true });
+  assert.strictEqual(flagged.exitCode, 0, flagged.output);
+  assert.match(flagged.output, /42/, 'the flag and its value both reached the child');
+});
+
+test('a --only pass answers partial, never green - it never looked at the rest', (t) => {
+  // The scenario the fixing agent is actually in: the full gate came back red on two
+  // steps, it repaired one, and it re-runs just that one. Reporting green there sends it
+  // straight to commit-and-push by its own decision table, with the unit suite still red.
+  const scripts = { lint: 'eslint .', typecheck: 'tsc --noEmit', test: 'vitest', build: 'ng build' };
+  const root = makeProject(t, scripts);
+  const outDir = outDirFor(t);
+  const red = checks.runChecks({ root, outDir, run: fakeRunner({ test: { exitCode: 1, output: '2 failing' }, build: { exitCode: 2, output: 'broke' } }) });
+  assert.strictEqual(red.gate, 'red');
+
+  const repaired = checks.runChecks({ root, outDir, only: ['build'], run: fakeRunner() });
+  assert.strictEqual(repaired.gate, 'partial', 'nothing failed HERE is not the whole gate');
+  assert.strictEqual(stepNamed(repaired, 'build').status, 'passed');
+  assert.strictEqual(stepNamed(repaired, 'test').status, 'skipped');
+  assert.strictEqual(checks.exitCodeFor(repaired), 0, 'nothing failed and the script ran, so it exits 0');
+
+  // A --only pass whose step FAILS is still red: red outranks everything.
+  const stillRed = checks.runChecks({ root, outDir, only: ['build'], run: fakeRunner({ build: { exitCode: 1, output: 'nope' } }) });
+  assert.strictEqual(stillRed.gate, 'red');
+
+  // --only naming every step IS a full pass, so it answers for the whole gate.
+  const all = checks.runChecks({ root, outDir, only: ['lint', 'typecheck', 'test', 'build'], run: fakeRunner() });
+  assert.strictEqual(all.gate, 'green', 'nothing was left unselected, so nothing is unanswered');
+});
+
 test('the gate is red when any step fails and green only when none does', (t) => {
   const scripts = { lint: 'eslint .', test: 'vitest' };
   const green = checks.runChecks({ root: makeProject(t, scripts), outDir: outDirFor(t), run: fakeRunner() });
@@ -309,3 +355,49 @@ test('the real runner reports the exit code of the command it spawned', (t) => {
   assert.strictEqual(bad.exitCode, 3);
   assert.match(bad.output, /boom/);
 });
+
+test('reapTree refuses to act under a pid that is still alive', (t) => {
+  // The reaper walks the parent chain from the pid spawnSync handed back, which by
+  // then is dead. If something LIVE holds that pid, Windows has reused it and the
+  // children under it belong to a stranger. An orphan left running is bad; killing
+  // somebody else process is worse, so the answer there is to do nothing at all.
+  // This guard is the whole safety of the feature, which is why it is tested first.
+  const { spawn } = require('node:child_process');
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { windowsHide: true });
+  t.after(() => child.kill());
+  assert.deepStrictEqual(checks.reapTree(process.pid), [], 'a live pid is refused');
+  assert.strictEqual(child.exitCode, null, 'and nothing under it was touched');
+  assert.deepStrictEqual(checks.reapTree(0), [], 'a pid that cannot exist reaps nothing');
+});
+
+test('a timed-out command does not leave its runner running', { skip: process.platform !== 'win32' }, (t) => {
+  // This suite spawns no package manager on purpose - offline and fast. This one test
+  // spawns a real process anyway, because a reaper proved against a stub is worth
+  // nothing: the whole defect was that spawnSync reports a kill it did not perform.
+  // What it costs is about two seconds, and what it buys is the only evidence there is.
+  const dir = fs.realpathSync(tempDir(t, 'fpc-reap-'));
+  const marker = path.join(dir, 'alive.txt');
+  fs.writeFileSync(path.join(dir, 'runner.js'),
+    `require("fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid));`
+    + 'setTimeout(() => {}, 60000);');
+
+  const outcome = checks.defaultRun(`node "${path.join(dir, 'runner.js')}"`, [],
+    { cwd: dir, env: process.env, timeoutMs: 2000, shell: true });
+  assert.ok(outcome.timedOut, 'the command was cut off by the timeout');
+
+  const pid = Number(fs.readFileSync(marker, 'utf8').trim());
+  assert.ok(Number.isFinite(pid), 'the runner reported its pid');
+  assert.ok(outcome.orphans.includes(pid), `reaped ${JSON.stringify(outcome.orphans)}, runner was ${pid}`);
+
+  // Get-Process exits non-zero when the id is gone, so the throw IS the answer here.
+  let alive;
+  try {
+    alive = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `Get-Process -Id ${pid} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id`],
+      { encoding: 'utf8' }).trim();
+  } catch {
+    alive = '';
+  }
+  assert.notStrictEqual(alive, String(pid), 'the runner is gone, not merely reported as gone');
+});
+

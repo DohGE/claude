@@ -14,7 +14,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { sanitizeBranchName } = require('../../codeReview/scripts/review-context.cjs');
+const { sanitizeBranchName, countOf } = require('../../codeReview/scripts/review-context.cjs');
 
 const bootstrapTimeoutMs = 10 * 60 * 1000;
 
@@ -147,8 +147,11 @@ function branchState(project, branch) {
   if (!local && !remote) return { state: 'missing' };
   if (!local) return { state: 'remote-only' };
   if (!remote) return { state: 'local-only' };
-  const ahead = Number(tryGit(project, ['rev-list', '--count', `origin/${branch}..${branch}`]));
-  const behind = Number(tryGit(project, ['rev-list', '--count', `${branch}..origin/${branch}`]));
+  // Through `countOf`, never `Number()`: `tryGit` answers null on a failed call and
+  // `Number(null)` is 0, so a rev-list that never ran would report the branch as
+  // in-sync with origin and the run would fix on top of code the reviewer never saw.
+  const ahead = countOf(tryGit(project, ['rev-list', '--count', `origin/${branch}..${branch}`]));
+  const behind = countOf(tryGit(project, ['rev-list', '--count', `${branch}..origin/${branch}`]));
   if (!Number.isFinite(ahead) || !Number.isFinite(behind)) return { state: 'unknown' };
   if (ahead === 0 && behind === 0) return { state: 'in-sync', ahead, behind };
   if (ahead === 0) return { state: 'behind', ahead, behind };
@@ -174,6 +177,22 @@ const installCommands = {
   npm: ['ci'],
 };
 
+// Why the HEAD of a failed install and not its tail: every package manager prints its
+// diagnosis first and its usage help last. `npm ci` on a lockfile out of sync names the
+// missing package in its third line and then forty lines of flag documentation, so the
+// last five lines handed the reader "aliases: clean-install, ic, install-clean" as the
+// reason their gate cannot run. The prefix-only lines every manager emits between
+// paragraphs carry nothing, so dropping them keeps the five that travel real ones.
+function installFailure(err) {
+  const text = String((err && err.stderr) || (err && err.message) || err);
+  return text.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(npm|pnpm|yarn)?\s*(error|warn|ERR!)?\s*$/i.test(line))
+    .slice(0, 5)
+    .join(' ')
+    .trim();
+}
+
 // A worktree is created from HEAD of the branch, so it carries neither
 // `node_modules` nor the gitignored local config the project needs - and the
 // gate before the commit runs the project's own lint, tests and build.
@@ -183,10 +202,17 @@ function installDependencies(root) {
   const manager = detectPackageManager(root);
   if (!manager) return { manager: null, error: null };
   try {
-    execFileSync(manager, installCommands[manager], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: bootstrapTimeoutMs, shell: process.platform === 'win32' });
+    // A shell is needed on Windows, where every package manager is a `.cmd` shim - and
+    // with one, the finished command line is the documented form: Node deprecates
+    // concatenating a separate args array into it without escaping (DEP0190). Joining is
+    // lossless here because both halves are literals of this file: the manager name and
+    // its entry in `installCommands`, neither of which holds a space.
+    const useShell = process.platform === 'win32';
+    const argv = installCommands[manager];
+    execFileSync(useShell ? [manager, ...argv].join(' ') : manager, useShell ? [] : argv, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: bootstrapTimeoutMs, shell: useShell });
     return { manager, error: null };
   } catch (err) {
-    return { manager, error: String((err && err.stderr) || (err && err.message) || err).split(/\r?\n/).slice(-5).join(' ').trim() };
+    return { manager, error: installFailure(err) };
   }
 }
 
@@ -383,7 +409,7 @@ function main() {
 
 module.exports = {
   parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
-  detectPackageManager, installDependencies, copyEnvFiles, add, remove, git, tryGit,
+  detectPackageManager, installDependencies, installFailure, copyEnvFiles, add, remove, git, tryGit,
 };
 
 if (require.main === module) main();

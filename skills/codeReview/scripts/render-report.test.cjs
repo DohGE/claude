@@ -1016,6 +1016,121 @@ test('attachSnippets renders a branch review against the branch, with its diff',
   assert.deepStrictEqual(rows.filter((l) => l.hit).map((l) => l.n), [2]);
 });
 
+test('one diff call serves every file, and no file gets another file\u0027s lines', (t) => {
+  const dir = tempDir(t, 'cr-diff-');
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'test@test.local']);
+  run(['config', 'user.name', 'Test']);
+  run(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(dir, 'a.ts'), 'a1\na2\na3\na4\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'b.ts'), 'b1\nb2\nb3\nb4\n', 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'base']);
+  run(['checkout', '-q', '-b', 'feature']);
+  // Different lines in each file: one range read off the wrong file's diff would
+  // mark the wrong row as added, which is exactly what one shared diff risks.
+  fs.writeFileSync(path.join(dir, 'a.ts'), 'a1\nA2\na3\na4\n', 'utf8');
+  fs.writeFileSync(path.join(dir, 'b.ts'), 'b1\nb2\nb3\nB4\n', 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'change']);
+  run(['checkout', '-q', 'main']);
+
+  const report = rr.parseReport(reportOf(
+    ['## a.ts', ''], findingOf({ lines: '2' }), '',
+    ['## b.ts', ''], findingOf({ lines: '4' }),
+  ));
+  rr.attachSnippets(report, dir, { mode: 'branch', base: 'main', branch: 'feature' });
+  const added = (i) => report.files[i].full.rows.filter((row) => row.kind === 'add').map((row) => row.text);
+  assert.deepStrictEqual(added(0), ['A2'], 'a.ts carries only its own addition');
+  assert.deepStrictEqual(added(1), ['B4'], 'and b.ts only its own');
+  const removed = (i) => report.files[i].full.rows.filter((row) => row.kind === 'del').map((row) => row.text);
+  assert.deepStrictEqual(removed(0), ['a2']);
+  assert.deepStrictEqual(removed(1), ['b4']);
+});
+
+test('a file the branch deleted gets no snippet, never the working tree copy', (t) => {
+  const dir = tempDir(t, 'cr-del-');
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'test@test.local']);
+  run(['config', 'user.name', 'Test']);
+  run(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(dir, 'gone.ts'), 'const gone = 1;' + String.fromCharCode(10), 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'base']);
+  run(['checkout', '-q', '-b', 'feature']);
+  run(['rm', '-q', 'gone.ts']);
+  run(['commit', '-q', '-m', 'delete it']);
+  run(['checkout', '-q', 'main']);
+  // main still has the file, and the user has unsaved work in it. `git show
+  // feature:gone.ts` fails, and falling through to the disk used to hand that unsaved
+  // work to the reader as the code the review read on the branch.
+  fs.writeFileSync(path.join(dir, 'gone.ts'), 'const gone = 999; // unsaved' + String.fromCharCode(10), 'utf8');
+
+  const report = rr.parseReport(reportOf(['## gone.ts', ''], findingOf({ lines: '1' })));
+  rr.attachSnippets(report, dir, { mode: 'branch', base: 'main', branch: 'feature' });
+  const file = report.files[0];
+  assert.strictEqual(file.findings[0].snippet, null, 'a deleted file has no content to show');
+  assert.strictEqual(file.full, null);
+  assert.strictEqual(file.fullLines, null, 'and no length either - it was never read');
+
+  // Folder mode has no revision, so the working tree is exactly where it must read.
+  const folder = rr.parseReport(reportOf(['## gone.ts', ''], findingOf({ lines: '1' })));
+  rr.attachSnippets(folder, dir, { mode: 'folder', base: '', branch: 'main' });
+  assert.deepStrictEqual(
+    folder.files[0].findings[0].snippet.hunks[0].lines.map((l) => l.text),
+    ['const gone = 999; // unsaved'],
+    'folder mode reviews the working tree, so it shows the working tree',
+  );
+});
+
+test('a deletion block anchored in the window does not swallow the snippet', (t) => {
+  const dir = tempDir(t, 'cr-anchor-');
+  const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(['init', '-q', '-b', 'main']);
+  run(['config', 'user.email', 'test@test.local']);
+  run(['config', 'user.name', 'Test']);
+  run(['config', 'commit.gpgsign', 'false']);
+  // A class whose BODY is rewritten end to end while the wrapper lines stay - a reformat,
+  // a regenerate, a rename sweep. `-U0` then anchors all 200 removals at line 2, and a
+  // window that reaches line 2 used to inherit every one of them.
+  const wrap = (b) => ['export class C {'].concat(b, ['}']).join(String.fromCharCode(10)) + String.fromCharCode(10);
+  const body = (tag) => Array.from({ length: 200 }, (_, i) => '  ' + tag + i + ' = ' + i + ';');
+  fs.writeFileSync(path.join(dir, 'f.ts'), wrap(body('base')), 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'base']);
+  run(['checkout', '-q', '-b', 'feature']);
+  fs.writeFileSync(path.join(dir, 'f.ts'), wrap(body('next')), 'utf8');
+  run(['add', '.']);
+  run(['commit', '-q', '-m', 'rewrite']);
+  run(['checkout', '-q', 'main']);
+
+  const snippetAt = (line) => {
+    const report = rr.parseReport(reportOf(['## f.ts', ''], findingOf({ lines: String(line) })));
+    rr.attachSnippets(report, dir, { mode: 'branch', base: 'main', branch: 'feature' });
+    const rows = report.files[0].findings[0].snippet.hunks[0].lines;
+    const kinds = {};
+    for (const row of rows) kinds[row.kind] = (kinds[row.kind] || 0) + 1;
+    return { rows, kinds, full: report.files[0].full.rows.length };
+  };
+
+  const near = snippetAt(5);
+  assert.ok(near.rows.length < 25, `a seven-line window stays small, got ${near.rows.length}`);
+  assert.strictEqual(near.kinds.del, 12, 'the first removals are still shown');
+  assert.strictEqual(near.kinds.gap, 1, 'and the rest are announced, not dropped in silence');
+  assert.match(near.rows.find((r) => r.kind === 'gap').text, /188 dalszych usuniętych linii/);
+
+  // The same finding further down the SAME file always rendered cleanly; it still does,
+  // and that asymmetry is what made the bug so easy to miss.
+  const far = snippetAt(100);
+  assert.strictEqual(far.rows.length, 7);
+  assert.strictEqual(far.kinds.gap, undefined);
+
+  // The full view is the whole file, so it keeps every removal: 200 old + 200 new + 2 wrappers.
+  assert.strictEqual(near.full, 402);
+});
+
 test('attachSnippets renders a staged review from the index', (t) => {
   const dir = tempDir(t, 'cr-diff-');
   const run = (args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -1391,6 +1506,35 @@ test('a malformed or unterminated checklist block warns instead of leaking into 
   assert.ok(unterminated.warnings.some((w) => w.includes('niezamknięty blok')), 'the missing --> is named');
 });
 
+test('a verdict word spelled any other way is named, not read as a clean item', () => {
+  // NARUSZENIE is a FIXED IDENTIFIER matched case-sensitively, and a near miss used to
+  // pass in silence while every other drift in a block warned. The consequence is the
+  // worst of them: the page shows the rule as compliant right under the finding that
+  // reports it broken.
+  const near = rr.parseReport(reportOf('<!-- checklist: src/a.ts',
+    '[x] general#1 rule one — naruszenie (L3)',
+    '[x] general#2 rule two — Naruszenie (L4)',
+    '[x] general#3 rule three — VIOLATION (L5)',
+    '[x] general#4 rule four — NARUSZENIE (L6)',
+    '-->'));
+  assert.deepStrictEqual(near.checklists[0].items.map((i) => i.state),
+    ['ok', 'ok', 'ok', 'violation'], 'only the exact spelling marks the item broken');
+  const named = near.warnings.filter((w) => w.includes('inaczej niż NARUSZENIE'));
+  assert.strictEqual(named.length, 3, 'each of the three near misses is named');
+  assert.match(named[0], /general#1/);
+  assert.match(named[0], /spełnioną pod znaleziskiem/, 'and the warning says what it costs');
+
+  // The boundaries are what keep honest Polish out of it: in every line below the word
+  // runs on into another letter, so neither pattern matches and nothing is warned about.
+  const honest = rr.parseReport(reportOf('<!-- checklist: src/a.ts',
+    '[x] general#1 brak naruszenia reguły — OK (brak wystąpień)',
+    '[x] general#2 zero naruszeń — OK (brak wystąpień)',
+    '[x] general#3 naruszenia potencjalne sprawdzone — OK (L4)',
+    '-->'));
+  assert.deepStrictEqual(honest.checklists[0].items.map((i) => i.state), ['ok', 'ok', 'ok']);
+  assert.deepStrictEqual(honest.warnings.filter((w) => w.includes('inaczej niż')), []);
+});
+
 test('any other multi-line comment is swallowed whole', () => {
   const report = rr.parseReport(reportOf('## src/a.ts', '', findingOf({}), '<!-- notatka', 'druga linia', '-->'));
   assert.deepStrictEqual(report.warnings, [], 'the comment body never reaches the finding parser');
@@ -1405,6 +1549,22 @@ test('a checklist id that matches no instruction file is reported, not counted i
   assert.strictEqual(report.warnings.length, 1, 'one warning per unknown id, not per item');
   assert.match(report.warnings[0], /a11y/);
   assert.ok(!report.warnings.some((w) => /general|accessibility/i.test(w)), 'real ids pass, case-insensitively');
+});
+
+test('a collision id from a project rulebook is known, not reported as invented', (t) => {
+  const dir = tempDir(t, 'cr-ids-');
+  // The skill already ships global/security.md, so a project adding its own under
+  // local/ collides: the context builder hands the second one `local-security`, and
+  // a renderer that only knew file names called every tick under it uncovered.
+  const dest = path.join(dir, '.claude', 'doh', 'instructions', 'local');
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(path.join(dest, 'security.md'), '---\nname: Security\n---\n- own rule\n', 'utf8');
+  const report = { checklists: [{ path: 'src/a.ts', items: [
+    { id: 'local-security#1' }, { id: 'security#1' }, { id: 'nieistniejaca#1' },
+  ] }], warnings: [] };
+  rr.warnUnknownChecklistIds(report, dir);
+  assert.strictEqual(report.warnings.length, 1, 'only the invented id is reported');
+  assert.match(report.warnings[0], /nieistniejaca/);
 });
 
 test('the page script the renderer emits actually parses', () => {
@@ -1544,3 +1704,29 @@ test('a second coverage marker for one file is named, like a second checklist bl
   assert.ok(report.warnings.some((w) => /drugi marker coverage/.test(w)),
     `expected a duplicate-marker warning, got: ${JSON.stringify(report.warnings)}`);
 });
+
+test('a path holding a space keeps its coverage proof', () => {
+  // Paths come from git with `core.quotepath=false`, so a folder with a space in its
+  // name arrives spelled out. Matching the marker path as a run of non-space characters
+  // simply failed on such a line: the coverage marker vanished with no warning at all,
+  // and the checklist block was reported as malformed - so the file whose proof went
+  // missing was the one the warning pointed away from. Silence about coverage is the
+  // one thing this report may never do, because coverage is what it is for.
+  const report = rr.parseReport(reportOf(
+    '## src/My Folder/a.ts',
+    '',
+    checklistOf('src/My Folder/a.ts', [
+      '[x] general#1 nazwy - OK (L1)',
+      '[x] general#2 i18n - OK (L4)',
+    ]),
+    '<!-- coverage: src/My Folder/a.ts 2/2 -->',
+  ));
+  assert.deepStrictEqual(report.coverage.map((c) => c.path), ['src/My Folder/a.ts']);
+  assert.deepStrictEqual(report.checklists.map((c) => c.path), ['src/My Folder/a.ts']);
+  assert.deepStrictEqual(report.warnings, [], report.warnings.join(' | '));
+
+  // The marker stays strict at both ends: the count still has to be one.
+  const bad = rr.parseReport(reportOf('<!-- coverage: src/My Folder/a.ts 2/2 extra -->'));
+  assert.deepStrictEqual(bad.coverage, []);
+});
+

@@ -142,6 +142,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 ## Rules
 
 - Write ONLY inside `{{SESSION}}` (`generated-mockups/`, plus spec/plan/checklist after approval).
+- Each `.md` you rewrite after the approval goes out in ONE write — the Write tool, or a single
+  Bash heredoc if your harness refuses a `.md` write from a sub-agent. One write either way: a
+  file assembled from several appends is one that ends half-written when anything goes wrong.
   Never touch `{{PROJECT}}`, never `git commit`, never change branch — no implementation happens here.
 - Never read or reference `{{SESSION}}/auth.json`; mockups show placeholder credentials at most.
 - Delete files of screens you drop between rounds, so `generated-mockups/` always matches the manifest.

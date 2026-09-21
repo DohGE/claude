@@ -25,6 +25,9 @@ const post = (base, urlPath, body) => fetch(`${base}${urlPath}`, {
 // Every state update addresses one task; t1 is the task a fresh run starts with.
 const postState = (base, body) => post(base, '/api/state', { taskId: 't1', ...body });
 
+// Chat entries carry a `time` as well; these helpers keep an assertion about who said
+// what from having to restate it.
+const said = chat => (chat || []).map(({ role, text }) => ({ role, text }));
 const getState = async base => (await fetch(`${base}/api/state`)).json();
 const task0 = async base => (await getState(base)).tasks[0];
 
@@ -104,7 +107,7 @@ test('the server owns the mockup rev, and the step owns the chat', async t => {
   // Round 1: the orchestrator sends the round, never a counter and never the chat.
   await postState(base, { mockupReview: { text: 'Pierwsza wersja', screens },
     mockupChat: { role: 'agent', text: 'Pierwsza wersja' } });
-  const chatOf = async () => (await task0(base)).steps[2].chat;
+  const chatOf = async () => said((await task0(base)).steps[2].chat);
   assert.equal((await task0(base)).mockupReview.rev, 1);
   assert.deepEqual(await chatOf(), [{ role: 'agent', text: 'Pierwsza wersja' }]);
   // The user's feedback appends without resending anything.
@@ -353,6 +356,59 @@ test('a step1 answer is stored on the task so the form can be re-rendered', asyn
   // The answer still reaches the orchestrator.
   const { answer } = await (await fetch(`${base}/api/answer`)).json();
   assert.equal(answer.kind, 'step1');
+});
+
+test('a transcript line is capped far below a form field, and says which cap it hit', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  // MAX_CHAT keeps a looping agent from growing the state document without bound -
+  // which at the form's 200 KB it did not: 200 entries x 200 KB is 40 MB for one step,
+  // re-sent to the browser every second. A chat line is a message someone reads back.
+  await postState(base, { step: 4, chat: { role: 'agent', text: 'x'.repeat(50000) } });
+  const line = (await task0(base)).steps[3].chat[0].text;
+  assert.ok(line.length < 9 * 1024, 'the line is cut at the transcript cap, not the form one');
+  assert.match(line, /ucięte.*8 KB/, 'and the marker names the cap it hit');
+  // A form field is a pasted document and keeps the 200 KB it was sized for.
+  await post(base, '/api/answer', { taskId: 't1', kind: 'step1', branch: 'b',
+    taskDescription: 'y'.repeat(50000) });
+  assert.strictEqual((await task0(base)).step1.taskDescription.length, 50000,
+    'a 50 KB requirement is nowhere near the form cap');
+});
+
+test('a clean shutdown stops advertising a pid that is about to die', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  // What the launcher reads to find the instance it must stop. Leaving it behind after
+  // a clean exit advertises a pid the OS is free to hand to something else, and the next
+  // launcher run then aims a kill at whatever inherited it.
+  const marker = path.join(dir, 'server.json');
+  fs.writeFileSync(marker, JSON.stringify({ port: 9999, pid: process.pid }));
+  assert.ok(fs.existsSync(marker));
+  await post(base, '/api/shutdown', {});
+  await new Promise((r) => { setTimeout(r, 120); });
+  assert.ok(!fs.existsSync(marker), 'server.json does not outlive the process it describes');
+});
+
+test('an oversized report, operation or log entry is cut and marked', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  // `GET /api/state` re-sends the WHOLE document once a second and `persist()`
+  // rewrites it on every update, so an agent that pastes its findings instead of a
+  // summary would be paid for again every tick for the rest of the run.
+  const huge = 'x'.repeat(300000);
+  await postState(base, { step: 6, report: huge, currentOperation: huge, logEntry: huge });
+  const step = (await task0(base)).steps[5];
+  for (const [name, value] of [['report', step.report], ['currentOperation', step.currentOperation],
+    ['logEntry', step.log[0].text]]) {
+    assert.ok(value.length < 210 * 1024, `${name} is cut at the cap`);
+    assert.match(value.slice(200 * 1024), /ucięte/, `${name} says it was cut`);
+  }
+  // The cap must not turn a cleared report into an empty string: null clears the panel.
+  await postState(base, { step: 6, report: null });
+  assert.strictEqual((await task0(base)).steps[5].report, null);
 });
 
 test('uploads, auth and mockoon live under the addressed task', async t => {
@@ -676,7 +732,7 @@ test('POST /api/answer records mockup feedback in the chat as it arrives', async
     mockupReview: { text: 'Two screens', screens: [] } });
   await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'feedback',
     text: 'Wider button' });
-  assert.deepStrictEqual((await task0(base)).steps[2].chat,
+  assert.deepStrictEqual(said((await task0(base)).steps[2].chat),
     [{ role: 'user', text: 'Wider button' }],
     'the browser gets its message back without waiting for the orchestrator');
   // Approve is not a chat message.
@@ -995,7 +1051,7 @@ test('POST /api/state dopisuje linię agenta do czatu wskazanego kroku', async t
   await postState(base, { step: 4, status: 'in_progress', activeStep: 4,
     chat: { role: 'agent', text: 'Robię to inaczej — bez migracji.' } });
   const task = await task0(base);
-  assert.deepStrictEqual(task.steps[3].chat,
+  assert.deepStrictEqual(said(task.steps[3].chat),
     [{ role: 'agent', text: 'Robię to inaczej — bez migracji.' }]);
   assert.deepStrictEqual(task.steps[4].chat, [], 'czat należy do kroku, nie do taska');
   // Rola inna niż user jest agentem: przeglądarka rysuje tylko te dwie.
@@ -1020,7 +1076,7 @@ test('mockupChat pisze do czatu kroku 3, a runda mockupów go nie kasuje', async
   await postState(base, { step: 3, enabled: true });
   await postState(base, { step: 3, mockupReview: { text: 'Pierwsza wersja', screens },
     mockupChat: { role: 'agent', text: 'Pierwsza wersja' } });
-  assert.deepStrictEqual((await task0(base)).steps[2].chat,
+  assert.deepStrictEqual(said((await task0(base)).steps[2].chat),
     [{ role: 'agent', text: 'Pierwsza wersja' }]);
   await postState(base, { step: 3, mockupReview: { text: 'Druga wersja', screens },
     mockupChat: { role: 'agent', text: 'Druga wersja' } });
@@ -1044,7 +1100,7 @@ test('POST /api/answer kind=message dopisuje linię użytkownika i budzi pętlę
   assert.strictEqual(answer.kind, 'message');
   assert.strictEqual(answer.step, 4);
   assert.strictEqual(answer.taskId, 't1');
-  assert.deepStrictEqual((await task0(base)).steps[3].chat,
+  assert.deepStrictEqual(said((await task0(base)).steps[3].chat),
     [{ role: 'user', text: 'Pomiń cache, zrób to synchronicznie' }],
     'przeglądarka widzi swoją wiadomość bez czekania na orkiestratora');
 });
@@ -1095,7 +1151,7 @@ test('czat makiet trafia do kroku o id 3, nie na trzecią pozycję listy', async
 
   await postState(base, { mockupChat: { role: 'agent', text: 'makieta gotowa' } });
   const steps = (await task0(base)).steps;
-  assert.deepStrictEqual(steps.find(s => s.id === 3).chat,
+  assert.deepStrictEqual(said(steps.find(s => s.id === 3).chat),
     [{ role: 'agent', text: 'makieta gotowa' }]);
   assert.deepStrictEqual(steps.find(s => s.id === 2).chat, [],
     'trzecia pozycja listy to nie krok 3');
@@ -1224,3 +1280,115 @@ test('GET /api/state niesie klucz projektu, stały w obrębie jednego doh/', asy
   // Klucz nie jest ścieżką: w localStorage przeglądarki nie ma po co trzymać dysku.
   assert.ok(!a.includes(path.sep) && !a.includes('/'), 'klucz jest nieprzezroczysty');
 });
+
+test('an answer reaches the poll that asked for that task, not the catch-all parked first', async t => {
+  // The orchestrator watches every task at once, so its poll carries no taskId and
+  // matches anything. An agent waiting on its own question parks a second poll. Serving
+  // whichever was parked first let the catch-all swallow an answer written for the task:
+  // the agent waited out its whole timeout, re-polled into an empty queue, and stopped.
+  // The user had watched the answer send, so nothing on screen said why it had stalled.
+  const app = createApp(tmpDir());
+  t.after(() => app.server.close());
+  const base = await listen(app);
+  const poll = query => fetch(`${base}/api/answer?${query}`).then(r => r.json()).then(j => j.answer);
+  const settle = () => new Promise(r => setTimeout(r, 60));
+
+  await post(base, '/api/tasks', { values: {} });
+  const catchAll = poll('wait=5');
+  await settle();
+  const agent = poll('taskId=t1&wait=5');
+  await settle();
+
+  await post(base, '/api/answer', { taskId: 't1', text: 'use the shared service' });
+  assert.strictEqual((await agent).text, 'use the shared service', 'the agent that asked gets the answer');
+
+  // And the catch-all is still parked, free to take what no one claimed.
+  await post(base, '/api/answer', { taskId: 't2', text: 'nobody is waiting on this one' });
+  assert.strictEqual((await catchAll).text, 'nobody is waiting on this one');
+});
+
+test('the catch-all poll is still served when no task-specific one waits', async t => {
+  const app = createApp(tmpDir());
+  t.after(() => app.server.close());
+  const base = await listen(app);
+  const only = fetch(`${base}/api/answer?wait=5`).then(r => r.json()).then(j => j.answer);
+  await new Promise(r => setTimeout(r, 60));
+  await post(base, '/api/answer', { taskId: 't1', text: 'alone' });
+  assert.strictEqual((await only).text, 'alone');
+});
+
+
+test('a chat line is timed, so a message written after a failure can be told from one before', async t => {
+  // What the user writes to a step whose agent has already died is promised to the retry.
+  // The orchestrator used to keep that promise from memory, and on a long run its memory is
+  // summarised away long before the user gets round to clicking retry - the line would go
+  // with it, while the log still said it had been kept. The transcript is the durable copy,
+  // and the time is what says which side of the failure it fell on. Log entries have always
+  // carried one; without one here the two could not be lined up at all.
+  const app = createApp(tmpDir());
+  t.after(() => app.server.close());
+  const base = await listen(app);
+
+  await postState(base, { step: 4, chat: { role: 'agent', text: 'starting the implementation' } });
+  await postState(base, { step: 4, status: 'failed', logEntry: 'the step failed' });
+  await post(base, '/api/answer', { taskId: 't1', kind: 'message', step: 4, text: 'skip the cache, do it synchronously' });
+
+  const step = (await task0(base)).steps.find(x => x.id === 4);
+  const failedAt = step.log.find(e => e.text === 'the step failed').time;
+  assert.ok(failedAt, 'the failure is timed');
+  assert.ok(step.chat.every(m => m.time), 'every chat line is timed');
+
+  // Exactly the read the retry makes: the user lines later than the failure.
+  const kept = step.chat.filter(m => m.role === 'user' && m.time > failedAt).map(m => m.text);
+  assert.deepStrictEqual(kept, ['skip the cache, do it synchronously']);
+  // And the agent line from before the failure is not dragged into the retry prompt.
+  assert.ok(step.chat.some(m => m.text === 'starting the implementation' && m.time <= step.chat[1].time));
+});
+
+
+test('E2E_LOCK and its FIFO queue read back from the state alone', async t => {
+  // Only one task may be inside step 5: Chrome, the extension and the dev port are
+  // single-instance. The orchestrator used to hold that lock in its head, and a long run
+  // summarises its head away - a forgotten lock puts two tasks on one Chrome. So SKILL.md
+  // defines the lock as a reading of /api/state, and this is that reading. If the status
+  // vocabulary of a step ever moves, it has to fail here rather than in a browser.
+  const app = createApp(tmpDir());
+  t.after(() => app.server.close());
+  const base = await listen(app);
+  const five = task => task.steps.find(x => x.id === 5);
+  const read = async () => {
+    const s = await getState(base);
+    const held = s.tasks.filter(x => ['in_progress', 'failed'].includes(five(x).status)).map(x => x.id);
+    const queued = s.tasks
+      .filter(x => five(x).status === 'waiting' && five(x).currentOperation === 'Waiting for the E2E slot')
+      .map(x => ({ id: x.id, at: (five(x).log.find(e => e.text === 'Queued for the E2E slot') || {}).time }))
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    return { held, queued: queued.map(x => x.id), times: queued.map(x => x.at) };
+  };
+
+  await post(base, '/api/tasks', { values: {} });
+  await post(base, '/api/tasks', { values: {} });
+  assert.deepStrictEqual((await read()).held, [], 'a fresh run holds nothing');
+
+  await postState(base, { step: 5, status: 'in_progress', activeStep: 5 });
+  assert.deepStrictEqual((await read()).held, ['t1']);
+
+  const queue = id => post(base, '/api/state', { taskId: id, step: 5, status: 'waiting',
+    activeStep: 5, currentOperation: 'Waiting for the E2E slot', logEntry: 'Queued for the E2E slot' });
+  await queue('t2');
+  await new Promise(r => setTimeout(r, 5));
+  await queue('t3');
+  let now = await read();
+  assert.deepStrictEqual(now.queued, ['t2', 't3'], 'FIFO comes from the log times, not from arrival order in memory');
+  assert.ok(now.times[0] < now.times[1], now.times.join(' / '));
+
+  // The lock covers the failure protocol, so a failed step 5 still holds it.
+  await postState(base, { step: 5, status: 'failed' });
+  assert.deepStrictEqual((await read()).held, ['t1'], 'a failed step 5 has not left step 5');
+
+  await postState(base, { step: 5, status: 'completed' });
+  now = await read();
+  assert.deepStrictEqual(now.held, [], 'leaving step 5 frees the slot');
+  assert.strictEqual(now.queued[0], 't2', 'the oldest queue entry goes next');
+});
+

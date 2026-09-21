@@ -49,8 +49,9 @@ An **outdated** thread — unresolved, but the code moved under it — is includ
 both its dead `line` and its `originalLine` plus the original `diffHunk`, so the agent locates the
 subject by content rather than by a number that now means something else.
 
-Comments from a GitHub App are flagged `isBot` and treated as noise by default, unless they name a
-concrete defect.
+Comments from a GitHub App are flagged `isBot` wherever they appear — inline threads included. A
+flagged **conversation** comment is treated as noise by default, unless it names a concrete defect;
+an inline one is read like any other thread, because it is anchored to a line of the change.
 
 ## Verdicts
 
@@ -135,7 +136,9 @@ last guard against deleting work the verification gate stopped from being commit
 Whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
 `type-check`), `test`, `build`. Missing scripts are `skipped`, not failures; so is the whole gate when
 there is no `package.json`, the dependency install failed, or there is no lockfile to install from.
-A skipped gate is never a red one.
+A skipped gate is never a red one. Neither is a `partial` one: a `--only=<step>` re-run reports
+`partial` however well that step went, because it never looked at the others — only a full pass can
+answer for the whole gate, and only a green full pass lets the run commit.
 
 **Every red command is the run's work** — whether the agent's own fixes broke it or it was already red
 when the run started. That is the change the rename is about: the gate used to be a guard that only

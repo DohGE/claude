@@ -54,8 +54,10 @@ Each kind carries its own fields, and they are what you read — never guess a n
 one also carries `taskId`, which is how you route it. Reading the wrong name yields `undefined`,
 and the run then forwards an empty answer to the agent instead of stopping.
 Two server caps bound what a form can carry: a request body over 25 MB is answered with
-`413 body over 25 MB`, which the page shows as a rejected send, and any single text field over 200 KB is stored cut, with a
-visible `[…ucięte…]` marker at the end. A pasted OpenAPI contract can reach that: when you see the
+`413 body over 25 MB`, which the page shows as a rejected send, and any single text field over its cap is stored
+cut, with a visible `[…ucięte…]` marker naming the cap it hit — 200 KB for a form field or a
+report, 8 KB for one line of a step's transcript, which is a message a human reads and
+not a document to paste. A pasted OpenAPI contract can reach that: when you see the
 marker in `requirements.md`, say so to the user instead of passing the half document on.
 
 POST `/api/state` takes only the fields listed in its contract, and a body carrying any other name
@@ -84,11 +86,21 @@ Because agents run in the background, several tasks can sit in steps 2-4 and 6 a
 fails does not stop the run: the others keep going while it waits at its gate.
 
 **E2E_LOCK.** Chrome, the Claude in Chrome extension, the Playwright installation and the app's dev
-port are single-instance, so only ONE task may be inside step 5 at a time. A task reaching step 5
-while the lock is held is posted as
-`{"taskId":"<id>","step":5,"status":"waiting","activeStep":5,"currentOperation":"Waiting for the E2E slot"}`
-and queued FIFO by arrival. The lock is held for the whole step, including any failure-protocol
-retry, and released when the task leaves step 5 — then start the next task in the queue.
+port are single-instance, so only ONE task may be inside step 5 at a time. The lock is NOT something
+you hold in your head: a long run summarises your memory away, and a lock you have forgotten puts
+two tasks on one Chrome and one dev port. It is a reading of `/api/state`, taken fresh each time you
+need it:
+
+- **Held** by any task whose step 5 has started and not finished — `in_progress`, or `failed` while
+  its failure protocol runs, because the lock covers the retry too.
+- **Queued**: every task whose step 5 is `waiting` with `currentOperation` `"Waiting for the E2E
+  slot"`. A task reaching step 5 while the lock is held is posted as
+  `{"taskId":"<id>","step":5,"status":"waiting","activeStep":5,"currentOperation":"Waiting for the E2E slot","logEntry":"Queued for the E2E slot"}`
+  — that log entry is what carries the arrival time, and FIFO is by that time. Order the queue by it
+  rather than by the order you happen to remember, which is the part that does not survive.
+
+The lock is held for the whole step, including any failure-protocol retry, and released when the task
+leaves step 5 — then start the queued task whose `Queued for the E2E slot` entry is the oldest.
 
 ## Setup
 
@@ -142,9 +154,9 @@ that reads it. You never build the prompt yourself.
        port and id it names is final. You are the <step name> agent of task <TASK_ID>, and you
        end with the single JSON object it specifies.
 
-   Whatever THIS spawn has to add — the failure report of a previous attempt, the notes kept in
-   `notes(T,N)`, a revision paragraph — goes in that prompt, under its own heading, after the
-   pointer. It never goes into the rendered file.
+   Whatever THIS spawn has to add — the failure report of a previous attempt, what the user wrote
+   to that step's transcript while it had no agent, a revision paragraph — goes in that prompt,
+   under its own heading, after the pointer. It never goes into the rendered file.
 
 **Never paste an agent file into a prompt yourself.** Reading it in and writing it back out costs
 that file twice per spawn, six times per pipeline and again on every retry — tens of thousands of
@@ -209,12 +221,16 @@ the pipeline moved, so do NOT touch `status`, `progress` or `activeStep` for it.
 - **That step's agent is alive** → SendMessage the text to it verbatim, then go back to polling.
   Do not post the line back as `chat`: the server recorded it the moment the browser sent it, and
   a copy would show it twice.
-- **The step failed** → its agent is gone. Append the text to `notes(T,N)` and POST
+- **The step failed** → its agent is gone. Remember nothing: the server already put the line in
+  that step's `chat` with a `time`, and your own memory of a long run is summarised away long
+  before the user gets round to clicking retry. POST
   `{"taskId":"T","step":N,"logEntry":"Message kept for the retry"}` so the user can see it landed
-  somewhere. On `retry`, hand every kept note to the fresh agent under a
-  `## What the user added after the failure` heading, then clear `notes(T,N)`.
-- **The step has no agent yet** (the user wrote ahead of the pipeline) → keep it in `notes(T,N)`
-  the same way and put it in that step's prompt when you do spawn it.
+  somewhere. On `retry`, re-read the step from `/api/state` and hand the fresh agent every `user`
+  entry of its `chat` whose `time` is later than that step's failure — the `log` entry you wrote
+  when it failed — under a `## What the user added after the failure` heading.
+- **The step has no agent yet** (the user wrote ahead of the pipeline) → the same, and simpler:
+  nothing in that step's `chat` predates a failure, so when you spawn it, put every `user` entry
+  of the transcript into that step's prompt.
 
 Messages never queue and never lock the panel, so several may arrive in a row: forward each in
 order and drop none. The agent answers in the step's transcript by POSTing `chat` itself, so its
@@ -434,14 +450,21 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
      When the branch already exists and is not checked out anywhere, drop `-b`. When it IS checked
      out elsewhere, go to the failure protocol with a report naming the conflict.
    A worktree is created from HEAD, so it has neither `node_modules` nor the untracked local config
-   the app needs. Bootstrap it before spawning anything:
-   - `package-lock.json` → `npm ci`; `pnpm-lock.yaml` → `pnpm install --frozen-lockfile`;
-     `yarn.lock` → `yarn install --immutable`; no lockfile → skip.
-   - copy every `.env*` file from `PROJECT` into `ROOT`, each at the same path relative to the
-     root: they are gitignored, so a fresh worktree has none of them, and one nested in a workspace
-     package is the one whose absence looks like an application bug in step 5 rather than a missing file.
-   A failure in either goes to the failure protocol for step 4. Playwright is unaffected: the
-   pipeline keeps using the plugin's own installation in `SKILL_DIR`.
+   the app needs. Bootstrap it before spawning anything, with ONE call (Bash tool):
+
+       node "<SKILL_DIR>/scripts/bootstrap-worktree.cjs" --root="<ROOT>" --project="<PROJECT>"
+
+   It installs from whatever lockfile the project committed and copies every `.env*` across at
+   the same path relative to the root — they are gitignored, so a fresh worktree has none of them,
+   and one nested in a workspace package is the one whose absence looks like an application bug in
+   step 5 rather than a missing file. Do NOT do either by hand: the copier skips `node_modules`,
+   build output and the run's own `.claude` folder, and a hand-rolled walk of the project finds a
+   dependency's `.env.example` long before it finds the project's own.
+   `errors[]` non-empty → failure protocol for step 4. `warnings[]` is not a failure: a failed or
+   skipped install means step 5 cannot run the suites, and it is reported, not retried. Keep
+   `installed` and say so in the summary. When `ROOT` is `PROJECT` the call is a no-op that says so —
+   that checkout already has both. Playwright is unaffected either way: the pipeline keeps using
+   the plugin's own installation in `SKILL_DIR`.
    POST `{"taskId":"T","root":"<ROOT>"}` so the summary can name it.
 2. POST `{"taskId":"T","step":4,"status":"in_progress","activeStep":4,"progress":0}`.
 3. Spawn the implementation agent from `references/implementation-agent.md`, per "Spawning a
@@ -521,14 +544,17 @@ It can run any number of times ("Regenerate" is the same step over the same file
 2. Wait for T's `kind=="decision"`:
    - `retry` → POST `{"taskId":"T","step":N,"status":"in_progress","report":null}`; re-spawn that
      step's agent **fresh**: render its brief again, then a new Agent call whose prompt carries the
-     pointer plus a note about the previous failure report path plus every message kept in
-     `notes(T,N)` under `## What the user added after the failure`, which is then cleared. The re-spawn reads `agents(T)` again, so a model changed since the
+     pointer plus a note about the previous failure report path plus every `user` entry of that
+     step's `chat` later than its failure log entry, under `## What the user added after the
+     failure`. Read them back from `/api/state` rather than from memory: on a long run yours has
+     been summarised since. The re-spawn reads `agents(T)` again, so a model changed since the
      failure takes effect here.
    - `finish` → write that task's final summary (below, including the `auth.json` cleanup) with
      `finalStatus:"Failed at <step name>"` — the NAME (`Implementation`, `Validation & E2E`), never
      the id. The stepper numbers the tiles it shows, so with mockups off step 4 is the tile labelled
      3: an id quoted at the user points them at the wrong tile. Names never drift.
-3. If the task held `E2E_LOCK`, release it on `finish` and start the next task in the queue.
+3. If the task held `E2E_LOCK`, release it on `finish` and start the queued task with the oldest
+   `Queued for the E2E slot` log entry — read the queue from `/api/state`, never from memory.
 4. A failed task does not end the run: keep serving the others from the event loop.
 
 ## Final summary (per task)
