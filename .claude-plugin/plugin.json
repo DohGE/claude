@@ -1,7 +1,7 @@
 {
   "name": "doh",
-  "description": "Skills: /implementNewFeature (feature pipeline with browser stepper UI), /codeReview (deterministic instruction-driven code review, interactive HTML reports) and /fixPr (fixes the open comments of a pull request and its red lint/typecheck/test/build in a background worktree per branch)",
-  "version": "0.22.0",
+  "description": "Skills: /implementNewFeature (feature pipeline with browser stepper UI), /codeReview (deterministic instruction-driven code review, interactive HTML reports) and /fixPr (fixes the open comments of a pull request and its red lint/typecheck/test/build in a background worktree per branch). Every skill runs in lean mode: caveman ultra for the orchestrator and each of its sub-agents, headroom context compression when the proxy is installed",
+  "version": "0.23.0",
   "author": {
     "name": "DohGE"
   },
@@ -13,6 +13,9 @@
     "stepper",
     "code-review",
     "pull-request",
-    "worktree"
+    "worktree",
+    "caveman",
+    "headroom",
+    "token-efficiency"
   ]
 }

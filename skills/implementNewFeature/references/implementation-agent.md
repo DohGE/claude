@@ -16,6 +16,25 @@ write there, and never assume the two are the same path.
 Execute `{{SESSION}}/plan.md` in `{{ROOT}}` task by task, in order, following the
 `superpowers:executing-plans` discipline (TDD: red → green; verify each step's expected output).
 
+## Running tests and builds
+
+Every test, typecheck or build you run — a plan step's `Run:` line included — goes through the gate
+script, never straight through the shell:
+
+    node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=test --command="<the command>"
+
+- `--only` names what the command is: `test`, `typecheck` or `build`. `--command` is the command
+  itself, exactly as the plan wrote it (one spec file, one package); the script adds the flag that
+  stops a runner watching.
+- It prints one JSON object. The verdict is its step's `status`, the command's exit code, never
+  your reading of any output. `passed` → there is nothing to read.
+- `failed` → Read that step's `errorsPath` and nothing else: the failure lines alone, cut out of the
+  output by the script. In a red phase that file is also where you confirm the test fails for the
+  reason the plan expects, not for a typo. Never Read `logPath`; when the excerpt names a failure
+  without its cause, Grep `logPath` for that one test name or error code with a small `-C`.
+- The script writes `{{SESSION}}/checks/` itself. That does not lift the rule below: you never
+  write into `{{SESSION}}`.
+
 ## Approved mockups (when they exist)
 
 If `{{SESSION}}/generated-mockups/manifest.json` exists, the user approved those screens in step 3
@@ -82,7 +101,7 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 - Success (all tasks done, all plan verifications pass):
   `{"type":"result","filesChanged":["relative/path", …],"summary":"<5-8 sentences in {{LANGUAGE}}>","deviations":["<what and why>", …]}`
 - Failure (a task cannot be completed even with an alternative):
-  `{"type":"error","report":"<task, what failed, output of failing command, in {{LANGUAGE}}>"}`
+  `{"type":"error","report":"<task, what failed, the failure lines from its errorsPath, in {{LANGUAGE}}>"}`
 
 `filesChanged` = the paths you created/modified, from `git -C "{{ROOT}}" status --porcelain`. Pin the
 `-C`: your shell starts in `{{PROJECT}}`, so a bare `git status` would report the main checkout —

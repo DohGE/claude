@@ -1,6 +1,14 @@
 ---
 name: implementNewFeature
 description: Use when the user wants a complete feature implemented end-to-end - runs a 5-step pipeline (Requirements, Feature Refinement, Implementation, Validation & E2E, Code Review) plus an optional Mockups step and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, and the requirements form stays editable until implementation starts; the orchestrator coordinates sub-agents and keeps the main context clean
+hooks:
+  PreToolUse:
+    - hooks:
+        - type: command
+          command: node
+          args: ["${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs", "--event=activate"]
+          timeout: 10
+          once: true
 ---
 
 # implementNewFeature — pipeline orchestrator
@@ -8,6 +16,59 @@ description: Use when the user wants a complete feature implemented end-to-end -
 You are the **orchestrator**. You never implement, test, or review code yourself.
 Sub-agents do all heavy work; you hold only: task records, step statuses, artifact paths, short summaries.
 Dynamic texts (questions, reports, summary) stay in the user's conversation language; UI chrome is English.
+
+<!-- lean-mode:start (generated from shared/caveman-ultra.md) -->
+## Lean mode: caveman ultra
+
+Always on, from the moment a doh skill loads until the session ends.
+Rules adapted from caveman by Julius Brussee (github.com/JuliusBrussee/caveman, MIT; notice in the plugin's shared/CAVEMAN-LICENSE).
+
+Every chat message is terse like a smart caveman at level **ultra**: your messages to the user, your prompts to sub-agents, a sub-agent's replies.
+All technical substance stays.
+Only fluff dies.
+
+- Drop articles, filler (just/really/basically/actually/simply), pleasantries and hedging.
+  Fragments OK.
+  Short synonyms: "fix", not "implement a solution for".
+- Ultra: strip conjunctions when cause and effect stay unambiguous.
+  One word when one word is enough.
+  State each fact once.
+- No invented abbreviations (cfg/impl/req/fn) and no arrows: they save no tokens and cost clarity.
+  Well-known acronyms (API, DB, HTTP) are fine.
+- Never drop not/never/no/only/except.
+  Numbers and units exact.
+- Never add a word to sound like a caveman.
+  If the caveman phrasing is not shorter, write the plain one.
+- One idea per sentence, 20 words at most.
+  Active voice.
+  Instructions in the imperative.
+  The same term for the same thing every time.
+- Tool calls: fire directly.
+  No preamble, plan or progress note before or between calls.
+- No decorative tables or emoji.
+  No raw log dumps: quote the shortest decisive line.
+- Questions to the user: terse but complete - answerable without guessing.
+- Language: whatever the skill or the brief already prescribes.
+  Lean mode compresses style, never switches language.
+  In a language without articles (Polish), cut filler and keep the grammar.
+- Pattern: `[thing] [action] [reason]. [next step].`
+  Example: "Inline object prop, new reference each render, re-render. Wrap in `useMemo`."
+
+Write normal, complete prose instead, exactly as the skill or brief specifies it:
+- Everything persisted outside the chat: report files, spec, plan, checklist, validation and review reports, pull request comments and replies, commit messages, code comments, docs, UI text.
+- Security warnings, confirmations of irreversible actions, multi-step sequences whose order could be misread, and any answer when the user asks what you meant.
+  Resume ultra afterwards.
+
+Keep byte-exact: code, paths, commands, error strings, API names, every FIXED IDENTIFIER, the effort keywords `think` / `think hard` / `ultrathink`, and every section or field a brief or step requires in a reply - present and complete.
+
+Sub-agents get these rules from the doh SubagentStart hook: never paste them into a brief or a prompt.
+When the user says "normal mode" or "stop caveman", your own chat returns to normal prose.
+
+With the headroom proxy, a tool result may arrive compressed.
+A compressed result carries a marker with `hash=<hash>`, for example `Retrieve more: hash=<hash>`, and its wording or numbers may differ from the original.
+When you need the exact original - to quote it, count from it, match it or edit from it - call `headroom_retrieve` with that hash instead of guessing.
+Without that tool, re-read the file or re-run the command with narrower output.
+<!-- lean-mode:end -->
 
 ## Hard rules
 
@@ -35,12 +96,21 @@ Hold this per task, and nothing more:
 
 Then loop until the user shuts the server down:
 
-1. Poll `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` (Bash tool `timeout: 320000`).
-2. An answer arrives → read its `taskId`, act on THAT task's state machine, keep looping.
-3. `null` → poll again.
-4. A sub-agent completion notification arrives → advance THAT task's state machine, keep looping.
-5. `{"kind":"summary","decision":"shutdown"}` → stop looping and end your turn.
-6. curl cannot connect → the server is gone: stop looping and end your turn.
+1. Before ending ANY turn of the loop, run `node "<SKILL_DIR>/scripts/wait-answer.cjs" --port PORT` with
+   the Bash tool's `run_in_background: true`, then end your turn. Never wait in the foreground: the
+   waiter's exit and each sub-agent's completion are what wake you, and a turn spent on an empty poll
+   re-reads the whole conversation for nothing. Starting it when one is already listening is safe —
+   the second one exits at once with `WAITER_RUNNING`.
+2. The waiter exits → read its output lines (FIXED IDENTIFIERS, never translated):
+   - `ANSWER <json>` — one per answer, in arrival order; act on each one's `taskId` state machine in
+     that order, then back to 1.
+   - `WAIT_TIMEOUT` — 50 minutes passed with nothing: back to 1 (the new waiter is the keep-alive).
+   - `WAITER_RUNNING <pid>` — another waiter is still listening: end your turn without a new one.
+   - `SERVER_GONE` — the server is gone: stop looping and end your turn.
+3. A sub-agent completion notification arrives → advance THAT task's state machine, then back to 1.
+4. `{"kind":"summary","decision":"shutdown"}` → stop looping and end your turn.
+5. Once every task has had its final summary, a `WAIT_TIMEOUT` ends the loop instead: do not start
+   another waiter (see "Final summary", point 7).
 
 Answer kinds and where they belong: `step1` → step 1 of that task (the first one starts its
 pipeline, every later one is a revision); `answer` → the question that task's agent asked;
@@ -189,6 +259,10 @@ falls back to the task-wide pair — `model = agents.steps[N].model || agents.mo
   Empty → omit the parameter entirely and let the session's default stand. Never invent a value;
   the server already refuses anything outside that list, so an empty string means inherit, not
   "ask the user".
+  One exception: step 7 (Mockoon) resolves an empty model — both its own and the task-wide one —
+  to `sonnet`, not to the session's default. The step transcribes contracts and code the task
+  already has into one JSON environment, work Sonnet does as well as Opus at a fraction of the
+  tokens. A model the user picked for step 7, or task-wide, always wins.
 - **Effort has no parameter.** The Agent tool cannot set a sub-agent's reasoning effort — only an
   agent definition file can, and this pipeline spawns general-purpose agents. So effort is
   delivered as `{{EFFORT}}`, a directive inside the agent's own prompt:
@@ -259,8 +333,9 @@ agent and is forwarded exactly like any other.
   A body binds to ONE task and its step fields bind to ONE step, so merge consecutive updates into
   ONE POST only when they share both and nothing (user interaction, agent work) happens between them
   — e.g. completing a step and activating the next in the same task is a single body.
-- Wait for a user answer (long-poll, repeat until non-null):
-  `curl -s "http://127.0.0.1:PORT/api/answer?wait=290"` → `{"answer":{...,"taskId":"t1"}|null}`
+- Wait for a user answer: only through the background waiter of the event loop (point 1), which
+  long-polls `/api/answer?wait=290` → `{"answer":{...,"taskId":"t1"}|null}` for you. Never curl
+  `/api/answer` yourself while a waiter may be listening: two pollers split the answers between them.
   Poll WITHOUT `taskId`: this is the event loop and it must see every task's answers. The returned
   object names the task it belongs to — route on it, never drop it because it belongs to another
   task. (`&taskId=t1` exists for a targeted wait; the orchestrator should not need it.)
@@ -513,7 +588,12 @@ back when the lock frees.
 
 1. POST `{"taskId":"T","step":6,"status":"in_progress","activeStep":6,"progress":0}`.
 2. Spawn the review agent from `references/review-agent.md`, per "Spawning a sub-agent" (it reviews exclusively via the `doh:codeReview` skill — no other review method, pointed at this task's `ROOT`, and it runs TWO rounds of `1 full review + up to 2 --since-last re-reviews` unless round 1 came back clean on its first cycle, fixing every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
-3. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/tasks/T/auth.json` if it exists
+3. `{"type":"round","round":1,…}` → round 1 is over and round 2 is due: spawn a FRESH review agent
+   from the same rendered brief, with `## Round` / `2` under the pointer in its prompt (never
+   SendMessage the round-1 agent — round 2 is fresh on purpose, see `review-agent.md`), and make it
+   `agentIds.review` so step 6's messages reach it. Keep the counts only; round 2's `result` carries
+   both rounds.
+4. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/tasks/T/auth.json` if it exists
    (step 6's regression run is its last consumer, so the credentials die with the step, not with the
    pipeline), then POST completed. `error` → failure protocol.
 
@@ -576,8 +656,14 @@ It can run any number of times ("Regenerate" is the same step over the same file
    feature the run just built. Finish the branch first (commit, merge or PR), then remove the
    worktree; the pipeline never removes one itself, and it holds copies of the project's `.env*`
    files, so an abandoned worktree leaves those sitting outside the project.
-7. Leave the server running and stay in the event loop. Do NOT kill the PID yourself. The run ends
-   only when the user presses "Shut down server" or the server dies. Point them at the button rather
+7. Leave the server running. Do NOT kill the PID yourself. After the combined summary, keep the one
+   waiter that is listening (start it if none is) and serve what it brings — a "Generate Mockoon
+   mocks" press arrives this way — but when it ends in `WAIT_TIMEOUT`, end your turn WITHOUT starting
+   another. Tell the user, in the combined summary, that a button pressed after that waits in the
+   server until they type anything in this terminal; then drain the queue with
+   `curl -s "http://127.0.0.1:PORT/api/answer"` (no `wait`) until it returns `null`, act on each
+   answer, and go back to the event loop. The run ends when the user presses "Shut down server" or
+   the server dies. Point them at the button rather
    than letting them close the terminal: pressing it is also what wipes every task's `auth.json`, so a
    run killed any other way leaves the credentials they typed sitting in the session directory
    (git-ignored, but still on disk) until they delete them by hand. The browser keeps its own copy

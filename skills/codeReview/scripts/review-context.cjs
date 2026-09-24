@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const github = require('./github.cjs');
+const duplication = require('./duplication-scan.cjs');
 
 const defaultSkillDir = path.resolve(__dirname, '..');
 const baseBranchNames = ['main', 'master', 'develop', 'dev'];
@@ -472,7 +473,8 @@ function parseRawDiff(output) {
 const reItemScopeTag = /^\{\s*([A-Za-z0-9][A-Za-z0-9 ,_-]*)\}\s+\S/;
 
 // The checklist of an instruction, item by item: `n` is its `<id>#<n>` address,
-// `scopes` the names of its scope tag (empty = wherever the instruction applies).
+// `scopes` the names of its scope tag (empty = wherever the instruction applies),
+// `text` the item without that tag - what a report's `<id>#<n>` rule expands to.
 function parseChecklistItems(file) {
   let body;
   try {
@@ -488,6 +490,7 @@ function parseChecklistItems(file) {
     items.push({
       n: items.length + 1,
       scopes: tag ? tag[1].split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : [],
+      text: (tag ? line.slice(2).replace(/^\{[^}]*\}\s+/, '') : line.slice(2)).trim(),
     });
   }
   return items;
@@ -771,7 +774,18 @@ function pruneReports(reportsDir, retain = reportsRetain) {
   }
   for (const dir of branchDirs) {
     try {
-      for (const name of fs.readdirSync(dir)) if (isReport(name)) files.push(path.join(dir, name));
+      const names = fs.readdirSync(dir);
+      for (const name of names) if (isReport(name)) files.push(path.join(dir, name));
+      // An import ledger outlives its run only when the run never assembled; while
+      // its parts are still there it waits for the resume, which rewrites it.
+      for (const name of names) {
+        const ledger = name.match(/^(.*-\d{4}-\d{2}-\d{2}-\d{2}-\d{2})\.imports\.txt$/);
+        if (ledger && !names.some((other) => other.startsWith(`${ledger[1]}.part`))) {
+          try {
+            fs.unlinkSync(path.join(dir, name));
+          } catch {}
+        }
+      }
     } catch {}
   }
   if (files.length > retain) {
@@ -819,6 +833,148 @@ function ensureDohGitignore(dohDir) {
   try {
     if (!fs.existsSync(gi)) fs.writeFileSync(gi, DOH_GITIGNORE);
   } catch {}
+}
+
+// The import edges of one source file, for the cross-file layering question. Read by
+// pattern, not by a parser: a missed exotic form costs one edge the reviewer still sees
+// in the file, while a parser dependency would cost every run a package install.
+// Block comments and whole-line `//` comments go first, so a commented-out import is
+// not an edge; a `//` inside a string (a URL) is left alone.
+const importExtensions = /\.(?:[cm]?[jt]sx?|vue|svelte|s[ac]ss|less|css)$/i;
+const reImportPatterns = [
+  /\bimport\s+(?:type\s+)?(?:[^'";]*?\sfrom\s*)?['"]([^'"\n]+)['"]/g,
+  /\bexport\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*['"]([^'"\n]+)['"]/g,
+  /\b(?:import|require)\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g,
+  /@(?:use|import|forward)\s+['"]([^'"\n]+)['"]/g,
+];
+
+function extractImports(content, filePath) {
+  if (!importExtensions.test(filePath)) return null;
+  // A removed comment keeps its line breaks, so every edge keeps its `cat -n` line.
+  const text = String(content)
+    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ''))
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+  const found = [];
+  for (const re of reImportPatterns) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) found.push({ at: m.index, spec: m[1] });
+  }
+  const dir = path.posix.dirname(filePath.replace(/\\/g, '/'));
+  const seen = new Set();
+  return found.sort((a, b) => a.at - b.at).filter((f) => {
+    if (seen.has(f.spec)) return false;
+    seen.add(f.spec);
+    return true;
+  }).map(({ at, spec }) => ({
+    line: text.slice(0, at).split('\n').length,
+    spec,
+    ...(spec.startsWith('.') ? { resolved: path.posix.normalize(path.posix.join(dir, spec)) } : {}),
+  }));
+}
+
+// FIXED IDENTIFIER: `<importing file>:<line> → <specifier>[ (<resolved path>)]`, one edge
+// per line - SKILL.md's layering question walks these lines. `# ` lines are notes: the
+// files whose language has no extractor here, whose edges the reviewer collects itself.
+function formatImportLedger(files, readContent) {
+  const edges = [];
+  const unparsed = [];
+  for (const file of files) {
+    if (file.status === 'D') continue;
+    const content = readContent(file.path);
+    const imports = content === null ? null : extractImports(content, file.path);
+    if (imports === null) {
+      unparsed.push(file.path);
+      continue;
+    }
+    for (const edge of imports) edges.push(`${file.path}:${edge.line} → ${edge.spec}${edge.resolved ? ` (${edge.resolved})` : ''}`);
+  }
+  const notes = unparsed.length ? [`# not parsed - collect their imports while reading them: ${unparsed.join(', ')}`] : [];
+  return { text: [...notes, ...edges].join('\n') + '\n', edges: edges.length };
+}
+
+// Blob contents through one `git cat-file --batch` instead of a process per file.
+function readBlobs(project, blobs) {
+  const wanted = [...new Set(blobs.filter((b) => /^[0-9a-f]{7,64}$/.test(b) && !/^0+$/.test(b)))];
+  const out = new Map();
+  if (wanted.length === 0) return out;
+  let buf;
+  try {
+    buf = execFileSync('git', ['-C', project, 'cat-file', '--batch'], {
+      input: wanted.join('\n') + '\n', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024,
+    });
+  } catch {
+    return out;
+  }
+  let at = 0;
+  for (const blob of wanted) {
+    const eol = buf.indexOf(10, at);
+    if (eol < 0) break;
+    const header = buf.toString('utf8', at, eol).split(' ');
+    if (header[1] === 'missing' || header.length < 3) {
+      at = eol + 1;
+      continue;
+    }
+    const size = Number(header[2]);
+    out.set(blob, buf.toString('utf8', eol + 1, eol + 1 + size));
+    at = eol + 1 + size + 1;
+  }
+  return out;
+}
+
+// The context goes to a file the reviewer Reads instead of to stdout: tool output
+// may be compressed on its way into the conversation, a Read file is not. One line
+// per element down to the file entries, because Read cuts lines past 2000 chars.
+function layoutJson(value, depth = 4, indent = '') {
+  if (depth === 0 || value === null || typeof value !== 'object') return JSON.stringify(value);
+  const entries = Array.isArray(value)
+    ? value.map((v) => layoutJson(v, depth - 1, `${indent} `))
+    : Object.entries(value).filter(([, v]) => v !== undefined)
+      .map(([k, v]) => `${JSON.stringify(k)}:${layoutJson(v, depth - 1, `${indent} `)}`);
+  if (entries.length === 0) return Array.isArray(value) ? '[]' : '{}';
+  const [open, close] = Array.isArray(value) ? ['[', ']'] : ['{', '}'];
+  return `${open}\n${indent} ${entries.join(`,\n${indent} `)}\n${indent}${close}`;
+}
+
+// A review that died before its assembly leaves `<stem>.partNN.md` files behind, and
+// every finished file among them carries its coverage marker. The latest such stem of
+// this target is resumed - but only while the snapshot proves the target still holds
+// what that run was reviewing; parts written against other content would be spliced
+// into a report about code they never saw.
+const reStampedPart = /^(.*)-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2})\.part(\d+)\.md$/;
+const reCoverageMarker = /<!--\s*coverage:\s*(.+?)\s+(?:mechanical|\d+\s*\/\s*\d+)\s*-->/g;
+
+function findInterruptedRun(reportPath) {
+  const dir = path.dirname(reportPath);
+  const name = path.basename(reportPath).replace(/-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/, '');
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const byStamp = new Map();
+  for (const entry of entries) {
+    const m = entry.match(reStampedPart);
+    if (!m || m[1] !== name) continue;
+    if (!byStamp.has(m[2])) byStamp.set(m[2], []);
+    byStamp.get(m[2]).push(path.join(dir, entry));
+  }
+  if (byStamp.size === 0) return null;
+  const stamp = [...byStamp.keys()].sort().pop();
+  const doneFiles = new Set();
+  for (const part of byStamp.get(stamp)) {
+    let text = '';
+    try {
+      text = fs.readFileSync(part, 'utf8');
+    } catch {}
+    for (const m of text.matchAll(reCoverageMarker)) doneFiles.add(m[1]);
+  }
+  return {
+    stamp,
+    stem: path.join(dir, `${name}-${stamp}`),
+    doneFiles,
+    otherStamps: [...byStamp.keys()].filter((s) => s !== stamp),
+  };
 }
 
 function buildContext(options) {
@@ -943,11 +1099,54 @@ function buildContext(options) {
   // something to compare against — and trusted only as far as the previous run
   // got: a review that died half-way still recorded the whole file list.
   const pendingSnapshots = new Map();
+  // The revision each target reviews, in the form the duplication scan reads it
+  // (duplication-scan.cjs) - kept out of the target, which is the reviewer's JSON.
+  const scanSources = new Map();
   const snapshotPathOf = (target) =>
     path.join(path.dirname(target.reportPath), `.last-review-${target.kind}.json`);
-  const registerTarget = (target, currentBlobs) => {
+  const resumeFrom = (target, currentBlobs) => {
+    const run = findInterruptedRun(target.reportPath);
+    if (!run) return false;
+    const leftovers = (stamps) => stamps.map((s) => `"${run.stem.slice(0, -s.length)}${s}".part*.md`).join(' ');
+    if (run.otherStamps.length > 0) {
+      result.warnings.push(`[${target.branch}] Parts of older interrupted reviews stay behind and are not used: ${run.otherStamps.join(', ')} - remove them with rm -f ${leftovers(run.otherStamps)}.`);
+    }
+    let previous = null;
+    try {
+      previous = JSON.parse(fs.readFileSync(snapshotPathOf(target), 'utf8'));
+    } catch {}
+    if (currentBlobs) {
+      const same = previous && previous.files && path.resolve(String(previous.reportPath)) === path.resolve(`${run.stem}.md`)
+        && Object.keys(previous.files).length === currentBlobs.size
+        && [...currentBlobs].every(([p, blob]) => previous.files[p] === blob);
+      if (!same) {
+        result.warnings.push(`[${target.branch}] The interrupted review from ${run.stamp} was of different content than this target holds now, so it is not resumed - this run starts from scratch. Its parts: rm -f ${leftovers([run.stamp])}.`);
+        return false;
+      }
+    } else {
+      result.warnings.push(`[${target.branch}] Resuming the interrupted review from ${run.stamp} without a content check (folder mode keeps no snapshot) - if files of this folder changed since, delete its parts (rm -f ${leftovers([run.stamp])}) and run again.`);
+    }
+    if (previous && Array.isArray(previous.reviewed)) {
+      const reviewed = new Set(previous.reviewed);
+      target.files = target.files.filter((f) => reviewed.has(f.path));
+    }
+    if (previous && previous.sinceLast) {
+      target.unchangedSinceLastReview = previous.sinceLast.unchanged;
+      target.previousReportPath = previous.sinceLast.previousReportPath;
+    }
+    target.reportPath = `${run.stem}.md`;
+    target.htmlReportPath = wantsHtml ? `${run.stem}.html` : null;
+    const doneFiles = target.files.map((f) => f.path).filter((p) => run.doneFiles.has(p));
+    target.resume = { from: run.stamp, doneFiles, headerWritten: fs.existsSync(target.reportPath) };
+    result.warnings.push(`[${target.branch}] Resuming the review interrupted at ${run.stamp}: ${doneFiles.length} of ${target.files.length} file(s) already have their part and are not analyzed again.`);
+    return true;
+  };
+  const registerTarget = (target, currentBlobs, scanSource) => {
     if (currentBlobs) pendingSnapshots.set(target, currentBlobs);
-    if (options.sinceLast && !currentBlobs) {
+    scanSources.set(target, scanSource);
+    if (resumeFrom(target, currentBlobs)) {
+      if (options.sinceLast) result.warnings.push(`[${target.branch}] --since-last is ignored while resuming: the resumed run keeps the file list it started with.`);
+    } else if (options.sinceLast && !currentBlobs) {
       result.warnings.push(`[${target.branch}] --since-last has no effect in folder mode - every file is reviewed.`);
     } else if (options.sinceLast) {
       let previous = null;
@@ -995,7 +1194,10 @@ function buildContext(options) {
   // strings per file — the reviewer substitutes each file's `path` into them.
   // Status decides applicability: added files have no diff (every line is
   // new), deleted files have no content to show. `show` pipes through
-  // `cat -n` so finding line numbers can be read off the output.
+  // `cat -n` so finding line numbers can be read off the output. `grep`
+  // searches the whole reviewed revision - the branch's commit, the index, the
+  // working tree - for a `<pattern>` placeholder (an extended regex), so "does
+  // this helper already exist?" is asked of the code the review reads.
   // changedLines: new-file line ranges precomputed from `git diff -U0`
   // (rangesArgsFor), so the reviewer never derives them from hunks itself;
   // null for added (every line is new) and deleted (no new file) files.
@@ -1090,10 +1292,11 @@ function buildContext(options) {
       commands: {
         diff: gitc(`diff ${range} -- ${q('<path>')}`),
         show: `${gitc(`show ${q(`${branchRef}:<path>`)}`)} | cat -n`,
+        grep: gitc(`grep -n -I -E ${q('<pattern>')} ${branchRef} --`),
       },
       files: makeFiles(kept, parseDiffRangesByPath(tryGit(project, [...quiet, 'diff', '-U0', range]) || '')),
       skipped,
-    }, new Map(raw.map((f) => [f.path, f.blob])));
+    }, new Map(raw.map((f) => [f.path, f.blob])), { ref: branchRef });
   };
 
   if (options.mode === 'staged') {
@@ -1120,10 +1323,11 @@ function buildContext(options) {
       commands: {
         diff: gitc(`diff --cached -- ${q('<path>')}`),
         show: `${gitc(`show ${q(':<path>')}`)} | cat -n`,
+        grep: gitc(`grep -n -I --cached -E ${q('<pattern>')} --`),
       },
       files: makeFiles(kept, parseDiffRangesByPath(tryGit(project, [...quiet, 'diff', '-U0', '--cached']) || '')),
       skipped,
-    }, new Map(raw.map((f) => [f.path, f.blob])));
+    }, new Map(raw.map((f) => [f.path, f.blob])), { index: true });
   } else if (options.mode === 'branches') {
     const names = [...new Set(String(options.branches || '').split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
     if (names.length === 0) result.errors.push('No branches given (expected --branches="a,b;c").');
@@ -1160,10 +1364,11 @@ function buildContext(options) {
         commands: {
           diff: null,
           show: `cat ${q(`${project.replace(/\\/g, '/')}/<path>`)} | cat -n`,
+          grep: gitc(`grep -n -I --untracked -E ${q('<pattern>')} --`),
         },
         files: makeFiles(kept, new Map()),
         skipped,
-      }, null);
+      }, null, { workTree: true });
     }
   } else {
     const branchName = tryGit(project, ['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -1172,6 +1377,42 @@ function buildContext(options) {
     } else {
       addBranchTarget(branchName);
     }
+  }
+
+  // Copy/paste detection over each reviewed revision (duplication-scan.cjs). Runs
+  // only when the caller hands the scanner in - main() does - because it spawns
+  // jscpd through npx, which tests and library callers must not pay for.
+  if (options.scanDuplicates) {
+    for (const target of result.targets) {
+      const scan = options.scanDuplicates({ project, source: scanSources.get(target), files: target.files, isSkipped: isSkippedPath });
+      if (scan.error) {
+        result.warnings.push(`[${target.branch}] Duplication scan (jscpd) did not run: ${scan.error}. Duplicated code is searched for by the review alone.`);
+        continue;
+      }
+      target.duplicationCandidates = scan.candidates;
+      if (scan.omitted > 0) {
+        result.warnings.push(`[${target.branch}] Duplication scan: ${scan.omitted} more duplication candidate(s) found than the ${scan.candidates.length} listed - they are not in this review.`);
+      }
+    }
+  }
+
+  // The import ledger the cross-file layering question walks, collected here from the
+  // reviewed revision instead of by the reviewer while each file is open - a step that
+  // costs output on every file and was, in practice, skipped. Written with the reports.
+  const pendingLedgers = new Map();
+  for (const target of result.targets) {
+    const blobs = pendingSnapshots.get(target);
+    const contents = blobs ? readBlobs(project, target.files.map((f) => blobs.get(f.path) || '')) : null;
+    const readContent = (p) => {
+      if (contents) return contents.has(blobs.get(p)) ? contents.get(blobs.get(p)) : null;
+      try {
+        return fs.readFileSync(path.join(project, p), 'utf8');
+      } catch {
+        return null;
+      }
+    };
+    pendingLedgers.set(target, formatImportLedger(target.files, readContent).text);
+    target.importLedger = target.reportPath.replace(/\.md$/, '.imports.txt');
   }
 
   // Surface files that matched no local instruction — the files a reviewer is
@@ -1243,6 +1484,11 @@ function buildContext(options) {
     // being created for this run.
     for (const target of result.targets) {
       fs.mkdirSync(path.dirname(target.reportPath), { recursive: true });
+      try {
+        fs.writeFileSync(target.importLedger, pendingLedgers.get(target));
+      } catch {
+        result.warnings.push(`[${target.branch}] Could not write the import ledger ${target.importLedger} - collect the import edges while reading each file.`);
+      }
       const blobs = pendingSnapshots.get(target);
       if (!blobs) continue;
       try {
@@ -1250,6 +1496,12 @@ function buildContext(options) {
           at: now.toISOString(),
           reportPath: target.reportPath,
           files: Object.fromEntries(blobs),
+          // What a resumed run restores: the file list this run reviews and the
+          // `--since-last` narrowing it was built with.
+          reviewed: target.files.map((f) => f.path),
+          ...(target.unchangedSinceLastReview
+            ? { sinceLast: { unchanged: target.unchangedSinceLastReview, previousReportPath: target.previousReportPath || null } }
+            : {}),
         }));
       } catch {}
     }
@@ -1260,14 +1512,36 @@ function buildContext(options) {
 function main() {
   let context;
   try {
-    context = buildContext(parseArgs(process.argv.slice(2)));
+    context = buildContext({ ...parseArgs(process.argv.slice(2)), scanDuplicates: duplication.scanDuplicates });
   } catch (err) {
     context = { targets: [], errors: [String((err && err.message) || err)] };
   }
-  process.stdout.write(JSON.stringify(context) + '\n');
+  process.stdout.write(JSON.stringify(writeContext(context)) + '\n');
   process.exit(context.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { ensureDohGitignore, countOf, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+// FIXED IDENTIFIERS (SKILL.md Step 1 reads them): `contextPath`, `errors`, `warnings`,
+// `targets[].branch|files|reportPath|resumed`. The whole context goes to `contextPath`,
+// next to the first target's report; stdout carries only what Step 1 acts on at once.
+// A run with no target has nothing worth a file, so it prints everything as before.
+function writeContext(context) {
+  if (!context.targets || context.targets.length === 0) return context;
+  const first = context.targets[0];
+  const contextPath = path.join(path.dirname(first.reportPath), `.review-context-${first.kind}.json`);
+  const { errors, warnings, ...rest } = context;
+  try {
+    fs.writeFileSync(contextPath, layoutJson(rest) + '\n');
+  } catch (err) {
+    return { ...context, errors: [...(errors || []), `Could not write the context file ${contextPath} (${(err && err.message) || err}) - the full context follows inline.`] };
+  }
+  return {
+    contextPath,
+    errors: errors || [],
+    warnings: warnings || [],
+    targets: context.targets.map((t) => ({ branch: t.branch, files: t.files.length, reportPath: t.reportPath, resumed: !!t.resume })),
+  };
+}
+
+module.exports = { ensureDohGitignore, extractImports, formatImportLedger, readBlobs, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

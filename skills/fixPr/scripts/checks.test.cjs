@@ -185,6 +185,7 @@ test('a timeout is a failure, never a hang reported as a pass', (t) => {
   assert.strictEqual(step.status, 'failed');
   assert.strictEqual(step.timedOut, true);
   assert.match(step.reason, /timed out/i);
+  assert.match(fs.readFileSync(step.errorsPath, 'utf8'), /^\(the command timed out after \d+ms/);
   assert.strictEqual(result.gate, 'red');
 });
 
@@ -276,9 +277,325 @@ test('each step writes its output to its own log, and the step points at it', (t
   assert.strictEqual(step.logPath, path.join(outDir, 'test.log'));
   assert.match(fs.readFileSync(step.logPath, 'utf8'), /FAIL src\/a\.spec\.ts/);
   assert.strictEqual(step.truncated, false);
-  // A passing step keeps its log too: the agent reads it when a later pass turns
-  // the step red and it needs to know what changed.
+  // A passing step keeps its log too - for the user, who may want to see it. The
+  // agent gets nothing to read there: a pass is its exit code.
   assert.ok(fs.existsSync(stepNamed(result, 'lint').logPath));
+  assert.strictEqual(stepNamed(result, 'lint').errorsPath, null);
+});
+
+test('parseArgs takes one step\'s own command line, and only with that step named', () => {
+  const args = checks.parseArgs(['--root=/a', '--out-dir=/b', '--only=test', '--command=npx vitest run src/a.spec.ts']);
+  assert.strictEqual(args.command, 'npx vitest run src/a.spec.ts');
+  assert.strictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b']).command, null);
+  // A line with no step would have no label, no log and no verdict of its own.
+  assert.throws(() => checks.parseArgs(['--root=/a', '--out-dir=/b', '--command=go test ./...']), /--only/);
+  assert.throws(() => checks.parseArgs(['--root=/a', '--out-dir=/b', '--only=test,build', '--command=go test ./...']), /--only/);
+  assert.throws(() => checks.parseArgs(['--root=/a', '--out-dir=/b', '--only=test', '--command= ']), /empty/);
+});
+
+test('the unit-test step prefers test:unit, because test may run the e2e suite as well', (t) => {
+  const root = makeProject(t, { test: 'npm run test:unit && playwright test', 'test:unit': 'vitest' });
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run });
+  assert.strictEqual(stepNamed(result, 'test').script, 'vitest');
+  assert.deepStrictEqual(run.calls.find((c) => c.options.step === 'test').args, ['run', 'test:unit', '--', '--run']);
+});
+
+const jestOutput = [
+  '> x@1.0.0 test',
+  '> jest',
+  '',
+  'PASS src/ok.spec.ts',
+  '  ✓ handles an error gracefully (3 ms)',
+  'FAIL src/foo.spec.ts',
+  '  ● Foo › adds',
+  '',
+  '    expect(received).toBe(expected) // Object.is equality',
+  '',
+  '    Expected: 3',
+  '    Received: 4',
+  '',
+  '      at Object.<anonymous> (src/foo.spec.ts:4:21)',
+  '      at Promise.then.completed (node_modules/jest-circus/build/utils.js:298:28)',
+  '',
+  'Tests:       1 failed, 1 passed, 2 total',
+  'npm error Lifecycle script `test` failed with error:',
+  'npm error code 1',
+].join('\n');
+
+test('a failed step gets an excerpt of its failure lines alone, and the step points at it', (t) => {
+  const root = makeProject(t, { lint: 'eslint .', test: 'jest' });
+  const outDir = outDirFor(t);
+  const result = checks.runChecks({ root, outDir, run: fakeRunner({ test: { exitCode: 1, output: jestOutput } }) });
+  const step = stepNamed(result, 'test');
+  assert.strictEqual(step.errorsPath, path.join(outDir, 'test.errors.log'));
+  const excerpt = fs.readFileSync(step.errorsPath, 'utf8');
+  for (const kept of ['FAIL src/foo.spec.ts', '● Foo › adds', 'Received: 4', 'src/foo.spec.ts:4:21', 'Tests:       1 failed']) {
+    assert.ok(excerpt.includes(kept), `${kept} is missing from:\n${excerpt}`);
+  }
+  // A passing test, the package manager's epilogue and a frame inside a dependency
+  // are output, not failure.
+  for (const dropped of ['PASS', 'handles an error', 'npm error', 'jest-circus', '> jest']) {
+    assert.ok(!excerpt.includes(dropped), `${dropped} leaked into:\n${excerpt}`);
+  }
+  assert.strictEqual(stepNamed(result, 'lint').errorsPath, null);
+  assert.ok(!fs.existsSync(path.join(outDir, 'lint.errors.log')));
+});
+
+test('a step that turns green drops the excerpt a red pass left, while a step not re-run keeps its own', (t) => {
+  const root = makeProject(t, { lint: 'eslint .', test: 'vitest' });
+  const outDir = outDirFor(t);
+  checks.runChecks({
+    root, outDir, run: fakeRunner({ lint: { exitCode: 1, output: 'x.js\n  1:1  error  bad  rule' }, test: { exitCode: 1, output: 'FAIL src/a.spec.ts' } }),
+  });
+  const result = checks.runChecks({ root, outDir, only: ['test'], run: fakeRunner() });
+  assert.strictEqual(stepNamed(result, 'test').errorsPath, null);
+  assert.ok(!fs.existsSync(path.join(outDir, 'test.errors.log')));
+  // lint was not run again, so the excerpt of its last run is still the current one.
+  assert.strictEqual(stepNamed(result, 'lint').errorsPath, path.join(outDir, 'lint.errors.log'));
+});
+
+test('a failed step that printed nothing says so rather than leaving an empty excerpt', (t) => {
+  const root = makeProject(t, { build: 'vite build' });
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner({ build: { exitCode: 1, output: '' } }) });
+  assert.match(fs.readFileSync(stepNamed(result, 'build').errorsPath, 'utf8'), /printed nothing/);
+});
+
+// Asserts what an excerpt keeps and what it drops, printing it when either fails.
+function assertExcerpt(output, kept, dropped) {
+  const excerpt = checks.extractErrors(output);
+  for (const text of kept) assert.ok(excerpt.includes(text), `${text} is missing from:\n${excerpt}`);
+  for (const text of dropped) assert.ok(!excerpt.includes(text), `${text} leaked into:\n${excerpt}`);
+  return excerpt;
+}
+
+test('the ESLint excerpt keeps the errors under their file and leaves a warnings-only file out', () => {
+  assertExcerpt([
+    '',
+    '/w/src/a.js',
+    "  1:10  error    'foo' is defined but never used  no-unused-vars",
+    '  2:5   warning  Unexpected console statement      no-console',
+    '',
+    '/w/src/b.js',
+    '  4:1  warning  Unexpected console statement  no-console',
+    '',
+    '✖ 3 problems (1 error, 2 warnings)',
+  ].join('\n'), ['/w/src/a.js', "'foo' is defined but never used", '✖ 3 problems'], ['/w/src/b.js', 'Unexpected console']);
+});
+
+test('a Jest verbose ✕ line is kept however far down its file it sits', () => {
+  const suites = [];
+  for (let n = 1; n <= 24; n += 1) suites.push(`  suite ${n}`, `    ✓ passes ${n} (1 ms)`);
+  assertExcerpt([
+    'FAIL src/b.test.js',
+    ...suites,
+    '  suite 25',
+    '    ✕ waits between tries (5 ms)',
+    '',
+    'Tests:       1 failed, 24 passed, 25 total',
+  ].join('\n'), ['suite 25', '✕ waits between tries', 'Tests:'], ['passes 3']);
+});
+
+test('ESLint failing on --max-warnings makes the warnings the errors', () => {
+  assertExcerpt([
+    '/w/src/a.js',
+    '  2:5  warning  Unexpected console statement  no-console',
+    '',
+    '✖ 1 problem (0 errors, 1 warning)',
+    '',
+    'ESLint found too many warnings (maximum: 0).',
+  ].join('\n'), ['/w/src/a.js', 'Unexpected console statement', 'too many warnings'], []);
+});
+
+test('the esbuild excerpt keeps the location and the code frame under an error', () => {
+  assertExcerpt([
+    'Application bundle generation failed. [1.234 seconds]',
+    '',
+    "✘ [ERROR] TS2322: Type 'string' is not assignable to type 'number'. [plugin angular-compiler]",
+    '',
+    '    src/app/foo.component.ts:10:4:',
+    "      10 │     this.x = 'a';",
+    '         ╵     ~~~~~~',
+    '',
+  ].join('\n'), ['✘ [ERROR] TS2322', 'src/app/foo.component.ts:10:4:', "this.x = 'a';"], []);
+});
+
+test('the Karma excerpt keeps the failure and its own frame, and one state of the progress counter', () => {
+  const karma = [
+    'Chrome Headless 120.0.0.0 (Windows 10): Executed 11 of 41 SUCCESS (0.4 secs / 0.3 secs)',
+    'Chrome Headless 120.0.0.0 (Windows 10) FooComponent should create FAILED',
+    "\tTypeError: Cannot read properties of undefined (reading 'x')",
+    '\t    at UserContext.apply (src/app/foo.component.spec.ts:20:5)',
+    '\t    at _ZoneDelegate.invoke (node_modules/zone.js/fesm2015/zone.js:368:26)',
+    '\t    at <Jasmine>',
+    'Chrome Headless 120.0.0.0 (Windows 10): Executed 12 of 41 (1 FAILED) (0.5 secs / 0.4 secs)',
+    'Chrome Headless 120.0.0.0 (Windows 10): Executed 13 of 41 (1 FAILED) (0.5 secs / 0.4 secs)',
+    'Chrome Headless 120.0.0.0 (Windows 10): Executed 41 of 41 (1 FAILED) (1.2 secs / 1.1 secs)',
+    'TOTAL: 1 FAILED, 40 SUCCESS',
+  ].join('\n');
+  assertExcerpt(karma,
+    ['should create FAILED', 'TypeError: Cannot read properties', 'foo.component.spec.ts:20:5', 'Executed 41 of 41', 'TOTAL: 1 FAILED'],
+    ['zone.js', '<Jasmine>', 'Executed 11 of 41', 'Executed 12 of 41', 'Executed 13 of 41']);
+});
+
+test('the Vitest excerpt reaches the location printed a paragraph below the message', () => {
+  assertExcerpt([
+    ' ✓ src/ok.spec.ts (3 tests) 4ms',
+    ' ❯ src/foo.spec.ts (2 tests | 1 failed) 6ms',
+    '   ✓ Foo > handles an error 1ms',
+    '   × Foo > adds 3ms',
+    '     → expected 4 to be 3 // Object.is equality',
+    '',
+    '⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯',
+    '',
+    ' FAIL  src/foo.spec.ts > Foo > adds',
+    'AssertionError: expected 4 to be 3 // Object.is equality',
+    '',
+    '- Expected',
+    '+ Received',
+    '',
+    '- 3',
+    '+ 4',
+    '',
+    ' ❯ src/foo.spec.ts:11:15',
+    "      9|   it('adds', () => {",
+    '     10|     const result = add(2, 2);',
+    '     11|     expect(result).toBe(3);',
+    '       |               ^',
+    '     12|   });',
+    '',
+    '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯',
+    '',
+    ' Test Files  1 failed | 1 passed (2)',
+    '      Tests  1 failed | 4 passed (5)',
+  ].join('\n'),
+  ['× Foo > adds', '→ expected 4 to be 3', 'AssertionError', '+ 4', 'src/foo.spec.ts:11:15', 'expect(result).toBe(3);', 'Tests  1 failed'],
+  ['src/ok.spec.ts', 'handles an error']);
+});
+
+test('what the console printed is not a failure, even when it says error', () => {
+  assertExcerpt([
+    'PASS src/a.spec.ts',
+    '  ● Console',
+    '',
+    '    console.error',
+    '      Error: connection failed',
+    '',
+    '      at log (src/a.ts:3:11)',
+    '',
+    'FAIL src/b.spec.ts',
+    '  ● Console',
+    '',
+    '    console.warn',
+    '      deprecated: failed to parse',
+    '',
+    '  ● B › works',
+    '',
+    '    TypeError: x is not a function',
+    '',
+    '      at Object.<anonymous> (src/b.spec.ts:5:3)',
+  ].join('\n'),
+  ['FAIL src/b.spec.ts', '● B › works', 'TypeError: x is not a function', 'src/b.spec.ts:5:3'],
+  ['connection failed', 'deprecated', 'console.', 'src/a.ts']);
+});
+
+test('the package manager\'s lines stay in when they are the only failure there is', () => {
+  assertExcerpt([
+    'npm error Missing script: "test:unit"',
+    'npm error',
+    'npm error To see a list of scripts, run:',
+    'npm error   npm run',
+  ].join('\n'), ['Missing script: "test:unit"'], []);
+});
+
+test('output with no failure line in it is read through its tail, where every runner summarises', () => {
+  const excerpt = checks.extractErrors(Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n'));
+  assert.strictEqual(excerpt.split('\n').length, 40);
+  assert.match(excerpt, /line 99$/);
+  assert.doesNotMatch(excerpt, /line 59\b/);
+});
+
+test('a flood of errors is cut to the first ones and the count, and says so', () => {
+  const lines = Array.from({ length: 1000 }, (_, i) => `src/f${i}.ts(1,1): error TS2304: Cannot find name 'x${i}'.`);
+  const excerpt = checks.extractErrors([...lines, '', 'Found 1000 errors in 1000 files.'].join('\n')).split('\n');
+  assert.strictEqual(excerpt.length, 200);
+  assert.match(excerpt[0], /src\/f0\.ts/);
+  assert.ok(excerpt.some((line) => /more lines cut here/.test(line)));
+  assert.strictEqual(excerpt[excerpt.length - 1], 'Found 1000 errors in 1000 files.');
+});
+
+test('the excerpt is what a terminal would have shown: no colour codes, a redrawn line in its last state', () => {
+  const excerpt = assertExcerpt(
+    '\u001b[31mFAIL\u001b[39m src/a.spec.ts\nExecuted 1 of 3\rExecuted 2 of 3\rExecuted 3 of 3 (1 FAILED)\r\nTOTAL: 1 FAILED',
+    ['FAIL src/a.spec.ts', 'Executed 3 of 3 (1 FAILED)', 'TOTAL: 1 FAILED'], ['\u001b', 'Executed 1 of 3', 'Executed 2 of 3']);
+  assert.ok(!excerpt.includes('\r'));
+});
+
+test('--command runs the caller\'s line as the one step, even where there is no package.json', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-cmd-'));
+  const outDir = outDirFor(t);
+  const run = fakeRunner({ test: { exitCode: 1, output: '--- FAIL: TestAdd (0.00s)\n    math_test.go:9: expected 3, got 4\nFAIL' } });
+  const result = checks.runChecks({ root: dir, outDir, only: ['test'], command: 'go test ./...', run });
+  assert.strictEqual(run.calls.length, 1);
+  assert.strictEqual(run.calls[0].command, 'go test ./...');
+  assert.deepStrictEqual(run.calls[0].args, []);
+  assert.strictEqual(run.calls[0].options.shell, true);
+  const step = stepNamed(result, 'test');
+  assert.strictEqual(step.command, 'go test ./...');
+  assert.strictEqual(step.status, 'failed');
+  assert.match(fs.readFileSync(step.errorsPath, 'utf8'), /math_test\.go:9: expected 3, got 4/);
+  assert.strictEqual(result.gate, 'red');
+  assert.deepStrictEqual(result.errors, []);
+  assert.deepStrictEqual(result.warnings, []);
+});
+
+test('a --command line still gets the flag that stops its runner watching, unless it carries one', (t) => {
+  const root = makeProject(t, { test: 'ng test', 'test:jest': 'jest' });
+  const cases = [
+    ['npx ng test --include=src/app/foo.spec.ts', 'npx ng test --include=src/app/foo.spec.ts --watch=false'],
+    ['npx vitest run src/a.spec.ts --run', 'npx vitest run src/a.spec.ts --run'],
+    ['npx jest src/foo.spec.ts', 'npx jest src/foo.spec.ts --ci --watchAll=false'],
+    ['npx ng test --watch=false', 'npx ng test --watch=false'],
+    // A package.json script names its runner in the script, not in the line.
+    ['npm test -- --include=src/app/foo.spec.ts', 'npm test -- --include=src/app/foo.spec.ts --watch=false'],
+    ['npm run test:jest', 'npm run test:jest -- --ci --watchAll=false'],
+    ['go test ./...', 'go test ./...'],
+  ];
+  for (const [line, expected] of cases) {
+    const run = fakeRunner();
+    checks.runChecks({ root, outDir: outDirFor(t), only: ['test'], command: line, run });
+    assert.strictEqual(run.calls[0].command, expected, line);
+  }
+});
+
+test('the CLI runs a --command line for real and hands back its failures alone', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-cli-cmd-'));
+  const outDir = outDirFor(t);
+  fs.writeFileSync(path.join(dir, 'suite.js'), [
+    'console.log("PASS src/ok.spec.ts");',
+    'console.log("FAIL src/foo.spec.ts");',
+    'console.log("  \\u25cf Foo \\u203a adds");',
+    'console.log("    Received: 4");',
+    'process.exit(1);',
+  ].join('\n'));
+  let status = 0;
+  let stdout = '';
+  try {
+    stdout = execFileSync(process.execPath, [
+      path.join(__dirname, 'checks.cjs'), `--root=${dir}`, `--out-dir=${outDir}`, '--only=test', '--command=node suite.js',
+    ], { encoding: 'utf8', stdio: 'pipe' });
+  } catch (err) {
+    status = err.status;
+    stdout = String(err.stdout || '');
+  }
+  assert.strictEqual(status, 1);
+  const step = stepNamed(JSON.parse(stdout), 'test');
+  assert.strictEqual(step.status, 'failed');
+  assert.strictEqual(step.exitCode, 1);
+  const excerpt = fs.readFileSync(step.errorsPath, 'utf8');
+  assert.match(excerpt, /● Foo › adds/);
+  assert.match(excerpt, /Received: 4/);
+  assert.doesNotMatch(excerpt, /PASS/);
 });
 
 test('a huge log keeps its tail, where the failure summary is, and says it was cut', (t) => {

@@ -1,6 +1,14 @@
 ---
 name: codeReview
 description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against global/local instruction checklists and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md) with severity, real line numbers, violated rule and expected result
+hooks:
+  PreToolUse:
+    - hooks:
+        - type: command
+          command: node
+          args: ["${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs", "--event=activate"]
+          timeout: 10
+          once: true
 ---
 
 # codeReview — deterministic instruction-driven review
@@ -17,6 +25,59 @@ Coverage is non-negotiable: every file of every target, every checklist item of 
 instruction, on every run — violating the letter of these steps violates their spirit. Coverage and
 reporting scope differ: everything is evaluated, only what the diff touched is reported (Step 3
 scope gate).
+
+<!-- lean-mode:start (generated from shared/caveman-ultra.md) -->
+## Lean mode: caveman ultra
+
+Always on, from the moment a doh skill loads until the session ends.
+Rules adapted from caveman by Julius Brussee (github.com/JuliusBrussee/caveman, MIT; notice in the plugin's shared/CAVEMAN-LICENSE).
+
+Every chat message is terse like a smart caveman at level **ultra**: your messages to the user, your prompts to sub-agents, a sub-agent's replies.
+All technical substance stays.
+Only fluff dies.
+
+- Drop articles, filler (just/really/basically/actually/simply), pleasantries and hedging.
+  Fragments OK.
+  Short synonyms: "fix", not "implement a solution for".
+- Ultra: strip conjunctions when cause and effect stay unambiguous.
+  One word when one word is enough.
+  State each fact once.
+- No invented abbreviations (cfg/impl/req/fn) and no arrows: they save no tokens and cost clarity.
+  Well-known acronyms (API, DB, HTTP) are fine.
+- Never drop not/never/no/only/except.
+  Numbers and units exact.
+- Never add a word to sound like a caveman.
+  If the caveman phrasing is not shorter, write the plain one.
+- One idea per sentence, 20 words at most.
+  Active voice.
+  Instructions in the imperative.
+  The same term for the same thing every time.
+- Tool calls: fire directly.
+  No preamble, plan or progress note before or between calls.
+- No decorative tables or emoji.
+  No raw log dumps: quote the shortest decisive line.
+- Questions to the user: terse but complete - answerable without guessing.
+- Language: whatever the skill or the brief already prescribes.
+  Lean mode compresses style, never switches language.
+  In a language without articles (Polish), cut filler and keep the grammar.
+- Pattern: `[thing] [action] [reason]. [next step].`
+  Example: "Inline object prop, new reference each render, re-render. Wrap in `useMemo`."
+
+Write normal, complete prose instead, exactly as the skill or brief specifies it:
+- Everything persisted outside the chat: report files, spec, plan, checklist, validation and review reports, pull request comments and replies, commit messages, code comments, docs, UI text.
+- Security warnings, confirmations of irreversible actions, multi-step sequences whose order could be misread, and any answer when the user asks what you meant.
+  Resume ultra afterwards.
+
+Keep byte-exact: code, paths, commands, error strings, API names, every FIXED IDENTIFIER, the effort keywords `think` / `think hard` / `ultrathink`, and every section or field a brief or step requires in a reply - present and complete.
+
+Sub-agents get these rules from the doh SubagentStart hook: never paste them into a brief or a prompt.
+When the user says "normal mode" or "stop caveman", your own chat returns to normal prose.
+
+With the headroom proxy, a tool result may arrive compressed.
+A compressed result carries a marker with `hash=<hash>`, for example `Retrieve more: hash=<hash>`, and its wording or numbers may differ from the original.
+When you need the exact original - to quote it, count from it, match it or edit from it - call `headroom_retrieve` with that hash instead of guessing.
+Without that tool, re-read the file or re-run the command with narrower output.
+<!-- lean-mode:end -->
 
 ## Step 1 — Build the review context
 
@@ -52,10 +113,13 @@ scope gate).
 4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
-5. Parse the JSON from stdout:
+5. Parse the JSON from stdout — a short summary, not the context:
    - Report every `errors[]` entry to the user immediately, in Polish.
    - No targets / exit code 1 → stop after reporting the errors.
    - Report every top-level `warnings[]` entry, in Polish.
+   - Read the file at `contextPath` with the Read tool — never `cat` it: that file IS the context
+     every later step calls "the context JSON" (`targets`, `globalInstructions`, `checklistPlans`, …).
+     `targets[].resumed` true means the target continues an interrupted run (Step 3).
 
 ## Step 2 — Load the rulebook (once per run)
 
@@ -187,11 +251,20 @@ inside the value: protocol + domain (`https://api.example.com/...`), `localhost`
 that is reported as a hard-coded environment/base URL. Everything else about such a file (typing,
 method naming, layering, `.pipe(...)` usage, secrets in query params) stays reviewable as usual.
 
-Clear any stale part files first — `rm -f "<reportPath minus .md>".part*.md` — then write the report
-header (Step 4 format) to `target.reportPath`. The report path carries the run stamp down to the
-MINUTE, so a second run of the same target inside the same minute lands on the same paths; a previous
-run that died between writing its parts and assembling them would otherwise have its leftovers spliced
-into this report by the concatenation at the end. Then process EVERY file in
+A target WITHOUT `target.resume`: clear any stale part files first —
+`rm -f "<reportPath minus .md>".part*.md` — then write the report header (Step 4 format) to
+`target.reportPath`. The report path carries the run stamp down to the MINUTE, so a second run of the
+same target inside the same minute lands on the same paths; a previous run that died between writing
+its parts and assembling them would otherwise have its leftovers spliced into this report by the
+concatenation at the end.
+A target WITH `target.resume` continues a run that was interrupted before its assembly; the script
+has already checked that the target still holds the content that run reviewed, and pointed
+`reportPath` at that run's report. Never `rm` its parts. Write the header only when
+`resume.headerWritten` is false. Skip every file listed in `resume.doneFiles` — its part, checklist
+block and coverage marker are already on disk — and analyze every other file exactly as below, with
+the part number it has by its position in `target.files` (overwrite a part that exists without a
+coverage marker). The cross-file pass and the closing parts are always written anew.
+Then process EVERY file in
 `target.files`, one at a time, in the listed order. The script has already excluded everything
 skippable → `target.skipped` (generated, binary, and prose — the label says "wygenerowane/binarne" but
 `*.md`, `*.txt`, `*.rst`, `*.adoc` and `LICENSE`-style files go there too), so `target.files` contains
@@ -208,18 +281,24 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    Status `A` files have no diff — review them from the `show` output alone (every line is new);
    status `D` files have no content — review them from the diff alone. (`commands.diff` is `null`
    for modes without diffs, e.g. folder mode.)
+   `commands.grep` searches the whole reviewed revision (the branch's commit, the index, the working
+   tree) for its `<pattern>` placeholder, an extended regex.
+   Use it, never a search of the checkout, whenever a rule asks whether something already exists
+   elsewhere in the project.
    Fetch contents in BATCHES: one Bash call chains the commands of several consecutive files,
    each preceded by an `echo "=== <path> ==="` marker line, up to ~1,500 output lines per call —
    never one call per file. If a batch's output comes back truncated, re-fetch the missing files
    in smaller batches. Only the fetching is batched — the analysis below stays strictly one file
-   at a time.
+   at a time. When the file you are finishing is the last one of its batch, send its part Write
+   (point 4) and the next batch's fetch in the SAME message: they do not depend on each other, and
+   the next file's analysis still starts only after both have returned.
    `changedLines` (precomputed by the script from `git diff -U0`) is the authoritative list of the
    lines this diff touched, numbered exactly like the `cat -n` output, e.g. `"7, 12-15"`;
    `""` means the diff only deleted lines, `null` means an added/deleted file. Never re-derive
    these ranges from diff hunks yourself.
-   While the file's content is open, append its import lines to a running import ledger
-   (`importing file → imported module`, one entry per import) — the cross-file layering question
-   consumes this ledger after the per-file pass.
+   The import edges are not yours to collect: the script wrote them to `target.importLedger` (the
+   cross-file layering question reads it). Only a file named on its `# not parsed` line — a language
+   the script has no extractor for — needs its import lines noted while its content is open.
    With the file's diff and content in front of you, turn its plan's `checklist`
    (`checklistPlans[file.plan].checklist`) into the ticking list of
    this file: every instruction of the plan, in plan order, expanded to exactly the item numbers its
@@ -239,7 +318,7 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
       `localInstructionsCatalog`), checklist item by item.
    3. Consistency with the other files of this diff (naming, patterns, architecture) - the one point
       NOT verdicted here: a single file cannot answer it. This pass only COLLECTS what it needs (the
-      import ledger of point 1, the names and literals the file introduces); the one cross-file pass
+      names and literals the file introduces, and the imports of a `# not parsed` file); the one cross-file pass
       below reaches the verdicts. Judging it per file as well would raise the same drift once per
       file involved, in several part files, under the same instruction.
    4. Potential regressions.
@@ -284,8 +363,9 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    instruction files — never re-derive them from memory):
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
    - naming rules (general instruction) plus naming consistency across the diff;
-   - code-quality rules (code-quality instruction): duplicated, unnecessary, unused and boilerplate
-     code, every comment the diff adds, inconsistency — full 🟡 Medium findings, never nits to skip;
+   - code-quality rules (code-quality instruction): duplicated code as full 🔴 High findings;
+     unnecessary, unused and boilerplate code, every comment the diff adds, inconsistency as full
+     🟡 Medium findings — never nits to skip;
    - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction);
    - test scaffolding rules (unit-tests instruction plus the matching per-type test instruction):
      spec and snapshot location, the prescribed setup instead of TestBed/MockStore, `ngMocks.faster()`
@@ -339,7 +419,8 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    order: the file's findings sections, its ticked checklist block, its coverage marker. A file with
    no findings still gets its part file — the block and the marker alone. Earlier parts are never
    edited, and the next file is not analyzed before the current one's part file is written (the
-   fetching of point 1 stays batched; only the analysis and this write are per file).
+   fetching of point 1 stays batched, and may ride in the same message as this write; only the
+   analysis and this write are per file).
    The checklist block is the file's walk, written down:
 
        <!-- checklist: <file.path>
@@ -404,15 +485,37 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
 After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as the
 final part file. Answer each of these four questions explicitly, against the diff as a whole:
 1. Duplication drift — is the same logic, formatting or literal implemented in two or more places
-   of this diff, or re-implemented next to an existing shared util? Report every copy the diff adds,
-   under the code-quality instruction (🟡 Medium).
-2. Layering — walk the import ledger collected in point 1 of the per-file pass, edge by edge: name
-   the layer of the importing file and of the imported module, check the edge's direction AND its
-   form (barrel vs concrete path, per the architecture instruction) against the architecture
-   instruction, and report each forbidden edge at the importing file. A permitted direction does not
-   end the edge's verdict — a legal edge taken through the wrong form is still a finding. "No layering
-   findings" may be claimed only after every ledger entry has its verdict — an empty ledger means
-   the collection step was skipped, not that the diff has no import edges.
+   of this diff, or re-implemented next to an existing shared util? Answer it from three sources:
+   - `target.duplicationCandidates` — jscpd's scan of the whole reviewed revision, kept only where
+     the diff wrote at least half of the copy: `path` and `lines` are the copy, `sources` what it
+     repeats, `kinds` how it matched (`exact`, `renamed` identifiers, `similar` with a gap).
+     Open both sides of every candidate.
+     Dismiss one only when the two blocks share no logic: a shape the framework or a generator
+     dictates (a TestBed skeleton, a module or route declaration, a generated `project.json` or
+     `tsconfig`), parallel data (translation files), or — for a `renamed` or `similar` candidate —
+     nothing but syntax, because the blocks call different functions and read different fields (two
+     `ngOnInit`s, each calling its own initializers).
+     Renamed local variables and parameters over the same operations are still a copy.
+     Report every other one.
+     A target without the list was not scanned (its warning says why), and the other two sources
+     then carry the question alone.
+   - A search for what a token scan cannot see: for every exported function, class, pipe,
+     directive, validator, util or constant the diff ADDS, look for an existing equivalent in the
+     reviewed revision with `commands.grep` — by its name, a synonym and the characteristic
+     expression of its body — in the shared folders first (`shared/`, `utils/`, `common/`, `core/`,
+     or wherever this project keeps them).
+   - What the per-file walk already noticed.
+
+   Report every copy the diff adds under the code-quality instruction as 🔴 High, anchored on a
+   line of the copy that the diff changed, and name the source it repeats (`path:lines`).
+2. Layering — Read `target.importLedger` and walk it edge by edge, together with the edges you
+   noted for its `# not parsed` files. Each line is `<importing file>:<line> → <specifier>`, plus
+   `(<resolved path>)` for a relative one; `<line>` is the import's `cat -n` line. Name the layer
+   of the importing file and of the imported module, check the edge's direction AND its form
+   (barrel vs concrete path, per the architecture instruction) against the architecture
+   instruction, and report each forbidden edge at the importing file, on that line. A permitted
+   direction does not end the edge's verdict — a legal edge taken through the wrong form is still a
+   finding. "No layering findings" may be claimed only after every ledger entry has its verdict.
 3. Derived-data flow — does any state field, action payload or component binding carry a value
    computable from other state? Report every station of the flow (the action, the reducer field,
    the dispatching component), each under its own instruction.
@@ -427,9 +530,9 @@ empty diff (`files` empty) has no per-file parts at all: `Nie wykryto zmian do a
 `part01`, so the assembly below always has something to concatenate.
 
 Assemble the report in ONE Bash call: append every part file to `target.reportPath` (which already
-holds the header), remove the parts, and — when `target.htmlReportPath` is not null — render the
-HTML report from the assembled Markdown:
-`cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>" --project="<PROJECT>" --mode="<target.kind>" --branch="<target.branch>" --base="<target.baseBranch>"`.
+holds the header), remove the parts and the import ledger, and — when `target.htmlReportPath` is not
+null — render the HTML report from the assembled Markdown:
+`cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md "<target.importLedger>"; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>" --project="<PROJECT>" --mode="<target.kind>" --branch="<target.branch>" --base="<target.baseBranch>"`.
 The four trailing arguments are what puts a code snippet under every finding: `--project` locates the
 reviewed files, and `--mode`/`--branch`/`--base` make the snippet read the same revision the review
 read — rendering it as a real `+`/`-` diff for `branch` and `staged`, and as a plain file view for
@@ -464,7 +567,7 @@ regardless of diff size or session length.
     <emoji> **<Severity>**
     - **Linia:** <N | N, M, X-Y>
     - **Problem:** <description of this single violation>
-    - **Reguła:** <instruction file → checklist item, or the violated point name>
+    - **Reguła:** <id>#<n>
     - **Expected Result:** <correct code state + concrete implementation proposal>
     - **PR Problem:** <ENGLISH, two sentences: what is wrong at these lines + the concrete consequence>
     - **PR Expected:** <ENGLISH, two to three sentences: the expected state + the concrete way to reach it>
@@ -494,8 +597,8 @@ regardless of diff size or session length.
 - Severity emoji, exactly: ⚪ **Low**, 🟡 **Medium**, 🔴 **High**, 🟤 **Critical**, 🔵 **Missing Unit Test**.
 - Assign severity by these criteria, picking the highest that applies:
   - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
-  - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification).
-  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every code-quality finding (duplicated, unnecessary, unused or boilerplate code, an added comment, inconsistency) — those stay Medium however cosmetic they look.
+  - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification), and every duplication finding (code-quality's duplicated-logic and copy-paste-with-a-tweak items), whether jscpd listed it or the review found it.
+  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every other code-quality finding (unnecessary, unused or boilerplate code, an added comment, inconsistency) — those stay Medium however cosmetic they look.
   - ⚪ **Low** — readability, naming-convention or style drift with no behavioral impact and not covered by the code-quality instruction.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
@@ -504,6 +607,16 @@ regardless of diff size or session length.
 - One finding = one such block = one rule in one file (the splitting rules are Step 3 point 3).
   Separate every block from the next with exactly one blank line, and put one blank line before AND
   after every `##` header — that is what makes each finding render as its own section.
+- `**Reguła:**` is the ADDRESS of the violated checklist item — `<id>#<n>`, the same address its
+  `NARUSZENIE` line ticks (`component#1`), several joined with `; ` when one finding breaks more
+  than one item. The address is a FIXED IDENTIFIER: never the item's text, never translated — the
+  renderer looks each one up in the rulebook, prints the item's own words, and flags an address the
+  rulebook does not hold. Only a finding no checklist item covers (the cross-file pass, the universal
+  points 3–5, a `CLAUDE.md` rule) writes prose instead: `<source> → <rule in a few words>`, e.g.
+  `CLAUDE.md → brak console.log`.
+- `PR Problem`, `PR Expected` and `PR Locations` are written ONLY when `target.htmlReportPath` is not
+  null. An `--only-md` run has no HTML page and so no way to post a comment, and its findings carry
+  the four fields above and nothing more.
 - `PR Problem`, `PR Expected` and `PR Locations` are the text of the pull request comment, so they
   are the only fields written in ENGLISH — no Polish words, ever. Write them for a reviewer who sees
   the comment on GitHub and never opens the report: everything needed to act on the finding has to
@@ -527,7 +640,8 @@ regardless of diff size or session length.
   Still no severity, no rule name, no Polish, and no sentence that only restates the Polish fields
   without adding the English detail above.
 - The severity is a bold lead line — `<emoji> **<Severity>**` with NO leading `- ` — that opens the
-  block; the other seven fields follow it as `- ` bullet lines in the order shown. Each field is its
+  block; the other fields (seven, or four in an `--only-md` run) follow it as `- ` bullet lines in
+  the order shown. Each field is its
   own line and never continues on the previous field's line. `**Linia:**` holds a comma-separated
   list of numbers and/or `<start>-<end>` spans — one entry per occurrence.
 - Group findings under one `## <file path>` section per file; omit files without findings.
@@ -542,7 +656,7 @@ regardless of diff size or session length.
 After writing all reports print, in Polish: each report path (`target.htmlReportPath` when the renderer ran, otherwise `target.reportPath`) + finding counts per severity, plus any errors/warnings from Step 1 and any warning the renderer printed.
 Also state the checklist coverage of the target: how many files walked their whole checklist, and — when any did not — every such file with its `<checked>/<total>`, so an unticked item is read as the gap it is instead of disappearing into the report.
 For a `--since-last` run also say how many files were skipped as unchanged and where the previous report is (`target.unchangedSinceLastReview`, `target.previousReportPath`) — the reader must know the report covers only what moved.
-For a branch target also name the base it was reviewed against — `target.baseBranch` plus where that base came from, read off `target.baseSource`: `pr` = the target branch of PR #`target.prNumber`, `fork` = the branch it was created from, `candidate` = the default `main`/`master`/`develop`/`dev` detection. Staged and folder targets have no base (`baseSource` is null): a staged review covers the uncommitted changes themselves.
+For a resumed target (`target.resume`) say that it continued the run from `resume.from` and how many files it took over from it.For a branch target also name the base it was reviewed against — `target.baseBranch` plus where that base came from, read off `target.baseSource`: `pr` = the target branch of PR #`target.prNumber`, `fork` = the branch it was created from, `candidate` = the default `main`/`master`/`develop`/`dev` detection. Staged and folder targets have no base (`baseSource` is null): a staged review covers the uncommitted changes themselves.
 Nothing else.
 
 ## Skip rationalizations — all invalid
@@ -566,3 +680,5 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "This item is obviously fine, tick it" | A tick states you checked THIS file against THAT item and can name where you saw the answer. Obvious-looking is what unchecked items look like; check it, then tick it. |
 | "I will write the checklist once the file is done" | The block is the record of the walk: each line is written as its verdict is reached, and the file's part file is written before the next file is opened. A block composed afterwards is a summary of what you remember, which is what the ticks exist to replace. |
 | "Ticking every item keeps the numbers clean" | The numbers are not the point; what was actually checked is. An unticked item with its reason is a finished, honest walk — an unearned tick is a false claim in a report someone will act on. |
+| "jscpd listed nothing, so nothing is duplicated" | jscpd matches copied token runs. Logic written again in other words, and a helper that already exists in a shared folder, reach the review only through the `commands.grep` search of cross-file question 1. |
+| "This jscpd candidate is short / only similar" | A candidate is dismissed only on the grounds cross-file question 1 lists: a dictated shape, parallel data, or the same syntax around different calls and fields. Every other one is a 🔴 High finding, whatever its length or kind. |
