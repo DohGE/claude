@@ -1,0 +1,17 @@
+{
+  "description": "doh lean mode: gives every sub-agent of a session in which a doh skill ran the caveman ultra rules (shared/caveman-ultra.md). See shared/README.md.",
+  "hooks": {
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs", "--event=subagent"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

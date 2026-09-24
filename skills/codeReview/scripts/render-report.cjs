@@ -11,7 +11,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const github = require('./github.cjs');
-const { checklistIdOf } = require('./review-context.cjs');
+const { checklistIdOf, parseChecklistItems } = require('./review-context.cjs');
 
 // Order is the display order and the sort rank of the flat global list.
 // `missing-unit-test` sorts last: it is orthogonal to the severity ladder, and
@@ -148,10 +148,20 @@ function splitInstructionNames(left) {
 // `**Reguła:**` carries one or more `<instruction files> → <rule text>` segments
 // separated by `;`. Each instruction file named on the left becomes its own tag
 // sharing the segment's rule text, which is what feeds the two-level filter.
+// A segment may also be a bare `<id>#<n>` address - the same one the checklist
+// block ticks - which `resolveRuleAddresses` later expands into the item's text,
+// so the reviewer never writes out a rule the rulebook already holds.
+const reRuleAddress = /^([a-z0-9][a-z0-9-]*)#(\d+)$/;
+
 function parseRuleField(value) {
   const tags = [];
   const segments = String(value || '').split(';').map((s) => s.trim()).filter(Boolean);
   for (const segment of segments) {
+    const address = segment.match(reRuleAddress);
+    if (address) {
+      tags.push({ file: address[1], rule: '', address: { id: address[1], n: Number(address[2]) } });
+      continue;
+    }
     const arrow = segment.match(/\s*(?:→|->)\s*/);
     if (!arrow) {
       // A `;` inside the rule text itself: fold the fragment back into the
@@ -183,7 +193,8 @@ function parseRuleField(value) {
     }
     for (const file of names) tags.push({ file, rule });
   }
-  return tags.filter((tag, i) => tags.findIndex((t) => t.file === tag.file && t.rule === tag.rule) === i);
+  return tags.filter((tag, i) => tags.findIndex((t) => t.file === tag.file && t.rule === tag.rule
+    && (t.address && t.address.n) === (tag.address && tag.address.n)) === i);
 }
 
 function fnv1a(str) {
@@ -737,11 +748,18 @@ function diffReader(projectRoot, source) {
     return null;
   };
   let byPath = null;
+  // One failed call now costs EVERY file its diff - that is the price of reading the
+  // whole range in one go. Before it, a git error took down one file’s snippet while
+  // the rest still showed their added and removed lines; now a whole report can render
+  // as plain file views, which reads exactly like a diff that changed nothing. So the
+  // failure is said once, where the reader of the report can see it.
+  let unavailable = false;
   const load = () => {
     if (byPath) return byPath;
     byPath = new Map();
     const args = argsForRange();
     const text = args ? gitText(root, args, maxDiffBytes) : null;
+    if (args && !text) unavailable = true;
     if (!text) return byPath;
     // Sections come from the `diff --git` headers and the new path is read off
     // `+++ b/<path>`; `/dev/null` there marks a deletion, which has no new side to show.
@@ -757,7 +775,9 @@ function diffReader(projectRoot, source) {
     }
     return byPath;
   };
-  return (filePath) => load().get(filePath) || null;
+  const read = (filePath) => load().get(filePath) || null;
+  read.unavailable = () => { load(); return unavailable; };
+  return read;
 }
 
 // The sidebar maps the change, not the findings, so it needs the diff's own file
@@ -818,8 +838,8 @@ function treeEntries(report) {
 // counts toward coverage all the same, so the report would claim a walk through a
 // checklist that does not exist. The ids are the instruction file names, from the
 // skill's rulebook plus the project's own when it has one.
-function knownChecklistIds(projectRoot) {
-  const ids = new Set();
+function rulebookFiles(projectRoot) {
+  const files = new Map();
   const walk = (dir) => {
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -835,14 +855,50 @@ function knownChecklistIds(projectRoot) {
       // a run hands out depends on the rest of the rulebook.
       else if (entry.isFile() && entry.name.endsWith('.md')) {
         const bare = checklistIdOf(full, new Set());
-        ids.add(bare);
-        ids.add(checklistIdOf(full, new Set([bare])));
+        const prefixed = checklistIdOf(full, new Set([bare]));
+        if (!files.has(bare)) files.set(bare, full);
+        if (!files.has(prefixed)) files.set(prefixed, full);
       }
     }
   };
   walk(path.join(__dirname, '..', 'instructions'));
   if (projectRoot) walk(path.join(path.resolve(projectRoot), '.claude', 'doh', 'instructions'));
-  return ids;
+  return files;
+}
+
+function knownChecklistIds(projectRoot) {
+  return new Set(rulebookFiles(projectRoot).keys());
+}
+
+// `**Reguła:** security#3` carries only the address; the page needs the words.
+// An address the rulebook cannot answer is a warning like any other drift, so the
+// Markdown stays behind instead of a finding filed under a rule nobody can read.
+function resolveRuleAddresses(report, projectRoot) {
+  let files = null;
+  const itemsCache = new Map();
+  for (const section of report.files) {
+    for (const finding of section.findings) {
+      if (!finding.tags.some((tag) => tag.address)) continue;
+      if (!files) files = rulebookFiles(projectRoot);
+      for (const tag of finding.tags) {
+        if (!tag.address) continue;
+        const { id, n } = tag.address;
+        const file = files.get(id);
+        if (file && !itemsCache.has(file)) itemsCache.set(file, parseChecklistItems(file));
+        const item = file ? itemsCache.get(file)[n - 1] : null;
+        // Filed under the instruction's file name, the group a prose rule naming the same
+        // instruction (`code-quality.md → …`) already lands in.
+        if (item) Object.assign(tag, { file: path.basename(file), rule: item.text });
+        else {
+          tag.rule = `${id}#${n}`;
+          report.warnings.push(`${section.path}: reguła "${id}#${n}" nie istnieje w rulebooku - brak takiej instrukcji albo punktu.`);
+        }
+        delete tag.address;
+      }
+      finding.rule = finding.tags.map((tag) => `${tag.file} → ${tag.rule}`).join('; ');
+    }
+  }
+  return report;
 }
 
 function warnUnknownChecklistIds(report, projectRoot) {
@@ -864,6 +920,9 @@ function warnUnknownChecklistIds(report, projectRoot) {
 function attachSnippets(report, projectRoot, source) {
   const read = sourceReader(projectRoot, source);
   const readDiff = diffReader(projectRoot, source);
+  if (report.files.length > 0 && readDiff.unavailable()) {
+    report.warnings.push('Nie udało się odczytać diffa dla tego zakresu (jedno wywołanie `git diff` na cały raport) - fragmenty kodu pokazują same linie pliku, bez oznaczeń dodane/usunięte.');
+  }
   for (const file of report.files) {
     const lines = read(file.path);
     const diff = lines ? readDiff(file.path) : null;
@@ -2347,6 +2406,7 @@ function main(argv) {
   const report = parseReport(markdown);
   const projectRoot = projectRootFor(args.report, args.project);
   warnUnknownChecklistIds(report, projectRoot);
+  resolveRuleAddresses(report, projectRoot);
   const source = { mode: args.mode, base: args.base, branch: args.branch };
   attachSnippets(report, projectRoot, source);
   report.changed = changedFiles(projectRoot, source);
@@ -2388,7 +2448,7 @@ function main(argv) {
 
 module.exports = {
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
-  projectRootFor, attachSnippets, warnUnknownChecklistIds, buildPayload, renderHtml, detectPullRequest,
+  projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, buildPayload, renderHtml, detectPullRequest,
   changedFiles, treeEntries, main,
 };
 

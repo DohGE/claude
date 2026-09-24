@@ -224,9 +224,16 @@ b. Not a plain `git diff` against HEAD: step 4 never stages, so HEAD still preda
 c. Prove it: `grep -rn "DOH-MOCK" {{ROOT}}` (excluding `{{SESSION}}`) prints nothing, and
    `git -C "{{ROOT}}" status --porcelain` no longer lists the module. A leftover marker fails the
    step; it is never just a line in the report.
-d. Re-run the project's unit suite and its build/typecheck script if it has one — removal must not
-   leave a dangling import for step 6 to trip over. Fix what the removal broke by finishing the
-   removal, never by putting a mock back.
+d. Re-run the unit suite, the typecheck and the build — removal must not leave a dangling import
+   for step 6 to trip over:
+
+       node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=typecheck,test,build
+
+   A step the project has no script for comes back `skipped`, never failed. A stack with no
+   `package.json` re-runs step 4's `--command` call instead, plus the same call with `--only=build`
+   and the stack's build command when it has one. Each step's verdict is its `status`, and a `failed`
+   step is read through its `errorsPath` only, exactly as in step 4. Fix what the removal broke by
+   finishing the removal, never by putting a mock back.
 e. Do NOT re-run the E2E suite: with the backend still missing it would fail by design. The report
    says plainly which results came from mocked endpoints.
 
@@ -238,17 +245,31 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    the checklist is not in the `- [ ] R<n> | <requirement> | verify: …` shape step 2 must produce.
    Do not proceed: untagged items are covered by nothing, yet step 10 would still divide ticks by
    their count, and the run could clear the 99% gate on a number that measures no verification at
-   all. Work out how to launch the app and how it runs its unit tests
-   (package.json scripts, README).
+   all. Work out how to launch the app (package.json scripts, README); step 4's script finds the
+   unit tests on its own.
 2. Setup — run the two install commands from the toolchain section above (skip what is already
    installed) and create `{{SESSION}}/e2e/`. Progress 5.
 3. Extension gate — do the REQUIRED check above before any test work, so a missing extension costs
    the user one wait instead of a wasted run. Progress 10.
-4. Project unit tests — run `{{ROOT}}`'s OWN suite with its OWN runner, from `{{ROOT}}`:
-   the narrowest unit script in `package.json` (`test:unit`, else `test` — never a script that
-   boots an e2e/Playwright suite), or the stack's equivalent (`pytest`, `go test ./...`,
-   `mvn -q test`, `dotnet test`, …). Never install a test framework or any dependency into the
-   project, and never substitute the plugin's Playwright for the project's unit runner.
+4. Project unit tests — run `{{ROOT}}`'s OWN suite through the gate script. It picks the unit
+   script (`test:unit`, else `test`), the package manager, the flag that stops a runner watching
+   and the timeout, and it decides pass or fail by the exit code:
+
+       node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=test
+
+   It prints one JSON object. The verdict is the `status` of its `test` step, never your reading of
+   any output:
+   - `passed` → there is nothing to read.
+   - `failed` → Read that step's `errorsPath` and nothing else: the failing tests alone, cut out of
+     the output by the script. Never Read `logPath`; when the excerpt names a failing test without
+     its cause, Grep `logPath` for that one test name with a small `-C`.
+   - `skipped` because there is no `package.json`, or no unit script in it → when the stack has a
+     runner of its own, run the call again with it added as `--command="<runner command>"`
+     (`python -m pytest -q`, `go test ./...`, `mvn -q test`, `dotnet test`, …): same verdict, same
+     excerpt. When it has none, there is no unit suite.
+   Write the exact call you ran into `## Unit tests`: step 8d re-runs it verbatim, and so does step 6.
+   Never install a test framework or any dependency into the project, and never substitute the
+   plugin's Playwright for the project's unit runner.
    - A failure caused by the pipeline's changes is yours: fix the application code. Never delete,
      skip or weaken a test to make it pass — a test that is genuinely wrong against `spec.md` may be
      corrected, and you say so in the report.
@@ -305,8 +326,9 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
       merely an improvement goes in the report, unfixed. Optionally record ONE `gif_creator` clip
       of the happy path, named after the feature. In cycles 2-3 re-walk ONLY the screens touched by
       fixes.
-   d. Re-run the project's unit suite whenever this cycle changed application code — the fixes you
-      just made must not break what already worked. Same discipline as step 4: fix the app, not the
+   d. Re-run step 4's exact call whenever this cycle changed application code — the fixes you just
+      made must not break what already worked. Same discipline as step 4: the verdict is the `test`
+      step's `status`, a failure is read through its `errorsPath` only, and you fix the app, not the
       test. The last cycle always ends with a unit run, so the reported result is current.
    e. Update `checklist.md`: tick `- [x]` every item confirmed by a passing test, visual check or
       UX pass, and append what proves it — `| evidence: <spec file › test name>` for `e2e`,
@@ -328,7 +350,7 @@ afterwards.
 
 ## Rules
 
-- NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `screenshots/`, `mocks/`, `checklist.md` and report files. `generated-mockups/` is read-only for you — it is the approved baseline, never "fix" it to match the app.
+- NEVER `git commit`; outside `{{SESSION}}` never touch the skill's runtime folders, and inside `{{SESSION}}` write only your `e2e/` tests, `screenshots/`, `mocks/`, `checklist.md` and report files. `checks/` is written by `checks.cjs` alone; you only read a failed step's excerpt there. `generated-mockups/` is read-only for you — it is the approved baseline, never "fix" it to match the app.
 - Never install anything into `{{ROOT}}` — not Playwright, not a test runner, not a helper
   package, and not a mocking library either. The only toolchain you install is the plugin's own,
   inside `{{SKILL_DIR}}`.
@@ -346,10 +368,11 @@ afterwards.
   sub-agent. One write either way: a report assembled from several appends is one that ends
   half-written when anything goes wrong. Its three headings are FIXED IDENTIFIERS, written in
   English exactly as spelled below even though the prose under them is in {{LANGUAGE}}: step 6 reads
-  `## Unit tests` to recover the unit-test command, so a translated or reworded heading leaves the
+  `## Unit tests` to recover the unit-test call, so a translated or reworded heading leaves the
   review agent unable to run the suite it must green before it finishes. Heading verbatim, content in
   the user's language. The file holds the raw test output of the final Playwright run, then a
-  `## Unit tests` section (command used, result, any pre-existing failures left alone), a
+  `## Unit tests` section (the exact `checks.cjs` call used, the `test` step's `status`, any
+  pre-existing failures left alone), a
   `## UX` section (findings fixed, findings left as suggestions) and a `## Mocks` section — every
   probed endpoint with its verdict, which ones were faked and therefore never met a real API, that
   the module is gone, and that `git apply {{SESSION}}/mocks/mocks.patch` from `{{ROOT}}` brings

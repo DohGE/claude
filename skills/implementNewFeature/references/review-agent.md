@@ -27,6 +27,15 @@ Cycles are numbered 1-6 across both rounds (round 1 = cycles 1-3, round 2 = cycl
 and 4 are the full ones. A round ends early when its report comes back clean, the run ends only
 after round 2.
 
+**Each round is its own agent.** Your spawn prompt names your round under a `## Round` heading (FIXED
+IDENTIFIER); a prompt without one is round 1. Round 1 ends with the `round` JSON (see "Final
+message") and the orchestrator spawns a FRESH agent for round 2: its opening full review then comes
+from a context that holds none of round 1's reports, fixes and reasoning, which is what makes it a
+second look rather than a re-read of your own conclusions — and it starts from an empty context
+instead of one three cycles deep. What crosses between the two is `{{SESSION}}/review-report.md`:
+as round 2, read it first, and treat its `## Rejected findings` list exactly as if you had written
+it yourself.
+
 **The one case where round 2 is skipped** is the one where it is provably a repeat: round 1 ended at
 CYCLE 1. A clean cycle-1 report means zero findings, so you fixed nothing, so the tree cycle 4 would
 review is byte-for-byte the tree cycle 1 already reviewed in full — same files, same instructions,
@@ -35,7 +44,12 @@ not needed)`. Anything else runs round 2 in full: one fix applied in ANY cycle, 
 cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on your rejection list.
 
 1. Stage everything: `git -C "{{ROOT}}" add -A`. Progress 10.
-2. Review: invoke the `doh:codeReview` skill via the Skill tool.
+2. Review: invoke the `doh:codeReview` skill via the Skill tool — ONCE per agent, on your round's
+   opening cycle. Its instructions then sit in your context verbatim, so every later cycle of your
+   round runs that same procedure again, from its first step, with the new cycle's arguments in
+   place of the first call's; do NOT call the Skill tool again — a second call only loads a second
+   copy of the same ~15 000 tokens. This is still a `doh:codeReview` run, by the skill's own
+   instructions, and everything below about it applies unchanged.
    Cycles 1 and 4 (the opening cycle of each round): `staged --only-md --project="{{ROOT}}"`.
    Cycles 2, 3, 5 and 6: `staged --since-last --only-md --project="{{ROOT}}"` — after the round's
    full pass only the files your fixes touched can carry new findings, and `--since-last` makes the
@@ -54,7 +68,7 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    `sed -e "/^<!--[[:space:]]*checklist:/,/-->/d" -e "/^<!--[[:space:]]*coverage:/d" "<reportPath>"`
    so neither reaches your context: those lines grow with the rulebook rather than with the
    findings, so on a clean review they are most of the file.
-   **The rulebook is read ONCE across the whole loop, not once per cycle.** The skill's step 2
+   **The rulebook is read ONCE per agent, not once per cycle.** The skill's step 2
    sends you to read every file of `globalInstructions` and `localInstructionsCatalog`; its rule
    against working from memory is there so nobody reviews from RECOLLECTION, and inside this loop
    the files are not a recollection — they are sitting in your context verbatim from the cycle that
@@ -62,10 +76,10 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    narrow `--since-last` cycle still matches ~15 000 of it, so six cycles that each re-read their own
    come to ~107 000 tokens against ~23 000 read once — about 84 000 tokens of the context you need
    for the code itself, spent on files you already have.
-   So on every cycle after the first, read only what you do NOT already have: compare the two lists
+   So on every cycle after your first, read only what you do NOT already have: compare the two lists
    the fresh context JSON prints against the files you have read this run and open the difference —
-   a `--since-last` cycle narrows the catalogs, and round 2's full pass can widen them again past
-   what round 1 ever matched. Everything else per cycle IS fresh and IS read every time: the context
+   a `--since-last` cycle narrows the catalogs. The round-2 agent reads its own rulebook in full on
+   cycle 4: round 1's copy went with round 1's context. Everything else per cycle IS fresh and IS read every time: the context
    JSON, the report, and the files under review.
    This is the ONLY permitted review method:
    - never review the diff manually, "quickly", or as a "sanity check";
@@ -85,8 +99,8 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    here" and "unclear" are NOT grounds — when in doubt, fix it. Never reject a finding just because a
    later cycle would have to re-check it.
    Record every rejection in `{{SESSION}}/review-report.md` under `## Rejected findings` — that
-   heading is a FIXED IDENTIFIER, English verbatim even in a {{LANGUAGE}} report, because YOU read
-   it back on every later cycle and in round 2 to know what stays rejected. Each entry is `file:line`,
+   heading is a FIXED IDENTIFIER, English verbatim even in a {{LANGUAGE}} report, because it is read
+   back on every later cycle and by the round-2 agent to know what stays rejected. Each entry is `file:line`,
    the violated rule, and the one-line reason naming its ground. A rejected finding stays rejected for
    every later cycle and for round 2: never re-open it, never re-argue it, never let it block completion.
    Every fix and every new spec you write obeys the same rulebook the code is reviewed against:
@@ -102,10 +116,13 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    without the rules the project meant to enforce.
    Then `git -C "{{ROOT}}" add -A` again.
 4. Regression guard — BOTH suites must pass before you continue:
-   - the project's own unit suite, run from `{{ROOT}}` with the project's own runner (step 5
-     recorded the exact command in `{{SESSION}}/validation-report.md`; `## Unit tests` says `n/a`
-     when the project has none). The unit tests you just added for 🔵 Missing Unit Test findings
-     run here too.
+   - the project's own unit suite, through the exact `checks.cjs` call step 5 recorded under
+     `## Unit tests` in `{{SESSION}}/validation-report.md` — run it verbatim, never rebuild the
+     command yourself (`## Unit tests` says `n/a` when the project has none). The verdict is the
+     `status` of its `test` step, the exit code, never your reading of any output: `passed` → there
+     is nothing to read; `failed` → Read that step's `errorsPath`, the failing tests alone, and never
+     `logPath` — Grep `logPath` for one test name only when the excerpt leaves its cause out. The
+     unit tests you just added for 🔵 Missing Unit Test findings run here too.
    - the step-5 Playwright suite, always the `doh` plugin's own runner pinned by path:
      `NODE_PATH="{{SKILL_DIR}}/node_modules" E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"`
      — never `npx playwright`, never the project's copy (toolchain in the skill folder, tests in
@@ -136,12 +153,13 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    - Clean report + green suites at CYCLE 1 → nothing was fixed, so round 2 would re-review an
      unchanged tree: you are done. POST progress 100 with
      `"currentOperation":"review complete (round 1, cycle 1 — clean, round 2 not needed)"`.
-   - Clean report + green suites at cycle 2 or 3 → round 1 ends here; continue with round 2, whose
-     cycle 4 is the FULL review that asks the full-diff and cross-file questions about the shape your
-     fixes left behind.
+   - Clean report + green suites at cycle 2 or 3 → round 1 ends here: write `review-report.md` and
+     end with the `round` JSON. Round 2's cycle 4 is the FULL review that asks the full-diff and
+     cross-file questions about the shape your fixes left behind — asked by a fresh agent.
    - Clean report + green suites inside round 2 → done: POST progress 100 with
      `"currentOperation":"review complete (round 2, cycle <k>)"`.
-   - Findings still open after cycle 3 → the round ends anyway and round 2 takes them over.
+   - Findings still open after cycle 3 → the round ends anyway: write `review-report.md` with them
+     listed as open, and end with the `round` JSON; round 2 takes them over.
    - Findings still open after cycle 6 → the `error` JSON.
 
 ## Progress reporting
@@ -161,7 +179,9 @@ unfinished; use the "review complete" wording above.
   your harness refuses a `.md` write from a sub-agent. One write either way: a report assembled
   from several appends is one that ends half-written when anything goes wrong. It holds one section
   per round listing every finding from the `doh:codeReview` reports with how you fixed it, plus
-  the `## Rejected findings` list with the ground for each rejection.
+  the `## Rejected findings` list with the ground for each rejection. Round 1 writes its section,
+  its open findings and the list; round 2 rewrites the whole file once at its end, round 1's section
+  kept as it was, its own section added, the list extended.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
 never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the
@@ -171,7 +191,11 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
-- Success: `{"type":"result","findingsFixed":<N>,"findingsRejected":<N>,"reviewSummary":"<categories, counts, notable fixes, and every rejected finding with its ground, in {{LANGUAGE}}>"}`
+- Round 1 over and round 2 needed: `{"type":"round","round":1,"findingsFixed":<N>,"findingsRejected":<N>}`
+  (`type` and `round` are FIXED IDENTIFIERS). Never send it after a clean cycle 1 — that one ends
+  with `result`.
+- Success: `{"type":"result","findingsFixed":<N>,"findingsRejected":<N>,"reviewSummary":"<categories, counts, notable fixes, and every rejected finding with its ground, in {{LANGUAGE}}>"}`.
+  As round 2, the counts and the summary cover BOTH rounds — round 1's are in `review-report.md`.
 - After cycle 6 with findings still open (rejected ones do not count), or unrecoverable regression:
   `{"type":"error","report":"<open findings / broken tests, in {{LANGUAGE}}>"}`
 

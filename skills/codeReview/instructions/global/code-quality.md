@@ -13,20 +13,21 @@ scopes:
   code: ["**/*.ts", "**/*.html", "**/*.scss", "**/*.css", "**/*.js"]
   logic: ["**/*.ts", "**/*.html"]
 ---
-Every violation of this checklist is reported with severity 🟡 **Medium** — never softened to ⚪ Low
-because it looks cosmetic and never raised because it looks dangerous.
+The two duplication items (the first two below) are reported with severity 🔴 **High**, every other
+violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never
+raised because it looks dangerous.
 
 This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and
 inconsistency: when another instruction or the cross-file pass covers the same occurrence (the
-architecture "reuse before creating" rule, the duplication-drift and naming-consistency questions),
-the occurrence is reported ONCE — here, with this severity.
+architecture "reuse before creating" rule, the duplication-drift and naming-consistency questions,
+a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.
 
 Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the
 diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or
 inconsistency living entirely in untouched lines is not.
 
 ## Checklist
-- No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key. Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates.
+- No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates.
 - No copy-paste-with-a-tweak: two near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset).
 - No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change.
 - {logic} No unnecessary code: a wrapper that only forwards to the wrapped call, a variable used once on the very next line, `else` after a `return`, a condition that can never be false, `?.`/`??`/`try` guarding a value the types already guarantee, a hand-written helper an existing shared function already provides, an abstraction (interface, base class, generic, options object) introduced for a single consumer "for the future".

@@ -66,9 +66,17 @@ anything nobody asked about, and do not "improve" neighbouring code while you ar
 line you change beyond the comments is a line the reviewer has to review again.
 
 When the project ships a rulebook — `{{ROOT}}/.claude/doh/instructions/` — your fixes obey it like
-any other code in the repository. A worktree is checked out from HEAD, so it carries the rulebook
-only when it is COMMITTED; when the folder is absent, say so in `summary` instead of reaching outside
-`{{ROOT}}` for it.
+any other code in the repository. Read it per file, not whole: before your first edit of a file, run
+`node "{{SKILL_DIR}}/../implementNewFeature/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative path>"`
+and read every file it lists under `globalInstructions` and `localInstructions` for that path whose
+path lies inside `projectInstructionsDir` — the others are the doh review checklists, not this
+project's rules, and a comment fix is not the place to apply them. Skip the ones you already read;
+they stay binding for every file that listed them. Most rules declare `applies-to`, so which ones
+bind a file is a per-file answer, and reading them all up front spends the context your threads need.
+`projectInstructionsDir` null → the project ships no rulebook, or a worktree is checked out from HEAD
+and it is not COMMITTED; when `{{ROOT}}/.claude/doh/instructions/` is absent but the main checkout
+has it, say so in `summary` instead of reaching outside `{{ROOT}}` for it. The matcher exiting
+non-zero → go on without it and say so in `summary`.
 
 ## Step 3 — Bring the gate green
 
@@ -86,9 +94,12 @@ Otherwise run, from anywhere:
     node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}"
 
 It prints ONE JSON object: `gate` (`green` / `red` / `partial` / `skipped`) and a `steps[]` entry per command with
-`step`, `label`, `command`, `status`, `reason`, `logPath` and `truncated`. Never assemble these
+`step`, `label`, `command`, `status`, `reason`, `logPath`, `errorsPath` and `truncated`. Never assemble these
 commands yourself — the script is where the package manager, the non-interactive flags and the
 timeouts are decided, and a hand-built `npm test` is how a watcher gets left running.
+
+A step's `status` is its command's exit code, decided by the script. It is never yours to decide by
+reading output: a `passed` step has nothing for you to read, and no output ever turns it into a failure.
 
 - `gate: "skipped"` — the project has no `package.json`, so there was nothing to run. Record the
   reason and go to step 4. **A skipped gate is not a red one.**
@@ -96,9 +107,12 @@ timeouts are decided, and a hand-built `npm test` is how a watcher gets left run
 - `gate: "partial"` — this was a `--only` pass, so nothing failed among the commands it RAN and the
   rest were not looked at. It is not a green gate and it is not a licence to commit: run the full
   gate and act on that answer.
-- `gate: "red"` — for each `failed` step, read its `logPath` with the Read tool and repair the CAUSE.
-  Read it with a `limit`: these logs run to hundreds of kilobytes, the failure summary is at the END,
-  and you never need the whole file. Never paste a log back into a message. Then run the gate again.
+- `gate: "red"` — for each `failed` step, read its `errorsPath` with the Read tool and repair the CAUSE.
+  That file is the failure lines alone, cut out of the output by the script: the failing tests, the
+  compiler and lint errors with their locations, the summary count. Never Read `logPath` — it is the
+  whole output, kept for the user. When the excerpt names a failure but not its cause, Grep `logPath`
+  for that one test name or error code with a small `-C`; that is the only way into it. Never paste
+  either file back into a message. Then run the gate again.
 
 **Budget: three gate passes.** Still red after the third → do NOT commit, do NOT push, leave the
 worktree exactly as it is so the user can inspect it, write the report, and end with the `error` JSON.
@@ -210,7 +224,7 @@ The following are not repairs, and none of them may appear in your commit:
 - Never resolve a thread on GitHub yourself and never post a comment there — the orchestrator closes
   exactly the threads you report as fixed, once the push has landed.
 - Never remove the worktree; the orchestrator does that after it has read your result.
-- Never write inside `{{CHECKS_DIR}}` yourself. `checks.cjs` owns those logs; you only read them.
+- Never write inside `{{CHECKS_DIR}}` yourself. `checks.cjs` owns those files; you only read a failed step's `errorsPath`.
 - `fixedThreadIds` carries the `id` of every `threads[]` entry you verdicted `fixed`, and nothing
   else. A rejected thread, an answered one, a `conversation[]` comment (which has no thread at all)
   and anything you fixed without committing must NOT be in that list: each id in it becomes a public

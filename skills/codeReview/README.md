@@ -47,6 +47,12 @@ Pruning counts only run-stamped report names (`…-YYYY-MM-DD-HH-mm.md|html`), s
 It is meant for a target already reviewed in this session — the implementNewFeature review loop uses it from cycle 2 on; on a first review it warns and reviews everything.
 The snapshot is recorded while the context is built, before the first file is analyzed, so it says what the previous run intended to review rather than what it completed. A run that died half-way still recorded every file, and the next `--since-last` will skip the ones it never reached — an unchanged tree then reports "nothing to review". After an interrupted review, re-run the target in full instead. The same applies once the previous report has been pruned away: the run warns that nothing on disk covers the skipped files any more.
 
+An interrupted review resumes by itself: a run that died before its assembly leaves its part files (`<report>.partNN.md`) behind, and the next run of the same target picks them up.
+The context script lists every file whose part already carries a coverage marker in `target.resume.doneFiles`, points `reportPath` at the interrupted report, and the review analyzes only the rest before writing the cross-file pass anew.
+It resumes only while the `.last-review-<kind>.json` snapshot proves the target still holds the content that run reviewed; otherwise it warns, names the leftover parts to delete and starts from scratch.
+A resumed run keeps the file list it started with, so `--since-last` is ignored for it.
+After a break longer than an hour (a usage limit, a closed laptop) run `/clear` and then the same command instead of typing "continue": the finished files come back from their parts, while "continue" would re-read the whole old conversation at cache-write price.
+
 Each analyzed file ends its block with the checklist it was walked against — one ticked line per item — and a coverage marker, `<!-- coverage: <path> <checked>/<total> -->`, `<total>` being the number of checklist items the context script counted for that file. See [Checklist coverage](#checklist-coverage).
 Three groups of files are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report:
 
@@ -101,7 +107,7 @@ A local instruction without any including `applies-to` pattern never matches and
 **Checklist items must start with `- `, at the left margin.** That is what `<id>#<n>` counts, so the
 marker is part of the format, not a style choice: an item written `* rule` or `+ rule` is not counted,
 and a file whose items are ALL written that way has zero items — it is then dropped from every plan,
-from `checklistIds` and from the catalog, because an instruction with nothing to check has nothing to
+from both instruction catalogs, because an instruction with nothing to check has nothing to
 say. That drop is reported too: an instruction with no readable items warns by name, so the bullet
 character is named as the cause instead of leaving you to debug the glob.
 Indented `- ` sub-bullets under an item are safe: they are not counted and do not shift the numbering,
@@ -144,7 +150,7 @@ A global with only excluding patterns covers everything except them; a local sti
 
 ## Checklist coverage
 
-The context script hands every file a `plan` index into `checklistPlans` — files of one kind share one entry, so a 200-file diff carries about eight plans instead of two hundred copies (measured: 53% off the whole context JSON). A plan's `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-9,12-14,17,20` for one the file's kind narrowed. `checklistTotal` is their sum, and the top-level `checklistIds` says which instruction file each id stands for.
+The context script hands every file a `plan` index into `checklistPlans` — files of one kind share one entry, so a 200-file diff carries about eight plans instead of two hundred copies (measured: 53% off the whole context JSON). A plan's `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-9,12-14,17,20` for one the file's kind narrowed. `checklistTotal` stays on the FILE and is their sum; which instruction file each `<id>` stands for travels with its path in `globalInstructions` and `localInstructionsCatalog`.
 Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and the plan's `globalInstructionsSkipped` names them — by checklist id, the same address the report ticks items under, because an absolute path repeated once per file per skipped global was two fifths of the context JSON — so a shorter plan reads as a decision rather than an omission; `globalInstructions` itself lists only the globals at least one reviewed file walks, so a diff of stylesheets never loads the TypeScript rulebook.
 Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under, whether or not the file walks every neighbour.
 
@@ -191,6 +197,17 @@ For a branch, the base is the first of these that answers:
 
 No usable candidate → the run stops with a clear error.
 The terminal summary names the base and which of the three steps picked it.
+
+## Duplication scan
+
+Every target is scanned for copy-paste by [jscpd](https://github.com/kucherenko/jscpd) before the review starts, and every duplication finding — whether jscpd listed it or the review found it — is reported as 🔴 **High**.
+
+- **What is scanned** — the whole reviewed revision, not only the changed files, because a copy of an untouched file is found only when that file is scanned too: the branch's commit, the index for `staged`, the working tree for `folder` (tracked and untracked files, not the ignored ones). The revision is exported to a temporary folder outside the repository and deleted afterwards; the checkout, the index and every ref stay as they were. Paths the review skips and `.snap` files are left out.
+- **What is kept** — only the clone pairs the diff wrote: one side has to be at least half made of changed lines. That side is the copy the finding is anchored on, the other one the source it repeats. Editing one line inside a clone that already existed is therefore not a candidate. jscpd's own `--baseline-from-ref` was measured and rejected for exactly that case: a one-literal edit changes the clone's fingerprint and reads as two new clones.
+- **How it matches** — token runs of at least 30 tokens (`--min-tokens 30`), with renamed identifiers (`--ignore-identifiers`) and one or two inserted or dropped lines (`--max-gap-lines 2`) still matching. jscpd's default of 50 tokens was measured on 15 commits of an Angular monorepo: it listed 24 candidates against 67 at 30, and missed e.g. a nine-line mapping copied within one component. Import statements are skipped, because with identifiers ignored any two import lists match. The AST mode (`--similarity`) is off: on the same monorepo 212 of its 235 pairs were the CLI-generated spec skeleton matched against every other spec. The project's own `.jscpd.json` and `package.json#jscpd` are ignored, so its threshold and ignores never decide what the review sees.
+- **What the review gets** — `target.duplicationCandidates`, at most 50 per target (the overflow is a warning): `{ path, lines, sources: ["<path>:<from>-<to>"], kinds: ["exact" | "renamed" | "similar"] }`. The reviewer opens both sides of each one and dismisses it only when the blocks share no logic: a shape the framework or a generator dictates (a TestBed skeleton, a module or route declaration, a generated `project.json` or `tsconfig`), parallel data (translation files), or the same syntax around different calls and fields.
+- **What jscpd cannot see** — logic written again in other words, or a helper that already exists in a shared folder. For every exported function, class, pipe, directive, validator, util or constant the diff adds, the review therefore searches the reviewed revision itself with `target.commands.grep` (`git grep` over the branch's commit, the index, or the working tree).
+- **Running it** — `npx --yes jscpd@5.3.1`, pinned because the report shape is read as that version writes it. Nothing is installed into the project; the first run downloads jscpd into the npx cache, later runs are served from it. A scan that cannot run — no npx, offline on the first run, a timeout after 180 s — never stops the review: it becomes a warning, and duplication is then searched for by the review alone.
 
 Step 1 runs only when a remote points at github.com, and needs no tooling at all — see [GitHub access](#github-access). A call that cannot be made warns once and the run starts at step 2.
 
@@ -242,18 +259,20 @@ Always Polish, findings only — no intros, summaries or closing remarks.
 Header line: `# Code Review: <branch> → <base> | <YYYY-MM-DD> <HH:mm>` (staged variant: `# Code Review: staged (<branch>) | ...`).
 One `## <file path>` section per file with findings.
 Each finding is one block describing exactly one violation of one rule at one location — several violations never share a block.
-The severity is a bold lead line; the other seven fields follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
+The severity is a bold lead line; the other seven fields (four under `--only-md`, which has no PR comment to write) follow as bullets, each on its own line, with one blank line before every block so each finding renders as its own vertically spaced section:
 
     🔴 **High**
     - **Linia:** 87
     - **Problem:** Gałąź błędu efektu kończy się `EMPTY`, więc porażka żądania nie dociera do reduktora
-    - **Reguła:** instructions/local/code/+state/ngrx-effects.md → "Ścieżka błędu nigdy nie kończy się `EMPTY`"
+    - **Reguła:** ngrx-effects#5
     - **Expected Result:** `catchError` zwracający `of(loadUsersFailure({ error }))` wewnątrz `switchMap`
     - **PR Problem:** The `loadUsers$` effect swallows the failure: its `catchError` returns `EMPTY`, so no failure action ever reaches the reducer. The `loading` flag stays `true`, the spinner never stops and the user is told nothing.
     - **PR Expected:** A failed request should end in a failure action that clears `loading` and fills the error state. Return `of(loadUsersFailure({ error }))` from `catchError` inside the `switchMap`, handle that action in the reducer and render it through the existing error branch of the template.
     - **PR Locations:** `user-panel.effects.ts` → `loadUsers$`, `user-panel.reducer.ts` → `loadUsersFailure`, `user-panel.effects.spec.ts` → failing-request case
 
-`PR Problem`, `PR Expected` and `PR Locations` are the only English fields, written for the PR comment and used nowhere else on the page.
+`**Reguła:**` holds the `<id>#<n>` address of the violated checklist item — the address the checklist block ticks — and `render-report.cjs` prints the item's own words in its place; an address the rulebook does not hold is a parser warning.
+A finding no checklist item covers (the cross-file pass, a `CLAUDE.md` rule) names its source in prose instead: `CLAUDE.md → brak console.log`.
+`PR Problem`, `PR Expected` and `PR Locations` are the only English fields, written for the PR comment and used nowhere else on the page; an `--only-md` report leaves them out.
 They are written for a reviewer who never opens the report: `PR Problem` gets two sentences (what is wrong + the consequence), `PR Expected` two to three (the target state + how to reach it), and `PR Locations` lists every file and symbol the fix touches — every concrete name the Polish fields propose has to appear in them.
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
@@ -265,6 +284,9 @@ No findings → the report is the single line `Nie wykryto problemów.`; empty d
 ## Mechanics
 
 `scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, instruction matching, report paths and ready-to-run git commands.
+It writes the full context to `.review-context-<kind>.json` next to the first report and prints only a summary (`contextPath`, `errors`, `warnings`, one line per target), which the skill then Reads — tool output can be compressed on its way into the conversation, a Read file is not.
+It also writes each target's import ledger (`<report>.imports.txt`, one `<file>:<line> → <specifier>` edge per line, read from the reviewed revision) for the cross-file layering question; files in a language it has no extractor for are named on a `# not parsed` line.
+It runs the [duplication scan](#duplication-scan) through `scripts/duplication-scan.cjs`, which fetches jscpd with npx at run time instead of depending on it.
 Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews first run `git add .`, then read index content (`git show :path`).
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
@@ -276,7 +298,7 @@ The old-file line numbers the left side prints are derived from the `-U0` hunk h
 The full source of every file with a finding is embedded once per file, so a file with four findings carries one copy, not four.
 Files longer than 3000 lines are left out and the `Cały plik` button reports the count instead — the fragment still renders.
 `--project` names the root the report paths are relative to; when it is omitted the root is recovered from a report living in `<project>/.claude/doh/<branch>/`, and a file that cannot be read simply renders without a snippet.
-It accepts the severity lead line with and without a leading `- ` (reports written before `ee76300` use the dashed form), and reads `**Reguła:**` whether the instruction is named with its `.md` extension, without it, or replaced by the violated point's name.
+It accepts the severity lead line with and without a leading `- ` (reports written before `ee76300` use the dashed form), and reads `**Reguła:**` as `<id>#<n>` addresses, and — in older reports and prose rules — whether the instruction is named with its `.md` extension, without it, or replaced by the violated point's name.
 
 `scripts/github.cjs` (Node, no dependencies) is the only place that talks to GitHub: the owner/repo read off the remote URL, the token lookup, and the three calls the skill needs (find the open PR, read its diff, post the review).
 `fetch` is asynchronous while every script around it is not, so the request runs in a child copy of that file — the parent hands it a JSON request on stdin and reads the JSON response off stdout, which keeps the calling scripts synchronous.
@@ -292,5 +314,5 @@ Findings anchored on lines the PR diff shows become inline review comments (a wh
 The button is tied to the *branch*, not to the review mode: a `staged` or `folder <path>` review run on a branch that has an open PR gets it too.
 That is intentional but worth knowing — those modes review code the PR diff need not contain, so most or all of their findings end up in the review body rather than pinned to lines.
 
-Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs`
+Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs skills/codeReview/scripts/duplication-scan.test.cjs`
 (paths are listed explicitly because PowerShell does not expand globs for native commands).

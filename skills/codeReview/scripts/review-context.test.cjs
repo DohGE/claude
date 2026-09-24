@@ -4,10 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 
 const rc = require('./review-context.cjs');
-const { tempDir } = require('./test-helpers.cjs');
+const { tempDir, run, commitFile, initRepo } = require('./test-helpers.cjs');
 
 // ---------- Task 1: utilities ----------
 
@@ -110,26 +110,8 @@ test('formatTimestamp uses local date and HH-mm', () => {
 
 // ---------- Task 2: git helpers + fixtures ----------
 
-function run(dir, args) {
-  return execFileSync('git', ['-C', dir, ...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
-}
-
-function commitFile(dir, file, content, message) {
-  fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
-  fs.writeFileSync(path.join(dir, file), content);
-  run(dir, ['add', '.']);
-  run(dir, ['commit', '-q', '-m', message]);
-}
-
 function makeRepo(t) {
-  const dir = tempDir(t, 'cr-repo-');
-  run(dir, ['init', '-q', '-b', 'main']);
-  run(dir, ['config', 'user.email', 'test@test.local']);
-  run(dir, ['config', 'user.name', 'Test']);
-  run(dir, ['config', 'commit.gpgsign', 'false']);
+  const dir = initRepo(t, 'cr-repo-');
   commitFile(dir, 'README.md', '# repo\n', 'initial');
   // A reviewable non-code seed file: prose is skipped by skipGlobs, so tests
   // that need "a changed file with no local instruction" modify this one.
@@ -1043,10 +1025,10 @@ test('parseChecklistItems reads the scope tag of every item, numbering unchanged
     '',
   ].join('\n'));
   assert.deepStrictEqual(rc.parseChecklistItems(file), [
-    { n: 1, scopes: [] },
-    { n: 2, scopes: ['styles'] },
-    { n: 3, scopes: ['markup', 'styles'] },
-    { n: 4, scopes: [] },
+    { n: 1, scopes: [], text: 'plain rule' },
+    { n: 2, scopes: ['styles'], text: 'a stylesheet rule' },
+    { n: 3, scopes: ['markup', 'styles'], text: 'a rule for both' },
+    { n: 4, scopes: [], text: '`@defer` is not a scope tag' },
   ]);
   assert.strictEqual(rc.countChecklistItems(file), 4, 'numbering still counts every bullet');
   const fm = rc.parseFrontmatter(fs.readFileSync(file, 'utf8'));
@@ -1309,6 +1291,20 @@ test('pruneReports keeps only the newest N run-stamped reports', (t) => {
     'plan.md',
   ], 'only run-stamped names count as reports');
   assert.ok(fs.existsSync(path.join(dir, 'notes.txt')), 'non-md files are untouched');
+});
+
+test('pruneReports drops an import ledger whose run left no parts', (t) => {
+  const dir = tempDir(t, 'cr-reports-');
+  const branch = path.join(dir, 'main');
+  fs.mkdirSync(branch);
+  fs.writeFileSync(path.join(branch, 'main-2026-01-01-10-00.imports.txt'), 'orphan');
+  fs.writeFileSync(path.join(branch, 'main-2026-01-02-10-00.imports.txt'), 'pending');
+  fs.writeFileSync(path.join(branch, 'main-2026-01-02-10-00.part01.md'), 'part');
+  rc.pruneReports(dir, 3);
+  assert.deepStrictEqual(fs.readdirSync(branch).sort(), [
+    'main-2026-01-02-10-00.imports.txt',
+    'main-2026-01-02-10-00.part01.md',
+  ], 'the ledger of an interrupted run waits for its resume');
 });
 
 test('pruneReports counts html reports toward the same cap', (t) => {
@@ -1768,4 +1764,186 @@ test('coverage and spec shape each name the other as the owner of the other half
   assert.match(shape, /owned by the global test-coverage instruction/,
     'unit-tests still defers the cases back, so a gap is not reported twice');
   assert.match(shape, /only the SHAPE/, 'and states its own boundary');
+});
+
+test('the duplication scan reads each target at the revision it reviews', (t) => {
+  // Candidates only mean something against the code the review reads: the branch's
+  // commit, the index of a staged review, the working tree of a folder review.
+  const dir = makeRepo(t);
+  const skillDir = makeSkillDir(t);
+  const now = new Date(2026, 6, 8, 10, 0);
+  const calls = [];
+  const candidate = { path: 'src/copy.ts', lines: '1-9', sources: ['src/orig.ts:1-9'], kinds: ['exact'] };
+  const scanDuplicates = (args) => {
+    calls.push(args);
+    return { candidates: [candidate], omitted: 0 };
+  };
+
+  run(dir, ['checkout', '-q', '-b', 'feature/dup']);
+  commitFile(dir, 'src/copy.ts', 'const a = 1;\n', 'copy');
+  const branch = rc.buildContext({ mode: 'auto', project: dir, skillDir, now, scanDuplicates });
+  assert.strictEqual(calls[0].project, path.resolve(dir));
+  assert.deepStrictEqual(calls[0].source, { ref: 'feature/dup' });
+  assert.deepStrictEqual(calls[0].files.map((f) => f.path), ['src/copy.ts']);
+  assert.strictEqual(calls[0].isSkipped('dist/main.js'), true, 'the scan leaves out what the review skips');
+  assert.deepStrictEqual(branch.targets[0].duplicationCandidates, [candidate]);
+
+  fs.writeFileSync(path.join(dir, 'src', 'staged.ts'), 'const b = 2;\n');
+  rc.buildContext({ mode: 'staged', project: dir, skillDir, now, scanDuplicates });
+  assert.deepStrictEqual(calls[1].source, { index: true });
+
+  rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now, scanDuplicates });
+  assert.deepStrictEqual(calls[2].source, { workTree: true });
+});
+
+test('a duplication scan that could not run is said out loud', (t) => {
+  // An empty list would read as "no duplicates found". A scan that did not run leaves
+  // no list at all and a warning, so the report never claims a check nobody made.
+  const dir = makeRepo(t);
+  const skillDir = makeSkillDir(t);
+  const now = new Date(2026, 6, 8, 10, 0);
+  run(dir, ['checkout', '-q', '-b', 'feature/dup']);
+  commitFile(dir, 'src/copy.ts', 'const a = 1;\n', 'copy');
+
+  const failed = rc.buildContext({ mode: 'auto', project: dir, skillDir, now, scanDuplicates: () => ({ error: 'npx: not found' }) });
+  assert.ok(!('duplicationCandidates' in failed.targets[0]));
+  assert.strictEqual(failed.warnings.filter((w) => /Duplication scan/.test(w) && w.includes('npx: not found')).length, 1,
+    JSON.stringify(failed.warnings));
+
+  const capped = rc.buildContext({ mode: 'auto', project: dir, skillDir, now, scanDuplicates: () => ({ candidates: [], omitted: 7 }) });
+  assert.ok(capped.warnings.some((w) => /7 more duplication candidate/.test(w)), JSON.stringify(capped.warnings));
+
+  const unscanned = rc.buildContext({ mode: 'auto', project: dir, skillDir, now });
+  assert.ok(!('duplicationCandidates' in unscanned.targets[0]), 'no scanner, no list');
+});
+
+test('each target carries a search over the revision it reviews', (t) => {
+  // "Does this helper already exist?" has to be asked of the code the review reads.
+  // Here the checkout is back on main, so only a search of the branch's commit finds it.
+  const dir = makeRepo(t);
+  const skillDir = makeSkillDir(t);
+  const now = new Date(2026, 6, 8, 10, 0);
+  run(dir, ['checkout', '-q', '-b', 'feature/grep']);
+  commitFile(dir, 'src/a.ts', 'export const answer = 42;\n', 'a');
+  const branch = rc.buildContext({ mode: 'branches', branches: 'feature/grep', project: dir, skillDir, now }).targets[0];
+  run(dir, ['checkout', '-q', 'main']);
+  const found = spawnSync(branch.commands.grep.replace('<pattern>', 'answer = [0-9]+'), { shell: true, encoding: 'utf8' });
+  assert.match(found.stdout, /src\/a\.ts:1:export const answer = 42;/, found.stderr);
+
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'b.ts'), 'const b = 2;\n');
+  const staged = rc.buildContext({ mode: 'staged', project: dir, skillDir, now }).targets[0];
+  assert.match(staged.commands.grep, /grep -n -I --cached -E "<pattern>" --$/);
+  const folder = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now }).targets[0];
+  assert.match(folder.commands.grep, /grep -n -I --untracked -E "<pattern>" --$/);
+});
+
+test('a duplicate has one severity - in the instruction and in the criteria alike', () => {
+  // Duplication is the one code-quality finding reported as High. The instruction that
+  // owns it and the skill's severity criteria both say so; change one side alone and
+  // the reviewer is handed two severities for the same copy.
+  const root = path.join(__dirname, '..');
+  const quality = fs.readFileSync(path.join(root, 'instructions', 'global', 'code-quality.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(root, 'SKILL.md'), 'utf8');
+  assert.match(quality, /two duplication items[^]*?🔴 \*\*High\*\*/, 'the instruction makes its duplication items High');
+  const criterion = (label) => skill.split('\n').find((l) => l.trimStart().startsWith(`- ${label}`)) || '';
+  assert.match(criterion('🔴 **High**'), /duplication/, 'the High criterion lists duplication');
+  assert.doesNotMatch(criterion('🟡 **Medium**'), /duplicat/, 'and the Medium criterion no longer does');
+});
+
+test('extractImports reads every import form and resolves the relative ones', () => {
+  const src = [
+    "import { A } from '@app/core';",
+    'import {',
+    '  B,',
+    "} from '../shared/b';",
+    "import type { C } from './c';",
+    "import './side-effect';",
+    "export * from './barrel';",
+    "const lazy = () => import('./lazy');",
+    "// import { Old } from './old';",
+    "/* import { Gone } from './gone'; */",
+    "const url = 'http://x//y';",
+    "import { A as A2 } from '@app/core';",
+  ].join('\n');
+  assert.deepStrictEqual(rc.extractImports(src, 'src/app/x/a.ts'), [
+    { line: 1, spec: '@app/core' },
+    { line: 2, spec: '../shared/b', resolved: 'src/app/shared/b' },
+    { line: 5, spec: './c', resolved: 'src/app/x/c' },
+    { line: 6, spec: './side-effect', resolved: 'src/app/x/side-effect' },
+    { line: 7, spec: './barrel', resolved: 'src/app/x/barrel' },
+    { line: 8, spec: './lazy', resolved: 'src/app/x/lazy' },
+  ]);
+  assert.deepStrictEqual(rc.extractImports("@use 'sass:math';\n@import './vars';", 'src/a.scss'), [
+    { line: 1, spec: 'sass:math' },
+    { line: 2, spec: './vars', resolved: 'src/vars' },
+  ]);
+  assert.strictEqual(rc.extractImports('import x', 'src/a.py'), null, 'a language without an extractor says so');
+});
+
+test('the import ledger is written from the reviewed revision, one edge per line', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/ledger']);
+  commitFile(dir, 'src/a.ts', "import { b } from './b';\nimport { http } from '@angular/common/http';\n", 'feat a');
+  commitFile(dir, 'src/tool.py', 'import os\n', 'feat py');
+  // The working tree differs from the branch: the ledger must not read it.
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), "import { z } from './z';\n");
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const target = ctx.targets[0];
+  assert.ok(target.importLedger.endsWith('-2026-07-08-10-00.imports.txt'));
+  assert.strictEqual(fs.readFileSync(target.importLedger, 'utf8'), [
+    '# not parsed - collect their imports while reading them: src/tool.py',
+    'src/a.ts:1 → ./b (src/b)',
+    'src/a.ts:2 → @angular/common/http',
+    '',
+  ].join('\n'));
+});
+
+test('an interrupted review is resumed from its parts while the target is unchanged', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/resume']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat a');
+  commitFile(dir, 'src/b.ts', 'const b = 1;\n', 'feat b');
+  const skillDir = makeSkillDir(t, { 'ts.md': TS_INSTRUCTION });
+  const first = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const stem = first.targets[0].reportPath.replace(/\.md$/, '');
+  fs.writeFileSync(first.targets[0].reportPath, '# header\n');
+  fs.writeFileSync(`${stem}.part01.md`, '<!-- checklist: src/a.ts\n[x] ts#1 — OK\n-->\n<!-- coverage: src/a.ts 1/1 -->\n');
+  // A part the run died writing before its marker: that file is not done.
+  fs.writeFileSync(`${stem}.part02.md`, '## src/b.ts\n');
+
+  const second = rc.buildContext({ mode: 'auto', project: dir, skillDir, sinceLast: true, now: new Date(2026, 6, 8, 11, 30) });
+  const target = second.targets[0];
+  assert.strictEqual(target.reportPath, first.targets[0].reportPath, 'the parts are assembled into the interrupted report');
+  assert.deepStrictEqual(target.resume, { from: '2026-07-08-10-00', doneFiles: ['src/a.ts'], headerWritten: true });
+  assert.deepStrictEqual(target.files.map((f) => f.path), ['src/a.ts', 'src/b.ts'], 'numbering keeps every file');
+  assert.ok(second.warnings.some((w) => /--since-last is ignored while resuming/.test(w)));
+
+  commitFile(dir, 'src/b.ts', 'const b = 2;\n', 'fix b');
+  const third = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 12, 0) });
+  assert.ok(!('resume' in third.targets[0]), 'parts of other content are never resumed');
+  assert.ok(third.targets[0].reportPath.endsWith('-2026-07-08-12-00.md'));
+  assert.ok(third.warnings.some((w) => /different content/.test(w)));
+});
+
+test('writeContext puts the context in a file and prints a summary', (t) => {
+  const dir = tempDir(t, 'cr-ctx-');
+  const reportPath = path.join(dir, 'b', 'b-2026-07-08-10-00.md');
+  fs.mkdirSync(path.dirname(reportPath));
+  const context = {
+    outputFormat: 'md', errors: [], warnings: ['w'],
+    targets: [{ kind: 'branch', branch: 'b', reportPath, files: [{ path: 'a.ts', plan: 0 }] }],
+  };
+  const summary = rc.writeContext(context);
+  assert.deepStrictEqual(summary, {
+    contextPath: path.join(dir, 'b', '.review-context-branch.json'),
+    errors: [], warnings: ['w'],
+    targets: [{ branch: 'b', files: 1, reportPath, resumed: false }],
+  });
+  const written = fs.readFileSync(summary.contextPath, 'utf8');
+  assert.deepStrictEqual(JSON.parse(written), { outputFormat: 'md', targets: context.targets });
+  assert.ok(written.split('\n').length > 5, 'laid out one element per line');
+  const failed = { targets: [], errors: ['x'] };
+  assert.strictEqual(rc.writeContext(failed), failed, 'no target, nothing to put in a file');
 });

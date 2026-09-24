@@ -134,7 +134,9 @@ last guard against deleting work the verification gate stopped from being commit
 ## The gate
 
 Whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
-`type-check`), `test`, `build`. Missing scripts are `skipped`, not failures; so is the whole gate when
+`type-check`), `test:unit` (else `test`), `build`. `test:unit` comes first because a project that has
+both usually keeps `test` for everything, an e2e suite included, and that suite cannot pass in a
+worktree with no backend. Missing scripts are `skipped`, not failures; so is the whole gate when
 there is no `package.json`, the dependency install failed, or there is no lockfile to install from.
 A skipped gate is never a red one. Neither is a `partial` one: a `--only=<step>` re-run reports
 `partial` however well that step went, because it never looked at the others — only a full pass can
@@ -144,7 +146,7 @@ answer for the whole gate, and only a green full pass lets the run commit.
 when the run started. That is the change the rename is about: the gate used to be a guard that only
 had to stay as green as it was found, and it is now a job.
 
-The agent reads the failing command's log, repairs the cause, and runs the gate again, with a budget
+The agent reads the failing command's errors, repairs the cause, and runs the gate again, with a budget
 of **three passes**. Still red after the third: no commit, no push, no resolve, and the worktree is
 left in place for inspection.
 
@@ -158,9 +160,17 @@ the project's own test runner understands (`--run` for Vitest, `--ci --watchAll=
 `--watch=false` for Angular and Karma), gives each command a finite timeout, and treats a timeout as a
 failure rather than a hang.
 
+Whether a command passed is its exit code, never the agent's reading of what it printed. A passing
+command's output is never read at all.
+
 Each command's output goes to its own log file next to the report, capped at the last 256 KB — the end,
-where a runner puts its failure summary. The agent is handed the path, never the contents, which is the
-same discipline the skill applies to comment bodies.
+where a runner puts its failure summary. That log is for the user. A failed command also gets
+`<step>.errors.log`, cut out of the whole output by the script: the failure lines alone, with the line
+each sits under and the lines that belong to it (a stack, a code frame, an expected/received pair).
+Passing tests, progress counters, console output, the package manager's epilogue and stack frames
+inside `node_modules` stay out, and the excerpt stops at 200 lines. The agent is handed that path and
+reads only that file; the full log it may only Grep, for one test name the excerpt left without its
+cause. It is the same discipline the skill applies to comment bodies.
 
 ## Order of work
 
@@ -177,7 +187,7 @@ comment under `## Naprawione`, `## Odrzucone` and `## Bez akcji`, then `## Napra
 `## Weryfikacja` and `## Wynik`.
 
 Next to it sit the collected-comments JSON the agent read (`{branch}-fix-pr-{stamp}.json`) and the
-gate's logs (`{branch}-fix-pr-checks/{step}.log`). The stamped files are capped at the 30 newest per
+gate's logs (`{branch}-fix-pr-checks/{step}.log`, plus `{step}.errors.log` for a failed step). The stamped files are capped at the 30 newest per
 folder, like the codeReview reports they share the directory with; the log directory is unstamped and
 each run overwrites it. Everything lives outside the worktree on purpose, so writing a report or a
 build log can never end up in the commit.
@@ -196,6 +206,15 @@ credential store, `.netrc`, the `gh` config file, then the `gh` CLI, in that ord
 required. The account needs write access to the repository; resolving another person's thread also needs
 write access, and a token without it produces a warning and leaves those threads open.
 
+## Lean mode
+
+The orchestrator and every fix agent run in the plugin's lean mode (caveman ultra).
+The orchestrator reads the rules from the block at the top of `SKILL.md`, and each fix agent receives them from the plugin's `SubagentStart` hook.
+The brief in `references/fix-agent.md` carries none of it.
+Pull request replies, commit messages and the agent's report file stay normal prose.
+With the headroom proxy installed, the whole run also goes through context compression.
+[`../../shared/README.md`](../../shared/README.md) describes both.
+
 ## Files
 
 | Path | Role |
@@ -204,7 +223,7 @@ write access, and a token without it produces a warning and leaves those threads
 | `references/fix-agent.md` | the background agent's prompt: verdicts, fixes, gate, commit, push |
 | `scripts/pr-api.cjs` | GraphQL review threads and the resolve mutation, plus the two REST lists |
 | `scripts/pr-comments.cjs` | argument parsing, the commit prefix and `CR` message, and the per-branch comment JSON |
-| `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step |
+| `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
 | `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap, removal |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed |
 | `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled, so the orchestrator hands the agent a path instead of carrying the brief twice |

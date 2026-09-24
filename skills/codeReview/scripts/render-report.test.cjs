@@ -1567,6 +1567,40 @@ test('a collision id from a project rulebook is known, not reported as invented'
   assert.match(report.warnings[0], /nieistniejaca/);
 });
 
+test('parseRuleField reads a bare <id>#<n> address next to a prose rule', () => {
+  assert.deepStrictEqual(rr.parseRuleField('security#3; general.md → spójność'), [
+    { file: 'security', rule: '', address: { id: 'security', n: 3 } },
+    { file: 'general.md', rule: 'spójność' },
+  ]);
+  assert.strictEqual(rr.parseRuleField('security#3; security#4').length, 2, 'two items of one instruction stay two tags');
+});
+
+test('resolveRuleAddresses expands an address into the item text and flags an unknown one', (t) => {
+  const dir = tempDir(t, 'cr-addr-');
+  const dest = path.join(dir, '.claude', 'doh', 'instructions', 'local');
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(path.join(dest, 'own-rules.md'), '---\nname: Own\n---\n- first rule\n- {styles} second rule\n', 'utf8');
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '🟡 **Średni**',
+    '- **Linia:** 1',
+    '- **Problem:** p',
+    '- **Reguła:** own-rules#2; own-rules#9',
+    '- **Expected Result:** e',
+    '- **PR Problem:** p',
+    '- **PR Expected:** e',
+    '- **PR Locations:** l',
+  ));
+  rr.resolveRuleAddresses(report, dir);
+  const finding = report.files[0].findings[0];
+  assert.deepStrictEqual(finding.tags, [
+    { file: 'own-rules.md', rule: 'second rule' },
+    { file: 'own-rules', rule: 'own-rules#9' },
+  ]);
+  assert.strictEqual(finding.rule, 'own-rules.md → second rule; own-rules → own-rules#9');
+  assert.ok(report.warnings.some((w) => /own-rules#9/.test(w)), 'an address past the checklist is reported');
+});
+
 test('the page script the renderer emits actually parses', () => {
   // Those 35 kB of browser code live inside a template string: nothing compiles
   // them, so a typo would ship and only show up as a blank report page in front
@@ -1730,3 +1764,16 @@ test('a path holding a space keeps its coverage proof', () => {
   assert.deepStrictEqual(bad.coverage, []);
 });
 
+
+// One `git diff` now serves the whole report, so its failure is not one file's
+// missing snippet - it is every file's. That has to be said, or a report with no
+// add/del marks anywhere reads as a diff that changed nothing.
+test('a diff call that answers nothing warns once instead of silently flattening every snippet', (t) => {
+  const root = tempDir(t, 'doh-diff-');
+  const report = { files: [{ path: 'a.ts', findings: [] }], warnings: [] };
+  // `--base` that no repository resolves: the range call fails, and there is no
+  // per-file retry left to hide it.
+  rr.attachSnippets(report, root, { mode: 'branch', branch: 'no-such-branch', base: 'no-such-base' });
+  assert.equal(report.warnings.length, 1);
+  assert.match(report.warnings[0], /git diff/);
+});
