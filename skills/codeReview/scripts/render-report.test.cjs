@@ -685,6 +685,54 @@ test('parseLineRanges reads numbers and spans and drops everything else', () => 
   assert.deepStrictEqual(rr.parseLineRanges(''), []);
 });
 
+// The reviewer meets `L12` in its own checklist lines and em dashes all over its
+// instructions, so those spellings of the same list are read, not dropped - a
+// dropped entry used to cost the finding its code snippet without a word.
+test('parseLineRanges reads the other spellings of the same line list', () => {
+  const twoLines = [{ start: 12, end: 12 }, { start: 18, end: 18 }];
+  assert.deepStrictEqual(rr.parseLineRanges('L12, L18'), twoLines);
+  assert.deepStrictEqual(rr.parseLineRanges('l12, L18'), twoLines);
+  assert.deepStrictEqual(rr.parseLineRanges('12; 18'), twoLines);
+  assert.deepStrictEqual(rr.parseLineRanges('`12`, `18`'), twoLines);
+  assert.deepStrictEqual(rr.parseLineRanges('L12-L15'), [{ start: 12, end: 15 }]);
+  assert.deepStrictEqual(rr.parseLineRanges('L12-15'), [{ start: 12, end: 15 }]);
+  assert.deepStrictEqual(rr.parseLineRanges('12—15'), [{ start: 12, end: 15 }]);
+  assert.deepStrictEqual(rr.parseLineRanges('12 − 15'), [{ start: 12, end: 15 }]);
+  assert.deepStrictEqual(rr.parseLineRanges('12 (metoda `load`, szablon), 18'), twoLines);
+  assert.deepStrictEqual(
+    rr.parseLineRanges('12 (to samo w user.service.ts:80)'),
+    [{ start: 12, end: 12 }],
+    'a number inside a note often belongs to another file, so it is never read as a line of this one',
+  );
+  assert.deepStrictEqual(rr.buildSnippet(Array.from({ length: 20 }, (_, i) => `line ${i + 1}`), 'L10-L11').hits, [10, 11]);
+});
+
+test('parseReport reads a Linia spelled with L-prefixes without a warning', () => {
+  const report = rr.parseReport(reportOf('## a.ts', '', findingOf({ lines: 'L12, L18-L20' })));
+  assert.deepStrictEqual(report.warnings, []);
+  assert.strictEqual(report.files[0].findings[0].lines, 'L12, L18-L20', 'the field is shown as written');
+});
+
+test('parseReport names a Linia entry that is not a line number and keeps the rest', () => {
+  const report = rr.parseReport(reportOf('## a.ts', '', findingOf({ lines: 'cały plik, 4, 9-2' })));
+  const warning = report.warnings.find((w) => /pole "Linia"/.test(w));
+  assert.ok(warning, 'the unreadable entries are reported');
+  assert.match(warning, /^a\.ts: /);
+  assert.match(warning, /"cały plik"/);
+  assert.match(warning, /"9-2"/, 'a backwards span is named too');
+  assert.ok(!/"4"/.test(warning), 'the entry that was read is not named');
+});
+
+test('parseReport warns when Linia points at no line at all', () => {
+  for (const lines of ['cały plik', '(szablon)', '0']) {
+    const report = rr.parseReport(reportOf('## a.ts', '', findingOf({ lines })));
+    assert.ok(
+      report.warnings.some((w) => /pole "Linia"/.test(w) && /nie wskazuje żadnej linii/.test(w)),
+      `"${lines}" yields no line, so the finding would render without code`,
+    );
+  }
+});
+
 test('buildSnippet marks the cited lines and pads them with context', () => {
   const source = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
   const snippet = rr.buildSnippet(source, '10');

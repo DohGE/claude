@@ -597,6 +597,21 @@ test('a gate sentence reaches the context under the instruction id', (t) => {
   assert.deepStrictEqual(ctx.checklistGates, { gated: 'the file renders UI' });
 });
 
+test('findings: per-file reaches the context under the instruction id, and a misspelt value warns', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/per-file']);
+  commitFile(dir, 'src/a.ts', 'const a = 1;\n', 'feat');
+  const skillDir = makeSkillDir(t, {}, {
+    'coverage.md': '---\nname: Coverage\nfindings: per-file\n---\n- one\n- two\n',
+    'typo.md': '---\nname: Typo\nfindings: per-files\n---\n- rule\n',
+    'plain.md': '---\nname: Plain\n---\n- rule\n',
+  });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.checklistPerFile, ['coverage']);
+  const res = rc.loadInstructions(path.join(skillDir, 'instructions'), 'review');
+  assert.ok(res.warnings.some((w) => /Unknown findings "per-files"/.test(w) && /typo\.md/.test(w)), res.warnings.join('\n'));
+});
+
 test('an applies-to the block parser cannot read warns, and says which way it fails', (t) => {
   // A YAML flow sequence is valid YAML and renders the same, but leaves no
   // patterns - and the two buckets then fail in OPPOSITE directions, which is
@@ -731,14 +746,28 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.strictEqual(added.changedLines, null, 'added files: every line is new');
   assert.strictEqual(added.diffCommand, undefined, 'per-file command strings are gone');
   assert.strictEqual(added.showCommand, undefined, 'per-file command strings are gone');
-  assert.ok(t0.commands.show.includes('show "feature/auto:<path>"'), 'one show template per target');
-  assert.ok(t0.commands.show.endsWith('| cat -n'), 'show output is line-numbered');
-  assert.ok(t0.commands.diff.includes('diff main...feature/auto'));
-  assert.ok(t0.commands.diff.includes('"<path>"'), 'templates carry the <path> placeholder');
+  assert.deepStrictEqual(Object.keys(t0.commands), ['grep'], 'content and diff are files to Read, not commands');
+  assert.strictEqual(t0.workDir, t0.reportPath.replace(/\.md$/, '.work').replace(/\\/g, '/'));
+  assert.ok(added.contentPath.startsWith(`${t0.workDir}/`) && added.contentPath.endsWith('/02-a.ts'), added.contentPath);
+  assert.strictEqual(fs.readFileSync(added.contentPath, 'utf8'), 'const a = 1;\n', 'the reviewed revision, from the work folder');
+  assert.strictEqual(added.diffPath, null, 'an added file has no diff - every line is new');
   const modified = t0.files.find((f) => f.path === 'config/app.json');
   assert.strictEqual(modified.status, 'M');
   assert.strictEqual(modified.changedLines, '2', 'script precomputes new-file changed lines');
+  assert.ok(modified.contentPath.endsWith('/01-app.json'), 'numbered like the part the file is reviewed into');
+  assert.strictEqual(fs.readFileSync(modified.contentPath, 'utf8'), '{\n  "a": 2\n}\n');
+  assert.strictEqual(modified.diffPath, `${modified.contentPath}.diff`);
+  const patch = fs.readFileSync(modified.diffPath, 'utf8');
+  assert.match(patch, /^diff --git a\/config\/app\.json b\/config\/app\.json\n/, 'the file\'s own section of the patch');
+  assert.match(patch, /^\+ {2}"a": 2$/m);
+  assert.doesNotMatch(patch, /src\/a\.ts/, 'and no other file\'s');
   assert.deepStrictEqual(ctx.localInstructionsCatalog.map((e) => path.basename(e.path)), ['ts.md']);
+  const numbered = fs.readFileSync(ctx.localInstructionsCatalog[0].numberedPath, 'utf8');
+  assert.match(numbered, /^- ts#1: /m, 'the reviewer reads a copy whose bullets carry their address');
+  assert.strictEqual(
+    (numbered.match(/^- ts#\d+: /gm) || []).length,
+    rc.countChecklistItems(ctx.localInstructionsCatalog[0].path),
+  );
   assert.deepStrictEqual(added.localInstructions, [0], 'per-file matches are catalog indexes');
   assert.deepStrictEqual(modified.localInstructions, []);
   assert.strictEqual(ctx.claudeMd, null);
@@ -761,7 +790,6 @@ test('auto mode diffs against the open PR base and names its source', (t) => {
   assert.strictEqual(t0.baseBranch, 'main', 'the PR base wins over the forked-from develop');
   assert.strictEqual(t0.baseSource, 'pr');
   assert.strictEqual(t0.prNumber, 42);
-  assert.ok(t0.commands.diff.includes('diff main...feature/pr-target'));
   assert.deepStrictEqual(t0.files.map((f) => f.path), ['d.json', 'src/a.ts'], 'develop`s commit is part of the PR diff');
 });
 
@@ -854,13 +882,13 @@ test('staged mode lists index files with index show commands', (t) => {
   const ts = t0.files.find((f) => f.path === 'app.ts');
   assert.strictEqual(ts.status, 'A');
   assert.strictEqual(ts.changedLines, null);
-  assert.ok(t0.commands.show.includes('show ":<path>"'), 'index show template');
-  assert.ok(t0.commands.show.endsWith('| cat -n'));
-  assert.ok(t0.commands.diff.includes('diff --cached'));
-  assert.ok(t0.commands.diff.includes('"<path>"'));
+  assert.strictEqual(fs.readFileSync(ts.contentPath, 'utf8'), 'const x = 1;\n', 'the index version, from the work folder');
+  assert.strictEqual(ts.diffPath, null);
   const del = t0.files.find((f) => f.path === 'old.css');
   assert.strictEqual(del.status, 'D');
   assert.strictEqual(del.changedLines, null, 'deleted files have no new-file lines');
+  assert.strictEqual(del.contentPath, null, 'a deleted file has no content');
+  assert.match(fs.readFileSync(del.diffPath, 'utf8'), /^-body \{\}$/m, 'only what it lost');
   const staged = t0.files.find((f) => f.path === 'config/app.json');
   assert.strictEqual(staged.status, 'M');
   assert.strictEqual(staged.changedLines, '2', 'staged ranges come from git diff --cached -U0');
@@ -1022,15 +1050,19 @@ test('parseChecklistItems reads the scope tag of every item, numbering unchanged
     '- {styles} a stylesheet rule',
     '- {markup, styles} a rule for both',
     '- `@defer` is not a scope tag',
+    '- {+markup} a rule carried to templates',
+    '- {styles, + Markup} narrowed and carried',
     '',
   ].join('\n'));
   assert.deepStrictEqual(rc.parseChecklistItems(file), [
-    { n: 1, scopes: [], text: 'plain rule' },
-    { n: 2, scopes: ['styles'], text: 'a stylesheet rule' },
-    { n: 3, scopes: ['markup', 'styles'], text: 'a rule for both' },
-    { n: 4, scopes: [], text: '`@defer` is not a scope tag' },
+    { n: 1, scopes: [], reach: [], text: 'plain rule' },
+    { n: 2, scopes: ['styles'], reach: [], text: 'a stylesheet rule' },
+    { n: 3, scopes: ['markup', 'styles'], reach: [], text: 'a rule for both' },
+    { n: 4, scopes: [], reach: [], text: '`@defer` is not a scope tag' },
+    { n: 5, scopes: [], reach: ['markup'], text: 'a rule carried to templates' },
+    { n: 6, scopes: ['styles'], reach: ['markup'], text: 'narrowed and carried' },
   ]);
-  assert.strictEqual(rc.countChecklistItems(file), 4, 'numbering still counts every bullet');
+  assert.strictEqual(rc.countChecklistItems(file), 6, 'numbering still counts every bullet');
   const fm = rc.parseFrontmatter(fs.readFileSync(file, 'utf8'));
   assert.deepStrictEqual(fm.scopes, { styles: ['**/*.scss', '**/*.css'], markup: ['**/*.html'] });
 });
@@ -1050,6 +1082,60 @@ test('matchChecklistItems keeps untagged items and narrows the tagged ones', () 
     [1, 4],
     'an undeclared scope name fails open - a typo never deletes a rule',
   );
+});
+
+test('matchChecklistItems carries a +scope item past the instruction\'s own scope, and only that item', () => {
+  const items = [
+    { n: 1, scopes: [], reach: [] },
+    { n: 2, scopes: [], reach: ['routes'] },
+    { n: 3, scopes: ['spec'], reach: ['spec'] },
+    { n: 4, scopes: [], reach: ['typo'] },
+  ];
+  const named = { routes: ['**/*.routes.ts'], spec: ['**/*.guard.spec.ts'] };
+  assert.deepStrictEqual(rc.matchChecklistItems(items, named, 'src/a.guard.ts'), [1, 2, 4], 'in scope: the reach adds nothing and takes nothing away');
+  assert.deepStrictEqual(rc.matchChecklistItems(items, named, 'src/a.routes.ts', false), [2], 'out of scope: only the item reaching the file');
+  assert.deepStrictEqual(
+    rc.matchChecklistItems(items, named, 'src/a.guard.spec.ts', false),
+    [3],
+    'narrowed to a scope and reaching the same one = walked exactly there',
+  );
+  assert.deepStrictEqual(rc.matchChecklistItems(items, named, 'src/b.ts', false), [], 'an undeclared reach name reaches nothing');
+  assert.deepStrictEqual(
+    rc.itemsWalkedBy(items, { appliesTo: ['**/*.guard.ts'], itemScopes: named }, false, 'src\\a.routes.ts'),
+    [2],
+    'itemsWalkedBy decides the own scope from applies-to',
+  );
+  assert.deepStrictEqual(rc.itemsWalkedBy(items, { appliesTo: [], itemScopes: named }, true, 'src/b.ts'), [1, 2, 4], 'a global without applies-to is in scope everywhere');
+});
+
+test('a reaching item brings its instruction into the plan of a file outside applies-to', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feature/reach']);
+  commitFile(dir, 'src/a.guard.ts', 'export const aGuard = () => true;\n', 'guard');
+  commitFile(dir, 'src/a.routes.ts', 'export const routes = [];\n', 'routes');
+  commitFile(dir, 'src/a.util.ts', 'export const x = 1;\n', 'util');
+  const skillDir = makeSkillDir(t, {
+    'guards.md': [
+      '---',
+      'name: Guards',
+      'applies-to:',
+      '  - "**/*.guard.ts"',
+      'scopes:',
+      '  routes: ["**/*.routes.ts"]',
+      '---',
+      '- functional guard',
+      '- {+routes} a guard factory is invoked inside canActivate',
+      '',
+    ].join('\n'),
+  });
+  const ctx = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0) });
+  const files = ctx.targets[0].files;
+  const byPath = (p) => files.find((f) => f.path === p);
+  assert.deepStrictEqual(checklistOf(ctx, byPath('src/a.guard.ts')), ['guards:1-2']);
+  assert.deepStrictEqual(checklistOf(ctx, byPath('src/a.routes.ts')), ['guards:2'], 'the routes file walks the reaching item only');
+  assert.strictEqual(byPath('src/a.routes.ts').checklistTotal, 1);
+  assert.strictEqual(byPath('src/a.routes.ts').localInstructions.length, 1, 'and reads the instruction it comes from');
+  assert.deepStrictEqual(checklistOf(ctx, byPath('src/a.util.ts')), [], 'a file no item reaches stays out');
 });
 
 test('item scope tags narrow the plan and the total, and a fully out-of-scope instruction drops out', (t) => {
@@ -1093,11 +1179,12 @@ test('item scope tags narrow the plan and the total, and a fully out-of-scope in
 
 test('an item scope tag naming an undeclared scope warns, and so does a scope no item uses', (t) => {
   const skillDir = makeSkillDir(t, {
-    'typo.md': '---\nname: Typo\napplies-to:\n  - "**/*.ts"\nscopes:\n  styles: ["**/*.scss"]\n  unused: ["**/*.css"]\n---\n- {stlyes} misspelled\n',
+    'typo.md': '---\nname: Typo\napplies-to:\n  - "**/*.ts"\nscopes:\n  styles: ["**/*.scss"]\n  unused: ["**/*.css"]\n  reached: ["**/*.html"]\n---\n- {stlyes} misspelled\n- {+rouets} misspelled reach\n- {+reached} used only as a reach\n',
   });
   const res = rc.loadInstructions(path.join(skillDir, 'instructions'));
-  assert.ok(res.warnings.some((w) => /not declared in the "scopes:" frontmatter.*stlyes/.test(w)), res.warnings.join('\n'));
-  assert.ok(res.warnings.some((w) => /Declared scope\(s\) no checklist item uses: styles, unused/.test(w)), res.warnings.join('\n'));
+  assert.ok(res.warnings.some((w) => /scope\(s\) not declared in the "scopes:" frontmatter \(items kept unnarrowed\): stlyes /.test(w)), res.warnings.join('\n'));
+  assert.ok(res.warnings.some((w) => /reach scope\(s\) not declared .*: \+rouets /.test(w)), res.warnings.join('\n'));
+  assert.ok(res.warnings.some((w) => /Declared scope\(s\) no checklist item uses: styles, unused /.test(w)), res.warnings.join('\n'));
 });
 
 test('globalInstructions lists only the globals some reviewed file actually walks', (t) => {
@@ -1146,17 +1233,16 @@ test('the shipped rulebook loads clean: every scope tag resolves and every scope
     'src/app/a/shared/interceptors/a.interceptor.ts', 'src/app/a/shared/routes/a.routes.ts',
     'src/app/app.config.ts', 'src/main.ts', 'src/assets/i18n/en.json', 'tsconfig.json',
     'src/app/a/shared/utils/tests/build-a.util.spec.snap',
+    'src/app/a/components-a/feature/c/c.component.html', 'src/app/a/shared/index.ts',
+    'src/app/a/data-access/services/tests/a.service.spec.ts', 'src/app/a/shared/routes/tests/a.routes.spec.ts',
+    'src/assets/i18n/tests/en.json.spec.ts',
   ];
   for (const file of [...res.globals, ...res.locals.map((l) => l.file)]) {
     const items = rc.parseChecklistItems(file);
     if (items.length === 0) continue;
     const walked = new Set();
     for (const kind of kinds) {
-      const inScope = res.globals.includes(file)
-        ? rc.matchGlobalInstructions(res.globals, res.scopes, kind).includes(file)
-        : rc.matchLocalInstructions(res.locals, kind).includes(file);
-      if (!inScope) continue;
-      for (const n of rc.matchChecklistItems(items, res.scopes[file].itemScopes, kind)) walked.add(n);
+      for (const n of rc.itemsWalkedBy(items, res.scopes[file], res.globals.includes(file), kind)) walked.add(n);
     }
     const unreachable = items.map((i) => i.n).filter((n) => !walked.has(n));
     assert.deepStrictEqual(unreachable, [], `${path.basename(file)}: item(s) no file kind walks`);
@@ -1293,18 +1379,73 @@ test('pruneReports keeps only the newest N run-stamped reports', (t) => {
   assert.ok(fs.existsSync(path.join(dir, 'notes.txt')), 'non-md files are untouched');
 });
 
-test('pruneReports drops an import ledger whose run left no parts', (t) => {
+test('pruneReports drops an import ledger and a work folder whose run left no parts', (t) => {
   const dir = tempDir(t, 'cr-reports-');
   const branch = path.join(dir, 'main');
   fs.mkdirSync(branch);
   fs.writeFileSync(path.join(branch, 'main-2026-01-01-10-00.imports.txt'), 'orphan');
+  fs.mkdirSync(path.join(branch, 'main-2026-01-01-10-00.work'));
+  fs.writeFileSync(path.join(branch, 'main-2026-01-01-10-00.work', '1-a.ts'), 'orphan');
   fs.writeFileSync(path.join(branch, 'main-2026-01-02-10-00.imports.txt'), 'pending');
+  fs.mkdirSync(path.join(branch, 'main-2026-01-02-10-00.work'));
   fs.writeFileSync(path.join(branch, 'main-2026-01-02-10-00.part01.md'), 'part');
   rc.pruneReports(dir, 3);
   assert.deepStrictEqual(fs.readdirSync(branch).sort(), [
     'main-2026-01-02-10-00.imports.txt',
     'main-2026-01-02-10-00.part01.md',
-  ], 'the ledger of an interrupted run waits for its resume');
+    'main-2026-01-02-10-00.work',
+  ], 'what an interrupted run left waits for its resume');
+});
+
+test('splitPatchByPath hands every file its own section, renames and deletions included', () => {
+  const patch = [
+    'diff --git a/src/old.ts b/src/new.ts',
+    'similarity index 90%',
+    'rename from src/old.ts',
+    'rename to src/new.ts',
+    'index 1111111..2222222 100644',
+    '--- a/src/old.ts',
+    '+++ b/src/new.ts',
+    '@@ -1 +1 @@',
+    '-const a = 1;',
+    '+const a = 2;',
+    'diff --git a/gone.css b/gone.css',
+    'deleted file mode 100644',
+    'index 3333333..0000000',
+    '--- a/gone.css',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-body {}',
+    'diff --git a/pure move.ts b/moved/pure move.ts',
+    'similarity index 100%',
+    'rename from pure move.ts',
+    'rename to moved/pure move.ts',
+    'diff --git a/logo.png b/logo.png',
+    'index 4444444..5555555 100644',
+    'Binary files a/logo.png and b/logo.png differ',
+    'diff --git "a/tab\\there.ts" "b/tab\\there.ts"',
+    'new file mode 100644',
+    'index 0000000..6666666',
+    '--- /dev/null',
+    '+++ "b/tab\\there.ts"',
+    '@@ -0,0 +1 @@',
+    '++++ b/not-a-header',
+  ].join('\n');
+  const byPath = rc.splitPatchByPath(patch);
+  assert.deepStrictEqual([...byPath.keys()], ['src/new.ts', 'gone.css', 'moved/pure move.ts', 'logo.png', 'tab\there.ts']);
+  assert.match(byPath.get('src/new.ts'), /^rename from src\/old\.ts$/m, 'a rename stays a rename');
+  assert.doesNotMatch(byPath.get('src/new.ts'), /gone\.css/);
+  assert.match(byPath.get('gone.css'), /^-body \{\}$/m);
+  assert.strictEqual(rc.unquoteGitPath('"\\303\\251.ts"'), 'é.ts');
+});
+
+test('numberChecklist prefixes exactly the bullets parseChecklistItems counts', (t) => {
+  const file = path.join(tempDir(t, 'cr-numbered-'), 'n.md');
+  const text = '---\nname: N\nscopes:\n  - "**/*.ts"\n---\n# N\n- first\n  - nested, not an item\n- {ts} second\n* not an item\n-not an item\n- third\n';
+  fs.writeFileSync(file, text);
+  const numbered = rc.numberChecklist(text, 'n');
+  assert.strictEqual(numbered, '---\nname: N\nscopes:\n  - "**/*.ts"\n---\n# N\n- n#1: first\n  - nested, not an item\n- n#2: {ts} second\n* not an item\n-not an item\n- n#3: third\n');
+  assert.deepStrictEqual(rc.parseChecklistItems(file).map((i) => i.n), [1, 2, 3]);
 });
 
 test('pruneReports counts html reports toward the same cap', (t) => {
@@ -1390,10 +1531,12 @@ test('folder mode reviews every file under the folder as added', (t) => {
     assert.strictEqual(f.status, 'A', 'folder files get the added-file treatment');
     assert.strictEqual(f.changedLines, null);
   }
-  assert.strictEqual(t0.commands.diff, null, 'folder mode has no diffs');
-  assert.ok(t0.commands.show.startsWith('cat "'), 'working-tree files are read with cat');
-  assert.ok(t0.commands.show.endsWith('| cat -n'));
-  assert.ok(t0.commands.show.includes('/<path>"'), 'template turns the relative path into an absolute one');
+  assert.deepStrictEqual(Object.keys(t0.commands), ['grep']);
+  for (const f of t0.files) {
+    assert.strictEqual(f.diffPath, null, 'folder mode has no diffs');
+    assert.strictEqual(f.contentPath, `${dir.replace(/\\/g, '/')}/${f.path}`, 'working-tree files are read in place');
+  }
+  assert.deepStrictEqual(fs.readdirSync(t0.workDir), [], 'so the work folder only waits for searches');
   assert.deepStrictEqual(t0.skipped, ['src/app/logo.png']);
   const comp = t0.files.find((f) => f.path === 'src/app/a.component.ts');
   assert.deepStrictEqual(comp.localInstructions, [0], 'local instructions match folder files too');
@@ -1578,15 +1721,14 @@ test('every checklist item has a file in the test environment that reaches it', 
   const res = rc.loadInstructions(path.join(skill, 'instructions'), 'review');
   const unreachable = [];
   for (const file of [...res.globals, ...res.locals.map((l) => l.file)]) {
-    const meta = res.scopes[file] || {};
-    const itemScopes = meta.itemScopes || {};
     const isGlobal = res.globals.includes(file);
-    const targets = live.filter((f) => rc.matchesScope(meta.appliesTo || [], f, isGlobal));
-    for (const item of rc.parseChecklistItems(file)) {
-      const tags = item.scopes || [];
-      const reached = targets.some((f) => !tags.length
-        || tags.some((t) => rc.matchesScope(itemScopes[t] || [], f, false)));
-      if (!reached) unreachable.push(path.relative(skill, file) + ' #' + item.n);
+    const items = rc.parseChecklistItems(file);
+    const walked = new Set();
+    for (const f of live) {
+      for (const n of rc.itemsWalkedBy(items, res.scopes[file], isGlobal, f)) walked.add(n);
+    }
+    for (const item of items) {
+      if (!walked.has(item.n)) unreachable.push(path.relative(skill, file) + ' #' + item.n);
     }
   }
   assert.deepStrictEqual(unreachable, [], 'these checklist items have nothing to bite on');
@@ -1827,15 +1969,25 @@ test('each target carries a search over the revision it reviews', (t) => {
   commitFile(dir, 'src/a.ts', 'export const answer = 42;\n', 'a');
   const branch = rc.buildContext({ mode: 'branches', branches: 'feature/grep', project: dir, skillDir, now }).targets[0];
   run(dir, ['checkout', '-q', 'main']);
-  const found = spawnSync(branch.commands.grep.replace('<pattern>', 'answer = [0-9]+'), { shell: true, encoding: 'utf8' });
-  assert.match(found.stdout, /src\/a\.ts:1:export const answer = 42;/, found.stderr);
+  // The template is POSIX shell (the reviewer's Bash). `sh`, not `bash`: on Windows a
+  // bare `bash` can be WSL's, which cannot see these paths.
+  const found = spawnSync('sh', ['-c', branch.commands.grep.replace('<pattern>', 'answer = [0-9]+')], { encoding: 'utf8' });
+  if (found.error) {
+    t.diagnostic(`no POSIX sh on PATH (${found.error.code}) - the search itself was not run`);
+  } else {
+    const summary = found.stdout.match(/^\s*(\d+) match\(es\) -> (.+)$/m);
+    assert.ok(summary, `the command prints a count and a file, not the matches: ${found.stdout}${found.stderr}`);
+    assert.strictEqual(summary[1], '1');
+    assert.ok(summary[2].startsWith(`${branch.workDir}/grep-`), summary[2]);
+    assert.match(fs.readFileSync(summary[2].trim(), 'utf8'), /src\/a\.ts:1:export const answer = 42;/);
+  }
 
   fs.mkdirSync(path.join(dir, 'src'));
   fs.writeFileSync(path.join(dir, 'src', 'b.ts'), 'const b = 2;\n');
   const staged = rc.buildContext({ mode: 'staged', project: dir, skillDir, now }).targets[0];
-  assert.match(staged.commands.grep, /grep -n -I --cached -E "<pattern>" --$/);
+  assert.match(staged.commands.grep, /grep -n -I --cached -E "<pattern>" -- > "\$f";/);
   const folder = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now }).targets[0];
-  assert.match(folder.commands.grep, /grep -n -I --untracked -E "<pattern>" --$/);
+  assert.match(folder.commands.grep, /grep -n -I --untracked -E "<pattern>" -- > "\$f";/);
 });
 
 test('a duplicate has one severity - in the instruction and in the criteria alike', () => {

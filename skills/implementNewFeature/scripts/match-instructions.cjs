@@ -92,15 +92,16 @@ function buildOutput(options) {
     // and obey that step 6 then never walks or ticks - the same mismatch the comment
     // above describes for globals, one level further down. `general.md` against an
     // `assets/i18n/*.json` file is the shipped example.
-    const walked = (file, p) => reviewContext.matchChecklistItems(
-      reviewContext.parseChecklistItems(file), (scopes || {})[file] && scopes[file].itemScopes, p,
+    // An item tagged `{+scope}` carries its instruction past `applies-to` (a guard
+    // rule into the routes file that registers the guard), so the file list comes
+    // from the items walked, not from the path patterns alone.
+    const walked = (file, p, isGlobal) => reviewContext.itemsWalkedBy(
+      reviewContext.parseChecklistItems(file), (scopes || {})[file], isGlobal, p,
     ).length > 0;
     out.files = files.map((p) => ({
       path: p,
-      globalInstructions: reviewContext.matchGlobalInstructions(globals, scopes || {}, p)
-        .filter((file) => walked(file, p)),
-      localInstructions: reviewContext.matchLocalInstructions(locals, p)
-        .filter((file) => walked(file, p)),
+      globalInstructions: globals.filter((file) => walked(file, p, true)),
+      localInstructions: locals.map((l) => l.file).filter((file) => walked(file, p, false)),
     }));
   } else {
     out.globals = globals;

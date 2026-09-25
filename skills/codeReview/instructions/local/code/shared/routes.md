@@ -2,6 +2,8 @@
 name: Route definitions
 applies-to:
   - "**/*.routes.ts"
+scopes:
+  spec: ["**/*.routes.spec.ts"]
 ---
 ## Checklist
 - The export is `<camelCaseArea>Routes: Routes`; components are loaded lazily with `loadComponent: () => import('...').then((c) => c.<Component>)`.
@@ -13,4 +15,4 @@ applies-to:
 - Route parameters reach the component as signal `input()`s through `withComponentInputBinding()` (path params, query params, `data` and `resolve` keys all bind by name) — a route added in the diff never introduces a new `ActivatedRoute` read for a value the binding already delivers.
 - `data`/`resolve` payloads are typed; a route never carries a plain `Record<string, any>` bag.
 - Import paths inside route files may be relative within the area or aliased when crossing areas; no other logic lives in a routes file.
-- Route files have no unit specs — lazy-load correctness is verified by the build.
+- {+spec} Route files have no unit specs — lazy-load correctness is verified by the build.

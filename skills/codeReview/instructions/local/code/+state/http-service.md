@@ -4,7 +4,9 @@ applies-to:
   - "**/data-access/services/*.service.ts"
   - "**/data-access/services/**/*.service.ts"
   - "!**/*.spec.ts"
-gate: the file is an HTTP layer - it injects an HTTP client (`HttpClient`) or its methods execute REST requests. A service in this folder that performs no request is an architecture finding (wrong location), never a set of HTTP-service findings
+gate: the file is an HTTP layer - it injects an HTTP client (`HttpClient`) or its methods execute REST requests - or it is the spec of such a service. A service in this folder that performs no request is an architecture finding (wrong location), never a set of HTTP-service findings
+scopes:
+  spec: ["**/data-access/services/*.service.spec.ts", "**/data-access/services/**/*.service.spec.ts"]
 ---
 ## Checklist
 - The service is a thin HTTP layer — the only place in the area executing REST requests — injected **exclusively by effects**; never used by components, facades, reducers or selectors.
@@ -20,4 +22,4 @@ gate: the file is an HTTP layer - it injects an HTTP client (`HttpClient`) or it
 - The response generic is an honest contract: `_http.get<UserResponse>(...)` asserts, it does not validate — a new or changed endpoint response interface is verified against the real API contract (field names, casing, nullability) instead of being guessed.
 - Forbidden: injecting the store, cross-area services, keeping state, composing requests (`forkJoin` belongs to effects), `firstValueFrom`/`lastValueFrom`, logging, declaring local interfaces, HTTP interceptors (global ones already apply).
 - `resource()`/`httpResource()` have no home in this architecture — components never fetch, and effects own cancellation and error handling; requests stay `HttpClient` here and reach the component through the store. Their absence is never reported as a modernization gap.
-- No unit tests for a service that only wraps HTTP calls (it is covered through the effects spec); a dedicated spec exists only when the service transforms data — which itself signals the service does too much.
+- {+spec} No unit tests for a service that only wraps HTTP calls (it is covered through the effects spec); a dedicated spec exists only when the service transforms data — which itself signals the service does too much.

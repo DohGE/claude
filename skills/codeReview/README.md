@@ -139,6 +139,19 @@ Numbering never moves: `<id>#<n>` stays the n-th bullet of the file, so narrowin
 An instruction every item of which is out of scope for a file drops out of that file's plan entirely — it is not read, walked or ticked for it.
 A tag naming a scope the frontmatter does not declare keeps the item (a typo must never delete a rule) and is reported as a warning, as is a declared scope no item uses.
 
+A name written `+name` REACHES instead of narrowing: the item is also walked for every file of scope `name`, even one outside the instruction's `applies-to`.
+A rule is often broken in a file its own instruction never covers, and without the reach such a finding has no item to be reported under:
+
+    scopes:
+      routes: ["**/*.routes.ts"]
+    ---
+    ## Checklist
+    - {+routes} A guard factory is invoked inside `canActivate`, never passed uncalled
+
+A reached file's plan carries that instruction with its reaching items only, and a declared `gate:` is answered for it like for any other file.
+Both kinds combine: `{spec, +spec}` is walked for the files of `spec` only, whether or not the instruction covers them.
+A reaching name the frontmatter does not declare reaches nothing (a typo must never spread a rule over the whole diff) and is reported as a warning; a reaching scope needs at least one including pattern.
+
 ### Glob subset
 
 `**` matches any number of directories, `*` matches within one path segment, `?` matches a single character.
@@ -159,8 +172,8 @@ The reviewer walks that list item by item and writes the result next to the file
     <!-- checklist: src/app/user.component.ts
     [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
     [x] general#1-5,#7-13 — OK (brak wystąpień)
-    [x] general#6 nazwy const camelCase — NARUSZENIE (L12, L18)
-    [x] component#1 OnPush — NARUSZENIE (L4)
+    [x] general#6 nazwy const camelCase — NARUSZENIE (12, 18)
+    [x] component#1 OnPush — NARUSZENIE (4)
     [x] component#2-14,#16-27 — OK (brak wystąpień)
     [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
     -->
@@ -206,7 +219,7 @@ Every target is scanned for copy-paste by [jscpd](https://github.com/kucherenko/
 - **What is kept** — only the clone pairs the diff wrote: one side has to be at least half made of changed lines. That side is the copy the finding is anchored on, the other one the source it repeats. Editing one line inside a clone that already existed is therefore not a candidate. jscpd's own `--baseline-from-ref` was measured and rejected for exactly that case: a one-literal edit changes the clone's fingerprint and reads as two new clones.
 - **How it matches** — token runs of at least 30 tokens (`--min-tokens 30`), with renamed identifiers (`--ignore-identifiers`) and one or two inserted or dropped lines (`--max-gap-lines 2`) still matching. jscpd's default of 50 tokens was measured on 15 commits of an Angular monorepo: it listed 24 candidates against 67 at 30, and missed e.g. a nine-line mapping copied within one component. Import statements are skipped, because with identifiers ignored any two import lists match. The AST mode (`--similarity`) is off: on the same monorepo 212 of its 235 pairs were the CLI-generated spec skeleton matched against every other spec. The project's own `.jscpd.json` and `package.json#jscpd` are ignored, so its threshold and ignores never decide what the review sees.
 - **What the review gets** — `target.duplicationCandidates`, at most 50 per target (the overflow is a warning): `{ path, lines, sources: ["<path>:<from>-<to>"], kinds: ["exact" | "renamed" | "similar"] }`. The reviewer opens both sides of each one and dismisses it only when the blocks share no logic: a shape the framework or a generator dictates (a TestBed skeleton, a module or route declaration, a generated `project.json` or `tsconfig`), parallel data (translation files), or the same syntax around different calls and fields.
-- **What jscpd cannot see** — logic written again in other words, or a helper that already exists in a shared folder. For every exported function, class, pipe, directive, validator, util or constant the diff adds, the review therefore searches the reviewed revision itself with `target.commands.grep` (`git grep` over the branch's commit, the index, or the working tree).
+- **What jscpd cannot see** — logic written again in other words, or a helper that already exists in a shared folder. For every exported function, class, pipe, directive, validator, util or constant the diff adds, the review therefore searches the reviewed revision itself with `target.commands.grep` (`git grep` over the branch's commit, the index, or the working tree, its matches written to a file of the target's work folder).
 - **Running it** — `npx --yes jscpd@5.3.1`, pinned because the report shape is read as that version writes it. Nothing is installed into the project; the first run downloads jscpd into the npx cache, later runs are served from it. A scan that cannot run — no npx, offline on the first run, a timeout after 180 s — never stops the review: it becomes a warning, and duplication is then searched for by the review alone.
 
 Step 1 runs only when a remote points at github.com, and needs no tooling at all — see [GitHub access](#github-access). A call that cannot be made warns once and the run starts at step 2.
@@ -277,22 +290,34 @@ They are written for a reviewer who never opens the report: `PR Problem` gets tw
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
 Every file also carries its ticked checklist and coverage marker as HTML comments — see [Checklist coverage](#checklist-coverage).
-Line numbers refer to the file's real content (read off the line-numbered `git show … | cat -n` output), never to diff hunk numbering.
+Line numbers refer to the file's real content (as the Read of the file's `contentPath` numbers it), never to diff hunk numbering.
 The context script additionally precomputes each file's changed-line ranges (`changedLines`, from `git diff -U0`) as the authoritative list of lines the diff touched, and carries the source path of a renamed file (`oldPath`, from the rename pair `git diff --raw` reports) so the rename can be checked against the naming rules.
 No findings → the report is the single line `Nie wykryto problemów.`; empty diff → `Nie wykryto zmian do analizy.`
 
 ## Mechanics
 
-`scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, instruction matching, report paths and ready-to-run git commands.
+`scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, instruction matching, report paths, the files the reviewer reads and a ready-to-run search command.
 It writes the full context to `.review-context-<kind>.json` next to the first report and prints only a summary (`contextPath`, `errors`, `warnings`, one line per target), which the skill then Reads — tool output can be compressed on its way into the conversation, a Read file is not.
 It also writes each target's import ledger (`<report>.imports.txt`, one `<file>:<line> → <specifier>` edge per line, read from the reviewed revision) for the cross-file layering question; files in a language it has no extractor for are named on a `# not parsed` line.
+It writes each target's work folder (`<report>.work/`, the context's `workDir`): every reviewed file's content in the reviewed revision (`contentPath`) and its own section of the target's diff (`diffPath`), both taken from git once and Read by the reviewer file by file.
+A folder review reads the working tree, so its `contentPath` is the file itself and it has no diff.
+`target.commands.grep` searches the reviewed revision into a file of that folder and prints only the match count and the file's path.
+Next to the context it writes `.review-rules-<kind>/`: a copy of every instruction whose checklist items each start with their address (`- general#6: …`, the catalog entry's `numberedPath`), so the reviewer takes every address from that copy instead of counting bullets.
+A write failure there drops the targets it concerns, and a run with no target left exits 1.
 It runs the [duplication scan](#duplication-scan) through `scripts/duplication-scan.cjs`, which fetches jscpd with npx at run time instead of depending on it.
 Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews first run `git add .`, then read index content (`git show :path`).
+
+`scripts/check-part.cjs` (Node, zero dependencies) checks the report's part files against the context, with the grammar `render-report.cjs` parses.
+As the skill's PreToolUse hook it runs on every Write or Edit of a `<report>.partNN.md` file: a failing part is not written (exit 2), and the reviewer gets the list of problems back.
+Run with `--context=<contextPath> --report=<reportPath>`, it checks the whole target before the assembly and exits 1 on any problem, which leaves the parts on disk.
+It holds the part numbering and order, a checklist block covering exactly the file's plan with the marker's total, verdict lines that name their evidence (`OK (L12, L18)` or `OK (brak wystąpień)`, never another item's address), a finding behind every `NARUSZENIE`, at most one item of each instruction per finding (two items of one checklist are two defects, so two findings), gates only where an instruction declares one, and cited lines that exist in the file.
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
 Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source]`.
 It reads the per-file checklist blocks and coverage markers too, and reconciles them: the ticks are recounted, and a short walk, a missing or malformed block or a marker the ticks contradict warns (and keeps the Markdown), while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions. Any other multi-line HTML comment in the report is swallowed whole instead of being read as findings.
 Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
+The cited lines come from `**Linia:**`: bare numbers and spans, plus the other spellings of the same list (`L12`, an em dash or minus sign between the ends, `;` between entries, backticks); a note in parentheses is set aside whole.
+Any other entry warns and names itself, and a field that points at no line at all warns too.
 `--mode` decides what the snippet is: `branch` reads `git show <branch>:<path>` plus `git diff -U0 <base>...<branch>`, `staged` reads the index plus `git diff -U0 --cached`, and both render a real before/after split diff; `folder` (and a missing `--mode`) renders the working-tree file with no diff markers.
 The old-file line numbers the left side prints are derived from the `-U0` hunk headers, which state how far the old numbering runs ahead of the new one from each hunk on.
 The full source of every file with a finding is embedded once per file, so a file with four findings carries one copy, not four.
@@ -314,5 +339,5 @@ Findings anchored on lines the PR diff shows become inline review comments (a wh
 The button is tied to the *branch*, not to the review mode: a `staged` or `folder <path>` review run on a branch that has an open PR gets it too.
 That is intentional but worth knowing — those modes review code the PR diff need not contain, so most or all of their findings end up in the review body rather than pinned to lines.
 
-Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs skills/codeReview/scripts/duplication-scan.test.cjs`
+Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/check-part.test.cjs skills/codeReview/scripts/score-review.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs skills/codeReview/scripts/duplication-scan.test.cjs`
 (paths are listed explicitly because PowerShell does not expand globs for native commands).

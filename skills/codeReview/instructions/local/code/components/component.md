@@ -2,6 +2,8 @@
 name: Angular component (common)
 applies-to:
   - "**/*.component.ts"
+scopes:
+  symbol: ["**/*.pipe.ts", "**/*.directive.ts"]
 ---
 This instruction OWNS the component TS file: file separation, the `@Component` metadata, DI fields,
 visibility, form wiring and subscription teardown. The signals/DI/host APIs themselves are owned by
@@ -11,7 +13,7 @@ inside the template by the component-template instruction.
 ## Checklist
 - `changeDetection: ChangeDetectionStrategy.OnPush` is set — no exceptions.
 - Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one.
-- The `imports` array matches the template exactly, verified in BOTH directions: every imported entry is used by the template (nothing speculative), AND every external symbol the template uses has its entry — component/directive selectors, pipe names, `[formControl]`/`formGroup` → `ReactiveFormsModule`, `[(ngModel)]` → `FormsModule`, `ngSrc` → `NgOptimizedImage`. A missing entry breaks the template at runtime — report from this consequence.
+- {+symbol} The `imports` array matches the template exactly, verified in BOTH directions: every imported entry is used by the template (nothing speculative), AND every external symbol the template uses has its entry — component/directive selectors, pipe names, `[formControl]`/`formGroup` → `ReactiveFormsModule`, `[(ngModel)]` → `FormsModule`, `ngSrc` → `NgOptimizedImage`. A missing entry breaks the template at runtime — report from this consequence. For a pipe or directive the diff adds or renames, walk that second direction from the symbol: every template using it has its entry in its component's `imports`, and a missing one is reported at the symbol's file.
 - The `imports` array never contains `CommonModule` (nor `NgIf`/`NgForOf`/`NgSwitch`/`NgClass`/`NgStyle`, which the native control flow and `[class.x]`/`[style.x]` bindings replace) — only the concrete components, directives and pipes the template uses.
 - Injected fields are `private readonly _camelCase`; the field name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name. (`inject()`-only DI, the signal input/output API and `host: {}` bindings are governed by the global best-practices instruction.)
 - An input the component cannot render without is `input.required<T>()` — no `!` definite-assignment tricks and no fake defaults that mask a missing binding.
