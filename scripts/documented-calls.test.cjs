@@ -77,7 +77,9 @@ test('every documented script call names a real script and real flags', () => {
     if (doc.includes(`${path.sep}test-environment${path.sep}`)) continue;
     const rel = path.relative(ROOT, doc).split(path.sep).join('/');
     const text = fs.readFileSync(doc, 'utf8');
-    for (const call of text.matchAll(/node "?([^"\s]*scripts\/[a-z-]+\.cjs)"?([^\n`]*)/gi)) {
+    // A call's flags run to the end of its own command - `&&`, `||`, `;` or a spaced `|`
+    // ends it - so a second call chained on the same line is matched, and checked, on its own.
+    for (const call of text.matchAll(/node "?([^"\s]*scripts\/[a-z-]+\.cjs)"?((?:(?!&&|\|\||;|\s\|\s)[^\n`])*)/gi)) {
       const base = path.basename(call[1]);
       const script = scripts.get(base);
       if (!script) {

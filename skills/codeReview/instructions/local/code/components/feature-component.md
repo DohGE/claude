@@ -2,6 +2,8 @@
 name: Feature (smart) component
 applies-to:
   - "**/feature/**/*.component.ts"
+scopes:
+  template: ["**/feature/**/*.component.html"]
 ---
 ## Checklist
 - Folder and file are `feature-<segment>/feature-<segment>.component.*`, class `Feature<PascalCase>Component`, selector `<app-prefix>-feature-<segment>`.
@@ -9,8 +11,8 @@ applies-to:
 - Forbidden injections: the store, HTTP/data services, repositories; no imports from `*.actions`/`*.selectors`; no `store.dispatch`.
 - State from the facade is consumed as signals re-exported 1:1 (`readonly x = this._facade.x`; the template calls `x()`); facade observable streams and the `async` pipe are not used.
 - No `pipe(map(...))` on facade streams; a `computed()` over facade signals is allowed ONLY when the derivation ALSO reads data the NgRx state does not hold (a component `input()`, a local `signal()`, a route value, an injected runtime value) — when every operand comes from the store, the derived value is a new selector exposed by the facade, never a `computed()` in the component.
-- Presentation is delegated to `ui-*` children or shared/library components; the feature wires facade state to children through inputs/outputs and does not render rich markup itself.
-- An extensive, complex, or over-50-line template is extracted into `ui-*` children rather than left inline in the feature component; the feature keeps only the wiring markup that binds facade state to those children.
+- {+template} Presentation is delegated to `ui-*` children or shared/library components; the feature wires facade state to children through inputs/outputs and does not render rich markup itself.
+- {+template} An extensive, complex, or over-50-line template is extracted into `ui-*` children rather than left inline in the feature component; the feature keeps only the wiring markup that binds facade state to those children.
 - Public handlers are thin proxies to facade methods (no logic, no branching beyond trivial argument shaping).
 - Route and query parameters arrive as signal `input()`s bound by `withComponentInputBinding()`; `ActivatedRoute` is injected only for what the binding cannot express (reacting to a sibling route, reading a parent route's snapshot).
 - `ngOnInit` triggers the initial facade loads and creates subscriptions — it no longer reads route parameters.

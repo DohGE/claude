@@ -9,6 +9,12 @@ hooks:
           args: ["${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs", "--event=activate"]
           timeout: 10
           once: true
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: node
+          args: ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/check-part.cjs"]
+          timeout: 30
 ---
 
 # codeReview — deterministic instruction-driven review
@@ -123,10 +129,14 @@ Without that tool, re-read the file or re-run the command with narrower output.
 
 ## Step 2 — Load the rulebook (once per run)
 
-1. Read the `path` of EVERY entry of `globalInstructions` — the globals at least one reviewed file
-   is actually walked against, not every global the skill ships.
-2. Read the `path` of EVERY entry of `localInstructionsCatalog` (deduplicated across targets;
-   per-file `localInstructions` are INDEXES into this catalog).
+1. Read the `numberedPath` of EVERY entry of `globalInstructions` — the globals at least one
+   reviewed file is actually walked against, not every global the skill ships.
+2. Read the `numberedPath` of EVERY entry of `localInstructionsCatalog` (deduplicated across
+   targets; per-file `localInstructions` are INDEXES into this catalog).
+   `numberedPath` (a FIXED IDENTIFIER) is a copy of the instruction at `path` that the script wrote
+   for this run, with every checklist item already prefixed by its address (`- general#6: …`).
+   Read it with the Read tool, never `cat` or `grep`: a Bash result may arrive compressed, and a
+   rule read from a compressed copy is a rule half-read.
 3. If `claudeMd` is not null, read it and treat it as one more global instruction.
 4. Issue every Read of points 1–3 as parallel tool calls in ONE message — the whole rulebook
    loads in a single turn, never one file per turn.
@@ -144,7 +154,9 @@ Never skip or skim any of these files — they are the review rulebook.
 Every checklist item has an address, and Step 3 ticks the items off one by one under it:
 `<id>#<n>` is the n-th top-level `- ` bullet of that instruction's body, counted from 1 in file
 order — the only numbering there is. Each entry of the two catalogs above carries the `id` its
-items are addressed by beside its `path`; number the bullets of every instruction as you read it.
+items are addressed by beside its `path`, and its `numberedPath` copy already prints that address in
+front of every item. Take addresses from that copy only: never number, list or count items yourself,
+and never through Bash.
 Each file of a target carries `plan`, an INDEX into `checklistPlans` (top level of the context
 JSON) — files of one kind share one plan, so the catalog holds a handful of entries for a diff of
 hundreds of files, exactly like `localInstructionsCatalog` below. `checklistPlans[file.plan].checklist`
@@ -156,13 +168,17 @@ that file must be walked against.
 The plan is the authority on that: walk exactly the numbers it lists, under the addresses it gives
 them, and never renumber a narrowed instruction from 1 — `accessibility#12` is the twelfth bullet of
 the file, whether or not `#1-11` are in this file's plan.
-Two mechanisms put an item there or leave it out, and both are already resolved in the plan.
+Three mechanisms put an item there or leave it out, and all three are already resolved in the plan.
 A whole instruction is narrowed by `applies-to`: a global that declares one is narrowed by path
 exactly like a local, one that declares none still applies to every file, and a pattern starting with
 `!` excludes what it matches and always wins over an include. A single item is narrowed by a leading
 scope tag — `- {styles} Contrast ratios …` walks only for the file kinds the instruction's `scopes:`
-frontmatter maps that name to (an untagged item walks wherever its instruction does). So a plan shorter
-than the rulebook is a decision, not an omission — the plan's `globalInstructionsSkipped` names, by
+frontmatter maps that name to (an untagged item walks wherever its instruction does). A reach tag
+works the other way: `- {+routes} A guard factory is invoked …` ALSO walks that item for the files
+scope `routes` maps, outside the instruction's `applies-to` — a rule about one file kind that is
+broken in another (the guard rule, in the routes file that registers the guard). Such a file's plan
+then holds that instruction with only its reaching items; that is the reach, not a mismatch.
+So a plan shorter than the rulebook is a decision, not an omission — the plan's `globalInstructionsSkipped` names, by
 `<id>`, the globals this file's path took it out of, an instruction that is not in the plan is never walked or ticked, and an
 item the plan does not list is not this file's rule: it is never walked, never ticked and never
 reported, not even when the file happens to break it.
@@ -213,9 +229,10 @@ small it looks — a changed condition, argument, operator, default, lifecycle h
      canonical location; an import edge whose direction or form (barrel vs concrete path) now breaks
      the architecture instruction; a reformat that leaves the file against the style rules.
 - The rename pair is `oldPath → path` on the file entry; `oldPath` is there when `status` is `R`
-  and absent otherwise — that pair, not the diff, is what the naming and location checks compare. A
-  path-limited diff renders any rename as a brand-new file, so "the diff shows the whole file as new"
-  never means "review the whole file as new" when `status` is `R`. A pure rename changes no content at
+  and absent otherwise — that pair, not the diff, is what the naming and location checks compare. The
+  diff at `diffPath` is cut from one diff of the whole target, so it shows a rename as `rename from` /
+  `rename to` plus the hunks that really changed; still, "the diff shows the whole file as new" never
+  means "review the whole file as new" when `status` is `R`. A pure rename changes no content at
   all: `changedLines` is `""` while `status` is `R`, which is a rename, not the deletion-only case
   above.
 - Git only calls a move a rename when the content stayed similar enough; a heavily edited move arrives
@@ -275,25 +292,31 @@ never whether it is processed. A file whose `localInstructions` is empty still g
 local matches usually means the file sits outside every dedicated location (the script surfaces
 these files in `warnings[]`), not that the file may be skimmed. For each file:
 
-1. Build the file's commands from the target-level `target.commands` templates by substituting
-   the file's `path` for the `<path>` placeholder: `commands.diff` shows what changed,
-   `commands.show` prints the full content piped through `cat -n` (needs a POSIX shell).
-   Status `A` files have no diff — review them from the `show` output alone (every line is new);
-   status `D` files have no content — review them from the diff alone. (`commands.diff` is `null`
-   for modes without diffs, e.g. folder mode.)
-   `commands.grep` searches the whole reviewed revision (the branch's commit, the index, the working
-   tree) for its `<pattern>` placeholder, an extended regex.
+1. Open the file from `target.workDir`, the folder the script filled with what this target reviews
+   (`workDir`, `contentPath` and `diffPath` are FIXED IDENTIFIERS — never translate them).
+   `file.contentPath` is the file's full content in the reviewed revision (the branch's commit or
+   the index; in folder mode, the working-tree file itself), and `file.diffPath` is this file's own
+   section of the target's diff.
+   Read both with the Read tool — never `cat`, `git show` or `git diff` through Bash, whose output
+   may reach you compressed: a line lost on the way is a line never reviewed.
+   `contentPath` is `null` for a status `D` file and for a binary one — review it from the diff
+   alone; `diffPath` is `null` for a status `A` file and in folder mode, where every line is new
+   and the content alone is the input.
+   The line numbers the Read prints are the numbers every finding, tick and range below uses.
+   A file longer than 2,000 lines is read page by page (`offset`/`limit`) up to its last line,
+   never sampled.
+   A line the Read cuts short (over 2,000 characters) is read whole with
+   `sed -n '<N>p' "<contentPath>"`.
+   One file is open at a time.
+   The message that writes file N's part (point 4) may carry the Reads of file N+1, since neither
+   depends on the other; file N+1's analysis still starts only after both have returned.
+   `target.commands.grep` (Bash, needs a POSIX shell) searches the whole reviewed revision (the
+   branch's commit, the index, the working tree) for its `<pattern>` placeholder, an extended regex.
+   It prints only `<count> match(es) -> <file>`: Read that file for the matches themselves.
    Use it, never a search of the checkout, whenever a rule asks whether something already exists
    elsewhere in the project.
-   Fetch contents in BATCHES: one Bash call chains the commands of several consecutive files,
-   each preceded by an `echo "=== <path> ==="` marker line, up to ~1,500 output lines per call —
-   never one call per file. If a batch's output comes back truncated, re-fetch the missing files
-   in smaller batches. Only the fetching is batched — the analysis below stays strictly one file
-   at a time. When the file you are finishing is the last one of its batch, send its part Write
-   (point 4) and the next batch's fetch in the SAME message: they do not depend on each other, and
-   the next file's analysis still starts only after both have returned.
    `changedLines` (precomputed by the script from `git diff -U0`) is the authoritative list of the
-   lines this diff touched, numbered exactly like the `cat -n` output, e.g. `"7, 12-15"`;
+   lines this diff touched, numbered exactly like the Read of `contentPath`, e.g. `"7, 12-15"`;
    `""` means the diff only deleted lines, `null` means an added/deleted file. Never re-derive
    these ranges from diff hunks yourself.
    The import edges are not yours to collect: the script wrote them to `target.importLedger` (the
@@ -346,6 +369,10 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    with inline `styles`, a `host: {}` binding, a timer or a `document` call renders UI, and a gate
    waved through on "this looks like a plain class" is the unearned tick the ticking exists to
    prevent. When the answer is not obvious, the gate HOLDS and the items are walked.
+   A gate fails only when the file holds NONE of the constructs the gate sentence names — never
+   because what it holds looks trivial, small or obviously correct.
+   A one-line setter is a method and a lone `.next()` call is behaviour: a test-coverage gate over
+   such a file holds, and its items are walked.
    Checklist items come in two shapes, and both get real verdicts:
    - prohibitions — code that must not appear; scanning the file finds these;
    - requirements — something that MUST be present (`ChangeDetectionStrategy.OnPush`, a route
@@ -383,12 +410,26 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    one file with the same consequence and severity, that is ONE finding whose `**Linia:**` lists
    every occurrence (`2, 8, 10-12`) — never one block per occurrence. An occurrence whose
    consequence or severity differs (one crashes, another is cosmetic) gets its own finding, as
-   does a different rule broken on the same line. The SAME violation is reported ONCE, under the
-   most specific instruction that covers it: a local beats a global, and the specific local beats the
-   general one it sits under. A file walking both `component` and `feature-component` gets ONE finding
-   for a rule they share, under `feature-component` — not the same violation twice with two `Reguła:` lines.
+   does a different rule broken on the same line.
+   The SAME violation is reported ONCE: when one requirement is written into several instructions
+   (a local rule and the general or global one it refines), one finding's `**Reguła:**` names
+   every copy it breaks, `; `-joined, the most specific first — a local before a global, the
+   specific local before the general one it sits under (`feature-component#4; component#9;
+   general#6`).
+   A file walking both `component` and `feature-component` gets ONE such finding for a rule they
+   share — never the same violation twice in two findings.
+   Those copies are the ONLY items one finding may share, so it names at most one item per
+   instruction. Two items of one checklist are two requirements: code breaking both — even on
+   one line — is two findings, each with its own `**Problem:**`, `**Oczekiwane:**`, severity and
+   lines. A finding that lists several defects ("brak OnPush, style inline, `CommonModule` w
+   `imports`") is one defect reported and the rest lost: the reader fixes, the PR comments and the
+   severity follow the first one.
+   Every item that finding names is ticked `NARUSZENIE` with the finding's lines, each in its own
+   instruction's block line.
+   None of them is ticked `OK` because another item "already reports it": code that breaks an item
+   never passes it, and a violation filed under one item only is lost to every other rule it breaks.
    Every listed line number is determined at the moment of writing it: locate the offending code
-   in the `cat -n` output and cite the number printed there — never diff hunk numbering, never an
+   in the Read of `contentPath` and cite the number printed there — never diff hunk numbering, never an
    estimate from memory. Each occurrence contributes one number, or one `<start>-<end>` span when
    that single occurrence spans contiguous lines. Cross-check every finding against `changedLines`
    and the scope gate: lines outside `changedLines` are reportable only under one of the gate's four
@@ -411,23 +452,35 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    is where further occurrences hide, not where they run out.
 4. Persist per FILE, never all at the end and never later than the file's own walk: the moment a
    file's walk is finished, write ONE part file for it — `<reportPath minus .md>.part<NN>.md`,
-   `<NN>` running in `target.files` order and zero-padded to the width of the LAST number the target
-   will use (two digits up to 99 parts, three from 100 on, counted from `target.files` before the
-   first part is written). The assembly below concatenates them through a shell glob, which orders
-   them as text: `part100` would land between `part10` and `part11` if the earlier parts were padded
-   narrower. Write it with ONE Write call, holding, in this
-   order: the file's findings sections, its ticked checklist block, its coverage marker. A file with
-   no findings still gets its part file — the block and the marker alone. Earlier parts are never
-   edited, and the next file is not analyzed before the current one's part file is written (the
-   fetching of point 1 stays batched, and may ride in the same message as this write; only the
-   analysis and this write are per file).
+   `<NN>` being the file's position in `target.files` (from 1), zero-padded to the digit count of
+   `target.files.length + 2` and never to fewer than two digits (`part03` for 5 files, `part003`
+   for 98).
+   Every part of the target, the cross-file and closing ones included, uses that one width.
+   The assembly below concatenates them through a shell glob, which orders them as text: `part100`
+   would land between `part10` and `part11` if the earlier parts were padded narrower.
+   Write it with ONE Write call, holding, in this order: the file's findings sections, its ticked
+   checklist block, its coverage marker.
+   A file with no findings still gets its part file — the block and the marker alone.
+   A part is report text: lean mode never shortens it, not a finding and not a checklist line.
+   Earlier parts are never edited, and the next file is not analyzed before the current one's part
+   file is written (only the Reads of the next file may ride in the same message as this write).
+   **Every part is checked as it is written.** This skill's hook runs `scripts/check-part.cjs` on each
+   Write or Edit of a part file and compares it with the context JSON: the part number and width,
+   the parts before it being on disk, a block covering exactly the plan's items with the marker's
+   total, the form of every verdict line, a finding behind every `NARUSZENIE`, and cited lines that
+   exist in `contentPath`.
+   A part that fails is NOT written: the call comes back with the list of problems.
+   Fix every one and Write the WHOLE part again — an Edit is checked the same way, as the file it
+   would leave behind.
+   Never answer a refusal by ticking an item you did not check: an item you cannot verify is
+   `[ ] … — NIEZWERYFIKOWANE: <reason>`, which the check accepts.
    The checklist block is the file's walk, written down:
 
        <!-- checklist: <file.path>
        [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
        [x] general#1-5,#7-13 — OK (brak wystąpień)
-       [x] general#6 nazwy const camelCase — NARUSZENIE (L12, L18)
-       [x] component#1 OnPush — NARUSZENIE (L4)
+       [x] general#6 nazwy const camelCase — NARUSZENIE (12, 18)
+       [x] component#1 OnPush — NARUSZENIE (4)
        [x] component#2-14,#16-27 — OK (brak wystąpień)
        [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
        -->
@@ -445,8 +498,9 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      `naruszenie`, `NARUSZONO` or `VIOLATION` parses as a clean item, so the page would show the rule
      as ✓ compliant directly under the finding that reports it breaking. The renderer NAMES such a
      line as a warning, which keeps the Markdown — so a near miss costs the HTML report instead of
-     passing unnoticed, and the fix is the exact word, never ticking a different item instead. (`BRAMKA` and
-     `NIEZWERYFIKOWANE` are read by humans only — the `[ ]` box is what records an unverified item.)
+     passing unnoticed, and the fix is the exact word, never ticking a different item instead.
+     `OK`, `BRAMKA`, `NIEZWERYFIKOWANE` and `brak wystąpień` are FIXED IDENTIFIERS as well: the part
+     check reads every one of them, in capitals and exactly as written here, never translated.
    - Collapse only what genuinely shares a verdict. `NARUSZENIE` and `NIEZWERYFIKOWANE` lines carry
      their own reason, so they stay separate — a range is for the OK run around them and for a
      gated-out instruction, never a way to sweep a violation into a neighbour's range.
@@ -454,14 +508,19 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      `NIEZWERYFIKOWANE`, and a single-item `OK` worth naming. On a collapsed OK or BRAMKA range the
      address IS the reference — do not spell out thirty rules to say the file has none of them.
    - `[x] … — OK (<where>)` — checked and compliant. `<where>` is where you saw the answer: the
-     `cat -n` line numbers you verified (`L12, L18`), or `brak wystąpień` when the rule's subject
-     does not occur in the file at all. `brak wystąpień` is a verdict for a PROHIBITION only — for a
-     requirement, a missing subject is a finding, never an absence to wave through.
+     line numbers of THIS file you verified, as its Read printed them (`L12, L18`), or
+     `brak wystąpień` when the rule's subject does not occur in the file at all.
+     `brak wystąpień` is a verdict for a PROHIBITION only — for a requirement, a missing subject is
+     a finding, never an absence to wave through.
+     `<where>` never names another item: `OK (pod general#6)` is no evidence, and an item the code
+     breaks is `NARUSZENIE` even when another item's finding already cites the lines (point 3).
    - `[x] … — BRAMKA: <what is absent>` — the instruction's `gate` failed for this file (point 2),
      so its whole range is ticked in one line. Only an instruction listed in `checklistGates` may
      produce such a line, and the reason names what the file does not contain.
-   - `[x] … — NARUSZENIE (L<n>, …)` — checked and broken; the lines are the ones the finding's
-     `**Linia:**` carries, and that finding is in this same part file. (Findings from the cross-file
+   - `[x] … — NARUSZENIE (<n>, …)` — checked and broken; the lines are the ones the finding's
+     `**Linia:**` carries, written the same way (bare numbers, no `L` prefix), and that finding is
+     in this same part file, its `**Reguła:**` naming this item's address among its own.
+     (Findings from the cross-file
      pass or from the universal points 3–5 belong to no item and appear only as findings.)
    - `[ ] … — NIEZWERYFIKOWANE: <reason>` — anything you could not check 100% (point 2). The reason
      is concrete: what was missing, not "no time".
@@ -482,8 +541,12 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    complete proof. It is for a WHOLE-diff mechanical file only; a file with even one behavioural
    change walks and ticks its items like any other.
 
-After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as the
-final part file. Answer each of these four questions explicitly, against the diff as a whole:
+After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as part
+`N+1` (`N` = `target.files.length`): its findings sections only, no checklist block and no coverage
+marker.
+That part is written on every target with files — empty when the pass found nothing, because the
+assembly refuses a report without it.
+Answer each of these four questions explicitly, against the diff as a whole:
 1. Duplication drift — is the same logic, formatting or literal implemented in two or more places
    of this diff, or re-implemented next to an existing shared util? Answer it from three sources:
    - `target.duplicationCandidates` — jscpd's scan of the whole reviewed revision, kept only where
@@ -501,8 +564,8 @@ final part file. Answer each of these four questions explicitly, against the dif
      then carry the question alone.
    - A search for what a token scan cannot see: for every exported function, class, pipe,
      directive, validator, util or constant the diff ADDS, look for an existing equivalent in the
-     reviewed revision with `commands.grep` — by its name, a synonym and the characteristic
-     expression of its body — in the shared folders first (`shared/`, `utils/`, `common/`, `core/`,
+     reviewed revision with `target.commands.grep` (Read the file it names) — by its name, a
+     synonym and the characteristic expression of its body — in the shared folders first (`shared/`, `utils/`, `common/`, `core/`,
      or wherever this project keeps them).
    - What the per-file walk already noticed.
 
@@ -510,7 +573,8 @@ final part file. Answer each of these four questions explicitly, against the dif
    line of the copy that the diff changed, and name the source it repeats (`path:lines`).
 2. Layering — Read `target.importLedger` and walk it edge by edge, together with the edges you
    noted for its `# not parsed` files. Each line is `<importing file>:<line> → <specifier>`, plus
-   `(<resolved path>)` for a relative one; `<line>` is the import's `cat -n` line. Name the layer
+   `(<resolved path>)` for a relative one; `<line>` is the import's line in that file's
+   `contentPath`. Name the layer
    of the importing file and of the imported module, check the edge's direction AND its form
    (barrel vs concrete path, per the architecture instruction) against the architecture
    instruction, and report each forbidden edge at the importing file, on that line. A permitted
@@ -529,18 +593,24 @@ every checklist block and coverage marker, which is what the report then shows. 
 empty diff (`files` empty) has no per-file parts at all: `Nie wykryto zmian do analizy.` is its
 `part01`, so the assembly below always has something to concatenate.
 
-Assemble the report in ONE Bash call: append every part file to `target.reportPath` (which already
-holds the header), remove the parts and the import ledger, and — when `target.htmlReportPath` is not
-null — render the HTML report from the assembled Markdown:
-`cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md "<target.importLedger>"; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>" --project="<PROJECT>" --mode="<target.kind>" --branch="<target.branch>" --base="<target.baseBranch>"`.
+Assemble the report in ONE Bash call: check the parts against the context, append them to
+`target.reportPath` (which already holds the header), remove the parts, the import ledger and the
+work folder, and — when `target.htmlReportPath` is not null — render the HTML report from the
+assembled Markdown:
+`node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --report="<reportPath>" && { cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md "<target.importLedger>"; rm -rf "<target.workDir>"; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>" --project="<PROJECT>" --mode="<target.kind>" --branch="<target.branch>" --base="<target.baseBranch>"; }`.
+`<contextPath>` is the path Step 1 printed.
+The check gates everything after it (`&&`): when a part is missing or breaks the format, it exits 1,
+lists every problem by part file and leaves the parts, the ledger and the work folder on disk.
+Write each part it names again, whole, and run the same command again.
 The four trailing arguments are what puts a code snippet under every finding: `--project` locates the
 reviewed files, and `--mode`/`--branch`/`--base` make the snippet read the same revision the review
 read — rendering it as a real `+`/`-` diff for `branch` and `staged`, and as a plain file view for
 `folder`. Drop `--base` when `target.baseBranch` is null (staged and folder targets). Without these
 arguments the HTML still renders, only without snippets.
-The separators are `;`, never `&&`: the renderer must run even if the concatenation found nothing,
-otherwise a clean review would silently fall back to Markdown in HTML mode.
-Drop the last command when `htmlReportPath` is null (`--only-md` was passed) — the Markdown
+Inside the braces the separators are `;`, never `&&`: once the check has passed, the renderer must
+run even if the concatenation found nothing, otherwise a clean review would silently fall back to
+Markdown in HTML mode.
+Drop the render command when `htmlReportPath` is null (`--only-md` was passed) — the Markdown
 is the report then. Otherwise the renderer replaces it with `target.htmlReportPath`; if it prints
 warnings it keeps the Markdown too — but a kept Markdown has two very different causes, and only one
 of them is yours to fix. `nierozpoznana…`/`nieczytelny…` warnings mean the report really did drift
@@ -550,7 +620,7 @@ simply carries an item you left `[ ] NIEZWERYFIKOWANE`. That one is the format w
 never answer it by going back and ticking an item you did not check.
 
 Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
-had its commands run, its part file written, and either all five points covered (point 3
+had its `contentPath`/`diffPath` read, its part file written, and either all five points covered (point 3
 collected, the other four verdicted) or — for a whole-diff mechanical file — the gate's two
 questions answered; analyze any missed file now. A target with an unanalyzed file is not done,
 regardless of diff size or session length.
@@ -643,7 +713,10 @@ regardless of diff size or session length.
   block; the other fields (seven, or four in an `--only-md` run) follow it as `- ` bullet lines in
   the order shown. Each field is its
   own line and never continues on the previous field's line. `**Linia:**` holds a comma-separated
-  list of numbers and/or `<start>-<end>` spans — one entry per occurrence.
+  list of numbers and/or `<start>-<end>` spans — one entry per occurrence. Its format is a FIXED
+  IDENTIFIER: bare line numbers as the Read of `contentPath` printed them (`12, 18, 20-24`), with
+  no `L` prefix, no path, no word and no note. A note belongs in `**Problem:**`. The renderer builds the finding's code snippet from this
+  field, so an entry it cannot read gets no snippet and a parser warning.
 - Group findings under one `## <file path>` section per file; omit files without findings.
   The cross-file pass may append a second section for an already-reported path — that is acceptable.
 - Expected Result describes ONLY the correct state of the code plus a concrete implementation proposal.
@@ -680,5 +753,10 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "This item is obviously fine, tick it" | A tick states you checked THIS file against THAT item and can name where you saw the answer. Obvious-looking is what unchecked items look like; check it, then tick it. |
 | "I will write the checklist once the file is done" | The block is the record of the walk: each line is written as its verdict is reached, and the file's part file is written before the next file is opened. A block composed afterwards is a summary of what you remember, which is what the ticks exist to replace. |
 | "Ticking every item keeps the numbers clean" | The numbers are not the point; what was actually checked is. An unticked item with its reason is a finished, honest walk — an unearned tick is a false claim in a report someone will act on. |
-| "jscpd listed nothing, so nothing is duplicated" | jscpd matches copied token runs. Logic written again in other words, and a helper that already exists in a shared folder, reach the review only through the `commands.grep` search of cross-file question 1. |
+| "jscpd listed nothing, so nothing is duplicated" | jscpd matches copied token runs. Logic written again in other words, and a helper that already exists in a shared folder, reach the review only through the `target.commands.grep` search of cross-file question 1, whose matches are in the file it names. |
 | "This jscpd candidate is short / only similar" | A candidate is dismissed only on the grounds cross-file question 1 lists: a dictated shape, parallel data, or the same syntax around different calls and fields. Every other one is a 🔴 High finding, whatever its length or kind. |
+| "Reading several files at once saves time" | One file is open at a time (Step 3 point 1). With several files' code in front of you, the walk of each one drifts into a skim of all of them. Only the next file's Reads may ride with the current part's Write. |
+| "`OK (pod X#n)` — the other item already reports it" | Code that breaks an item never passes it. When the two items are one requirement in two instructions, the finding names both and both are ticked `NARUSZENIE`; when they are two requirements, each gets its own finding (Step 3 point 3). |
+| "One finding per area of the file is tidier — list everything under it" | Each defect is its own finding. Items of one instruction in one `**Reguła:**` are refused by the part check: they are separate requirements, and a merged block reports one of them. |
+| "The methods are trivial, the gate fails" | Triviality never fails a gate: a one-line setter is a method and a lone `.next()` call is behaviour. Only a file holding none of the constructs the gate names fails it. |
+| "The check refused the part, tick the rest to get through" | The check refuses a false record, never an honest one: `[ ] … — NIEZWERYFIKOWANE: <reason>` always passes. Fix what it names and Write the whole part again. |

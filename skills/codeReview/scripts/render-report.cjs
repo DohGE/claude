@@ -274,6 +274,14 @@ function parseReport(markdown) {
     for (const [label, key] of Object.entries(fields)) {
       if (!finding[key]) report.warnings.push(`${section.path}: znalezisko bez pola "${label}".`);
     }
+    if (finding.lines) {
+      const { ranges, rejected } = readLineSpec(finding.lines);
+      if (!ranges.length) {
+        report.warnings.push(`${section.path}: pole "Linia" ("${finding.lines}") nie wskazuje żadnej linii - znalezisko nie ma fragmentu kodu.`);
+      } else if (rejected.length) {
+        report.warnings.push(`${section.path}: pole "Linia" zawiera wpisy, które nie są numerem ani zakresem linii (${rejected.map((entry) => `"${entry}"`).join(', ')}) - fragment kodu pokazuje tylko pozostałe.`);
+      }
+    }
     finding.tags = parseRuleField(finding.rule);
     section.findings.push(finding);
     finding = null;
@@ -473,20 +481,37 @@ const snippetContext = 3;
 const maxFullViewLines = 3000;
 const maxSourceBytes = 2 * 1024 * 1024;
 
-// `**Linia:**` is a comma-separated list of numbers and `start-end` spans; any
-// piece that is not one of those (a note, a stray word) is dropped rather than
-// guessed at.
-function parseLineRanges(value) {
+// `**Linia:**` is a comma-separated list of numbers and `start-end` spans. The other
+// spellings of that same list are read too, because the reviewer meets them in its
+// own instructions: `L12` from older checklist lines, an em dash or a minus sign
+// between the ends, `;` between the entries, backticks around them. A note in
+// parentheses is set aside whole - a number inside it often names a line of ANOTHER
+// file. Any other piece (a stray word, a backwards span) is returned as `rejected`
+// rather than guessed at, and `parseReport` names it: a dropped entry used to cost
+// the finding its code snippet without a word.
+const reLineEntry = /^L?(\d+)(?:\s*[-–—−]\s*L?(\d+))?$/i;
+
+function readLineSpec(value) {
   const ranges = [];
-  for (const piece of String(value || '').split(',')) {
-    const m = piece.trim().match(/^(\d+)(?:\s*[-–]\s*(\d+))?$/);
-    if (!m) continue;
-    const start = Number(m[1]);
-    const end = m[2] ? Number(m[2]) : start;
-    if (start < 1 || end < start) continue;
+  const rejected = [];
+  const text = String(value || '').replace(/\([^()]*\)/g, ' ').replace(/`/g, '');
+  for (const piece of text.split(/[,;]/)) {
+    const entry = piece.trim();
+    if (!entry) continue;
+    const m = entry.match(reLineEntry);
+    const start = m ? Number(m[1]) : 0;
+    const end = m && m[2] ? Number(m[2]) : start;
+    if (start < 1 || end < start) {
+      rejected.push(entry);
+      continue;
+    }
     ranges.push({ start, end });
   }
-  return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+  return { ranges: ranges.sort((a, b) => a.start - b.start || a.end - b.end), rejected };
+}
+
+function parseLineRanges(value) {
+  return readLineSpec(value).ranges;
 }
 
 // The rows of one span of the file: the source lines themselves, each carrying
@@ -563,7 +588,7 @@ function buildFullView(sourceLines, diff) {
 }
 
 // A trailing newline ends the last line, it does not start another one, and
-// `cat -n` - the numbering every report cites - counts it exactly that way.
+// the Read of `contentPath` - the numbering every report cites - counts it exactly that way.
 function withoutTrailingBlank(lines) {
   return lines.length && lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines;
 }
@@ -2450,6 +2475,8 @@ module.exports = {
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
   projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, buildPayload, renderHtml, detectPullRequest,
   changedFiles, treeEntries, main,
+  // check-part.cjs validates each part file against the same grammar this parser reads.
+  emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reViolationVerdict, expandItemSpec,
 };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

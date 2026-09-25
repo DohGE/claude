@@ -3,7 +3,7 @@ name: Test coverage — untested cases & edge cases
 applies-to:
   - "**/*.ts"
   - "!**/models/**"
-gate: the file carries behaviour a spec could execute - a function, branch, handler, effect or class method, not only declarations, re-exports or route/config literals
+gate: the file carries behaviour a spec could execute - a function or class method with a body (however trivial - a one-line setter or a lone .next() call is behaviour), a branch, handler or effect - not only declarations, re-exports or route/config literals
 scopes:
   source: ["**/*.ts", "!**/*.spec.ts"]
 ---

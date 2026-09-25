@@ -6,6 +6,8 @@ applies-to:
   - "**/shared/utils/**/*.ts"
   - "!**/tests/**"
   - "!**/*.spec.ts"
+scopes:
+  barrel: ["**/index.ts"]
 ---
 ## Checklist
 - File is `shared/utils/<verb>-<subject>.util.ts` (singular `.util.ts`, never `.utils.ts`; thematic subfolders allowed, each with its own `tests/`); verbs describe the job: `form-`/`build-` (data → UI/payload structure), `generate-` (tables/IDs/structures), `map-` (shape A → shape B), `create-` (single element factory). When the file groups several functions, its name states the shared subject they all serve.
@@ -17,5 +19,5 @@ applies-to:
 - Aggregation utils deduplicate with a `Map` keyed by the identifier, use `reduce<ReturnType>` with an explicit accumulator type, and delegate to shared builders instead of re-implementing them.
 - ID formats and shared builders are defined once and reused everywhere — never duplicated inline in reducers, selectors or components.
 - A `.util.ts` exists for logic with ≥2 real consumers. Before a util is created, check whether a const does the job: pure value→value translation belongs in a `Record` mapper const (models instruction), not in a function. A function with ONE consumer whose body is shorter than ~10 lines is never extracted at all: it stays inline at its call site — a module-level function in that file, a `computed()`, a private method, or simply the body of the effect/reducer/selector that needs it — and a new util file (or a new export added to an existing one) created to hold it is a finding even when the function is pure, typed and specced. Above ~10 lines a single consumer still justifies extraction only when the logic is genuinely complex (branching a spec has to pin down) and would bury its call site; a long but linear single-consumer body stays inline.
-- Utils are never exported through a barrel — consumers import the concrete `*.util.ts` file (relative within the area, alias from outside).
+- {+barrel} Utils are never exported through a barrel — consumers import the concrete `*.util.ts` file (relative within the area, alias from outside).
 - Every util file has a spec in the sibling `tests/` folder, covering every function the file exports (one `describe` per exported function).

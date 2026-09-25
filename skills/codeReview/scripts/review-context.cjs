@@ -138,7 +138,7 @@ function parseScopeList(value) {
 
 function parseFrontmatter(content) {
   const lines = content.split(/\r?\n/);
-  const result = { appliesTo: [], appliesToDeclared: false, audience: undefined, gate: null, scopes: {} };
+  const result = { appliesTo: [], appliesToDeclared: false, audience: undefined, gate: null, findings: null, scopes: {} };
   if (!lines.length || lines[0].trim() !== '---') return result;
   let inAppliesTo = false;
   let inScopes = false;
@@ -196,6 +196,15 @@ function parseFrontmatter(content) {
       inScopes = false;
       continue;
     }
+    // How the instruction's breaches in one file are counted: `per-file` makes them one
+    // finding. Absent, every item is its own requirement and its own finding.
+    const findings = line.match(/^findings:\s*(.+?)\s*$/);
+    if (findings) {
+      result.findings = findings[1].replace(/^["']|["']$/g, '');
+      inAppliesTo = false;
+      inScopes = false;
+      continue;
+    }
     if (/^\S/.test(line)) {
       inAppliesTo = false;
       inScopes = false;
@@ -216,10 +225,14 @@ function formatTimestamp(d) {
   };
 }
 
+// The buffer is sized for a whole target's patch: at the 1 MB default a large diff
+// (a regenerated lockfile is enough) made git fail, and every caller here reads a
+// failure as "no output" - no changed lines, no per-file patches, silently.
 function git(project, args) {
   return execFileSync('git', ['-C', project, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 256 * 1024 * 1024,
   }).trim();
 }
 
@@ -439,6 +452,89 @@ function parseDiffRangesByPath(diffOutput) {
   return byPath;
 }
 
+// A C-quoted path of a diff header (`"src/a\tb.ts"`, `"\303\251.ts"` without
+// core.quotepath=false) back to the name it spells.
+function unquoteGitPath(p) {
+  if (!(p.length >= 2 && p.startsWith('"') && p.endsWith('"'))) return p;
+  const body = p.slice(1, -1);
+  const escapes = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 };
+  const bytes = [];
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== '\\' || i === body.length - 1) {
+      bytes.push(...Buffer.from(body[i], 'utf8'));
+      continue;
+    }
+    const next = body[++i];
+    if (/[0-7]/.test(next)) {
+      bytes.push(parseInt(body.slice(i, i + 3), 8));
+      i += 2;
+    } else {
+      bytes.push(escapes[next] !== undefined ? escapes[next] : next.charCodeAt(0));
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+// Which file one `diff --git` section of a patch is about: the post-image path
+// (`+++ b/<path>`), the pre-image one for a deletion (`+++ /dev/null`), and for a
+// section with no content lines (a pure rename, a mode change, a binary file) the
+// `rename to`/`copy to` line or the header itself, whose two halves are the same
+// path when nothing was renamed.
+function patchPathOf(section) {
+  // Only the lines before the first hunk: an added line reading `++ x` is `+++ x`.
+  const lines = section.split('\n');
+  const firstHunk = lines.findIndex((l) => l.startsWith('@@'));
+  const header = firstHunk < 0 ? lines : lines.slice(0, firstHunk);
+  const field = (prefix) => {
+    const line = header.find((l) => l.startsWith(prefix));
+    return line === undefined ? null : unquoteGitPath(line.slice(prefix.length).replace(/\t.*$/, '').replace(/\r$/, ''));
+  };
+  const plus = field('+++ ');
+  if (plus !== null && plus !== '/dev/null') return plus.replace(/^b\//, '');
+  const minus = field('--- ');
+  if (minus !== null && minus !== '/dev/null') return minus.replace(/^a\//, '');
+  const moved = field('rename to ') ?? field('copy to ');
+  if (moved !== null) return moved;
+  const both = header[0].slice('diff --git '.length).replace(/\r$/, '');
+  const quoted = both.match(/^"(?:[^"\\]|\\.)*" ("(?:[^"\\]|\\.)*")$/);
+  if (quoted) return unquoteGitPath(quoted[1]).replace(/^b\//, '');
+  const half = (both.length - 1) / 2;
+  if (Number.isInteger(half) && both[half] === ' ' && both.slice(2, half) === both.slice(half + 3)) {
+    return both.slice(half + 3);
+  }
+  return null;
+}
+
+// One `git diff` of a whole target cut into the patch of each file: a process per
+// file costs ~50-100 ms on Windows, and a pathspec-limited diff shows a renamed file
+// as brand-new, while the whole patch pairs it with the name it had. A path met twice
+// (a type change is a deletion plus an addition) keeps both sections.
+function splitPatchByPath(patch) {
+  const byPath = new Map();
+  for (const section of String(patch || '').split(/^(?=diff --git )/m)) {
+    if (!section.startsWith('diff --git ')) continue;
+    const p = patchPathOf(section);
+    if (p === null) continue;
+    const text = section.endsWith('\n') ? section : `${section}\n`;
+    byPath.set(p, (byPath.get(p) || '') + text);
+  }
+  return byPath;
+}
+
+// An instruction as the reviewer reads it: every top-level `- ` bullet prefixed with
+// the `<id>#<n>` it is ticked and cited by, counted exactly as parseChecklistItems
+// counts. Numbering twenty-odd bullets by eye, or through a shell whose output may
+// arrive compressed, is where a tick and a finding came to name the wrong item.
+function numberChecklist(text, id) {
+  const fm = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+  const head = fm ? fm[0] : '';
+  let n = 0;
+  const body = text.slice(head.length).split('\n')
+    .map((line) => (/^- \S/.test(line) ? `- ${id}#${++n}: ${line.slice(2)}` : line))
+    .join('\n');
+  return head + body;
+}
+
 // `git diff --raw` carries status, path AND the post-image blob id in one line,
 // so a single call replaces `--name-status` and hands `--since-last` its content
 // fingerprint: `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\t<path>`.
@@ -470,10 +566,17 @@ function parseRawDiff(output) {
 // unaffected — `<id>#<n>` still counts every top-level bullet in file order —
 // so a rule that does not apply to a file drops out of that file's plan
 // instead of costing it a verdict it cannot reach.
-const reItemScopeTag = /^\{\s*([A-Za-z0-9][A-Za-z0-9 ,_-]*)\}\s+\S/;
+// A name written `+name` REACHES instead of narrowing: the item is also walked
+// for every file of that scope, even one outside the instruction's `applies-to`.
+// A rule is often broken in a file its own instruction never covers - a guard
+// factory is invoked (or not) in the routes file, a pipe goes missing from a
+// component's `imports`, a translation key is concatenated in a component - and
+// without the reach that finding had no plan item to be reported under.
+const reItemScopeTag = /^\{\s*(\+?\s*[A-Za-z0-9][A-Za-z0-9 ,_+-]*)\}\s+\S/;
 
 // The checklist of an instruction, item by item: `n` is its `<id>#<n>` address,
-// `scopes` the names of its scope tag (empty = wherever the instruction applies),
+// `scopes` the narrowing names of its scope tag (empty = wherever the instruction
+// applies), `reach` its `+name` names (the scopes it is carried to beyond that),
 // `text` the item without that tag - what a report's `<id>#<n>` rule expands to.
 function parseChecklistItems(file) {
   let body;
@@ -487,9 +590,11 @@ function parseChecklistItems(file) {
   for (const line of body.split('\n')) {
     if (!/^- \S/.test(line)) continue;
     const tag = line.slice(2).match(reItemScopeTag);
+    const names = tag ? tag[1].split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
     items.push({
       n: items.length + 1,
-      scopes: tag ? tag[1].split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : [],
+      scopes: names.filter((s) => !s.startsWith('+')),
+      reach: names.filter((s) => s.startsWith('+')).map((s) => s.slice(1).trim()).filter(Boolean),
       text: (tag ? line.slice(2).replace(/^\{[^}]*\}\s+/, '') : line.slice(2)).trim(),
     });
   }
@@ -503,25 +608,44 @@ function countChecklistItems(file) {
   return parseChecklistItems(file).length;
 }
 
-// Which items of an instruction this file is actually walked against: every
-// untagged item, plus the tagged ones whose scope the file falls into. A tag
-// naming a scope the instruction never declared keeps the item (a typo must not
-// silently delete a rule); `loadInstructions` reports it as a warning.
-function matchChecklistItems(items, namedScopes, filePath) {
+// Which items of an instruction this file is actually walked against. Inside the
+// instruction's own scope (`inScope`): every untagged item, plus the tagged ones
+// whose narrowing scope the file falls into. Anywhere: the items one of whose
+// `+name` scopes the file falls into. A narrowing name the instruction never
+// declared keeps the item (a typo must not silently delete a rule); an undeclared
+// reaching name reaches nothing (a typo must not spread a rule over the whole
+// diff). `loadInstructions` reports both as warnings.
+function matchChecklistItems(items, namedScopes, filePath, inScope = true) {
   const normalized = filePath.replace(/\\/g, '/');
   const named = namedScopes || {};
+  const declared = (name) => Object.prototype.hasOwnProperty.call(named, name);
   const selected = [];
   for (const item of items) {
+    const reach = item.reach || [];
+    if (reach.some((name) => declared(name) && matchesScope(named[name], normalized, false))) {
+      selected.push(item.n);
+      continue;
+    }
+    if (!inScope) continue;
     if (item.scopes.length === 0) {
       selected.push(item.n);
       continue;
     }
-    const hit = item.scopes.some((name) => (
-      !Object.prototype.hasOwnProperty.call(named, name) || matchesScope(named[name], normalized, false)
-    ));
+    const hit = item.scopes.some((name) => !declared(name) || matchesScope(named[name], normalized, false));
     if (hit) selected.push(item.n);
   }
   return selected;
+}
+
+// The items of one loaded instruction a file walks, own scope and reach together:
+// `scope` is the instruction's `loadInstructions` entry, `isGlobal` decides what an
+// `applies-to` without an including pattern means (see matchesScope). The review
+// and implementNewFeature both ask this, so code is written against exactly the
+// rules it is later reviewed against.
+function itemsWalkedBy(items, scope, isGlobal, filePath) {
+  const normalized = filePath.replace(/\\/g, '/');
+  const inScope = matchesScope((scope && scope.appliesTo) || [], normalized, isGlobal);
+  return matchChecklistItems(items, scope && scope.itemScopes, normalized, inScope);
 }
 
 // `[1,2,3,5,9,10]` -> `1-3,5,9-10`: the plan says WHICH items a file walks, not
@@ -620,12 +744,21 @@ function loadInstructions(instructionsDirs, audience) {
   const checkItemScopes = (file, declared) => {
     const items = parseChecklistItems(file);
     const used = new Set();
-    for (const item of items) for (const name of item.scopes) used.add(name);
-    const unknown = [...used].filter((name) => !Object.prototype.hasOwnProperty.call(declared, name));
+    const reaching = new Set();
+    for (const item of items) {
+      for (const name of item.scopes) used.add(name);
+      for (const name of item.reach) reaching.add(name);
+    }
+    const isDeclared = (name) => Object.prototype.hasOwnProperty.call(declared, name);
+    const unknown = [...used].filter((name) => !isDeclared(name));
     if (unknown.length > 0) {
       warnings.push(`Checklist item scope(s) not declared in the "scopes:" frontmatter (items kept unnarrowed): ${unknown.join(', ')} in ${file}`);
     }
-    const unused = Object.keys(declared).filter((name) => !used.has(name));
+    const unknownReach = [...reaching].filter((name) => !isDeclared(name));
+    if (unknownReach.length > 0) {
+      warnings.push(`Checklist item reach scope(s) not declared in the "scopes:" frontmatter (the items reach no file outside applies-to): ${unknownReach.map((name) => `+${name}`).join(', ')} in ${file}`);
+    }
+    const unused = Object.keys(declared).filter((name) => !used.has(name) && !reaching.has(name));
     if (unused.length > 0) {
       warnings.push(`Declared scope(s) no checklist item uses: ${unused.join(', ')} in ${file}`);
     }
@@ -658,6 +791,13 @@ function loadInstructions(instructionsDirs, audience) {
       warnings.push(`No checklist items found (items must be top-level \"- \" bullets; \"*\" and \"+\" are not counted), so this instruction is never walked: ${file}`);
     }
   };
+  // `per-file` is the one value that changes anything, so a misspelt one would silently leave
+  // a file's single defect to be split into a finding per item.
+  const checkFindings = (file, fm) => {
+    if (fm.findings !== null && fm.findings !== 'per-file') {
+      warnings.push(`Unknown findings "${fm.findings}" (expected per-file), treating every item as its own finding: ${file}`);
+    }
+  };
   const globals = [];
   for (const file of collect('global')) {
     const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
@@ -666,7 +806,8 @@ function loadInstructions(instructionsDirs, audience) {
     checkAppliesTo(file, fm, 'global');
     checkBraces(file, fm);
     checkItems(file);
-    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, itemScopes: fm.scopes };
+    checkFindings(file, fm);
+    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, findings: fm.findings, itemScopes: fm.scopes };
     globals.push(file);
   }
   const locals = [];
@@ -680,7 +821,8 @@ function loadInstructions(instructionsDirs, audience) {
     checkAppliesTo(file, fm, 'local');
     checkBraces(file, fm);
     checkItems(file);
-    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, itemScopes: fm.scopes };
+    checkFindings(file, fm);
+    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, findings: fm.findings, itemScopes: fm.scopes };
     locals.push({ file, appliesTo: fm.appliesTo });
   }
   return { globals, locals, scopes, warnings };
@@ -776,13 +918,14 @@ function pruneReports(reportsDir, retain = reportsRetain) {
     try {
       const names = fs.readdirSync(dir);
       for (const name of names) if (isReport(name)) files.push(path.join(dir, name));
-      // An import ledger outlives its run only when the run never assembled; while
-      // its parts are still there it waits for the resume, which rewrites it.
+      // An import ledger and a work folder outlive their run only when the run never
+      // assembled; while its parts are still there they wait for the resume, which
+      // rewrites them.
       for (const name of names) {
-        const ledger = name.match(/^(.*-\d{4}-\d{2}-\d{2}-\d{2}-\d{2})\.imports\.txt$/);
-        if (ledger && !names.some((other) => other.startsWith(`${ledger[1]}.part`))) {
+        const leftover = name.match(/^(.*-\d{4}-\d{2}-\d{2}-\d{2}-\d{2})\.(?:imports\.txt|work)$/);
+        if (leftover && !names.some((other) => other.startsWith(`${leftover[1]}.part`))) {
           try {
-            fs.unlinkSync(path.join(dir, name));
+            fs.rmSync(path.join(dir, name), { recursive: true, force: true });
           } catch {}
         }
       }
@@ -850,7 +993,7 @@ const reImportPatterns = [
 
 function extractImports(content, filePath) {
   if (!importExtensions.test(filePath)) return null;
-  // A removed comment keeps its line breaks, so every edge keeps its `cat -n` line.
+  // A removed comment keeps its line breaks, so every edge keeps the line the reviewer's Read shows.
   const text = String(content)
     .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ''))
     .replace(/^[ \t]*\/\/.*$/gm, '');
@@ -992,6 +1135,7 @@ function buildContext(options) {
     localInstructionsCatalog: [],
     checklistPlans: [],
     checklistGates: {},
+    checklistPerFile: [],
     projectInstructionsDir: null,
     claudeMd: null,
     warnings: [],
@@ -1058,17 +1202,19 @@ function buildContext(options) {
   const itemsOf = (file) => parsedItemsOf(file).length;
   const scopes = instructions.scopes || {};
   // Which items of an instruction a given file walks: the tagged ones whose
-  // scope it falls outside are not its rules and never reach its plan.
+  // scope it falls outside are not its rules and never reach its plan, and the
+  // reaching ones carry their instruction to files its `applies-to` never names.
   // Memoised per pair, because `makeFiles` asks the same question three times
   // for every one of them - is this instruction applicable, which items go in
   // the plan, how many items is that - and the answer cannot differ between
   // those three. The key separator is a newline: no path or file name holds one.
+  const globalSet = new Set(instructions.globals);
   const itemsCache = new Map();
   const itemsFor = (file, filePath) => {
     const key = `${file}\n${filePath}`;
     let items = itemsCache.get(key);
     if (items === undefined) {
-      items = matchChecklistItems(parsedItemsOf(file), scopes[file] && scopes[file].itemScopes, filePath);
+      items = itemsWalkedBy(parsedItemsOf(file), scopes[file], globalSet.has(file), filePath);
       itemsCache.set(key, items);
     }
     return items;
@@ -1141,8 +1287,12 @@ function buildContext(options) {
     result.warnings.push(`[${target.branch}] Resuming the review interrupted at ${run.stamp}: ${doneFiles.length} of ${target.files.length} file(s) already have their part and are not analyzed again.`);
     return true;
   };
-  const registerTarget = (target, currentBlobs, scanSource) => {
+  // What `git diff` compares for a target (`<base>...<branch>`, `--cached`); folder
+  // mode compares nothing and has none.
+  const pendingDiffArgs = new Map();
+  const registerTarget = (target, currentBlobs, scanSource, diffArgs) => {
     if (currentBlobs) pendingSnapshots.set(target, currentBlobs);
+    if (diffArgs) pendingDiffArgs.set(target, diffArgs);
     scanSources.set(target, scanSource);
     if (resumeFrom(target, currentBlobs)) {
       if (options.sinceLast) result.warnings.push(`[${target.branch}] --since-last is ignored while resuming: the resumed run keeps the file list it started with.`);
@@ -1189,15 +1339,15 @@ function buildContext(options) {
 
   const quiet = ['-c', 'core.quotepath=false'];
   const gitc = (args) => `git -C ${q(project)} ${args}`;
-  // Commands are emitted ONCE per target as templates with a `<path>`
-  // placeholder (`target.commands.diff` / `.show`) instead of two full command
-  // strings per file — the reviewer substitutes each file's `path` into them.
-  // Status decides applicability: added files have no diff (every line is
-  // new), deleted files have no content to show. `show` pipes through
-  // `cat -n` so finding line numbers can be read off the output. `grep`
-  // searches the whole reviewed revision - the branch's commit, the index, the
-  // working tree - for a `<pattern>` placeholder (an extended regex), so "does
-  // this helper already exist?" is asked of the code the review reads.
+  // What a file looks like and what changed in it are not commands any more but
+  // files (`contentPath`, `diffPath`, written into the target's `workDir` below):
+  // the reviewer Reads them, and a Read file reaches it whole, where a command's
+  // output may be compressed on its way. `commands.grep` stays a command - it
+  // searches the whole reviewed revision (the branch's commit, the index, the
+  // working tree) for a `<pattern>` placeholder (an extended regex), so "does
+  // this helper already exist?" is asked of the code the review reads - but its
+  // matches land in a file of the work folder too, and the command prints only
+  // how many there are and where.
   // changedLines: new-file line ranges precomputed from `git diff -U0`
   // (rangesArgsFor), so the reviewer never derives them from hunks itself;
   // null for added (every line is new) and deleted (no new file) files.
@@ -1224,12 +1374,13 @@ function buildContext(options) {
   const makeFiles = (rawFiles, rangesByPath) => rawFiles.map((f) => {
     // An instruction whose every item the file's scope tags took away has
     // nothing to say about it, so it is not one of the file's instructions —
-    // neither to read nor to tick.
+    // neither to read nor to tick. One outside the file's scope still is when
+    // an item reaches the file.
     const applicable = (file) => itemsFor(file, f.path).length > 0;
-    const locals = matchLocalInstructions(instructions.locals, f.path).filter(applicable);
+    const locals = instructions.locals.map((l) => l.file).filter(applicable);
     // Globals are matched per file too: one that declares `applies-to` is
     // narrowed like a local, one that declares none still applies everywhere.
-    const globals = matchGlobalInstructions(instructions.globals, scopes, f.path).filter(applicable);
+    const globals = instructions.globals.filter(applicable);
     const plan = [...planOf(globals, f.path), ...planOf(locals, f.path)];
     return {
       path: f.path,
@@ -1290,13 +1441,11 @@ function buildContext(options) {
       prNumber: base.source === 'pr' ? base.prNumber : null,
       ...reportPaths(branchName),
       commands: {
-        diff: gitc(`diff ${range} -- ${q('<path>')}`),
-        show: `${gitc(`show ${q(`${branchRef}:<path>`)}`)} | cat -n`,
         grep: gitc(`grep -n -I -E ${q('<pattern>')} ${branchRef} --`),
       },
       files: makeFiles(kept, parseDiffRangesByPath(tryGit(project, [...quiet, 'diff', '-U0', range]) || '')),
       skipped,
-    }, new Map(raw.map((f) => [f.path, f.blob])), { ref: branchRef });
+    }, new Map(raw.map((f) => [f.path, f.blob])), { ref: branchRef }, [range]);
   };
 
   if (options.mode === 'staged') {
@@ -1321,13 +1470,11 @@ function buildContext(options) {
       prNumber: null,
       ...reportPaths(branchName, 'staged'),
       commands: {
-        diff: gitc(`diff --cached -- ${q('<path>')}`),
-        show: `${gitc(`show ${q(':<path>')}`)} | cat -n`,
         grep: gitc(`grep -n -I --cached -E ${q('<pattern>')} --`),
       },
       files: makeFiles(kept, parseDiffRangesByPath(tryGit(project, [...quiet, 'diff', '-U0', '--cached']) || '')),
       skipped,
-    }, new Map(raw.map((f) => [f.path, f.blob])), { index: true });
+    }, new Map(raw.map((f) => [f.path, f.blob])), { index: true }, ['--cached']);
   } else if (options.mode === 'branches') {
     const names = [...new Set(String(options.branches || '').split(/[,;]/).map((s) => s.trim()).filter(Boolean))];
     if (names.length === 0) result.errors.push('No branches given (expected --branches="a,b;c").');
@@ -1335,7 +1482,7 @@ function buildContext(options) {
   } else if (options.mode === 'folder') {
     // Folder mode reviews the working tree instead of a diff: every file under
     // --path (recursive, minus skipGlobs) is emitted as an added file, so the
-    // whole folder gets the added-file treatment (show template only).
+    // whole folder gets the added-file treatment (content only, no diff).
     const rel = String(options.path || '').replace(/\\/g, '/').replace(/\/+$/, '');
     const abs = path.resolve(project, rel);
     // `path.resolve` happily walks out of the project (`--path=../other`), and every
@@ -1362,8 +1509,6 @@ function buildContext(options) {
         folder: rel,
         ...reportPaths(branchName, `folder-${sanitizeBranchName(rel)}`),
         commands: {
-          diff: null,
-          show: `cat ${q(`${project.replace(/\\/g, '/')}/<path>`)} | cat -n`,
           grep: gitc(`grep -n -I --untracked -E ${q('<pattern>')} --`),
         },
         files: makeFiles(kept, new Map()),
@@ -1400,6 +1545,12 @@ function buildContext(options) {
   // reviewed revision instead of by the reviewer while each file is open - a step that
   // costs output on every file and was, in practice, skipped. Written with the reports.
   const pendingLedgers = new Map();
+  // The files of each target's work folder, written with the reports: the reviewed
+  // revision of every file (`contentPath`) and its own section of the target's patch
+  // (`diffPath`), named after the part the file's review goes to - `07-a.ts` and
+  // `07-a.ts.diff` feed `<stem>.part07.md`. Folder mode reads the working tree
+  // itself, so its `contentPath` is the file and it has no patch.
+  const pendingWork = new Map();
   for (const target of result.targets) {
     const blobs = pendingSnapshots.get(target);
     const contents = blobs ? readBlobs(project, target.files.map((f) => blobs.get(f.path) || '')) : null;
@@ -1413,6 +1564,46 @@ function buildContext(options) {
     };
     pendingLedgers.set(target, formatImportLedger(target.files, readContent).text);
     target.importLedger = target.reportPath.replace(/\.md$/, '.imports.txt');
+    // Forward slashes: the same path works in a Read, in fs, and in a POSIX shell,
+    // and a JSON string of it is not doubled by escaping.
+    target.workDir = target.reportPath.replace(/\.md$/, '.work').replace(/\\/g, '/');
+    // Matches land in a file, so they reach the reviewer through a Read; `$$` (the
+    // shell's pid) keeps two searches of one run from overwriting each other.
+    target.commands.grep = `f=${q(`${target.workDir}/grep-`)}$$.txt; ${target.commands.grep} > "$f"; echo "$(wc -l < "$f") match(es) -> $f"`;
+    const diffArgs = pendingDiffArgs.get(target);
+    const patchFlags = ['--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/'];
+    const patches = diffArgs ? splitPatchByPath(tryGit(project, [...quiet, 'diff', ...patchFlags, ...diffArgs]) || '') : new Map();
+    // The part files' own width (check-part.cjs), so `03-a.ts` pairs with `part03.md`.
+    const width = Math.max(2, String(target.files.length + 2).length);
+    const writes = [];
+    target.files.forEach((f, i) => {
+      const stem = `${target.workDir}/${String(i + 1).padStart(width, '0')}-${path.basename(f.path).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')}`;
+      f.contentPath = null;
+      f.diffPath = null;
+      if (f.status !== 'D') {
+        if (!blobs) {
+          f.contentPath = `${project.replace(/\\/g, '/')}/${f.path}`;
+        } else {
+          // A blob that is no text (an image, a font) is reviewed from its diff line alone.
+          const text = readContent(f.path);
+          if (text !== null && !text.includes('\u0000')) {
+            f.contentPath = stem;
+            writes.push([stem, text]);
+          }
+        }
+      }
+      if (diffArgs && f.status !== 'A') {
+        // The whole-target patch missed this path only if its header spelled it in a
+        // way the split could not read back; the file's own diff is the fallback.
+        const patch = patches.get(f.path)
+          || tryGit(project, [...quiet, 'diff', ...patchFlags, ...diffArgs, '--', f.path]);
+        if (patch) {
+          f.diffPath = `${stem}.diff`;
+          writes.push([f.diffPath, patch.endsWith('\n') ? patch : `${patch}\n`]);
+        }
+      }
+    });
+    pendingWork.set(target, writes);
   }
 
   // Surface files that matched no local instruction — the files a reviewer is
@@ -1443,7 +1634,7 @@ function buildContext(options) {
     const usedGlobals = new Set();
     for (const target of result.targets) {
       for (const file of target.files) {
-        for (const g of matchGlobalInstructions(instructions.globals, scopes, file.path)) {
+        for (const g of instructions.globals) {
           if (itemsFor(g, file.path).length > 0) usedGlobals.add(g);
         }
       }
@@ -1461,6 +1652,12 @@ function buildContext(options) {
       .filter((f) => itemsOf(f) > 0 && scopes[f] && scopes[f].gate)
       .map((f) => [idOf.get(f), scopes[f].gate]),
   );
+  // Instructions declaring `findings: per-file`: their items are facets of one requirement, so
+  // a file's breaches of one are a single finding naming every item broken (SKILL.md Step 3
+  // point 3) - the part check lets that finding name several of its items, and refuses a second.
+  result.checklistPerFile = [...result.globalInstructions, ...result.localInstructionsCatalog]
+    .filter((f) => itemsOf(f) > 0 && scopes[f] && scopes[f].findings === 'per-file')
+    .map((f) => idOf.get(f));
   const indexOf = new Map(result.localInstructionsCatalog.map((p, i) => [p, i]));
   for (const target of result.targets) {
     for (const file of target.files) {
@@ -1469,7 +1666,16 @@ function buildContext(options) {
   }
 
   // Done last: everything above addresses these two lists by path.
-  const withId = (p) => ({ id: idOf.get(p), path: p });
+  // `numberedPath` is the copy of the instruction the reviewer reads, its bullets
+  // already carrying their `<id>#<n>` (numberChecklist), written with the reports.
+  const rulesDir = result.targets.length > 0
+    ? path.join(path.dirname(result.targets[0].reportPath), `.review-rules-${result.targets[0].kind}`).replace(/\\/g, '/')
+    : null;
+  const withId = (p) => ({
+    id: idOf.get(p),
+    path: p,
+    ...(rulesDir ? { numberedPath: `${rulesDir}/${idOf.get(p)}.md` } : {}),
+  });
   result.globalInstructions = result.globalInstructions.map(withId);
   result.localInstructionsCatalog = result.localInstructionsCatalog.map(withId);
 
@@ -1480,6 +1686,21 @@ function buildContext(options) {
     // with other artifacts, but only run-stamped report names are ever counted
     // or deleted (see pruneReports), so nothing else there is at risk.
     pruneReports(reportsDir);
+    // Rewritten whole every run, so a copy never outlives a change to its instruction.
+    try {
+      fs.rmSync(rulesDir, { recursive: true, force: true });
+      fs.mkdirSync(rulesDir, { recursive: true });
+      for (const entry of [...result.globalInstructions, ...result.localInstructionsCatalog]) {
+        fs.writeFileSync(entry.numberedPath, numberChecklist(fs.readFileSync(entry.path, 'utf8'), entry.id));
+      }
+    } catch (err) {
+      result.errors.push(`Could not write the numbered instructions to ${rulesDir} (${(err && err.message) || err}) - the review reads its checklists from there, so it cannot run.`);
+      // Dropped, not just reported: no target left is what stops Step 1 (exit 1),
+      // whoever reads the error text.
+      result.targets = [];
+    }
+    // A target whose work folder could not be written has nothing to be read from.
+    const unwritten = new Set();
     // After the pruning, so an emptied branch folder is not removed right after
     // being created for this run.
     for (const target of result.targets) {
@@ -1488,6 +1709,16 @@ function buildContext(options) {
         fs.writeFileSync(target.importLedger, pendingLedgers.get(target));
       } catch {
         result.warnings.push(`[${target.branch}] Could not write the import ledger ${target.importLedger} - collect the import edges while reading each file.`);
+      }
+      // Emptied first: a resumed run rewrites what the interrupted one wrote.
+      try {
+        fs.rmSync(target.workDir, { recursive: true, force: true });
+        fs.mkdirSync(target.workDir, { recursive: true });
+        for (const [file, text] of pendingWork.get(target) || []) fs.writeFileSync(file, text);
+      } catch (err) {
+        result.errors.push(`[${target.branch}] Could not write the work folder ${target.workDir} (${(err && err.message) || err}) - the files under review are read from it, so this target is not reviewed.`);
+        unwritten.add(target);
+        continue;
       }
       const blobs = pendingSnapshots.get(target);
       if (!blobs) continue;
@@ -1505,6 +1736,7 @@ function buildContext(options) {
         }));
       } catch {}
     }
+    result.targets = result.targets.filter((target) => !unwritten.has(target));
   }
   return result;
 }
@@ -1542,6 +1774,6 @@ function writeContext(context) {
   };
 }
 
-module.exports = { ensureDohGitignore, extractImports, formatImportLedger, readBlobs, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { ensureDohGitignore, extractImports, formatImportLedger, readBlobs, unquoteGitPath, patchPathOf, splitPatchByPath, numberChecklist, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, itemsWalkedBy, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();
