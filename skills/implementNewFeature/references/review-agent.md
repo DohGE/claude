@@ -62,25 +62,28 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    would then `git add .` and report on another task's tree. Pass it on every cycle, even when
    `{{ROOT}}` happens to equal `{{PROJECT}}`.
    It writes a findings report file (`reportPath` from its context script) and fixes nothing.
-   That report also carries proof of what the review walked, never feedback for you: one
-   HTML-comment checklist block per reviewed file plus a one-line `<!-- coverage: ... -->` marker
-   after each. Read the report through
-   `sed -e "/^<!--[[:space:]]*checklist:/,/-->/d" -e "/^<!--[[:space:]]*coverage:/d" "<reportPath>"`
-   so neither reaches your context: those lines grow with the rulebook rather than with the
-   findings, so on a clean review they are most of the file.
+   That report carries the findings only: the per-file checklist blocks and coverage markers, which grow with the rulebook rather than with the findings, are cut from it before the run ends, so read it whole with Read.
+   Never pass `--with-checklist`: it keeps those blocks in the report, where on a clean review they are most of the file and none of them is feedback for you.
    **The rulebook is read ONCE per agent, not once per cycle.** The skill's step 2
-   sends you to read every file of `globalInstructions` and `localInstructionsCatalog`; its rule
+   sends you to read the `numberedPath` copy of every entry of `instructionsCatalog`; its rule
    against working from memory is there so nobody reviews from RECOLLECTION, and inside this loop
-   the files are not a recollection — they are sitting in your context verbatim from the cycle that
-   read them. Measured on a 200-file diff: the full cycle's rulebook is ~23 000 tokens and even a
-   narrow `--since-last` cycle still matches ~15 000 of it, so six cycles that each re-read their own
-   come to ~107 000 tokens against ~23 000 read once — about 84 000 tokens of the context you need
-   for the code itself, spent on files you already have.
-   So on every cycle after your first, read only what you do NOT already have: compare the two lists
-   the fresh context JSON prints against the files you have read this run and open the difference —
-   a `--since-last` cycle narrows the catalogs. The round-2 agent reads its own rulebook in full on
-   cycle 4: round 1's copy went with round 1's context. Everything else per cycle IS fresh and IS read every time: the context
-   JSON, the report, and the files under review.
+   the copies are not a recollection — they are sitting in your context verbatim from the cycle that
+   read them.
+   Measured on the codeReview skill's 59-file test environment: a full cycle's copies come to
+   ~32 000 tokens, and a `--since-last` cycle narrowed to one folder still hands out ~7 000–16 000,
+   because they grow with the file kinds a cycle reviews, not with its file count.
+   So six cycles that each re-read their own spend ~70 000–110 000 tokens where reading once per
+   agent spends ~40 000–50 000 — the difference is context you need for the code itself.
+   So on every cycle after your first, read only what you do NOT already have.
+   Each entry of the fresh context JSON's `instructionsCatalog` names in `items` the item numbers its
+   copy lists: open its `numberedPath` when you have read no copy of that `id` this run, or when
+   `items` names a number the copy you read did not list.
+   A `--since-last` cycle usually walks a subset of what you hold, but a file of a kind your earlier
+   cycles did not review — a spec you added, say — brings items of its own.
+   The round-2 agent reads its own rulebook in full on cycle 4: round 1's copies went with round 1's
+   context.
+   Everything else per cycle IS fresh and IS read every time: the context JSON, the report, and the
+   files under review.
    This is the ONLY permitted review method:
    - never review the diff manually, "quickly", or as a "sanity check";
    - never use any other review skill or tool;
@@ -103,17 +106,22 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
    back on every later cycle and by the round-2 agent to know what stays rejected. Each entry is `file:line`,
    the violated rule, and the one-line reason naming its ground. A rejected finding stays rejected for
    every later cycle and for round 2: never re-open it, never re-argue it, never let it block completion.
-   Every fix and every new spec you write obeys the same rulebook the code is reviewed against:
-   once, run `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` and read every
-   `globals` file, and before editing a file re-run it with `--files="<project-relative path>"` and read
-   the returned `localInstructions` (a 🔵 Missing Unit Test fix follows the unit-test instructions the
-   same way). A fix that satisfies its finding while breaking another checklist item only moves the
-   finding into the next cycle.
-   When `projectInstructionsDir` is not null the `globals` list also carries the repository's own rules
-   from `{{ROOT}}/.claude/doh/instructions/`; they bind exactly like the skill's. A worktree is checked
-   out from HEAD, so it carries them only if they are COMMITTED — when it comes back null here, note it
-   in `reviewSummary` rather than reaching outside `{{ROOT}}`, because the review then silently ran
-   without the rules the project meant to enforce.
+   Every fix and every new spec you write obeys the same rulebook the code is reviewed against.
+   A reviewed file's checklist is its plan in the context JSON (`checklistPlans[file.plan].checklist`),
+   and the copies you read for the review already hold every item of it.
+   A file the review did not walk — the spec a 🔵 Missing Unit Test fix creates, any file you add —
+   gets its own before you write it: run
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative path>"`
+   and read the `rules` file it returns, the whole checklist of the file's `kind` item by item under
+   `<id>#<n>` (files of one kind share it, so one you already read stays binding).
+   A fix that satisfies its finding while breaking another checklist item only moves the finding into
+   the next cycle.
+   When `projectInstructionsDir` (in the context JSON and the matcher's output alike) is not null, the
+   repository's own file kinds from `{{ROOT}}/.claude/doh/instructions/` are layered into those
+   checklists; they bind exactly like the skill's.
+   A worktree is checked out from HEAD, so it carries them only if they are COMMITTED — when it comes
+   back null here, note it in `reviewSummary` rather than reaching outside `{{ROOT}}`, because the
+   review then silently ran without the rules the project meant to enforce.
    Then `git -C "{{ROOT}}" add -A` again.
 4. Regression guard — BOTH suites must pass before you continue:
    - the project's own unit suite, through the exact `checks.cjs` call step 5 recorded under

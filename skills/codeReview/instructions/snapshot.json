@@ -1,0 +1,67 @@
+{
+  "kind": "snapshot",
+  "pattern": "*.snap",
+  "role": "Jest snapshot file.",
+  "describedBy": [
+    {
+      "id": "unit-tests#1",
+      "text": "Specs live in a `tests/` folder next to the code under test; snapshots in `tests/__snapshots__/`."
+    },
+    {
+      "id": "unit-tests#23",
+      "text": "Snapshots are updated (`-u`) only after consciously reviewing the diff."
+    }
+  ],
+  "notes": [
+    "A snapshot artifact: only its location, the review-before-refresh rule and the no-secrets rule apply."
+  ],
+  "itemCount": 4,
+  "instructions": [
+    {
+      "id": "unit-tests",
+      "name": "Unit tests (common)",
+      "selectedItems": "1,23",
+      "checklistSize": 25,
+      "items": [
+        {
+          "id": "unit-tests#1",
+          "text": "Specs live in a `tests/` folder next to the code under test; snapshots in `tests/__snapshots__/`.",
+          "facts": [
+            "snapshot-outside-folder",
+            "snapshot-missing"
+          ]
+        },
+        {
+          "id": "unit-tests#23",
+          "text": "Snapshots are updated (`-u`) only after consciously reviewing the diff."
+        }
+      ]
+    },
+    {
+      "id": "util-guard-unit-test",
+      "name": "Util and guard unit tests",
+      "selectedItems": "4",
+      "checklistSize": 7,
+      "items": [
+        {
+          "id": "util-guard-unit-test#4",
+          "text": "Large summary structures may use `toMatchSnapshot()` with snapshots stored in `tests/__snapshots__/`; snapshots are refreshed only after reviewing the diff."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        }
+      ]
+    }
+  ]
+}

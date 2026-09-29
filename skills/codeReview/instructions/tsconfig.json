@@ -1,0 +1,40 @@
+{
+  "kind": "tsconfig",
+  "pattern": "tsconfig.json",
+  "role": "Root TypeScript compiler configuration.",
+  "describedBy": [
+    {
+      "id": "general#12",
+      "text": "The diff never weakens the compiler or template contract to make new code build: `strict`, `strictTemplates`, `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch` and the ESLint rule set stay at least as strict as they were, and no file is added to an `exclude`/ignore list for that purpose — a flag turned off hides the same class of error in every other file of the repo."
+    }
+  ],
+  "itemCount": 2,
+  "instructions": [
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "12",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#12",
+          "text": "The diff never weakens the compiler or template contract to make new code build: `strict`, `strictTemplates`, `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch` and the ESLint rule set stay at least as strict as they were, and no file is added to an `exclude`/ignore list for that purpose — a flag turned off hides the same class of error in every other file of the repo."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        }
+      ]
+    }
+  ]
+}

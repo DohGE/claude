@@ -1,0 +1,280 @@
+{
+  "kind": "mapper-const",
+  "pattern": "src/app/<area>/models/consts/<subject>-mapper.const.ts",
+  "role": "`Record<EnumKey, Value>` mapper const replacing a switch/lookup function.",
+  "describedBy": [
+    {
+      "id": "models#21",
+      "text": "Mappers are `Record<EnumKey, Value>` consts (completeness enforced by the compiler) named `...Mapper` in `-mapper.const.ts` files; the mapper imports its enum by relative path. A const `Record` mapper is PREFERRED over a util: a function whose whole body is a `switch`/`if` chain or an object lookup translating one value into another is a finding — it becomes a `...Mapper` const. Only a mapper that genuinely outgrows a plain `Record` (computation, several inputs, branching on more than the key) becomes a util with a spec."
+    }
+  ],
+  "itemCount": 33,
+  "instructions": [
+    {
+      "id": "models",
+      "name": "Models folder",
+      "selectedItems": "1-2,4-6,8,10,21",
+      "checklistSize": 24,
+      "items": [
+        {
+          "id": "models#1",
+          "text": "`models/` is the only source of the area's types, enums and constants, split into `consts/`, `enums/`, `interfaces/`, `types/` (optional thematic subfolders for large areas); file suffixes match: `.const.ts`, `.enum.ts`, `.interface.ts`, `.type.ts`."
+        },
+        {
+          "id": "models#2",
+          "text": "File name is the kebab-case of the main export; one main export per file (closely related helper interfaces may live alongside it)."
+        },
+        {
+          "id": "models#4",
+          "text": "A const is created only when it is reusable, carries meaningful logic/knowledge (a mapper, an option set, a configuration, a shared literal) or removes a magic value used in several places. A small one-off value — a single string, number, flag or object literal used in exactly ONE place — stays inline at its use site; extracting it into a `.const.ts` file (or a module-level const) is a finding, exactly like extracting a short single-consumer util.",
+          "facts": [
+            "export-single-importer"
+          ]
+        },
+        {
+          "id": "models#5",
+          "text": "Files are purely declarative — only `export interface/type/enum/const`; no functions (→ `shared/utils/`), classes, components, providers, or logic inside constants (a const is a literal or a `Record`, never an IIFE or function result)."
+        },
+        {
+          "id": "models#6",
+          "text": "A `.const.ts` file declares CONSTANTS only: no `interface`, no `type`, no `enum` in it — not even an unexported helper used by that one const. The type a const is annotated with is imported from its own `.interface.ts`/`.type.ts`/`.enum.ts` file or from the shared library; declared next to the const it is invisible to every other consumer that needs the same shape, and the next consumer writes a second copy of it. The co-location rule above lets a TYPE file gather the dependencies only it uses — it never lets a const file grow its own."
+        },
+        {
+          "id": "models#8",
+          "text": "Files **inside** `models/` import each other by relative paths to concrete files — never through their own barrel or the area alias (cycle risk); imports from outside the area always go through aliases.",
+          "sameAs": [
+            "state-interface#4"
+          ]
+        },
+        {
+          "id": "models#10",
+          "text": "The word `Dto`/`DTO` is not part of the vocabulary: no `UserDto`, no `user-dto.interface.ts`, no `dto/` folder, no `dto` field, variable or generic parameter — in nothing the diff adds or renames. A type is named after what it carries plus its role (`User`, `UserResponse`, `UsersListResponse`, `CreateUserRequest`, `UserSearchPayload`) and its file after the type (`user-response.interface.ts`).",
+          "sameAs": [
+            "general#2"
+          ]
+        },
+        {
+          "id": "models#21",
+          "text": "Mappers are `Record<EnumKey, Value>` consts (completeness enforced by the compiler) named `...Mapper` in `-mapper.const.ts` files; the mapper imports its enum by relative path. A const `Record` mapper is PREFERRED over a util: a function whose whole body is a `switch`/`if` chain or an object lookup translating one value into another is a finding — it becomes a `...Mapper` const. Only a mapper that genuinely outgrows a plain `Record` (computation, several inputs, branching on more than the key) becomes a util with a spec."
+        }
+      ]
+    },
+    {
+      "id": "i18n",
+      "name": "Translations",
+      "selectedItems": "2,11",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "i18n#2",
+          "text": "Before adding a key, the base file is searched for an existing translation with the same meaning — generic reusable texts are referenced, never duplicated per area; a new key exists only when no existing one fits semantically; the same phrase never lives under two keys.",
+          "facts": [
+            "i18n-duplicate-value"
+          ]
+        },
+        {
+          "id": "i18n#11",
+          "text": "No user-facing text is hard-coded in code or templates: every label, message, heading, tooltip and option text a user sees is a key of the base file, rendered through the translate pipe or resolved through the translation service — a `'Blocked'` returned by a mapper or a `<h2>Users</h2>` in a template is a finding, and so is a text an existing key already carries.",
+          "sameAs": [
+            "general#7",
+            "pipes#5",
+            "component-template#9"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "architecture",
+      "name": "Feature architecture",
+      "selectedItems": "1,6,8-9,11",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "architecture#1",
+          "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
+          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
+        },
+        {
+          "id": "architecture#6",
+          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, HTTP in `data-access/services/`, state files in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed.",
+          "probe": [
+            {
+              "builtin": "area-root-file"
+            }
+          ]
+        },
+        {
+          "id": "architecture#8",
+          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
+        },
+        {
+          "id": "architecture#9",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
+          "sameAs": [
+            "component-template#16"
+          ]
+        },
+        {
+          "id": "architecture#11",
+          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit.",
+          "secondQuestion": "Czy plik albo jego fragment to nietknięty szkielet generatora (Angular CLI) lub kopia starszego sąsiedniego kodu - co z tego zostało niedostosowane?"
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "1-7,13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#1",
+          "text": "Named `const` values are camelCase — never SCREAMING_SNAKE_CASE and never PascalCase; interfaces, types, enums and classes are PascalCase.",
+          "probe": [
+            {
+              "pattern": "\\bconst\\s+(?<at>[A-Z][\\w$]*)\\s*[:=]",
+              "message": "nazwa const zaczyna się wielką literą (SCREAMING_SNAKE_CASE albo PascalCase)",
+              "paths": "^(?!.*\\.spec\\.[cm]?[jt]s$)"
+            }
+          ]
+        },
+        {
+          "id": "general#2",
+          "text": "Names are full and descriptive — no abbreviations and no one-letter identifiers; shortening is allowed only for well-established abbreviations or when the full name would exceed ~25–30 characters or 4–5 words.",
+          "sameAs": [
+            "models#10"
+          ]
+        },
+        {
+          "id": "general#3",
+          "text": "No unnecessary type assertions (`as`), especially `as never` and assertions on primitive types; use a single `as Type` only when the compiler requires it; `as unknown as Type` only when the compiler/ESLint rejects a single assertion because of an incompatible shape."
+        },
+        {
+          "id": "general#4",
+          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
+        },
+        {
+          "id": "general#5",
+          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
+        },
+        {
+          "id": "general#6",
+          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.",
+          "facts": [
+            "cross-area-import"
+          ]
+        },
+        {
+          "id": "general#7",
+          "text": "Every user-facing string is an i18n key resolved through the translation pipe/service — never a hard-coded text, in TS or in templates.",
+          "sameAs": [
+            "i18n#11"
+          ]
+        },
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "best-practices",
+      "name": "Angular & TypeScript best practices",
+      "preamble": [
+        "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
+      ],
+      "selectedItems": "1-2,22",
+      "checklistSize": 23,
+      "items": [
+        {
+          "id": "best-practices#1",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.",
+          "sameAs": [
+            "utils#2"
+          ]
+        },
+        {
+          "id": "best-practices#2",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction."
+        },
+        {
+          "id": "best-practices#22",
+          "text": "A suppression comment added by the diff (`@ts-ignore`, `@ts-expect-error`, `eslint-disable*`) carries a one-line justification and the narrowest scope that works (line-level over file-level); `@ts-expect-error` is used wherever it compiles, because it fails once the underlying problem is fixed. The `/* eslint-disable @typescript-eslint/member-ordering */` allowed by the effects instruction is the one standing exception."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        }
+      ]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "severity": "medium",
+      "preamble": [
+        "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+      ],
+      "selectedItems": "1-3,6-8",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "code-quality#1",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates.",
+          "facts": [
+            "repeated-literal",
+            "repeated-condition",
+            "mapping-duplicate",
+            "mapping-duplicate-caller"
+          ],
+          "probe": [
+            {
+              "builtin": "markup-repeat"
+            }
+          ],
+          "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
+          "severity": "high"
+        },
+        {
+          "id": "code-quality#2",
+          "text": "No copy-paste-with-a-tweak: two near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset).",
+          "severity": "high"
+        },
+        {
+          "id": "code-quality#3",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change.",
+          "facts": [
+            "export-unused",
+            "barrel-unused",
+            "guard-without-route",
+            "pipe-unused",
+            "i18n-unused-key"
+          ]
+        },
+        {
+          "id": "code-quality#6",
+          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+        },
+        {
+          "id": "code-quality#7",
+          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
+        },
+        {
+          "id": "code-quality#8",
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+        }
+      ]
+    }
+  ]
+}

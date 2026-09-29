@@ -47,33 +47,41 @@ screen looks, the mockup wins (it is the newer, user-approved artifact) — reco
 
 ## Coding rulebook (MANDATORY)
 
-Step 6 reviews every change with the `doh:codeReview` skill against its instruction checklists —
-write code that already complies. The matcher below reuses the review-time matching logic, so its
-output is authoritative.
+Step 6 reviews every change with the `doh:codeReview` skill, walking each file against the checklist
+of its file kind — write code that already complies.
+The matcher below loads and matches the rulebook with the review's own code, so its output is
+authoritative.
 
 1. Once, before the first task, run
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` to learn the
-   rulebook `globals` lists. Read them as the files below bind them, not all of them up front:
-   most declare `applies-to`, so which ones bind a given file is a per-file answer. When `projectInstructionsDir`
-   is not null the list also carries the repository's own rules, read from `{{ROOT}}/.claude/doh/instructions/`
-   (the matcher resolves them under the `--project` you passed, so in a worktree it reads the
-   worktree's copy); they bind exactly like the skill's. A worktree is checked out from HEAD, so it
-   carries those rules only if they are COMMITTED — when `projectInstructionsDir` comes back null
-   here but the main checkout has such a directory, say so in `deviations` rather than reaching
-   outside `{{ROOT}}` for it.
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` to learn the file kinds
+   the rulebook knows: `kinds[]` gives each one's `kind`, `pattern` and `role`.
+   Read no checklist yet — which one binds a file is a per-file answer (point 2).
+   A file the plan does not name goes where the kind for its role expects it.
+   When `projectInstructionsDir` is not null the repository ships its own file kinds in
+   `{{ROOT}}/.claude/doh/instructions/` (the matcher resolves them under the `--project` you passed,
+   so in a worktree it reads the worktree's copy), and they are already layered in: a project kind
+   replaces the skill's kind of the same name, and an item a project kind restates reads the
+   project's text in every kind.
+   A worktree is checked out from HEAD, so it carries those rules only if they are COMMITTED — when
+   `projectInstructionsDir` comes back null here but the main checkout has such a directory, say so
+   in `deviations` rather than reaching outside `{{ROOT}}` for it.
 2. Before writing or editing any file, run it again with every file the task touches:
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative paths, comma-separated>"`
-   and read each file it returns under `globalInstructions` AND `localInstructions` for that path
-   (skip ones you already read — they stay binding for the files that listed them).
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative paths, comma-separated>"`.
+   Each path comes back with its `kind`, its `checklist` and `rules`: one Markdown file holding that
+   kind's whole checklist, every item under the `<id>#<n>` address the review cites it by.
+   Read the `rules` of each kind once — files of one kind share it, and it stays binding for all of them.
+   `kind: null` → no checklist binds that file; the plan, the project's `CLAUDE.md` and its
+   conventions still do.
    Files you only discover mid-task get the same treatment before you write them.
-3. Write each file to satisfy EVERY checklist item of the instructions THAT file was given. An
-   instruction a file's path took it out of is not its rule: step 6 narrows the globals the same way,
-   so writing a stylesheet against the test-coverage checklist is effort nothing will ever check.
-   They override your own style preferences and generic conventions; `plan.md` still decides WHAT
-   to build. A real conflict between an instruction and the plan → follow the instruction for HOW,
-   the plan for WHAT, and record it as a deviation.
-4. Before reporting a task done, re-check its files item-by-item against their matched checklists
-   and fix every violation — step 6 will reject what you skip.
+3. Write each file to satisfy EVERY item of its `rules` — exactly the items step 6 walks it against.
+   An instruction missing from a file's `rules` is not its rule: writing a stylesheet against the
+   test-coverage checklist is effort nothing will ever check.
+   The items override your own style preferences and generic conventions; `plan.md` still decides
+   WHAT to build.
+   A real conflict between an item and the plan → follow the item for HOW, the plan for WHAT, and
+   record it as a deviation.
+4. Before reporting a task done, re-check its files item by item against their `rules` and fix every
+   violation — step 6 will reject what you skip.
 5. Matcher exits non-zero (rulebook missing) → continue without it and record that in `deviations`.
 
 ## Rules

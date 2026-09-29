@@ -160,3 +160,25 @@ test('odznaczone zapamiętywanie przeżywa przerysowanie panelu', async ({ page 
   expect(await page.evaluate(() => Object.keys(localStorage)
     .filter(k => k.startsWith('inf.auth.')))).toEqual([]);
 });
+
+test('lista modeli jest z sesji, a zapamiętany model spoza niej to dziedziczenie', async ({ page }) => {
+  // Sesja, której narzędzie Agent zna inne modele niż ta, w której wybór zapamiętano.
+  if (app.server.closeAllConnections) app.server.closeAllConnections();
+  await new Promise(r => app.server.close(r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inf-mem-'));
+  fs.writeFileSync(path.join(dir, 'models.json'), JSON.stringify([
+    { value: 'opus', label: 'Opus 5.5' }, { value: 'sonnet', label: 'Sonnet 5' }]));
+  app = createApp(dir);
+  await new Promise(r => app.server.listen(0, '127.0.0.1', r));
+  base = `http://127.0.0.1:${app.server.address().port}`;
+  await state({ step: 1, status: 'in_progress', activeStep: 1 });
+  await page.addInitScript(() => localStorage.setItem('inf.agents', JSON.stringify({
+    model: 'haiku', effort: 'high', steps: { 6: { model: 'sonnet', effort: '' } } })));
+  await page.goto(base);
+  await page.waitForSelector('#agentModel');
+  await expect(page.locator('#agentModel option')).toHaveText(['Inherit', 'Opus 5.5', 'Sonnet 5']);
+  await expect(page.locator('#agentModel')).toHaveValue('');
+  await expect(page.locator('#agentEffort')).toHaveValue('high');
+  await page.locator('#agentOverrides summary').click();
+  await expect(page.locator('#agentModel-6')).toHaveValue('sonnet');
+});

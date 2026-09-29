@@ -27,18 +27,21 @@ them out again before it ends — see "Mocks for endpoints the backend does not 
 ## Coding rulebook (MANDATORY)
 
 Every line of APPLICATION code you write here — a bug fix, a UI correction against the baseline, a
-missing test hook — is reviewed in step 6 by the `doh:codeReview` skill against its instruction
-checklists, exactly like the step-4 code. Follow the same rulebook the implementation agent followed:
+missing test hook — is reviewed in step 6 by the `doh:codeReview` skill against the checklist of its
+file kind, exactly like the step-4 code.
+Follow the same rulebook the implementation agent followed:
 
 1. Once, before your first application fix, run
-   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` to learn the rulebook
-   `globals` lists (when `projectInstructionsDir` is not null the list also carries the project's
-   own rules from `<PROJECT>/.claude/doh/instructions/` — they bind exactly like the skill's).
-   Do not read them all here: most declare `applies-to`, so which bind a file is a per-file answer.
+   `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}"` to learn the file kinds
+   the rulebook knows (`kinds[]`: `kind`, `pattern`, `role`).
+   When `projectInstructionsDir` is not null the project's own file kinds from
+   `<PROJECT>/.claude/doh/instructions/` are layered in — they bind exactly like the skill's.
+   Read no checklist here: which one binds a file is a per-file answer.
 2. Before editing an application file, run it again with that file:
    `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative paths>"`
-   and read each file it returns under `globalInstructions` AND `localInstructions` for that path
-   (ones you already read stay binding).
+   and read the `rules` file it returns for that path — the whole checklist of its `kind`, item by
+   item under `<id>#<n>` (one you already read stays binding; files of one kind share it).
+   `kind: null` → no checklist binds that file.
 3. Fix the app so it satisfies those checklists — never "just enough to make the test go green".
    A quick fix that breaks a rule does not save time, it moves the work into step 6.
 4. The `DOH-MOCK` code of the mocks section is the one exception: temporary, stripped before this

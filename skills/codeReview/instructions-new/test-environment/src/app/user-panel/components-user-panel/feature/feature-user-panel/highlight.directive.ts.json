@@ -1,0 +1,538 @@
+{
+  "file": "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts",
+  "role": "Attribute-style directive placed next to the feature component (DOM highlighting).",
+  "notes": [
+    "Walked as a directive plus the components-folder placement rules, because it sits in a component folder."
+  ],
+  "itemCount": 94,
+  "instructions": [
+    {
+      "id": "directives",
+      "name": "Attribute directives",
+      "source": "instructions/local/code/shared/directives.md",
+      "selectedItems": "1-8",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "directives#1",
+          "text": "Standalone directive; the selector is an attribute selector carrying the app prefix (`[appPrefixFocusTrap]`), file `<name>.directive.ts`, class `<PascalCase>Directive`."
+        },
+        {
+          "id": "directives#2",
+          "text": "Inputs and outputs use `input()`/`output()`; host bindings and listeners live in the `host: {}` object — never `@HostBinding`/`@HostListener` (global best-practices instruction)."
+        },
+        {
+          "id": "directives#3",
+          "text": "DOM writes go through `Renderer2` or a signal-driven `host` binding; direct `nativeElement` writes in the constructor or `ngOnInit` are forbidden, and measurement or focus work runs in `afterNextRender`."
+        },
+        {
+          "id": "directives#4",
+          "text": "Listener teardown is automatic (`host: {}`) or explicit (`takeUntilDestroyed()`); a manually added `addEventListener` is removed through `inject(DestroyRef).onDestroy(...)`."
+        },
+        {
+          "id": "directives#5",
+          "text": "Behavior reused by several components is composed with `hostDirectives` rather than copy-pasted host bindings."
+        },
+        {
+          "id": "directives#6",
+          "text": "The directive holds no domain state and injects no facade or HTTP service — it is a presentation concern; behavior that needs state belongs in the component that hosts it."
+        },
+        {
+          "id": "directives#7",
+          "text": "A directive lives in a shared location (never next to a component file — components-folder instruction) and is listed in the `imports` array of every component whose template uses it."
+        },
+        {
+          "id": "directives#8",
+          "text": "Every directive has a spec in the sibling `tests/` folder that renders it on a host component and asserts the resulting host bindings and emitted outputs."
+        }
+      ]
+    },
+    {
+      "id": "components-folder",
+      "name": "Components folder contents",
+      "source": "instructions/local/code/components/components-folder.md",
+      "selectedItems": "1-2",
+      "checklistSize": 3,
+      "items": [
+        {
+          "id": "components-folder#1",
+          "text": "Inside `components-<area>/{feature,ui}/<component-name>/` only `*.component.ts`, `*.component.html`, `*.component.scss` and a `tests/` folder may exist. Any other file (helpers, consts, interfaces, enums, utils, local models) is a violation by its mere existence, regardless of the quality of its content."
+        },
+        {
+          "id": "components-folder#2",
+          "text": "For such a misplaced file, additionally report where each of its declarations belongs: interfaces/types/enums/consts → `models/`, pure functions → `shared/utils/`, state logic → `data-access/+state/`, user-facing texts → i18n keys."
+        }
+      ]
+    },
+    {
+      "id": "http-service",
+      "name": "HTTP service",
+      "source": "instructions/local/code/+state/http-service.md",
+      "gate": "the file is an HTTP layer - it injects an HTTP client (`HttpClient`) or its methods execute REST requests - or it is the spec of such a service. A service in this folder that performs no request is an architecture finding (wrong location), never a set of HTTP-service findings",
+      "selectedItems": "1",
+      "checklistSize": 14,
+      "items": [
+        {
+          "id": "http-service#1",
+          "text": "The service is a thin HTTP layer — the only place in the area executing REST requests — injected **exclusively by effects**; never used by components, facades, reducers or selectors."
+        }
+      ]
+    },
+    {
+      "id": "models",
+      "name": "Models folder",
+      "source": "instructions/local/code/models/models.md",
+      "selectedItems": "1,7,10",
+      "checklistSize": 24,
+      "items": [
+        {
+          "id": "models#1",
+          "text": "`models/` is the only source of the area's types, enums and constants, split into `consts/`, `enums/`, `interfaces/`, `types/` (optional thematic subfolders for large areas); file suffixes match: `.const.ts`, `.enum.ts`, `.interface.ts`, `.type.ts`."
+        },
+        {
+          "id": "models#7",
+          "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel."
+        },
+        {
+          "id": "models#10",
+          "text": "The word `Dto`/`DTO` is not part of the vocabulary: no `UserDto`, no `user-dto.interface.ts`, no `dto/` folder, no `dto` field, variable or generic parameter — in nothing the diff adds or renames. A type is named after what it carries plus its role (`User`, `UserResponse`, `UsersListResponse`, `CreateUserRequest`, `UserSearchPayload`) and its file after the type (`user-response.interface.ts`)."
+        }
+      ]
+    },
+    {
+      "id": "component",
+      "name": "Angular component (common)",
+      "source": "instructions/local/code/components/component.md",
+      "preamble": [
+        "This instruction OWNS the component TS file: file separation, the `@Component` metadata, DI fields, visibility, form wiring and subscription teardown. The signals/DI/host APIs themselves are owned by the global best-practices instruction, rendering cost by the performance instruction, and everything inside the template by the component-template instruction."
+      ],
+      "selectedItems": "3",
+      "checklistSize": 26,
+      "items": [
+        {
+          "id": "component#3",
+          "text": "The `imports` array matches the template exactly, verified in BOTH directions: every imported entry is used by the template (nothing speculative), AND every external symbol the template uses has its entry — component/directive selectors, pipe names, `[formControl]`/`formGroup` → `ReactiveFormsModule`, `[(ngModel)]` → `FormsModule`, `ngSrc` → `NgOptimizedImage`. A missing entry breaks the template at runtime — report from this consequence. For a pipe or directive the diff adds or renames, walk that second direction from the symbol: every template using it has its entry in its component's `imports`, and a missing one is reported at the symbol's file."
+        }
+      ]
+    },
+    {
+      "id": "i18n",
+      "name": "Translations",
+      "source": "instructions/local/i18n.md",
+      "selectedItems": "2,8,11",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "i18n#2",
+          "text": "Before adding a key, the base file is searched for an existing translation with the same meaning — generic reusable texts are referenced, never duplicated per area; a new key exists only when no existing one fits semantically; the same phrase never lives under two keys."
+        },
+        {
+          "id": "i18n#8",
+          "text": "Interpolated translations needed in TS are resolved through the translation service's instant lookup with a params object — never assembled by string concatenation."
+        },
+        {
+          "id": "i18n#11",
+          "text": "No user-facing text is hard-coded in code or templates: every label, message, heading, tooltip and option text a user sees is a key of the base file, rendered through the translate pipe or resolved through the translation service — a `'Blocked'` returned by a mapper or a `<h2>Users</h2>` in a template is a finding, and so is a text an existing key already carries."
+        }
+      ]
+    },
+    {
+      "id": "architecture",
+      "name": "Feature architecture",
+      "source": "instructions/global/architecture.md",
+      "selectedItems": "1,4,6,8-9,11",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "architecture#1",
+          "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area."
+        },
+        {
+          "id": "architecture#4",
+          "text": "Layering is strict: components touch state only through a facade; selectors compute every derived value; effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests."
+        },
+        {
+          "id": "architecture#6",
+          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, HTTP in `data-access/services/`, state files in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed."
+        },
+        {
+          "id": "architecture#8",
+          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
+        },
+        {
+          "id": "architecture#9",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach."
+        },
+        {
+          "id": "architecture#11",
+          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit."
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "source": "instructions/global/general.md",
+      "selectedItems": "1-8,10-11,13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#1",
+          "text": "Named `const` values are camelCase — never SCREAMING_SNAKE_CASE and never PascalCase; interfaces, types, enums and classes are PascalCase."
+        },
+        {
+          "id": "general#2",
+          "text": "Names are full and descriptive — no abbreviations and no one-letter identifiers; shortening is allowed only for well-established abbreviations or when the full name would exceed ~25–30 characters or 4–5 words."
+        },
+        {
+          "id": "general#3",
+          "text": "No unnecessary type assertions (`as`), especially `as never` and assertions on primitive types; use a single `as Type` only when the compiler requires it; `as unknown as Type` only when the compiler/ESLint rejects a single assertion because of an incompatible shape."
+        },
+        {
+          "id": "general#4",
+          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
+        },
+        {
+          "id": "general#5",
+          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
+        },
+        {
+          "id": "general#6",
+          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area."
+        },
+        {
+          "id": "general#7",
+          "text": "Every user-facing string is an i18n key resolved through the translation pipe/service — never a hard-coded text, in TS or in templates."
+        },
+        {
+          "id": "general#8",
+          "text": "No `console.log` or other leftover debug statements."
+        },
+        {
+          "id": "general#10",
+          "text": "In-app navigation goes through `Router` (`navigate`/`navigateByUrl`/`routerLink`) — `window.location.href`/`assign`/`replace` discards router state, guards and the SPA boundary; a deliberate full page load carries a justification in the PR description or it is a finding."
+        },
+        {
+          "id": "general#11",
+          "text": "Errors are never swallowed: no empty `catch` blocks, no `.catch(() => {})`, no `catchError` that drops the failure without mapping it to a fail action/error state — every failure path either surfaces to state/UI or carries an explicit justification in the PR description. In an effect a `catchError` returning `EMPTY` is always a finding (NgRx effects instruction); elsewhere — legacy components/services — `EMPTY` alone is not reported under this rule."
+        },
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "best-practices",
+      "name": "Angular & TypeScript best practices",
+      "source": "instructions/global/best-practices.md",
+      "preamble": [
+        "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
+      ],
+      "selectedItems": "1-6,9,11,14-15,20-22",
+      "checklistSize": 23,
+      "items": [
+        {
+          "id": "best-practices#1",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types."
+        },
+        {
+          "id": "best-practices#2",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction."
+        },
+        {
+          "id": "best-practices#3",
+          "text": "Standalone components/directives/pipes only — no new `NgModule`s; `standalone: true` is never written explicitly (it is the framework default)."
+        },
+        {
+          "id": "best-practices#4",
+          "text": "Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators or `@Input() set` accessors; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array."
+        },
+        {
+          "id": "best-practices#5",
+          "text": "View and content queries use the signal functions `viewChild()`/`viewChild.required()`/`viewChildren()`/`contentChild()`/`contentChildren()` — never the `@ViewChild`/`@ViewChildren`/`@ContentChild`/`@ContentChildren` decorators, and never `{ static: true }` (signal queries resolve without it)."
+        },
+        {
+          "id": "best-practices#6",
+          "text": "`ngOnChanges` does not exist in a component with signal inputs: reacting to an input is `computed()` (derived), `linkedSignal()` (derived but locally resettable) or `effect()` (side effect) — `ngOnChanges` re-introduces the string-keyed `SimpleChanges` bag the signal API replaced."
+        },
+        {
+          "id": "best-practices#9",
+          "text": "A writable signal is never exposed on a public surface: components, stores and services expose `signal.asReadonly()` or a `computed()`, keeping `.set()`/`.update()` with the owner."
+        },
+        {
+          "id": "best-practices#11",
+          "text": "Input coercion uses `transform: booleanAttribute` / `numberAttribute` / a pure function in `input(..., { transform })` — never a setter and never coercion inside the consuming `computed()`."
+        },
+        {
+          "id": "best-practices#14",
+          "text": "Dependency injection only through `inject()`, and only in an injection context (field initializers, constructor, provider/guard factories) — calling `inject()` inside methods, subscriptions or async callbacks is a runtime error (NG0203)."
+        },
+        {
+          "id": "best-practices#15",
+          "text": "Host bindings and listeners go into the `host: {}` object of the decorator — never `@HostBinding`/`@HostListener`."
+        },
+        {
+          "id": "best-practices#20",
+          "text": "RxJS operators are imported from `rxjs`, never from `rxjs/operators` (deprecated since 7.2); `toPromise()` is never used (`firstValueFrom`/`lastValueFrom` where a promise is genuinely required, and neither belongs in an HTTP service)."
+        },
+        {
+          "id": "best-practices#21",
+          "text": "No `subscribe()` inside a `subscribe()` — compose with `switchMap`/`concatMap`/`mergeMap`; the nested form leaks the inner subscription past every teardown operator on the outer one."
+        },
+        {
+          "id": "best-practices#22",
+          "text": "A suppression comment added by the diff (`@ts-ignore`, `@ts-expect-error`, `eslint-disable*`) carries a one-line justification and the narrowest scope that works (line-level over file-level); `@ts-expect-error` is used wherever it compiles, because it fails once the underlying problem is fixed. The `/* eslint-disable @typescript-eslint/member-ordering */` allowed by the effects instruction is the one standing exception."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "source": "instructions/global/security.md",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "1,3-5,7-8,12-13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#1",
+          "text": "No `DomSanitizer.bypassSecurityTrust*` calls without a justification in the PR description and a provably static, developer-controlled value — never on user-, API- or URL-derived data."
+        },
+        {
+          "id": "security#3",
+          "text": "No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings."
+        },
+        {
+          "id": "security#4",
+          "text": "No `eval`, `new Function(...)`, or string arguments to `setTimeout`/`setInterval`."
+        },
+        {
+          "id": "security#5",
+          "text": "URLs bound to `[href]`/`[src]` or passed to `window.open`/`Router.navigateByUrl` never come unvalidated from user input or query params; `javascript:` URLs are forbidden; redirect targets (`returnUrl`-style params) are validated against an allowlist of internal routes (open-redirect)."
+        },
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\"."
+        },
+        {
+          "id": "security#8",
+          "text": "Sensitive data (tokens, credentials, PII) never appears in log/console statements, URL query params, `localStorage`/`sessionStorage`, or error messages shown to users."
+        },
+        {
+          "id": "security#12",
+          "text": "User-provided content (file names, rich text, uploaded HTML/SVG) is treated as untrusted: never rendered through `innerHTML`/`srcdoc` and never used to build selectors, URLs or templates."
+        },
+        {
+          "id": "security#13",
+          "text": "A new third-party dependency introduced in the diff is reported for verification (maintenance status, license, known vulnerabilities) — never silently accepted."
+        }
+      ]
+    },
+    {
+      "id": "performance",
+      "name": "Performance & change detection",
+      "source": "instructions/global/performance.md",
+      "gate": "the file holds Angular runtime code or a template - a component, directive, pipe, service, effect, store, config or bindings, not only type/const declarations or re-exports",
+      "selectedItems": "1,3-8,17",
+      "checklistSize": 17,
+      "items": [
+        {
+          "id": "performance#1",
+          "text": "Every value read by a template is a signal (`signal`/`computed`/`input`/facade signal) — a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes)."
+        },
+        {
+          "id": "performance#3",
+          "text": "`toSignal()`/`toObservable()` are called once, as field initializers — never inside methods, getters, `computed()` or `effect()` (every call creates a new subscription)."
+        },
+        {
+          "id": "performance#4",
+          "text": "No `ngDoCheck`, `ngAfterContentChecked` or `ngAfterViewChecked` hooks (they run on every change-detection cycle); no state mutation inside `ngAfterViewInit`/`ngAfterContentInit` (ExpressionChangedAfterItHasBeenChecked)."
+        },
+        {
+          "id": "performance#5",
+          "text": "`effect()` never writes signals to emulate derivation — derived state is `computed()`; dependent-but-locally-resettable state is `linkedSignal()`."
+        },
+        {
+          "id": "performance#6",
+          "text": "No change-detection escape hatches: `ChangeDetectorRef.detectChanges()`/`markForCheck()`, `ApplicationRef.tick()`, `NgZone.run()`/`runOutsideAngular()`, or a `setTimeout`/`Promise.resolve()` whose only purpose is making the view update. Under OnPush + signals the notification IS the signal write — an escape hatch means state lives somewhere that is not a signal, and that is the finding to report."
+        },
+        {
+          "id": "performance#7",
+          "text": "An `effect()` that starts a timer, listener or subscription registers its teardown through the `onCleanup` callback; without it every re-run stacks another one."
+        },
+        {
+          "id": "performance#8",
+          "text": "An `effect()` reading a signal it must not depend on (a value it only samples — a form snapshot read while reacting to a lock flag) wraps that read in `untracked()`; an accidental dependency turns the effect into a loop."
+        },
+        {
+          "id": "performance#17",
+          "text": "Render-phase work that must re-run when a signal changes is `afterRenderEffect()` (v19+), not an `effect()` reading the DOM: a plain `effect()` runs before the DOM is updated, so it measures the previous frame; the one-shot case stays `afterNextRender`."
+        }
+      ]
+    },
+    {
+      "id": "accessibility",
+      "name": "Accessibility — WCAG 2.2 level AA",
+      "source": "instructions/global/accessibility.md",
+      "gate": "the file renders or styles UI - markup, style rules, or a class that builds DOM, host bindings, focus, timers or navigation the user perceives",
+      "preamble": [
+        "The baseline is WCAG 2.2 (https://www.w3.org/TR/WCAG22/) at conformance level AA — every level A and level AA success criterion, including the ones added in 2.2 (2.4.11, 2.5.7, 2.5.8, 3.2.6, 3.3.7, 3.3.8). AAA criteria (2.4.12, 2.4.13, 3.3.9, 1.4.6 …) are not findings unless the reviewed project's own `CLAUDE.md` asks for AAA. `4.1.1 Parsing` was removed in 2.2 and is never reported.",
+        "Every violation of this checklist is reported with severity 🟡 **Medium** — never softened to ⚪ Low because it is \"just markup\" and never raised because the barrier looks severe. Each finding names the violated success criterion by number in **Reguła:** (e.g. `accessibility.md → \"1.4.3 Contrast (Minimum)\"`).",
+        "This instruction OWNS accessibility across the whole diff — template semantics, ARIA, keyboard operability, focus management, contrast, motion and target size. When the component template, the component styles or any other instruction touches the same occurrence, it is reported ONCE — here, with this severity.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. Markup, styles or handlers the diff ADDS are reviewed even when they extend an already inaccessible structure; a barrier living entirely in untouched lines is not a finding. Judge only what the diff itself makes checkable — a hard-coded color pair, a declared size, a missing name, a handler bound to one input modality. Never guess at a value that would need the running app (a themed color resolved at runtime, a screen-reader announcement) and never report a criterion as passing or failing on a hunch."
+      ],
+      "selectedItems": "10-13,15-16,19-21,23,27-29",
+      "checklistSize": 31,
+      "items": [
+        {
+          "id": "accessibility#10",
+          "text": "Tooltips, popovers and hover cards are dismissible with Escape, stay visible while the pointer moves onto them, and open on `focus` as well as `mouseenter` — a hover-only tooltip is a defect (1.4.13)."
+        },
+        {
+          "id": "accessibility#11",
+          "text": "Every interactive element is reachable and operable by keyboard: interaction sits on native `<button type=\"…\">` / `<a href>`; a `(click)` on a `div`/`span`/icon is a finding unless the element also declares `role`, `tabindex=\"0\"` and Enter/Space handling, and every hover-only behavior has a focus equivalent (2.1.1)."
+        },
+        {
+          "id": "accessibility#12",
+          "text": "`tabindex` is only `0` or `-1` — a positive value rewrites the focus order; DOM order matches visual order (no `order`, `row-reverse` or absolute positioning that reorders focusable content); a programmatic `.focus()` targets an element that can actually receive focus (a native control, or a container the diff also gives `tabindex=\"-1\"`) — moving focus to a plain `div` silently does nothing (1.3.2, 2.4.3)."
+        },
+        {
+          "id": "accessibility#13",
+          "text": "Focus is visible: no `outline: none` / `outline: 0` without an equally visible `:focus-visible` replacement of at least 3:1 contrast against its surroundings (2.4.7, 1.4.11)."
+        },
+        {
+          "id": "accessibility#15",
+          "text": "Overlays manage focus deliberately: opening a dialog/drawer/menu moves focus into it, focus cycles inside it, Escape closes it, and focus returns to the element that opened it; nothing outside it is reachable while it is open, and no other construct traps focus (2.1.2, 2.4.3)."
+        },
+        {
+          "id": "accessibility#16",
+          "text": "Drag interactions (reorderable lists, sliders, drag-and-drop, swipe) have a single-pointer and keyboard alternative — buttons, arrow keys or a select; path-based or multipoint gestures (pinch, swipe) always have a simple-pointer equivalent, and actions fire on `pointerup`/`click`, never on `pointerdown`/`mousedown` (2.5.1, 2.5.2, 2.5.7)."
+        },
+        {
+          "id": "accessibility#19",
+          "text": "Single-character keyboard shortcuts (a document-level `host: { '(document:keydown.…)': '…' }` listener) can be turned off or remapped, or are active only while the relevant component has focus (2.1.4)."
+        },
+        {
+          "id": "accessibility#20",
+          "text": "Moving, auto-updating and time-limited content can be controlled: carousels, tickers, auto-advancing steps and polling counters have pause/stop, time limits can be extended, nothing flashes more than three times per second, and non-essential animation respects `prefers-reduced-motion` (2.2.1, 2.2.2, 2.3.1)."
+        },
+        {
+          "id": "accessibility#21",
+          "text": "Focus or input alone never changes context: focusing a field, selecting an option or typing must not navigate, submit, reopen a dialog or move focus — context changes come from an explicit activation (3.2.1, 3.2.2)."
+        },
+        {
+          "id": "accessibility#23",
+          "text": "Validation errors are identified in text (never by red border or color alone), are programmatically tied to their control (`aria-describedby` + `aria-invalid`), suggest the correction when it is known, and a failed submit moves focus to the first invalid control or to the error summary (3.3.1, 3.3.3)."
+        },
+        {
+          "id": "accessibility#27",
+          "text": "Custom widgets expose name, role and value: `role` matches actual behavior, required relations are present and bound to the driving signal rather than left static (`aria-expanded`, `aria-controls`, `aria-selected`, `aria-checked`, `aria-current`), ARIA attribute names and values are valid, focusable content is never inside `aria-hidden=\"true\"`, and `role=\"presentation\"`/`none` never lands on an interactive element — a native element is used wherever one exists instead of rebuilding it with ARIA (4.1.2)."
+        },
+        {
+          "id": "accessibility#28",
+          "text": "A control that must stay discoverable while unavailable (a submit button explaining why it is blocked) uses `aria-disabled=\"true\"` plus a no-op handler rather than the `disabled` attribute, which removes it from the tab order and from the explanation it needs (4.1.2, 3.3.1)."
+        },
+        {
+          "id": "accessibility#29",
+          "text": "Status messages reach assistive technology without stealing focus: save results, async failures, filter result counts and validation summaries render through the shared alert/snackbar component or into an `aria-live` region (`polite`, `assertive` only for errors) that already exists in the DOM before the message is inserted (4.1.3)."
+        }
+      ]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "source": "instructions/global/code-quality.md",
+      "preamble": [
+        "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+      ],
+      "selectedItems": "1-8",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "code-quality#1",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates."
+        },
+        {
+          "id": "code-quality#2",
+          "text": "No copy-paste-with-a-tweak: two near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset)."
+        },
+        {
+          "id": "code-quality#3",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change."
+        },
+        {
+          "id": "code-quality#4",
+          "text": "No unnecessary code: a wrapper that only forwards to the wrapped call, a variable used once on the very next line, `else` after a `return`, a condition that can never be false, `?.`/`??`/`try` guarding a value the types already guarantee, a hand-written helper an existing shared function already provides, an abstraction (interface, base class, generic, options object) introduced for a single consumer \"for the future\"."
+        },
+        {
+          "id": "code-quality#5",
+          "text": "No boilerplate: empty or pass-through lifecycle hooks and constructors, getters/methods that only return a field, scaffolding and generator leftovers (placeholder markup, sample fields, `TODO` stubs nothing tracks), values re-declared although the framework already defaults to them, and ceremony that adds no behavior."
+        },
+        {
+          "id": "code-quality#6",
+          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+        },
+        {
+          "id": "code-quality#7",
+          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
+        },
+        {
+          "id": "code-quality#8",
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+        }
+      ]
+    },
+    {
+      "id": "test-coverage",
+      "name": "Test coverage — untested cases & edge cases",
+      "source": "instructions/global/test-coverage.md",
+      "gate": "the file carries behaviour a spec could execute - a function or class method with a body (however trivial - a one-line setter or a lone .next() call is behaviour), a branch, handler or effect - not only declarations, re-exports or route/config literals",
+      "findings": "per-file",
+      "preamble": [
+        "This instruction OWNS coverage gaps — which behavioral cases, branches, edge cases and state permutations the diff leaves untested; every finding here is 🔵 **Missing Unit Test**. The unit-tests instruction owns the SHAPE of a spec (location, setup, naming, assertion style). A gap is reported ONCE, here — never also as a unit-tests finding. The items below are facets of one requirement — the file's behaviour is tested — so everything a file breaks here is ONE finding: its Problem lists each untested case with its line, and its Reguła names every item it breaks. A file with no spec at all leaves its branches, failure paths and edge cases untested too: those items are broken, not passed, and that one finding names them."
+      ],
+      "selectedItems": "1-9",
+      "checklistSize": 9,
+      "items": [
+        {
+          "id": "test-coverage#1",
+          "text": "Every new or behavior-changing source file in the diff ships the matching spec change in the same diff; a missing or untouched spec for changed behavior is a 🔵 Missing Unit Test finding. The file types their own instructions exempt are never such a finding: `models/` declarations, route files, i18n JSON, barrels, templates and styles — their behavior is covered by the specs of the code that consumes them."
+        },
+        {
+          "id": "test-coverage#2",
+          "text": "Do not assume coverage from the spec's mere existence — enumerate the behavioral cases the changed lines introduce and cross-check each one against the spec's actual test cases."
+        },
+        {
+          "id": "test-coverage#3",
+          "text": "Every conditional branch introduced or modified by the diff is tested for BOTH outcomes: each `if`/`else`, ternary, `switch` case (including `default`), guard clause, early return and short-circuit path (`&&`, `||`, `??`, `?.`)."
+        },
+        {
+          "id": "test-coverage#4",
+          "text": "Every failure path is tested, not only the happy path: rejected promises, erroring observables/HTTP calls, thrown exceptions, `catch`/`catchError` blocks, timeout/retry logic and fallback values."
+        },
+        {
+          "id": "test-coverage#5",
+          "text": "Edge cases of the data the changed code reads are covered: empty array/collection, `null`/`undefined` input, empty string, `0` and negative numbers, boundary values of every comparison (test the exact limit of `<` vs `<=`), first/last element handling, duplicates where uniqueness matters."
+        },
+        {
+          "id": "test-coverage#6",
+          "text": "State permutations are covered: every boolean/loading/error flag the changed code reads is exercised in its non-default state as well as its default, and each flag is asserted independently so a single flag flipping the result is caught."
+        },
+        {
+          "id": "test-coverage#7",
+          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding."
+        },
+        {
+          "id": "test-coverage#8",
+          "text": "Public API surface changed by the diff (new method, new input/output, new selector/action handling) has at least one test exercising it through that public surface, not only through internals."
+        },
+        {
+          "id": "test-coverage#9",
+          "text": "Each finding names the concrete untested case — the input, state or branch that lacks a test, with the source line it lives on; a generic \"add more tests\" is not a valid finding."
+        }
+      ]
+    }
+  ]
+}

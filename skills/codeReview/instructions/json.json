@@ -1,0 +1,25 @@
+{
+  "kind": "json",
+  "pattern": "*.json",
+  "role": "JSON file no more specific kind identifies (data, mocks, tool configuration).",
+  "notes": [
+    "Fallback: only the no-secrets rule applies."
+  ],
+  "itemCount": 1,
+  "instructions": [
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        }
+      ]
+    }
+  ]
+}

@@ -45,7 +45,11 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
    `<done*100/total>` and `Task <k>/<total>`. Translate it to `## Zadanie 1 —`, or group the work
    under stage headings instead, and the count is zero — the progress bar divides by nothing and the
    whole of step 4 runs with no visible progress.
-   The plan carries real code, so it obeys the same rulebook step 4 writes against and step 6 reviews with: before writing it run `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` and read every `globals` file, then re-run it with the paths the plan will create (`--files="<project-relative paths>"`) and read their `localInstructions`. File layout, names and every code sample in the plan must already satisfy those checklists — a plan that contradicts them only turns into deviations in step 4 and findings in step 6.
+   The plan carries real code, so it obeys the same rulebook step 4 writes against and step 6 reviews with.
+   Before writing it, run `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` for the file kinds the rulebook knows (`kinds[]`: each one's `kind`, `pattern` and `role` — where every file belongs).
+   Then re-run it with the paths the plan will create (`--files="<project-relative paths>"`) and read the `rules` file of each kind they come back with — the whole checklist of that kind, item by item under `<id>#<n>`, one file per kind however many paths share it.
+   A path that comes back as a kind whose `role` is not the file's, or as `kind: null`, sits where the rulebook does not expect it: move it to the pattern of its kind.
+   File layout, names and every code sample in the plan must already satisfy those checklists — a plan that contradicts them only turns into deviations in step 4 and findings in step 6.
 6. Write `{{SESSION}}/checklist.md` — every verifiable requirement from spec.md, one line each:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`
    The `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS — English verbatim, even though the

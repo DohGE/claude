@@ -1,0 +1,44 @@
+{
+  "kind": "prettier-config",
+  "pattern": ".prettierrc*",
+  "role": "Prettier configuration.",
+  "describedBy": [
+    {
+      "id": "general#13",
+      "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+    }
+  ],
+  "itemCount": 3,
+  "instructions": [
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "5,13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#5",
+          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
+        },
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        }
+      ]
+    }
+  ]
+}

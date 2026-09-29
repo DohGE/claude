@@ -1,0 +1,67 @@
+{
+  "file": "src/app/user-panel/data-access/+state/index.ts",
+  "role": "Barrel re-exporting the NgRx `+state` files of the area.",
+  "itemCount": 7,
+  "instructions": [
+    {
+      "id": "architecture",
+      "name": "Feature architecture",
+      "source": "instructions/global/architecture.md",
+      "selectedItems": "7-8",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "architecture#7",
+          "text": "An `index.ts` barrel is allowed ONLY in `models/`. Everywhere else — `shared/` included, whatever it re-exports — a barrel `index.ts` is forbidden: it bundles guards, utils, routes and directives into one import surface, so every consumer drags the whole folder into its bundle, the import path stops naming the layer it depends on, and a `@defer`-loaded target reached through it lands in the eager bundle anyway. Consumers import the concrete file (`shared/utils/build-user-table.util`, `shared/guards/users-loaded.guard`)."
+        },
+        {
+          "id": "architecture#8",
+          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "source": "instructions/global/general.md",
+      "selectedItems": "13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "source": "instructions/global/code-quality.md",
+      "preamble": [
+        "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+      ],
+      "selectedItems": "3,6-8",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "code-quality#3",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change."
+        },
+        {
+          "id": "code-quality#6",
+          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+        },
+        {
+          "id": "code-quality#7",
+          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
+        },
+        {
+          "id": "code-quality#8",
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+        }
+      ]
+    }
+  ]
+}

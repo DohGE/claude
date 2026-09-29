@@ -1,0 +1,542 @@
+{
+  "kind": "template",
+  "pattern": [
+    "<name>.component.html",
+    "*.html"
+  ],
+  "role": "Angular component template in any other location.",
+  "describedBy": [
+    {
+      "id": "component#2",
+      "text": "Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one."
+    }
+  ],
+  "itemCount": 85,
+  "instructions": [
+    {
+      "id": "component-template",
+      "name": "Component template",
+      "preamble": [
+        "This instruction OWNS everything inside the template except accessibility, which is owned by the global accessibility instruction (WCAG 2.2 AA — alternative texts, labels, ARIA, keyboard, focus, target size): a template violation of those rules is reported there, once, never twice. `@defer` trigger and bundling rules are owned by the performance instruction."
+      ],
+      "selectedItems": "1-21",
+      "checklistSize": 21,
+      "items": [
+        {
+          "id": "component-template#1",
+          "text": "Only native control flow: `@if/@else`, `@for`, `@switch`, `@let` — never `*ngIf`, `*ngFor`, `*ngSwitch` or `*ngVar`."
+        },
+        {
+          "id": "component-template#2",
+          "text": "`@let` declarations at the top of the template unpack `computed()`/signal values that are used more than once; `@let` is block-scoped, so a value needed only inside an `@if`/`@for` is declared inside that block, and it is never treated as a mutable variable — it re-evaluates with its expression.",
+          "probe": [
+            {
+              "builtin": "signal-reads-without-let"
+            }
+          ]
+        },
+        {
+          "id": "component-template#3",
+          "text": "Every `@for` tracks by a stable unique identifier (`track item.id`); `track item` (reference identity) on object collections is a defect, and `track $index` is allowed only for static, never-reordered lists.",
+          "probe": [
+            {
+              "pattern": "(?<at>\\*ngFor)\\s*=\\s*\"(?![^\"]*\\btrackBy\\b)[^\"]*\"",
+              "message": "`*ngFor` bez `trackBy`"
+            },
+            {
+              "pattern": "@for\\s*\\(\\s*(?<item>[\\w$]+)\\s+of\\s+[^;)]+;\\s*track\\s+(?<at>\\$index|\\k<item>)\\s*[;)]",
+              "message": "`@for` śledzi po `$index` albo po samym elemencie"
+            }
+          ]
+        },
+        {
+          "id": "component-template#4",
+          "text": "Every `@for` over a collection that can be empty and is user-visible declares an `@empty` block — an empty list rendering as blank space is a defect, not a state.",
+          "probe": [
+            {
+              "builtin": "for-without-empty"
+            }
+          ]
+        },
+        {
+          "id": "component-template#5",
+          "text": "Every `@switch` covers its fallback with `@default`, including when the subject is an enum (a member added later must not render nothing)."
+        },
+        {
+          "id": "component-template#6",
+          "text": "Every `@defer` block declares a `@placeholder`; `@loading` and `@error` are declared wherever the wait or the failure is user-visible."
+        },
+        {
+          "id": "component-template#7",
+          "text": "Class and style bindings use `[class.x]` / `[style.x.px]` — never `ngClass`/`ngStyle`."
+        },
+        {
+          "id": "component-template#8",
+          "text": "No `async` pipe — observables are converted with `toSignal()` in the component and the template reads the signal."
+        },
+        {
+          "id": "component-template#9",
+          "text": "Every user-facing string goes through the translate pipe (`{{ 'key' | translate }}`), including parameterized texts (`| translate : { param }`); zero hard-coded texts.",
+          "sameAs": [
+            "i18n#11"
+          ]
+        },
+        {
+          "id": "component-template#10",
+          "text": "A translation containing HTML markup is rendered with `[innerHTML]=\"'key' | translate\"`, not interpolation — and `[innerHTML]` is used for nothing else: never bound to user-/API-derived values or concatenated HTML (see the security instruction).",
+          "sameAs": [
+            "security#2"
+          ]
+        },
+        {
+          "id": "component-template#11",
+          "text": "Bindings and interpolations read signals, `computed()` values and pure pipes — no component method calls inside property/interpolation bindings (function references passed uninvoked, e.g. `[compareWith]=\"compareWithId\"`, are fine)."
+        },
+        {
+          "id": "component-template#12",
+          "text": "Event bindings contain nothing but ONE call to one component handler (`(click)=\"onRowClick(item.id)\"`). Never logic composed in the template: no `output.emit(...)`, no `$event.stopPropagation()`/`preventDefault()`, no `signal.set(...)`/`update(...)`, no assignment, no `&&`/ternary chain, no second statement after a `;`. The class handler does all of it and receives `$event` as an argument when it needs the event — template-composed logic lives outside the class, so no component spec can assert it and no reader of the class sees the emit or the stopped propagation."
+        },
+        {
+          "id": "component-template#13",
+          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant). On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template."
+        },
+        {
+          "id": "component-template#14",
+          "text": "Static strings/constants are passed as plain attributes (`prop=\"value\"`), not property bindings of a literal (`[prop]=\"'value'\"`); `[...]` only for real expressions — with one exception: when an input name collides with a native HTML attribute (e.g. `title`), the binding form `[title]=\"'test'\"` is required even for a literal, because plain `title=\"test\"` also lands in the DOM as the native attribute and triggers unwanted browser behavior (a tooltip).",
+          "probe": [
+            {
+              "pattern": "<[a-z][\\w]*-[\\w-]*\\b[^>]*?\\s(?<at>title)\\s*=\\s*\"",
+              "message": "zwykły atrybut `title=\"…\"` na elemencie komponentu"
+            }
+          ]
+        },
+        {
+          "id": "component-template#15",
+          "text": "Repeated markup between branches is extracted to `ng-template` + `[ngTemplateOutlet]` instead of being duplicated in `@if/@else`."
+        },
+        {
+          "id": "component-template#16",
+          "text": "Before adding new markup, the shared library and the application are searched for a component that already does it, and it is reused — something suitable usually exists. Raw native elements are the signal to look: a hand-built `<table>`, `<input>`/`<select>`/`<textarea>` (with its own label and error markup), `<button>`, dialog, tooltip or pagination is a finding whenever the design system ships the equivalent component; native tags stay only for structural markup nothing wraps (`<div>`, `<span>`, `<section>`, headings, lists) or where the checked library truly has no counterpart.",
+          "sameAs": [
+            "architecture#9"
+          ]
+        },
+        {
+          "id": "component-template#17",
+          "text": "Global utility classes are added only when they change something; no redundant classes.",
+          "probe": [
+            {
+              "pattern": "\\bclass\\s*=\\s*\"[^\"]*?(?<![\\w-])(?<at>[mp][trblxy]?-0)(?![\\w-])",
+              "message": "klasa narzędziowa zerująca odstęp"
+            }
+          ]
+        },
+        {
+          "id": "component-template#18",
+          "text": "`[disabled]` is never bound on an element that also carries `formControl`/`formControlName`/`formGroupName` — Angular warns about it and the reactive control keeps its own disabled state, so the binding stops reflecting the expression after the first change and the field stays enabled (or stuck disabled) while the template claims otherwise; the lock comes from the class through `control.disable({ emitEvent: false })`/`enable(...)` (the lock-signal pattern of the component instruction). `[disabled]` on a plain button or a non-form input is untouched by this rule."
+        },
+        {
+          "id": "component-template#19",
+          "text": "A component or directive element that projects no content is self-closing (`<app-user-card [user]=\"user()\" />`), not an empty tag pair."
+        },
+        {
+          "id": "component-template#20",
+          "text": "Loop metadata comes from the `@for` block itself — `$index`, `$count`, `$first`, `$last`, `$even`, `$odd` (aliased with `let idx = $index` where a nested block shadows them); a counter signal maintained next to the loop, or an index threaded down from the parent, is a finding."
+        },
+        {
+          "id": "component-template#21",
+          "text": "Every `<button>` declares an explicit `type` (`type=\"button\"` unless it submits) — a missing `type` inside a form submits it (whether the element should be a `<button>` at all, and its labeling, belong to the accessibility instruction)."
+        }
+      ]
+    },
+    {
+      "id": "i18n",
+      "name": "Translations",
+      "selectedItems": "2,9,11",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "i18n#2",
+          "text": "Before adding a key, the base file is searched for an existing translation with the same meaning — generic reusable texts are referenced, never duplicated per area; a new key exists only when no existing one fits semantically; the same phrase never lives under two keys.",
+          "facts": [
+            "i18n-duplicate-value"
+          ]
+        },
+        {
+          "id": "i18n#9",
+          "text": "Changing or renaming an existing key requires checking every consumer of that key first.",
+          "facts": [
+            "i18n-missing-key"
+          ]
+        },
+        {
+          "id": "i18n#11",
+          "text": "No user-facing text is hard-coded in code or templates: every label, message, heading, tooltip and option text a user sees is a key of the base file, rendered through the translate pipe or resolved through the translation service — a `'Blocked'` returned by a mapper or a `<h2>Users</h2>` in a template is a finding, and so is a text an existing key already carries.",
+          "sameAs": [
+            "general#7",
+            "pipes#5",
+            "component-template#9"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "architecture",
+      "name": "Feature architecture",
+      "selectedItems": "9",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "architecture#9",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
+          "sameAs": [
+            "component-template#16"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "7,10,13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#7",
+          "text": "Every user-facing string is an i18n key resolved through the translation pipe/service — never a hard-coded text, in TS or in templates.",
+          "sameAs": [
+            "i18n#11"
+          ]
+        },
+        {
+          "id": "general#10",
+          "text": "In-app navigation goes through `Router` (`navigate`/`navigateByUrl`/`routerLink`) — `window.location.href`/`assign`/`replace` discards router state, guards and the SPA boundary; a deliberate full page load carries a justification in the PR description or it is a finding."
+        },
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "best-practices",
+      "name": "Angular & TypeScript best practices",
+      "preamble": [
+        "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
+      ],
+      "selectedItems": "12,18-19,22",
+      "checklistSize": 23,
+      "items": [
+        {
+          "id": "best-practices#12",
+          "text": "Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction)."
+        },
+        {
+          "id": "best-practices#18",
+          "text": "Forms follow the project's typed reactive-forms pattern (`_fb.nonNullable.group`, explicit control generics) — no template-driven forms, no `UntypedFormControl`/`UntypedFormGroup` or `any`-typed controls."
+        },
+        {
+          "id": "best-practices#19",
+          "text": "Static images use `NgOptimizedImage` (`ngSrc`) — not applicable to inline base64 images."
+        },
+        {
+          "id": "best-practices#22",
+          "text": "A suppression comment added by the diff (`@ts-ignore`, `@ts-expect-error`, `eslint-disable*`) carries a one-line justification and the narrowest scope that works (line-level over file-level); `@ts-expect-error` is used wherever it compiles, because it fails once the underlying problem is fixed. The `/* eslint-disable @typescript-eslint/member-ordering */` allowed by the effects instruction is the one standing exception."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "2-3,5-7,12",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#2",
+          "text": "`[innerHTML]` is bound only to trusted i18n translation values (`'key' | translate`); never to user input, API responses, query params or string-concatenated/interpolated HTML.",
+          "sameAs": [
+            "component-template#10"
+          ]
+        },
+        {
+          "id": "security#3",
+          "text": "No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings."
+        },
+        {
+          "id": "security#5",
+          "text": "URLs bound to `[href]`/`[src]` or passed to `window.open`/`Router.navigateByUrl` never come unvalidated from user input or query params; `javascript:` URLs are forbidden; redirect targets (`returnUrl`-style params) are validated against an allowlist of internal routes (open-redirect)."
+        },
+        {
+          "id": "security#6",
+          "text": "External links with `target=\"_blank\"` carry `rel=\"noopener noreferrer\"`."
+        },
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        },
+        {
+          "id": "security#12",
+          "text": "User-provided content (file names, rich text, uploaded HTML/SVG) is treated as untrusted: never rendered through `innerHTML`/`srcdoc` and never used to build selectors, URLs or templates.",
+          "probe": [
+            {
+              "pattern": "\\.(?<at>querySelector(?:All)?)\\s*(?:<[^>]*>)?\\(\\s*(?!['\"][^'\"]*['\"]\\s*\\)|`[^`$]*`\\s*\\))",
+              "message": "`querySelector` z argumentem budowanym w kodzie"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "performance",
+      "name": "Performance & change detection",
+      "gate": "the file holds Angular runtime code or a template - a component, directive, pipe, service, effect, store, config or bindings, not only type/const declarations or re-exports",
+      "selectedItems": "1-2,11-15",
+      "checklistSize": 17,
+      "items": [
+        {
+          "id": "performance#1",
+          "text": "Every value read by a template is a signal (`signal`/`computed`/`input`/facade signal) — a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).",
+          "secondQuestion": "Które pola klasy czyta szablon i czy każde z nich to sygnał, `computed()` albo `input()`?"
+        },
+        {
+          "id": "performance#2",
+          "text": "Template expressions are cheap: no objects/arrays/`new Date()` rebuilt on every check inside bindings; derivations go through `computed()`, selectors or pure pipes (method calls inside bindings are owned by the component-template instruction and reported there)."
+        },
+        {
+          "id": "performance#11",
+          "text": "`@defer`: above-the-fold/LCP content is never deferred — deferring it buys a layout shift and a slower LCP, not a faster one."
+        },
+        {
+          "id": "performance#12",
+          "text": "`@defer`: nested blocks use different triggers; identical triggers cascade into one simultaneous load and defeat the split."
+        },
+        {
+          "id": "performance#13",
+          "text": "`@defer`: the deferred component is imported from its concrete file, never through a barrel `index.ts` — a barrel import keeps it in the main bundle and the block defers nothing."
+        },
+        {
+          "id": "performance#14",
+          "text": "`@defer`: `viewport`/`interaction`/`hover` triggers declare a `@placeholder` with a single root element (the trigger needs exactly one element to observe)."
+        },
+        {
+          "id": "performance#15",
+          "text": "Images: the LCP/hero image is marked `priority`; every `ngSrc` image declares `width` + `height` (or `fill` with a positioned parent) so it cannot shift layout."
+        }
+      ]
+    },
+    {
+      "id": "accessibility",
+      "name": "Accessibility — WCAG 2.2 level AA",
+      "severity": "medium",
+      "gate": "the file renders or styles UI - markup, style rules, or a class that builds DOM, host bindings, focus, timers or navigation the user perceives",
+      "preamble": [
+        "The baseline is WCAG 2.2 (https://www.w3.org/TR/WCAG22/) at conformance level AA — every level A and level AA success criterion, including the ones added in 2.2 (2.4.11, 2.5.7, 2.5.8, 3.2.6, 3.3.7, 3.3.8). AAA criteria (2.4.12, 2.4.13, 3.3.9, 1.4.6 …) are not findings unless the reviewed project's own `CLAUDE.md` asks for AAA. `4.1.1 Parsing` was removed in 2.2 and is never reported.",
+        "Every violation of this checklist is reported with severity 🟡 **Medium** — never softened to ⚪ Low because it is \"just markup\" and never raised because the barrier looks severe. Each finding names the violated success criterion by number in **Reguła:** (e.g. `accessibility.md → \"1.4.3 Contrast (Minimum)\"`).",
+        "This instruction OWNS accessibility across the whole diff — template semantics, ARIA, keyboard operability, focus management, contrast, motion and target size. When the component template, the component styles or any other instruction touches the same occurrence, it is reported ONCE — here, with this severity.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. Markup, styles or handlers the diff ADDS are reviewed even when they extend an already inaccessible structure; a barrier living entirely in untouched lines is not a finding. Judge only what the diff itself makes checkable — a hard-coded color pair, a declared size, a missing name, a handler bound to one input modality. Never guess at a value that would need the running app (a themed color resolved at runtime, a screen-reader announcement) and never report a criterion as passing or failing on a hunch."
+      ],
+      "selectedItems": "1-8,10-13,15-18,20-35",
+      "checklistSize": 35,
+      "items": [
+        {
+          "id": "accessibility#1",
+          "text": "Every non-text element carries a text alternative: `<img>` has `[alt]` (empty `alt=\"\"` only for decorative images, `aria-hidden=\"true\"` on decorative inline `<svg>`/icon), icon-only buttons and links get an `aria-label` resolved from an i18n key, and no alternative is a filename, a key path or the word \"image\"/\"icon\" (1.1.1)."
+        },
+        {
+          "id": "accessibility#2",
+          "text": "Structure comes from semantics, not from styling: headings are real `h1`–`h6` in order without skipped levels (one `h1` per view), lists are `ul`/`ol`/`li`, tabular data is a `table` with `th` + `scope`, grouped radios/checkboxes sit in `fieldset` + `legend` — a `div` styled to look like a heading, list or table is a defect (1.3.1, 2.4.6)."
+        },
+        {
+          "id": "accessibility#3",
+          "text": "Landmarks and the document title are set for every route: `header`/`nav`/`main`/`footer` (exactly one `main`), a skip link to main content, and a unique, meaningful title through the route `title` / `Title` service; `<html lang>` is set and content in another language carries its own `lang` (2.4.1, 2.4.2, 3.1.1, 3.1.2)."
+        },
+        {
+          "id": "accessibility#4",
+          "text": "Every form control is programmatically labeled — `<label for>`, `aria-label` or `aria-labelledby`; a `placeholder` is never the only label, the label is not visually hidden away from the control it names, and required/optional state is conveyed by text or `aria-required`, not by a red asterisk alone (1.3.1, 3.3.2)."
+        },
+        {
+          "id": "accessibility#5",
+          "text": "Inputs collecting the user's own data declare the matching `autocomplete` token (`name`, `email`, `tel`, `street-address`, `postal-code`, `current-password`…) (1.3.5)."
+        },
+        {
+          "id": "accessibility#6",
+          "text": "Color is never the only carrier of meaning: error, required, selected, active and link states also differ by text, icon, underline, weight or shape (1.4.1)."
+        },
+        {
+          "id": "accessibility#7",
+          "text": "Contrast ratios of any color pair introduced or changed in the diff hold: ≥ 4.5:1 for text (≥ 3:1 for ≥ 24px, or ≥ 19px bold), ≥ 3:1 for UI component boundaries, icons, chart marks, focus indicators and state borders — a hard-coded hex/`rgb()` or a new theme token is checked against its background, not assumed (1.4.3, 1.4.11)."
+        },
+        {
+          "id": "accessibility#8",
+          "text": "Layout survives zoom and reflow: sizes in `rem`/relative units, no fixed `px` heights or `overflow: hidden` clipping translated text, content usable at 320 CSS px width (400% zoom) without two-dimensional scrolling and at 200% text zoom; the viewport meta never sets `user-scalable=no` or `maximum-scale=1`, and no layout breaks under increased line-height/letter/word spacing (1.4.4, 1.4.10, 1.4.12)."
+        },
+        {
+          "id": "accessibility#10",
+          "text": "Tooltips, popovers and hover cards are dismissible with Escape, stay visible while the pointer moves onto them, and open on `focus` as well as `mouseenter` — a hover-only tooltip is a defect (1.4.13)."
+        },
+        {
+          "id": "accessibility#11",
+          "text": "Every interactive element is reachable and operable by keyboard: interaction sits on native `<button type=\"…\">` / `<a href>`; a `(click)` on a `div`/`span`/icon is a finding unless the element also declares `role`, `tabindex=\"0\"` and Enter/Space handling, and every hover-only behavior has a focus equivalent (2.1.1)."
+        },
+        {
+          "id": "accessibility#12",
+          "text": "`tabindex` is only `0` or `-1` — a positive value rewrites the focus order; DOM order matches visual order (no `order`, `row-reverse` or absolute positioning that reorders focusable content); a programmatic `.focus()` targets an element that can actually receive focus (a native control, or a container the diff also gives `tabindex=\"-1\"`) — moving focus to a plain `div` silently does nothing (1.3.2, 2.4.3)."
+        },
+        {
+          "id": "accessibility#13",
+          "text": "Focus is visible: no `outline: none` / `outline: 0` without an equally visible `:focus-visible` replacement of at least 3:1 contrast against its surroundings (2.4.7, 1.4.11)."
+        },
+        {
+          "id": "accessibility#15",
+          "text": "Opening an overlay (dialog, drawer, menu) moves focus into it and focus cycles inside it: nothing outside it is reachable while it is open, and no other construct traps focus (2.1.2, 2.4.3)."
+        },
+        {
+          "id": "accessibility#16",
+          "text": "Drag interactions (reorderable lists, sliders, drag-and-drop, swipe) have a single-pointer and keyboard alternative — buttons, arrow keys or a select; path-based or multipoint gestures (pinch, swipe) always have a simple-pointer equivalent, and actions fire on `pointerup`/`click`, never on `pointerdown`/`mousedown` (2.5.1, 2.5.2, 2.5.7)."
+        },
+        {
+          "id": "accessibility#17",
+          "text": "Pointer targets are at least 24×24 CSS px, or spaced so that 24px circles centered on them do not overlap — an icon-only button, chip close or table row action sized below that is a finding (2.5.8)."
+        },
+        {
+          "id": "accessibility#18",
+          "text": "The accessible name contains the visible label text: an `aria-label` that replaces the visible i18n text with different wording breaks voice control — extend the visible text, don't contradict it (2.5.3)."
+        },
+        {
+          "id": "accessibility#20",
+          "text": "Moving, auto-updating and time-limited content can be controlled: carousels, tickers, auto-advancing steps and polling counters have pause/stop, time limits can be extended, nothing flashes more than three times per second, and non-essential animation respects `prefers-reduced-motion` (2.2.1, 2.2.2, 2.3.1)."
+        },
+        {
+          "id": "accessibility#21",
+          "text": "Focus or input alone never changes context: focusing a field, selecting an option or typing must not navigate, submit, reopen a dialog or move focus — context changes come from an explicit activation (3.2.1, 3.2.2)."
+        },
+        {
+          "id": "accessibility#22",
+          "text": "Repeated components stay consistent across routes: navigation keeps the same relative order, the same function keeps the same label/icon, and a help mechanism (contact link, chat, FAQ) present on several pages keeps the same relative position (3.2.3, 3.2.4, 3.2.6)."
+        },
+        {
+          "id": "accessibility#23",
+          "text": "Validation errors are identified in text (never by red border or color alone), are programmatically tied to their control (`aria-describedby` + `aria-invalid`), suggest the correction when it is known, and a failed submit moves focus to the first invalid control or to the error summary (3.3.1, 3.3.3)."
+        },
+        {
+          "id": "accessibility#24",
+          "text": "Submissions that are legal, financial or destructive (delete, irreversible state change) are reversible, checked or confirmed before they commit (3.3.4).",
+          "secondQuestion": "Które akcje pliku są nieodwracalne, prawne albo finansowe (usunięcie, wysyłka, płatność) i jaki krok przeglądu, potwierdzenia lub cofnięcia ma każda?"
+        },
+        {
+          "id": "accessibility#25",
+          "text": "Multi-step flows never ask for information the user already entered: wizard steps and re-authentication prefill or offer the earlier value instead of requiring it to be retyped (3.3.7)."
+        },
+        {
+          "id": "accessibility#26",
+          "text": "Authentication never requires a cognitive function test without an alternative — no hand-transcribed codes, puzzles or memorization as the only path; password, OTP and email fields allow paste and autofill (`(paste)=\"$event.preventDefault()\"`, `autocomplete=\"off\"` or `off`-style blocking on credentials is a finding) (3.3.8)."
+        },
+        {
+          "id": "accessibility#27",
+          "text": "Custom widgets expose name, role and value: `role` matches actual behavior, required relations are present and bound to the driving signal rather than left static (`aria-expanded`, `aria-controls`, `aria-selected`, `aria-checked`, `aria-current`), ARIA attribute names and values are valid, focusable content is never inside `aria-hidden=\"true\"`, and `role=\"presentation\"`/`none` never lands on an interactive element — a native element is used wherever one exists instead of rebuilding it with ARIA (4.1.2)."
+        },
+        {
+          "id": "accessibility#28",
+          "text": "A control that must stay discoverable while unavailable (a submit button explaining why it is blocked) uses `aria-disabled=\"true\"` plus a no-op handler rather than the `disabled` attribute, which removes it from the tab order and from the explanation it needs (4.1.2, 3.3.1)."
+        },
+        {
+          "id": "accessibility#29",
+          "text": "Status messages reach assistive technology without stealing focus: save results, async failures, filter result counts and validation summaries render through the shared alert/snackbar component or into an `aria-live` region (`polite`, `assertive` only for errors) that already exists in the DOM before the message is inserted (4.1.3)."
+        },
+        {
+          "id": "accessibility#30",
+          "text": "Media carries its alternatives: prerecorded video has captions and, where visuals convey information, an audio description; audio that plays automatically for more than 3 seconds can be paused or stopped (1.2.2, 1.2.5, 1.4.2)."
+        },
+        {
+          "id": "accessibility#31",
+          "text": "Link text says where the link goes: `Click here`/`Read more`/a bare URL is a finding — the visible text (or its `aria-label`) names the destination or the action, and a link opening a new tab or starting a download announces that in its accessible name (2.4.4)."
+        },
+        {
+          "id": "accessibility#32",
+          "text": "An overlay container declares `role=\"dialog\"` (`alertdialog` for an urgent confirmation) and `aria-modal=\"true\"` — written in the template or set by the overlay service that opens it (4.1.2)."
+        },
+        {
+          "id": "accessibility#33",
+          "text": "An overlay has an accessible name: `aria-labelledby` pointing at its visible title, or an `aria-label` resolved from an i18n key (4.1.2)."
+        },
+        {
+          "id": "accessibility#34",
+          "text": "Escape closes an open overlay (2.1.2)."
+        },
+        {
+          "id": "accessibility#35",
+          "text": "Closing an overlay returns focus to the element that opened it (2.4.3)."
+        }
+      ]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "severity": "medium",
+      "preamble": [
+        "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+      ],
+      "selectedItems": "1-8",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "code-quality#1",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates.",
+          "facts": [
+            "repeated-literal",
+            "repeated-condition",
+            "mapping-duplicate",
+            "mapping-duplicate-caller"
+          ],
+          "probe": [
+            {
+              "builtin": "markup-repeat"
+            }
+          ],
+          "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
+          "severity": "high"
+        },
+        {
+          "id": "code-quality#2",
+          "text": "No copy-paste-with-a-tweak: two near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset).",
+          "severity": "high"
+        },
+        {
+          "id": "code-quality#3",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change.",
+          "facts": [
+            "export-unused",
+            "barrel-unused",
+            "guard-without-route",
+            "pipe-unused",
+            "i18n-unused-key"
+          ]
+        },
+        {
+          "id": "code-quality#4",
+          "text": "No unnecessary code: a wrapper that only forwards to the wrapped call, a variable used once on the very next line, `else` after a `return`, a condition that can never be false, `?.`/`??`/`try` guarding a value the types already guarantee, a hand-written helper an existing shared function already provides, an abstraction (interface, base class, generic, options object) introduced for a single consumer \"for the future\"."
+        },
+        {
+          "id": "code-quality#5",
+          "text": "No boilerplate: empty or pass-through lifecycle hooks and constructors, getters/methods that only return a field, scaffolding and generator leftovers (placeholder markup, sample fields, `TODO` stubs nothing tracks), values re-declared although the framework already defaults to them, and ceremony that adds no behavior."
+        },
+        {
+          "id": "code-quality#6",
+          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+        },
+        {
+          "id": "code-quality#7",
+          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
+        },
+        {
+          "id": "code-quality#8",
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+        }
+      ]
+    }
+  ]
+}

@@ -66,13 +66,18 @@ anything nobody asked about, and do not "improve" neighbouring code while you ar
 line you change beyond the comments is a line the reviewer has to review again.
 
 When the project ships a rulebook — `{{ROOT}}/.claude/doh/instructions/` — your fixes obey it like
-any other code in the repository. Read it per file, not whole: before your first edit of a file, run
+any other code in the repository.
+Read it per file, not whole: which of its rules bind a file depends on the file's kind, and reading
+them all up front spends the context your threads need.
+Before your first edit of a file, run
 `node "{{SKILL_DIR}}/../implementNewFeature/scripts/match-instructions.cjs" --project="{{ROOT}}" --files="<project-relative path>"`
-and read every file it lists under `globalInstructions` and `localInstructions` for that path whose
-path lies inside `projectInstructionsDir` — the others are the doh review checklists, not this
-project's rules, and a comment fix is not the place to apply them. Skip the ones you already read;
-they stay binding for every file that listed them. Most rules declare `applies-to`, so which ones
-bind a file is a per-file answer, and reading them all up front spends the context your threads need.
+and read the `projectRules` file it returns for that path: the part of the file kind's checklist the
+project's own rulebook defines, item by item under `<id>#<n>`.
+Leave its `rules` file alone — that is the whole checklist, the doh review's own items included,
+which are not this project's rules, and a comment fix is not the place to apply them.
+Files of one kind share one `projectRules`: skip one you already read, it stays binding for every
+file that returned it.
+`projectRules` null → the project's rulebook defines nothing for that file.
 `projectInstructionsDir` null → the project ships no rulebook, or a worktree is checked out from HEAD
 and it is not COMMITTED; when `{{ROOT}}/.claude/doh/instructions/` is absent but the main checkout
 has it, say so in `summary` instead of reaching outside `{{ROOT}}` for it. The matcher exiting

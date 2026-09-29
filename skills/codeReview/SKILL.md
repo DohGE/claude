@@ -1,6 +1,6 @@
 ---
 name: codeReview
-description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against global/local instruction checklists and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md) with severity, real line numbers, violated rule and expected result
+description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist) with severity, real line numbers, violated rule and expected result
 hooks:
   PreToolUse:
     - hooks:
@@ -9,11 +9,24 @@ hooks:
           args: ["${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs", "--event=activate"]
           timeout: 10
           once: true
-    - matcher: "Write|Edit"
+    - matcher: "Write|Edit|Bash"
       hooks:
         - type: command
           command: node
           args: ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/check-part.cjs"]
+          timeout: 30
+    - matcher: "Read"
+      hooks:
+        - type: command
+          command: node
+          args: ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs", "--event=read"]
+          timeout: 30
+  PostToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: node
+          args: ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs", "--event=draft"]
           timeout: 30
 ---
 
@@ -31,6 +44,14 @@ Coverage is non-negotiable: every file of every target, every checklist item of 
 instruction, on every run — violating the letter of these steps violates their spirit. Coverage and
 reporting scope differ: everything is evaluated, only what the diff touched is reported (Step 3
 scope gate).
+
+**Run order.** This file is not in run order: what the walk of every file needs comes first, because a compaction of the session re-attaches only the head of this file.
+1. Steps 1–2 run once per run, before anything else, and stand at the end of this file, after the one-time marker.
+2. Step 3 walks each target's files batch by batch and writes every file's part in the Step 4 format.
+3. The cross-file pass follows the last file: `references/cross-file.md` in this skill's directory, which the last bundle's `## Dalej` names.
+4. The assembly, then the next target, and after the last target Step 5: `references/assembly.md`, which the cross-file reference names.
+
+After a compaction, this skill's hook names where the run stands and what to read again: continue from there, and never write a finished part anew.
 
 <!-- lean-mode:start (generated from shared/caveman-ultra.md) -->
 ## Lean mode: caveman ultra
@@ -84,108 +105,6 @@ A compressed result carries a marker with `hash=<hash>`, for example `Retrieve m
 When you need the exact original - to quote it, count from it, match it or edit from it - call `headroom_retrieve` with that hash instead of guessing.
 Without that tool, re-read the file or re-run the command with narrower output.
 <!-- lean-mode:end -->
-
-## Step 1 — Build the review context
-
-1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = the current working
-   directory, unless `--project=` overrides it (point 2).
-2. Strip the flags FIRST, from the whole argument list, wherever they sit — an unstripped flag would
-   be mapped below as a branch name:
-   - `--only-md` → `OUTPUT=md`; otherwise `OUTPUT=html`.
-   - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read
-     and — in staged mode — staged, where the reports land, and which `CLAUDE.md` and
-     `.claude/doh/instructions/` bind. A caller whose work lives somewhere other than the current
-     directory — a git worktree, e.g. a parallel implementNewFeature task — MUST pass it, or the
-     review silently stages and reviews the main checkout instead of that caller's tree.
-   - `--since-last` → pass it through to the context script (`INCREMENTAL`). It reviews only the
-     files whose content moved since the previous review of that target, using the snapshot the
-     script keeps next to the report. Meant for a RE-review of a target already reviewed (the
-     implementNewFeature review loop uses it from cycle 2 on); on a first review it warns and
-     reviews everything.
-     The snapshot is written when the CONTEXT is built, before any file is analyzed — so it records
-     what the previous run was going to review, not what it finished. After a review that died
-     mid-way, `--since-last` therefore skips files nobody ever looked at, and an untouched tree comes
-     back as "nothing to review". Re-review such a target in FULL (drop the flag) rather than trusting
-     an empty incremental result.
-3. Map the REMAINING arguments to the context script EXACTLY like this:
-   - no arguments → `--mode=auto`
-   - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review
-     covers every pending change — working-tree edits and untracked files staged as one set)
-   - the word `folder` followed by one path → `--mode=folder --path="<path>"` (reviews every
-     file currently in that folder of the working tree, no diff needed). The path must resolve
-     INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
-     instead, which is how you review a folder of another repository.
-   - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last]`
-   `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
-   with `No folder given` if the path is left off this line.
-5. Parse the JSON from stdout — a short summary, not the context:
-   - Report every `errors[]` entry to the user immediately, in Polish.
-   - No targets / exit code 1 → stop after reporting the errors.
-   - Report every top-level `warnings[]` entry, in Polish.
-   - Read the file at `contextPath` with the Read tool — never `cat` it: that file IS the context
-     every later step calls "the context JSON" (`targets`, `globalInstructions`, `checklistPlans`, …).
-     `targets[].resumed` true means the target continues an interrupted run (Step 3).
-
-## Step 2 — Load the rulebook (once per run)
-
-1. Read the `numberedPath` of EVERY entry of `globalInstructions` — the globals at least one
-   reviewed file is actually walked against, not every global the skill ships.
-2. Read the `numberedPath` of EVERY entry of `localInstructionsCatalog` (deduplicated across
-   targets; per-file `localInstructions` are INDEXES into this catalog).
-   `numberedPath` (a FIXED IDENTIFIER) is a copy of the instruction at `path` that the script wrote
-   for this run, with every checklist item already prefixed by its address (`- general#6: …`).
-   Read it with the Read tool, never `cat` or `grep`: a Bash result may arrive compressed, and a
-   rule read from a compressed copy is a rule half-read.
-3. If `claudeMd` is not null, read it and treat it as one more global instruction.
-4. Issue every Read of points 1–3 as parallel tool calls in ONE message — the whole rulebook
-   loads in a single turn, never one file per turn.
-5. Precedence when rules conflict: project `CLAUDE.md` > local instruction > global instruction,
-   and among locals the narrower one wins — a file routinely walks a general local plus the specific
-   one for its kind (`component` + `feature-component`, `unit-tests` + `ngrx-effects-unit-test`,
-   `models` + `state-interface`), which is layering, not duplication. Apply only the winning rule;
-   never report a violation of the overridden rule.
-6. Some of those paths may sit under `projectInstructionsDir` (`<project>/.claude/doh/instructions/`)
-   — the reviewed repo's own rulebook. It binds exactly like the skill's: a project file replaces the
-   skill file of the same relative path, the rest are extra instructions.
-
-Never skip or skim any of these files — they are the review rulebook.
-
-Every checklist item has an address, and Step 3 ticks the items off one by one under it:
-`<id>#<n>` is the n-th top-level `- ` bullet of that instruction's body, counted from 1 in file
-order — the only numbering there is. Each entry of the two catalogs above carries the `id` its
-items are addressed by beside its `path`, and its `numberedPath` copy already prints that address in
-front of every item. Take addresses from that copy only: never number, list or count items yourself,
-and never through Bash.
-Each file of a target carries `plan`, an INDEX into `checklistPlans` (top level of the context
-JSON) — files of one kind share one plan, so the catalog holds a handful of entries for a diff of
-hundreds of files, exactly like `localInstructionsCatalog` below. `checklistPlans[file.plan].checklist`
-lists one `<id>:<items>` entry per instruction that applies to that file — the globals first, then
-its matched locals — where `<items>` names WHICH items of that instruction this file is walked
-against (`general:1-13`, and `accessibility:6-9,12-14,17,20` for a file whose kind takes it out of
-the markup-only rules). `checklistTotal`, which stays on the FILE, is their sum: the number of items
-that file must be walked against.
-The plan is the authority on that: walk exactly the numbers it lists, under the addresses it gives
-them, and never renumber a narrowed instruction from 1 — `accessibility#12` is the twelfth bullet of
-the file, whether or not `#1-11` are in this file's plan.
-Three mechanisms put an item there or leave it out, and all three are already resolved in the plan.
-A whole instruction is narrowed by `applies-to`: a global that declares one is narrowed by path
-exactly like a local, one that declares none still applies to every file, and a pattern starting with
-`!` excludes what it matches and always wins over an include. A single item is narrowed by a leading
-scope tag — `- {styles} Contrast ratios …` walks only for the file kinds the instruction's `scopes:`
-frontmatter maps that name to (an untagged item walks wherever its instruction does). A reach tag
-works the other way: `- {+routes} A guard factory is invoked …` ALSO walks that item for the files
-scope `routes` maps, outside the instruction's `applies-to` — a rule about one file kind that is
-broken in another (the guard rule, in the routes file that registers the guard). Such a file's plan
-then holds that instruction with only its reaching items; that is the reach, not a mismatch.
-So a plan shorter than the rulebook is a decision, not an omission — the plan's `globalInstructionsSkipped` names, by
-`<id>`, the globals this file's path took it out of, an instruction that is not in the plan is never walked or ticked, and an
-item the plan does not list is not this file's rule: it is never walked, never ticked and never
-reported, not even when the file happens to break it.
-`checklistGates` (top level of the context JSON) holds the `gate:` sentence of every instruction that
-declares one — a precondition answered per file, in Step 3 point 2, before that instruction is walked.
-The project `CLAUDE.md` is a rulebook, not a numbered checklist: its rules decide verdicts and
-override conflicting instruction items, but they get no `<id>#<n>` line of their own.
 
 ## Step 3 — Analyze (per target, per file) and write findings as you go
 
@@ -268,12 +187,17 @@ inside the value: protocol + domain (`https://api.example.com/...`), `localhost`
 that is reported as a hard-coded environment/base URL. Everything else about such a file (typing,
 method naming, layering, `.pipe(...)` usage, secrets in query params) stays reviewable as usual.
 
+**Precedence — one rule wins a conflict.** The project `CLAUDE.md` outranks a checklist item, and within a plan the narrower instruction wins.
+A kind routinely walks a general instruction plus the specific one for what the file is (`component` + `feature-component`, `unit-tests` + `ngrx-effects-unit-test`, `models` + `state-interface`): that is layering, not duplication.
+Apply only the winning rule; never report a violation of the overridden rule.
+
 A target WITHOUT `target.resume`: clear any stale part files first —
 `rm -f "<reportPath minus .md>".part*.md` — then write the report header (Step 4 format) to
-`target.reportPath`. The report path carries the run stamp down to the MINUTE, so a second run of the
-same target inside the same minute lands on the same paths; a previous run that died between writing
+`target.reportPath`. Every report sits in its own run folder, `runs/<YYYY-MM-DD-HH-mm-ss>/<branch>/raport.md`,
+so a second run of the same target inside the same second lands on the same paths; a previous run that died between writing
 its parts and assembling them would otherwise have its leftovers spliced into this report by the
 concatenation at the end.
+The `rm`, the header's Write and the `target.start` Reads (below) do not depend on one another: issue them as parallel calls in ONE message.
 A target WITH `target.resume` continues a run that was interrupted before its assembly; the script
 has already checked that the target still holds the content that run reviewed, and pointed
 `reportPath` at that run's report. Never `rm` its parts. Write the header only when
@@ -281,24 +205,42 @@ has already checked that the target still holds the content that run reviewed, a
 block and coverage marker are already on disk — and analyze every other file exactly as below, with
 the part number it has by its position in `target.files` (overwrite a part that exists without a
 coverage marker). The cross-file pass and the closing parts are always written anew.
+`resume.drafts`, when present, lists the drafts of parts the interrupted run had written and the
+check had refused (point 4): when such a file's turn comes, run
+`node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --promote="<draft>"` first.
+A pass writes its part and the file is done; problems it names are fixed in the draft with Edit,
+after the file's Reads, and the hook checks the draft again after every Edit (point 4) — the walk behind it is not redone.
 Then process EVERY file in
-`target.files`, one at a time, in the listed order. The script has already excluded everything
+`target.files`, batch by batch (point 1), in the listed order. The script has already excluded everything
 skippable → `target.skipped` (generated, binary, and prose — the label says "wygenerowane/binarne" but
 `*.md`, `*.txt`, `*.rst`, `*.adoc` and `LICENSE`-style files go there too), so `target.files` contains
 no file you may skip:
 no exceptions for renames, formatting-only diffs, tests, configs, file size, diff size, or how many
 files remain — the mechanical-change gate narrows what a renamed or reformatted file may REPORT,
-never whether it is processed. A file whose `localInstructions` is empty still gets the complete global pass — zero
-local matches usually means the file sits outside every dedicated location (the script surfaces
-these files in `warnings[]`), not that the file may be skimmed. For each file:
+never whether it is processed.
+A file whose kind walks only a few items (the catch-all `other` walks one) still gets every item of
+its plan and the universal points, and a file no kind describes (the script surfaces these in
+`warnings[]`) still gets `CLAUDE.md` and the universal points — neither may be skimmed.
+The walk opens with the Reads `target.start` lists (a FIXED IDENTIFIER, like every key of the context JSON), issued as parallel calls in ONE message: the first batch's bundles, contents and diffs, or — when every file's part is already on disk — the cross-file bundle and its reference.
+A target with an empty diff (`files` empty) lists none: it has no per-file parts and no cross-file pass, its `part01` holds the single line `Nie wykryto zmian do analizy.`, and the assembly (`references/assembly.md`) follows.
+For each file:
 
 1. Open the file from `target.workDir`, the folder the script filled with what this target reviews
-   (`workDir`, `contentPath` and `diffPath` are FIXED IDENTIFIERS — never translate them).
+   (`workDir`, `bundlePath`, `contentPath` and `diffPath` are FIXED IDENTIFIERS — never translate
+   them: they are keys of the context JSON).
+   `file.bundlePath` is the file's bundle: its plan with the text of every item it is walked
+   against, each under its address, and what the script already found about this file — the facts
+   and probe hits bound to those items (point 2), the consumers of its exports, its duplication
+   candidates.
    `file.contentPath` is the file's full content in the reviewed revision (the branch's commit or
    the index; in folder mode, the working-tree file itself), and `file.diffPath` is this file's own
    section of the target's diff.
-   Read both with the Read tool — never `cat`, `git show` or `git diff` through Bash, whose output
-   may reach you compressed: a line lost on the way is a line never reviewed.
+   Read all three with the Read tool, as parallel calls in ONE message together with the Reads of
+   the other files of its batch — never `cat`, `head`,
+   `sed`, `git show` or `git diff` through Bash, whose output may reach you compressed and without
+   line numbers: a line lost on the way is a line never reviewed.
+   The hook refuses a Bash command that prints a reviewed file, its diff or its bundle; a search
+   (`grep`) or a count (`wc`) passes.
    `contentPath` is `null` for a status `D` file and for a binary one — review it from the diff
    alone; `diffPath` is `null` for a status `A` file and in folder mode, where every line is new
    and the content alone is the input.
@@ -306,10 +248,13 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    A file longer than 2,000 lines is read page by page (`offset`/`limit`) up to its last line,
    never sampled.
    A line the Read cuts short (over 2,000 characters) is read whole with
-   `sed -n '<N>p' "<contentPath>"`.
-   One file is open at a time.
-   The message that writes file N's part (point 4) may carry the Reads of file N+1, since neither
-   depends on the other; file N+1's analysis still starts only after both have returned.
+   `sed -n '<N>p' "<contentPath>"` — the one read from the shell the hook lets through.
+   Small files are walked in batches.
+   `target.batches` (a FIXED IDENTIFIER) lists, as `[first, last]` positions in `target.files` (from 1), every run of two or more consecutive small files whose Reads come in ONE message and whose parts are written in ONE message; the bundle's `partia:` line names the files of its batch.
+   Every other file is a batch of its own, and `--no-batch` (Step 1) makes every file one.
+   Inside a batch the walks stay sequential and separate: file k is walked to its end — every item, both sweeps of point 3, its block — before file k+1's walk starts, and only file k's own Reads are its evidence.
+   The last bundle of a batch ends with `## Dalej`: the Reads of the next batch, which ride in the message that writes this batch's parts because neither depends on the other, or, after the last file, the cross-file pass.
+   The next batch's walk starts only after both have returned.
    `target.commands.grep` (Bash, needs a POSIX shell) searches the whole reviewed revision (the
    branch's commit, the index, the working tree) for its `<pattern>` placeholder, an extended regex.
    It prints only `<count> match(es) -> <file>`: Read that file for the matches themselves.
@@ -322,12 +267,19 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    The import edges are not yours to collect: the script wrote them to `target.importLedger` (the
    cross-file layering question reads it). Only a file named on its `# not parsed` line — a language
    the script has no extractor for — needs its import lines noted while its content is open.
-   With the file's diff and content in front of you, turn its plan's `checklist`
-   (`checklistPlans[file.plan].checklist`) into the ticking list of
-   this file: every instruction of the plan, in plan order, expanded to exactly the item numbers its
-   `<items>` spec names (`component:1-27` is `#1`…`#27`; `accessibility:6-9,12` is four items, and
-   `#1-5`, `#10-11` are not this file's rules) — that list, and nothing shorter or wider, is what
-   point 2 walks and what point 4 writes down.
+   The bundle's `## Plan` is the ticking list of this file: every instruction of the plan, in plan
+   order, under a heading that names its `<items>` spec (and its gate, on a `Bramka:` line), followed
+   by exactly the items that spec names, one `- <id>#<n>: <text>` line each (`accessibility:6-9,12`
+   is four items, and `#1-5`, `#10-11` are not this file's rules).
+   The script expanded it from the plan's `checklist` (`checklistPlans[file.plan].checklist`), and
+   its header line `pozycji planu:` is the file's `checklistTotal` — never expand, renumber or
+   shorten it yourself: that list, and nothing shorter or wider, is what point 2 walks and what
+   point 4 writes down.
+   `Uwagi rodzaju:` under the header are the kind's `notes`; the sections after the plan
+   (`## Eksporty tego pliku i ich konsumenci`, `## Kandydaci duplikacji (jscpd)`, `## Fakty spoza
+   planu (bez wymogu)`) are context for the walk, and require nothing by themselves.
+   Under `--dedup-items` (`target.dedupItems`), an item an earlier bundle of the run already showed reaches you as `- <address>: treść jak w paczce <bundle>, przeczytanej wcześniej`: its text is the one under the same address in that bundle, and the lines under it are this file's own.
+   After a compaction every bundle shows its items in full again.
 2. Evaluate the file against every point below, checklist-driven — never holistically. For points
    1 and 2, walk that ticking list top-to-bottom: read an item, check the file's code against that
    one item, reach an explicit pass/violation verdict, record the finding(s) on violation, tick the
@@ -336,28 +288,68 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    notes or progress commentary; a file's verdicts go into its checklist block (point 4) and its
    findings into the report, never into the terminal. Sampling checklists, skipping items, or
    abandoning a checklist partway through a file is forbidden:
-   1. Compliance with every global instruction, checklist item by item.
-   2. Compliance with every matched local instruction (its `localInstructions` indexes into
-      `localInstructionsCatalog`), checklist item by item.
+   1. Compliance with every cross-cutting instruction of its plan (`general`, `best-practices`,
+      `code-quality`, `architecture`, `security`, `performance`, `accessibility`, `test-coverage`, …),
+      checklist item by item.
+   2. Compliance with every instruction of its plan that is about what the file IS (`component`,
+      `feature-component`, `ngrx-reducer`, `unit-tests`, …), checklist item by item.
+   Points 1 and 2 are one walk of the ticking list, in plan order — the split names what the plan
+   holds, not an order of its own.
    3. Consistency with the other files of this diff (naming, patterns, architecture) - the one point
       NOT verdicted here: a single file cannot answer it. This pass only COLLECTS what it needs (the
       names and literals the file introduces, and the imports of a `# not parsed` file); the one cross-file pass
-      below reaches the verdicts. Judging it per file as well would raise the same drift once per
+      (`references/cross-file.md`) reaches the verdicts. Judging it per file as well would raise the same drift once per
       file involved, in several part files, under the same instruction.
    4. Potential regressions.
    5. Readability problems.
-   Performance, security, architecture and test coverage are enforced through their global
-   instruction checklists in point 1 — do not invent extra criteria beyond the instructions.
+   Performance, security, architecture and test coverage are enforced through their instruction
+   checklists in point 1, as far as the file's plan walks them — do not invent extra criteria beyond
+   the instructions.
    An item counts as evaluated only after you checked the file's code against it and reached an
    explicit pass/violation verdict — "nothing jumped out at a glance" is not a verdict.
    **A tick is earned, never assumed.** `[x]` goes on an item ONLY when it was checked 100%: you
    read the item, looked at this file's code for it, and can say where you saw the answer — the
    lines that satisfy a requirement, the lines you cleared for a prohibition, or the lines that
-   violate it. Everything short of that — the rule's subject lives in code this run never opened,
-   the item needs a build/runtime answer, you are guessing, you ran out of room — stays `[ ]` with
-   the reason written next to it. An unticked item is an honest gap the report carries on; a tick
-   that was not earned is a false claim about the review and the one thing this checklist exists to
-   prevent. Neither the size of the file nor the number of items already walked changes this.
+   violate it. Everything short of that stays `[ ]` with the reason written next to it. An unticked
+   item is an honest gap the report carries on; a tick that was not earned is a false claim about
+   the review and the one thing this checklist exists to prevent. Neither the size of the file nor
+   the number of items already walked changes this.
+   **An unticked item names what was missing, and only three things can be:** the reason starts
+   with one of these prefixes (FIXED IDENTIFIERS, point 4):
+   - `narzędzie: <which>` — a tool this run did not run: a build, the test runner, a linter, a
+     coverage report;
+   - `poza recenzją: <path>` — the answer lives in a file outside the reviewed code (a base class, a
+     module that provides the service), named by its path; the check refuses a path that does not
+     exist, or that is itself reviewed in this target — that one you open and answer from;
+   - `działająca aplikacja: <what>` — only the running app shows it: rendered focus order, a
+     message after a real submit, a response from a live server.
+   A guess is not among them: look further until the answer is a verdict or one of the three.
+   Neither is the project lacking what the item requires ("the project has no i18n", "there is no
+   spec"): a requirement nothing satisfies is `NARUSZENIE`, never a reason to leave the item open.
+   **A prepared verdict is copied, not searched for.** `gotowy werdykt: [ ] <address> — NIEZWERYFIKOWANE: <reason>` under an item of the bundle is the rulebook's own answer for an item no reading of the code settles.
+   Copy that line into the block unchanged, or tick the item `NARUSZENIE` with its finding when the code visibly breaks it; the check refuses an `OK` on it.
+   The cross-file pass does not answer such an item again.
+   **The bundle may point at lines, and a verdict answers them.** Under an item of the bundle's
+   `## Plan`, the script prints what it found about THIS file for that item, each line naming the
+   file's lines it concerns (`L12`, `L3, L9`):
+   - `FAKT [<kind>] L…: <text>` — a repo fact that contradicts a clean verdict: an export nothing
+     imports, a barrel no file imports through, a guard no route uses, a pipe no template uses,
+     an i18n key the translation files lack, a relative import that leaves its area, a literal or
+     a label mapping repeated in other files, an action without its outcome pair.
+     The item is `NARUSZENIE`, or `OK` that cites each line the fact names and says, after
+     `fakt nie dotyczy:`, why the fact does not break THIS item — never `NIEZWERYFIKOWANE`: the fact
+     settled what a reason would name.
+   - `WSKAZÓWKA [<kind>] L…: <text>` — the same kind of fact where it cannot decide alone (a kind
+     that only points, or facts drawn from part of the repository).
+   - `SONDA L…: <text>` — a line matching the item's probe, a pattern of code that often breaks it.
+     A probe never makes a finding by itself: it names a line the verdict must look at.
+   - `drugie pytanie: <question>` — asked only of items whose `OK` measurably went wrong often:
+     an `OK` on that item carries `drugie pytanie: <answer>` in its evidence.
+   A `WSKAZÓWKA` or a `SONDA` leaves every verdict open: the item is `NARUSZENIE` when a pointed
+   line breaks it, and otherwise `OK` or `NIEZWERYFIKOWANE` whose evidence cites each pointed line
+   (as `L12`, or inside a span `L10-14`) and says why its code does not break the item.
+   `brak wystąpień` is refused on an item with pointed lines: its subject is in the file.
+   Such an item gets a checklist line of its own (point 4), never a place in a range.
    **Gates come first, and only where the instruction declares one.** For each instruction of the
    plan whose `<id>` appears in `checklistGates`, answer that one sentence against the file's content
    BEFORE walking its items. A gate that holds changes nothing — walk the items one by one as always.
@@ -373,21 +365,27 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    because what it holds looks trivial, small or obviously correct.
    A one-line setter is a method and a lone `.next()` call is behaviour: a test-coverage gate over
    such a file holds, and its items are walked.
-   Checklist items come in two shapes, and both get real verdicts:
+   Checklist items come in three shapes, and all get real verdicts:
    - prohibitions — code that must not appear; scanning the file finds these;
    - requirements — something that MUST be present (`ChangeDetectionStrategy.OnPush`, a route
      `title`, `{ dispatch: false }`, an `afterEach`, a `should`-prefixed description, a fail action
      completing a trio, a matching spec...). Scanning never finds an absence: a requirement's PASS
      verdict is reached only by pointing at the exact code that satisfies it, and a requirement
      nothing satisfies is a finding.
+   - conditional rules — a rule that holds only under a project-wide setting ("a zoneless app removes
+     `zone.js`", "a project with translations never hard-codes copy") is verdicted only after the
+     setting itself was read where it is declared (`app.config.ts`, `angular.json`, the i18n files),
+     found through `target.commands.grep`; that file's path is the `OK` evidence. The setting is never
+     assumed from the file under review: a `polyfills.ts` importing `zone.js` does not make the app
+     zone-based.
    Element-level template rules (`data-test`, `type` on `<button>`, `[alt]`, `aria-label`, programmatic
    labels, bound ARIA state) are verified per ELEMENT, never per file: walk EVERY interactive and media
    element of the template (`button`, `a`, `input`, `select`, `textarea`, `img`, any element with an event
    binding) and reach a separate verdict for each applicable rule on each element — one compliant element
    never passes the file, and a rule's walk ends at the last element, not at its first violation.
-   Seven rule families are historically under-reported; check them deliberately for every file their
-   instructions match, even when the diff looks unrelated (they stay defined ONLY by their
-   instruction files — never re-derive them from memory):
+   Seven rule families are historically under-reported; check them deliberately for every file whose
+   plan walks their instructions, even when the diff looks unrelated (they stay defined ONLY by the
+   item texts of the bundle — never re-derive them from memory):
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
    - naming rules (general instruction) plus naming consistency across the diff;
    - code-quality rules (code-quality instruction): duplicated code as full 🔴 High findings;
@@ -406,24 +404,43 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      instead of `setInput`/`MockRender` inputs — the spec passes either way, so only an explicit
      verdict per input-setting line finds it.
 3. Record only REAL findings — no speculative or cosmetic padding.
-   One finding = one rule violated in one file. When the SAME rule is broken in several places of
-   one file with the same consequence and severity, that is ONE finding whose `**Linia:**` lists
-   every occurrence (`2, 8, 10-12`) — never one block per occurrence. An occurrence whose
-   consequence or severity differs (one crashes, another is cosmetic) gets its own finding, as
-   does a different rule broken on the same line.
+   One finding = one rule violated in one file, and one fix for it.
+   When the SAME rule is broken the same way in several places of one file, with the same
+   consequence and severity, that is ONE finding whose `**Linia:**` lists every occurrence
+   (`2, 8, 10-12`) — never one block per occurrence.
+   An occurrence whose consequence or severity differs (one crashes, another is cosmetic) gets its
+   own finding, as does a different rule broken on the same line.
    The SAME violation is reported ONCE: when one requirement is written into several instructions
-   (a local rule and the general or global one it refines), one finding's `**Reguła:**` names
-   every copy it breaks, `; `-joined, the most specific first — a local before a global, the
-   specific local before the general one it sits under (`feature-component#4; component#9;
-   general#6`).
+   (a rule about what the file is and the general one it refines), one finding's `**Reguła:**` names
+   every copy it breaks, `; `-joined, the most specific first — the instruction of what the file is
+   before a cross-cutting one, the specific before the general one it sits under
+   (`feature-component#4; component#9; general#6`).
+   The bundle names the copies it knows: `ta sama wada: <addresses>` under an item lists the items of
+   this plan that state the same requirement, and one defect breaking several of them is one finding
+   naming each one it breaks.
    A file walking both `component` and `feature-component` gets ONE such finding for a rule they
    share — never the same violation twice in two findings.
    Those copies are the ONLY items one finding may share, so it names at most one item per
-   instruction. Two items of one checklist are two requirements: code breaking both — even on
-   one line — is two findings, each with its own `**Problem:**`, `**Oczekiwane:**`, severity and
-   lines. A finding that lists several defects ("brak OnPush, style inline, `CommonModule` w
-   `imports`") is one defect reported and the rest lost: the reader fixes, the PR comments and the
-   severity follow the first one.
+   instruction.
+   Two items of one checklist are two requirements: code breaking both — even on one line — is
+   two findings, each with its own `**Problem:**`, `**Oczekiwane:**`, severity and lines.
+   A finding that lists several defects ("brak OnPush, style inline, `CommonModule` w `imports`")
+   is one defect reported and the rest lost: the reader fixes, the PR comments and the severity
+   follow the first one.
+   That holds inside ONE item as well: an item names a rule, a finding names one fix.
+   The same fix needed in several places is one finding listing every line; two different fixes
+   under one item are two findings, each with its own `**Problem:**`, `**Oczekiwane:**` and lines,
+   and the item's `NARUSZENIE` line carries the lines of both.
+   A barrel that misses model files and a declaration living in that barrel are two findings under
+   one models item; a numeric enum and an enum with SCREAMING_SNAKE_CASE keys are two; a directive
+   named against the convention and one declared `standalone: false` are two; three different ARIA
+   defects on one control are three.
+   The test: an `**Oczekiwane:**` that needs "and" to join unrelated changes is several findings.
+   The one exception is an instruction in `checklistPerFile`: its items are facets of one
+   requirement — a file without a spec leaves its branches, failure paths and edge cases untested
+   all at once — so everything the file breaks under it is ONE finding.
+   That finding's `**Problem:**` names every case, its `**Reguła:**` every item broken, and a
+   second finding of that instruction in the same file is refused.
    Every item that finding names is ticked `NARUSZENIE` with the finding's lines, each in its own
    instruction's block line.
    None of them is ticked `OK` because another item "already reports it": code that breaks an item
@@ -456,43 +473,69 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
    `target.files.length + 2` and never to fewer than two digits (`part03` for 5 files, `part003`
    for 98).
    Every part of the target, the cross-file and closing ones included, uses that one width.
-   The assembly below concatenates them through a shell glob, which orders them as text: `part100`
+   The assembly (`references/assembly.md`) concatenates them through a shell glob, which orders them as text: `part100`
    would land between `part10` and `part11` if the earlier parts were padded narrower.
    Write it with ONE Write call, holding, in this order: the file's findings sections, its ticked
    checklist block, its coverage marker.
+   Never from the shell — not `cat > <part> <<'EOF'`, not `tee`, not `cp`/`mv` into it, not `sed -i` on it.
+   A part does not fit on a command line, the review's own quotes break the heredoc, and the check
+   below never sees it, so the hook refuses such a command before it runs.
    A file with no findings still gets its part file — the block and the marker alone.
    A part is report text: lean mode never shortens it, not a finding and not a checklist line.
-   Earlier parts are never edited, and the next file is not analyzed before the current one's part
-   file is written (only the Reads of the next file may ride in the same message as this write).
+   Earlier parts are never edited, except where a check message asks for it (the merge below, and a duplication's other side in the cross-file pass).
+   The next batch is not analyzed before the current batch's parts are written: only the next batch's Reads ride in the same message as those Writes.
+   **One message writes one batch.** A part is the end of one file's walk: a batch's parts are the Write calls of one message, one per file in file order, and a file walked alone writes its part alone.
+   The hook refuses a part written less than 2 seconds after the part before it — which is what two parts in one message are — unless both files lie in one range of `target.batches`.
    **Every part is checked as it is written.** This skill's hook runs `scripts/check-part.cjs` on each
-   Write or Edit of a part file and compares it with the context JSON: the part number and width,
-   the parts before it being on disk, a block covering exactly the plan's items with the marker's
-   total, the form of every verdict line, a finding behind every `NARUSZENIE`, and cited lines that
+   Write or Edit of a part file and compares it with the context JSON and the target's facts
+   (`target.factsPath`, the facts behind every bundle): the part number and width, the parts before
+   it being on disk, a block covering exactly the plan's items, the form of every verdict line, the
+   evidence of every `OK` (below), the answer to every line the bundle points at (point 2), the
+   reason of every `NIEZWERYFIKOWANE`, a finding behind every `NARUSZENIE`, and cited lines that
    exist in `contentPath`.
-   A part that fails is NOT written: the call comes back with the list of problems.
-   Fix every one and Write the WHOLE part again — an Edit is checked the same way, as the file it
-   would leave behind.
+   A part that fails is NOT written: the call comes back with the list of problems, and the part's
+   text waits in a draft, `<stem>.part<NN>.draft.md` in `target.workDir`.
+   Read the lines of the draft the problems name and fix exactly those with Edit.
+   After every Edit of a draft the hook checks it again: when it passes, the hook writes the part, removes the draft and says so in its context (`check-part: <part> zapisana ze szkicu.`, with every later draft that can now follow), and otherwise it names what is still wrong, for the next Edit.
+   Only when no such note came back, move the draft into place with the `--promote` command the refusal prints: it runs the same check.
+   The draft saves re-sending every line the check already accepted; only when a refusal names no
+   draft is the whole part written again.
+   A refusal whose only problem is the 2-second rule needs no fix: run its `--promote` command in
+   the next message.
+   A part can also pass with a note, `check-part: <part> zapisana, z uwagą:`, naming two findings on the same lines under items the bundle marks `ta sama wada` (point 3).
+   When they are one defect, merge them with ONE Edit of that part: one finding whose `**Reguła:**` names both addresses, the most specific first, while both items keep their `NARUSZENIE` lines.
+   When they are two defects that only share lines, leave the part as it is.
    Never answer a refusal by ticking an item you did not check: an item you cannot verify is
-   `[ ] … — NIEZWERYFIKOWANE: <reason>`, which the check accepts.
+   `[ ] … — NIEZWERYFIKOWANE: <reason>`, which the check accepts whenever the reason is one of the
+   three of point 2, it cites the lines the bundle points at, and no `FAKT` settles the item.
    The checklist block is the file's walk, written down:
 
        <!-- checklist: <file.path>
        [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
-       [x] general#1-5,#7-13 — OK (brak wystąpień)
-       [x] general#6 nazwy const camelCase — NARUSZENIE (12, 18)
+       [x] general#1-5,#7-9,#11-13 — OK (brak wystąpień)
+       [x] general#6 importy między obszarami — NARUSZENIE (12, 18)
+       [x] general#10 nawigacja przez Router — OK (L14, L22, L31)
        [x] component#1 OnPush — NARUSZENIE (4)
-       [x] component#2-14,#16-27 — OK (brak wystąpień)
-       [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
+       [x] component#2 osobny szablon i .scss — OK (L3)
+       [x] component#3-14,#17-27 — OK (brak wystąpień)
+       [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: poza recenzją: src/app/shared/base-form.component.ts
+       [x] component#16 formularz → stan przez valueChanges — OK (L41)
        -->
 
    - The block covers every item of the file's ticking list (point 1), in plan order — the plan's
      item numbers, no others: an item the plan left out gets no line, not even a `NIE DOTYCZY` one.
-     It does NOT spend a line per item: **items of one instruction that share a verdict are collapsed
-     into one line** whose address is a range or a list of ranges (`general#1-5,#7-13`). Every item
-     the plan lists still appears exactly once — the ranges of one instruction never overlap and
-     never skip a number the plan lists, or the renderer says so (a number the plan itself does not
-     list is not a gap, and a range may jump over it). Expanded, the block has exactly
-     `checklistTotal` items.
+     It does NOT spend a line on every item: **items of one instruction whose subject the file does
+     not contain collapse into one `OK (brak wystąpień)` line**, and a failed gate into one `BRAMKA`
+     line, whose address is a range or a list of ranges (`general#1-5,#7-9`).
+     An item whose subject IS in the file gets a line of its own, with the lines its verdict was read
+     from: lines that answer one item say nothing about the next, so the check refuses lines or a
+     path on a range.
+     Every item the plan lists still appears exactly once — the ranges of one instruction never
+     overlap and never skip a number the plan lists, or the renderer says so (a number the plan
+     itself does not list is not a gap, and a range may jump over it).
+     Expanded, the block has exactly `checklistTotal` items.
+     An item under which the bundle printed a `FAKT`, `WSKAZÓWKA`, `SONDA` or `drugie pytanie:` line
+     is never collapsed into a range: its line is its own, and its verdict answers them (point 2).
    - `NARUSZENIE` is the one verdict word the renderer MATCHES, exactly and case-sensitively, to mark
      an item as broken in the coverage section. Write it in capitals and in that exact form: a
      `naruszenie`, `NARUSZONO` or `VIOLATION` parses as a clean item, so the page would show the rule
@@ -501,129 +544,74 @@ these files in `warnings[]`), not that the file may be skimmed. For each file:
      passing unnoticed, and the fix is the exact word, never ticking a different item instead.
      `OK`, `BRAMKA`, `NIEZWERYFIKOWANE` and `brak wystąpień` are FIXED IDENTIFIERS as well: the part
      check reads every one of them, in capitals and exactly as written here, never translated.
-   - Collapse only what genuinely shares a verdict. `NARUSZENIE` and `NIEZWERYFIKOWANE` lines carry
-     their own reason, so they stay separate — a range is for the OK run around them and for a
+     So are the markers a verdict's text carries, which the check finds by exact, lower-case text:
+     `fakt nie dotyczy:` (translated, the check reads the `OK` as ignoring its `FAKT` and refuses
+     it), `drugie pytanie:` (translated, the `OK` reads as not answering the second question), the
+     three reason prefixes `narzędzie:`, `poza recenzją:` and `działająca aplikacja:` (translated,
+     every `NIEZWERYFIKOWANE` is refused as having no allowed reason) and the cross-file part's
+     `<!-- unverified:` opener (translated, the block is a plain comment and the check reports it
+     missing).
+     The bundle's labels `FAKT`, `WSKAZÓWKA`, `SONDA` and `drugie pytanie:` are printed in Polish by
+     the script: look for them as written — a translated label finds no line, and the item's
+     verdict then misses what the check holds it to.
+     So are the bundle's `Ważność stała:` and `ważność stała:` (a fixed severity, Step 4), `ta sama wada:` (point 3), `gotowy werdykt:` (point 2) and `partia:` (point 1) lines.
+   - Collapse only what genuinely shares a verdict.
+     `NARUSZENIE` and `NIEZWERYFIKOWANE` lines carry their own reason, and an OK with lines its own
+     evidence, so they stay separate — a range is for the `brak wystąpień` run around them and for a
      gated-out instruction, never a way to sweep a violation into a neighbour's range.
    - The 2–6 word label in your own words belongs on the lines that need it: `NARUSZENIE`,
      `NIEZWERYFIKOWANE`, and a single-item `OK` worth naming. On a collapsed OK or BRAMKA range the
      address IS the reference — do not spell out thirty rules to say the file has none of them.
-   - `[x] … — OK (<where>)` — checked and compliant. `<where>` is where you saw the answer: the
-     line numbers of THIS file you verified, as its Read printed them (`L12, L18`), or
-     `brak wystąpień` when the rule's subject does not occur in the file at all.
+   - `[x] … — OK (<where>)` — checked and compliant. `<where>` is where you saw the answer, one of:
+     - the line numbers of THIS file that decide THIS item, as its Read printed them (`L12, L18`) —
+       the declaration, call, binding or element its verdict was read from, and for an order rule
+       the first line of each element in the order.
+       Never the file itself: a span covering half or more of a file of 20+ lines (`L1-310`) points
+       at everything and so at nothing, and the check refuses it, as it refuses a line past the end;
+     - the path of the file that meets the requirement when it is met outside this one — a spec
+       (`tests/user-card.component.spec.ts`), the routes file that provides a facade — read from
+       this file's folder, the facts' root or the project root; the check refuses a path that does
+       not exist;
+     - `brak wystąpień` when the rule's subject does not occur in the file at all.
      `brak wystąpień` is a verdict for a PROHIBITION only — for a requirement, a missing subject is
      a finding, never an absence to wave through.
+     Lines and a path are the evidence of ONE item; only `brak wystąpień` closes a range.
      `<where>` never names another item: `OK (pod general#6)` is no evidence, and an item the code
      breaks is `NARUSZENIE` even when another item's finding already cites the lines (point 3).
    - `[x] … — BRAMKA: <what is absent>` — the instruction's `gate` failed for this file (point 2),
      so its whole range is ticked in one line. Only an instruction listed in `checklistGates` may
      produce such a line, and the reason names what the file does not contain.
-   - `[x] … — NARUSZENIE (<n>, …)` — checked and broken; the lines are the ones the finding's
-     `**Linia:**` carries, written the same way (bare numbers, no `L` prefix), and that finding is
-     in this same part file, its `**Reguła:**` naming this item's address among its own.
+   - `[x] … — NARUSZENIE (<n>, …)` — checked and broken; the lines are the ones its findings'
+     `**Linia:**` carry, written the same way (bare numbers, no `L` prefix), and every such finding
+     is in this same part file, its `**Reguła:**` naming this item's address among its own.
      (Findings from the cross-file
      pass or from the universal points 3–5 belong to no item and appear only as findings.)
    - `[ ] … — NIEZWERYFIKOWANE: <reason>` — anything you could not check 100% (point 2). The reason
-     is concrete: what was missing, not "no time".
+     starts with `narzędzie:`, `poza recenzją:` or `działająca aplikacja:` and names what was
+     missing (`poza recenzją: src/app/shared/base-form.component.ts`), never "no time"; the path of a
+     `poza recenzją:` reason is read from this file's folder, the facts' root or the project root.
    - Each verdict is written when it is reached, so the block is the running record of the walk —
-     never a list reconstructed from memory once the file is done. Collapsing is how a reached
-     verdict is WRITTEN, not permission to reach one for thirty items at once: an OK range means you
-     walked each of those items and each came back clean.
+     never a list reconstructed from memory once the file is done.
+     Collapsing is how a reached absence is WRITTEN, not permission to reach one for thirty items at
+     once: a `brak wystąpień` range means you looked for each of those items' subjects and found
+     none.
    The coverage marker closes the block and states the same walk as numbers:
    `<!-- coverage: <file.path> <checked>/<file.checklistTotal> -->`
    `<checked>` is how many ITEMS of the block carry `[x]` — a range line contributes every number it
    spans, not one — counted from the block you just wrote;
-   `checklistTotal` is copied from the context JSON. The two match on a file you finished — a
-   smaller `<checked>` makes the renderer warn and keeps the Markdown, which is the honest outcome
-   of an interrupted pass, not something to paper over with an unearned tick. The renderer recounts
-   the ticks and warns when the marker, the block and `checklistTotal` disagree.
+   `checklistTotal` is copied from the context JSON (the bundle's `pozycji planu:`).
+   Write the marker, but do not spend effort on its numbers: the assembly counts the block
+   and writes both numbers itself, so a miscount is never a refusal.
+   The two match on a file you finished — a smaller `<checked>` makes the renderer warn and keeps
+   the Markdown, which is the honest outcome of an interrupted pass, not something to paper over
+   with an unearned tick.
    A file the mechanical-change gate narrowed writes `<!-- coverage: <file.path> mechanical -->`
    and NO checklist block — its walk was two questions, not the checklist, and that marker is its
    complete proof. It is for a WHOLE-diff mechanical file only; a file with even one behavioural
    change walks and ticks its items like any other.
 
-After the per-file pass, do ONE cross-file pass over the whole diff for point 3, written as part
-`N+1` (`N` = `target.files.length`): its findings sections only, no checklist block and no coverage
-marker.
-That part is written on every target with files — empty when the pass found nothing, because the
-assembly refuses a report without it.
-Answer each of these four questions explicitly, against the diff as a whole:
-1. Duplication drift — is the same logic, formatting or literal implemented in two or more places
-   of this diff, or re-implemented next to an existing shared util? Answer it from three sources:
-   - `target.duplicationCandidates` — jscpd's scan of the whole reviewed revision, kept only where
-     the diff wrote at least half of the copy: `path` and `lines` are the copy, `sources` what it
-     repeats, `kinds` how it matched (`exact`, `renamed` identifiers, `similar` with a gap).
-     Open both sides of every candidate.
-     Dismiss one only when the two blocks share no logic: a shape the framework or a generator
-     dictates (a TestBed skeleton, a module or route declaration, a generated `project.json` or
-     `tsconfig`), parallel data (translation files), or — for a `renamed` or `similar` candidate —
-     nothing but syntax, because the blocks call different functions and read different fields (two
-     `ngOnInit`s, each calling its own initializers).
-     Renamed local variables and parameters over the same operations are still a copy.
-     Report every other one.
-     A target without the list was not scanned (its warning says why), and the other two sources
-     then carry the question alone.
-   - A search for what a token scan cannot see: for every exported function, class, pipe,
-     directive, validator, util or constant the diff ADDS, look for an existing equivalent in the
-     reviewed revision with `target.commands.grep` (Read the file it names) — by its name, a
-     synonym and the characteristic expression of its body — in the shared folders first (`shared/`, `utils/`, `common/`, `core/`,
-     or wherever this project keeps them).
-   - What the per-file walk already noticed.
-
-   Report every copy the diff adds under the code-quality instruction as 🔴 High, anchored on a
-   line of the copy that the diff changed, and name the source it repeats (`path:lines`).
-2. Layering — Read `target.importLedger` and walk it edge by edge, together with the edges you
-   noted for its `# not parsed` files. Each line is `<importing file>:<line> → <specifier>`, plus
-   `(<resolved path>)` for a relative one; `<line>` is the import's line in that file's
-   `contentPath`. Name the layer
-   of the importing file and of the imported module, check the edge's direction AND its form
-   (barrel vs concrete path, per the architecture instruction) against the architecture
-   instruction, and report each forbidden edge at the importing file, on that line. A permitted
-   direction does not end the edge's verdict — a legal edge taken through the wrong form is still a
-   finding. "No layering findings" may be claimed only after every ledger entry has its verdict.
-3. Derived-data flow — does any state field, action payload or component binding carry a value
-   computable from other state? Report every station of the flow (the action, the reducer field,
-   the dispatching component), each under its own instruction.
-4. Naming consistency — the same concept named differently across the diff's files, or one name
-   reused for different concepts; reported under the code-quality instruction (🟡 Medium), while a
-   plain naming-convention breach stays a general-instruction finding.
-
-A target whose whole review produced no finding closes with one more part file after the cross-file
-one, holding the single line `Nie wykryto problemów.` — the per-file parts before it still carry
-every checklist block and coverage marker, which is what the report then shows. A target with an
-empty diff (`files` empty) has no per-file parts at all: `Nie wykryto zmian do analizy.` is its
-`part01`, so the assembly below always has something to concatenate.
-
-Assemble the report in ONE Bash call: check the parts against the context, append them to
-`target.reportPath` (which already holds the header), remove the parts, the import ledger and the
-work folder, and — when `target.htmlReportPath` is not null — render the HTML report from the
-assembled Markdown:
-`node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --report="<reportPath>" && { cat "<reportPath minus .md>".part*.md >> "<reportPath>"; rm -f "<reportPath minus .md>".part*.md "<target.importLedger>"; rm -rf "<target.workDir>"; node "<SKILL_DIR>/scripts/render-report.cjs" --report="<reportPath>" --project="<PROJECT>" --mode="<target.kind>" --branch="<target.branch>" --base="<target.baseBranch>"; }`.
-`<contextPath>` is the path Step 1 printed.
-The check gates everything after it (`&&`): when a part is missing or breaks the format, it exits 1,
-lists every problem by part file and leaves the parts, the ledger and the work folder on disk.
-Write each part it names again, whole, and run the same command again.
-The four trailing arguments are what puts a code snippet under every finding: `--project` locates the
-reviewed files, and `--mode`/`--branch`/`--base` make the snippet read the same revision the review
-read — rendering it as a real `+`/`-` diff for `branch` and `staged`, and as a plain file view for
-`folder`. Drop `--base` when `target.baseBranch` is null (staged and folder targets). Without these
-arguments the HTML still renders, only without snippets.
-Inside the braces the separators are `;`, never `&&`: once the check has passed, the renderer must
-run even if the concatenation found nothing, otherwise a clean review would silently fall back to
-Markdown in HTML mode.
-Drop the render command when `htmlReportPath` is null (`--only-md` was passed) — the Markdown
-is the report then. Otherwise the renderer replaces it with `target.htmlReportPath`; if it prints
-warnings it keeps the Markdown too — but a kept Markdown has two very different causes, and only one
-of them is yours to fix. `nierozpoznana…`/`nieczytelny…` warnings mean the report really did drift
-from the Step 4 format: a line the parser could not read, which costs the HTML that finding or that
-tick. A `sprawdzono <checked>/<total>` warning means the opposite — the block parsed perfectly and
-simply carries an item you left `[ ] NIEZWERYFIKOWANE`. That one is the format working as intended;
-never answer it by going back and ticking an item you did not check.
-
-Coverage gate — before leaving Step 3 for a target: re-read `target.files` and confirm every entry
-had its `contentPath`/`diffPath` read, its part file written, and either all five points covered (point 3
-collected, the other four verdicted) or — for a whole-diff mechanical file — the gate's two
-questions answered; analyze any missed file now. A target with an unanalyzed file is not done,
-regardless of diff size or session length.
+The cross-file pass that closes each target is in `references/cross-file.md`, and the assembly and Step 5 are in `references/assembly.md`, both in this skill's directory.
+The last bundle's `## Dalej` names the first, and the first names the second.
 
 ## Step 4 — Report format (one file per target, ALWAYS in Polish)
 
@@ -646,21 +634,26 @@ regardless of diff size or session length.
     <!-- checklist: <file path>
     [x] <id>#<from>-<to>[,#<from>-<to>] — OK (brak wystąpień)
     [x] <id>#<n> <short item label> — NARUSZENIE (<lines>)
+    [x] <id>#<n> <short item label> — OK (<L-lines or path>[; fakt nie dotyczy: <why>][; drugie pytanie: <answer>])
     [x] <id>#<from>-<to> — BRAMKA: <what the file does not contain>
-    [ ] <id>#<n> <short item label> — NIEZWERYFIKOWANE: <reason>
+    [ ] <id>#<n> <short item label> — NIEZWERYFIKOWANE: <narzędzie: | poza recenzją: | działająca aplikacja:> <what was missing>
     -->
     <!-- coverage: <file path> <checked>/<total> -->
 
 - Staged header instead: `# Code Review: staged (<branch>) | <YYYY-MM-DD> <HH:mm>`.
 - Folder header instead: `# Code Review: folder <target.folder> (<branch>) | <YYYY-MM-DD> <HH:mm>`.
-- Take the header date and time from the trailing `-YYYY-MM-DD-HH-mm` of `reportPath`, replacing the final dash of the time with `:` (e.g. `14-30` → `14:30`), so the header always matches the file name.
+- Take the header date and time from the run folder of `reportPath` (`runs/<YYYY-MM-DD-HH-mm-ss>/`): keep the date, drop the seconds, and write the time with `:` (e.g. `runs/2026-09-25-14-30-05/` → `2026-09-25 14:30`), so the header always matches the folder name.
 - If `target.skipped` is non-empty, add directly under the header the single line:
   `Pominięto pliki wygenerowane/binarne: <paths, comma-separated>`.
 - The checklist block and the `<!-- coverage: ... -->` line of Step 3 point 4 are part of this
   format: one of each per analyzed file (the marker alone for a whole-diff mechanical one), written
   after that file's findings. They are HTML comments, so their text never reaches the rendered page —
-  the renderer reads the ticks, checks them against the marker and shows them as the page's
-  "Pokrycie checklist" section.
+  under `--with-checklist` the renderer reads the ticks, checks them against the marker and shows
+  them as the page's "Pokrycie checklist" section.
+  The cross-file part's `<!-- unverified:` block (`references/cross-file.md`) is a comment too: it proves the
+  cross-file answers to the check, and the page does not show it.
+  Every part carries all three whatever the flags, because the check reads them there.
+  The finished report keeps them only when `target.withChecklist` is true: otherwise the renderer cuts them before it renders, so neither the page nor an `--only-md` Markdown shows a checklist.
 - When `target.unchangedSinceLastReview` is non-empty (a `--since-last` run), add one comment line
   under the header:
   `<!-- since-last: <N> unchanged file(s) skipped; previous report: <target.previousReportPath> -->`
@@ -671,6 +664,9 @@ regardless of diff size or session length.
   - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every other code-quality finding (unnecessary, unused or boilerplate code, an added comment, inconsistency) — those stay Medium however cosmetic they look.
   - ⚪ **Low** — readability, naming-convention or style drift with no behavioral impact and not covered by the code-quality instruction.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
+- A fixed severity outranks these criteria: `Ważność stała: <severity>` under an instruction's heading in the bundle, or `ważność stała: <severity>` under one of its items, is the severity of every finding under it.
+  A finding that names several addresses takes the highest fixed one, and the criteria compete with it only when one of its addresses has none.
+  The assembly corrects a severity that misses it and says how many it set (`check-part: ważność stała z rulebooka ustawiona w …`).
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
   (infinite dispatch loop, race condition, subscription leak, crash on null, stale UI) — and
   severity is picked from that consequence, not from the rule's category.
@@ -724,14 +720,6 @@ regardless of diff size or session length.
 - No findings in the whole target → the report body is the single line `Nie wykryto problemów.`
 - Empty diff (`files` empty) → the single line `Nie wykryto zmian do analizy.` (plus the skipped line, if any).
 
-## Step 5 — Terminal summary (Polish)
-
-After writing all reports print, in Polish: each report path (`target.htmlReportPath` when the renderer ran, otherwise `target.reportPath`) + finding counts per severity, plus any errors/warnings from Step 1 and any warning the renderer printed.
-Also state the checklist coverage of the target: how many files walked their whole checklist, and — when any did not — every such file with its `<checked>/<total>`, so an unticked item is read as the gap it is instead of disappearing into the report.
-For a `--since-last` run also say how many files were skipped as unchanged and where the previous report is (`target.unchangedSinceLastReview`, `target.previousReportPath`) — the reader must know the report covers only what moved.
-For a resumed target (`target.resume`) say that it continued the run from `resume.from` and how many files it took over from it.For a branch target also name the base it was reviewed against — `target.baseBranch` plus where that base came from, read off `target.baseSource`: `pr` = the target branch of PR #`target.prNumber`, `fork` = the branch it was created from, `candidate` = the default `main`/`master`/`develop`/`dev` detection. Staged and folder targets have no base (`baseSource` is null): a staged review covers the uncommitted changes themselves.
-Nothing else.
-
 ## Skip rationalizations — all invalid
 
 Catching yourself thinking any of these means STOP and return to the file or checklist item:
@@ -741,22 +729,140 @@ Catching yourself thinking any of these means STOP and return to the file or che
 | "Too large / trivial / renamed / similar to a file that passed" | Coverage never shrinks: the script already removed skippable files, moved code breaks structure and import rules exactly at its new location, and similarity is not compliance. A mechanical-only diff narrows what the file may REPORT to the gate's two questions — it never drops the file from the pass. |
 | "This rename/reformat drags in badly written code" | The mechanical-change gate: a renamed or reformatted line counts as untouched. Report only what the change BROKE and what the change ITSELF violates — never a violation that was already sitting there. |
 | "This rule is pedantic here" | Rule weight is expressed through severity, never through omission. |
-| "I remember the instructions" | Verdicts come from the instruction files read this run, item by item — not from memory. |
+| "I remember the instructions" | Verdicts come from the item texts of each file's bundle, read this run, item by item — not from memory. |
 | "This would work better a different way" | The behaviour-preserving gate: if the fix changes what working code does, how it flows, or how it looks versus the plan and the mockups, it is not a finding. Report only fixes the user cannot see. |
 | "This file already has plenty of findings" | Findings per file are unlimited. Stopping a checklist partway is skipping items. |
 | "This line already has a finding" | Findings are per rule, not per line. A cited line goes back through the remaining checklist items (Step 3 point 3, line sweep) — one line commonly breaks three or four rules. |
 | "I already reported this rule here" | You reported its first occurrence. The occurrence sweep (Step 3 point 3) searches the whole file for the rest and puts every one into `**Linia:**`. |
-| "No local instruction matched this file" | The globals in its plan still apply, and zero local matches often means the file sits outside every dedicated location — itself a violation. |
+| "Its kind walks only a few items — this file is barely reviewed" | Every item of its plan is walked, and the universal points apply to every file whatever its kind. A short plan is the rulebook's decision about that kind of file, not permission to skim it. |
 | "The gate probably fails, collapse the instruction" | A gate is answered from what the file HOLDS, and an unclear answer means the gate HOLDS. A wrongly failed gate silently drops a whole instruction — the widest unearned tick there is. |
-| "One big range is faster to write" | A range is a way to write verdicts you already reached, one per item. Ranging over items you did not walk is thirty unearned ticks on one line. |
+| "One big range is faster to write" | A range writes one verdict you reached for each of its items — "the subject is not here" — and the check accepts it only as `OK (brak wystąpień)` or `BRAMKA`. Ranging over items you did not walk is thirty unearned ticks on one line. |
+| "These items all look fine — one `OK (L12-22)` covers them" | Lines answer one item. Every item whose subject is in the file gets its own line with the lines its verdict was read from; the check refuses lines or a path on a range. |
+| "This item is about the whole file — `OK (L1-310)`" | A whole-file span points at nothing. Cite the lines that decide the item; a prohibition whose subject the file lacks is `brak wystąpień`, and a requirement met in another file names that file. The check refuses a span of half or more of a file of 20+ lines. |
+| "The spec is another file, so there is no line to cite" | Name that file: `OK (tests/user-card.component.spec.ts)`. The check looks the path up and refuses one that does not exist. |
 | "Context/time is running low" | Coverage outranks speed, and the coverage marker records what you actually walked. Keep going file by file. |
 | "This item is obviously fine, tick it" | A tick states you checked THIS file against THAT item and can name where you saw the answer. Obvious-looking is what unchecked items look like; check it, then tick it. |
-| "I will write the checklist once the file is done" | The block is the record of the walk: each line is written as its verdict is reached, and the file's part file is written before the next file is opened. A block composed afterwards is a summary of what you remember, which is what the ticks exist to replace. |
+| "I will write the checklist once the file is done" | The block is the record of the walk: each line is written as its verdict is reached, and the file's part is composed before the next file's walk starts, in a batch as well. A block composed afterwards is a summary of what you remember, which is what the ticks exist to replace. |
 | "Ticking every item keeps the numbers clean" | The numbers are not the point; what was actually checked is. An unticked item with its reason is a finished, honest walk — an unearned tick is a false claim in a report someone will act on. |
 | "jscpd listed nothing, so nothing is duplicated" | jscpd matches copied token runs. Logic written again in other words, and a helper that already exists in a shared folder, reach the review only through the `target.commands.grep` search of cross-file question 1, whose matches are in the file it names. |
 | "This jscpd candidate is short / only similar" | A candidate is dismissed only on the grounds cross-file question 1 lists: a dictated shape, parallel data, or the same syntax around different calls and fields. Every other one is a 🔴 High finding, whatever its length or kind. |
-| "Reading several files at once saves time" | One file is open at a time (Step 3 point 1). With several files' code in front of you, the walk of each one drifts into a skim of all of them. Only the next file's Reads may ride with the current part's Write. |
-| "`OK (pod X#n)` — the other item already reports it" | Code that breaks an item never passes it. When the two items are one requirement in two instructions, the finding names both and both are ticked `NARUSZENIE`; when they are two requirements, each gets its own finding (Step 3 point 3). |
-| "One finding per area of the file is tidier — list everything under it" | Each defect is its own finding. Items of one instruction in one `**Reguła:**` are refused by the part check: they are separate requirements, and a merged block reports one of them. |
+| "Reading several files at once saves time" | Only the small files of one batch are read together (`target.batches`, Step 3 point 1), and each is still walked alone to its end, from its own Reads: with several files' code in front of you, the walk of each one drifts into a skim of all of them. Only the next batch's Reads may ride with the current batch's Writes. |
+| "`OK (pod X#n)` — the other item already reports it" | Code that breaks an item never passes it. When the two items are one requirement in two instructions, or two items of a `checklistPerFile` instruction, the finding names both and both are ticked `NARUSZENIE`; when they are two requirements, each gets its own finding (Step 3 point 3). |
+| "One finding per area of the file is tidier — list everything under it" | Each defect is its own finding. Items of one instruction in one `**Reguła:**` are refused by the part check: they are separate requirements, and a merged block reports one of them. Only a `checklistPerFile` instruction is one finding per file. |
+| "Both defects break the same item — one finding covers it" | An item names a rule; a finding names one fix. Two different changes under one item are two findings, each with its own lines, and the item's `NARUSZENIE` line carries both. |
 | "The methods are trivial, the gate fails" | Triviality never fails a gate: a one-line setter is a method and a lone `.next()` call is behaviour. Only a file holding none of the constructs the gate names fails it. |
-| "The check refused the part, tick the rest to get through" | The check refuses a false record, never an honest one: `[ ] … — NIEZWERYFIKOWANE: <reason>` always passes. Fix what it names and Write the whole part again. |
+| "The check refused the part, tick the rest to get through" | The check refuses a false record, never an honest one: `[ ] … — NIEZWERYFIKOWANE: <narzędzie: / poza recenzją: / działająca aplikacja:> …` passes on every item no `FAKT` settles. Fix what it names in the draft with Edit: the hook checks the draft again and writes the part once it passes. |
+| "The project has no spec / no i18n / no such file, so the item cannot be verified" | A requirement nothing satisfies is `NARUSZENIE`. `NIEZWERYFIKOWANE` names a tool not run, a file outside the review, or data of the running app — never an absence in the code under review. |
+| "The bundle's `SONDA` line hit, so that is a finding" | A probe points; it never decides. Read the line: `NARUSZENIE` if it breaks the item, otherwise an `OK` that cites it and says why not. |
+
+<!-- one-time:start -->
+Steps 1–2 run once per run, before Step 3.
+After a compaction, the hook names what of them to read again.
+
+## Step 1 — Build the review context
+
+1. `SKILL_DIR` = this skill's base directory (from the skill header). `PROJECT` = the current working
+   directory, unless `--project=` overrides it (point 2).
+2. Strip the flags FIRST, from the whole argument list, wherever they sit — an unstripped flag would
+   be mapped below as a branch name:
+   - `--only-md` → `OUTPUT=md`; otherwise `OUTPUT=html`.
+   - `--with-checklist` → pass it through to the context script (`target.withChecklist`).
+     The finished report then keeps every file's walked checklist and coverage marker (the HTML page's "Pokrycie checklist" section); without it the report carries the findings only.
+     The review itself is the same either way: every part is still written with its checklist and checked (Step 3).
+   - `--no-batch` → pass it through to the context script: every file is walked alone, its part in a message of its own (`target.batches` stays empty).
+   - `--dedup-items` → pass it through to the context script (`target.dedupItems`): an item an earlier bundle of the run already showed is shown again only by reference (Step 3 point 1).
+     It is opt-in until an A/B run shows it costs no finding.
+   - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read
+     and — in staged mode — staged, where the reports land, and which `CLAUDE.md` and
+     `.claude/doh/instructions/` bind. A caller whose work lives somewhere other than the current
+     directory — a git worktree, e.g. a parallel implementNewFeature task — MUST pass it, or the
+     review silently stages and reviews the main checkout instead of that caller's tree.
+   - `--since-last` → pass it through to the context script (`INCREMENTAL`). It reviews only the
+     files whose content moved since the previous review of that target, using the snapshot the
+     script keeps in the branch's `cache/` folder. Meant for a RE-review of a target already reviewed (the
+     implementNewFeature review loop uses it from cycle 2 on); on a first review it warns and
+     reviews everything.
+     The snapshot is written when the CONTEXT is built, before any file is analyzed — so it records
+     what the previous run was going to review, not what it finished. After a review that died
+     mid-way, `--since-last` therefore skips files nobody ever looked at, and an untouched tree comes
+     back as "nothing to review". Re-review such a target in FULL (drop the flag) rather than trusting
+     an empty incremental result.
+3. Map the REMAINING arguments to the context script EXACTLY like this:
+   - no arguments → `--mode=auto`
+   - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review
+     covers every pending change — working-tree edits and untracked files staged as one set)
+   - the word `folder` followed by one path → `--mode=folder --path="<path>"` (reviews every
+     file currently in that folder of the working tree, no diff needed). The path must resolve
+     INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
+     instead, which is how you review a folder of another repository.
+   - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--no-batch] [--dedup-items]`
+   `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
+   with `No folder given` if the path is left off this line.
+5. Parse the JSON from stdout — a short summary, not the context:
+   - Report every `errors[]` entry to the user immediately, in Polish.
+   - No targets / exit code 1 → stop after reporting the errors.
+   - Report every top-level `warnings[]` entry, in Polish.
+   - Read the file at `contextPath` with the Read tool — never `cat` it: that file IS the context
+     every later step calls "the context JSON" (`targets`, `instructionsCatalog`, `checklistPlans`, …).
+     `targets[].resumed` true means the target continues an interrupted run (Step 3).
+
+## Step 2 — Load the rulebook (once per run)
+
+The rulebook is one JSON file per file KIND — the skill's `instructions/`, layered with the project's
+`.claude/doh/instructions/`.
+A kind names the paths it covers and carries the whole checklist a file of that kind is walked
+against, and the script has already matched every reviewed file to the ONE kind that describes it best.
+What you read is exactly what this run's plans walk:
+
+1. Read `rulebookNotesPath`: what binds a WHOLE instruction of this run — the preamble of every
+   instruction at least one reviewed file walks.
+   The items themselves are not read here: every file's bundle (Step 3 point 1) carries the text of
+   exactly the items that file's plan walks, each under its address, so an item is read next to the
+   code it is checked against instead of a hundred items up front.
+   The `numberedPath` copies of `instructionsCatalog` stay on disk for a lookup of one item — never
+   read them whole.
+   `rulebookNotesPath`, `instructionsCatalog`, `items` and `numberedPath` are FIXED IDENTIFIERS —
+   never translate them: they are keys of the context JSON, and a translated key is a file never found.
+   Read with the Read tool, never `cat` or `grep`: a Bash result may arrive compressed, and a rule
+   read from a compressed copy is a rule half-read.
+2. If `claudeMd` is not null, read it too: it is one more rulebook, over every file.
+3. Issue the Reads of points 1–2 as parallel tool calls in ONE message.
+4. Precedence when rules conflict is Step 3's **Precedence** paragraph: it decides every verdict, so it stands with the walk.
+5. When `projectInstructionsDir` is not null, the reviewed repo ships its own file kinds there
+   (`<project>/.claude/doh/instructions/`), and the script has already layered them into the plans,
+   the bundles and the copies: a project kind replaces the skill's kind of the same name, and an item a project
+   kind restates carries the project's text in every kind. They bind exactly like the skill's.
+
+Never skip or skim these files, nor the `## Plan` of any bundle — together they are the review rulebook.
+
+Every checklist item has an address, and Step 3 ticks the items off one by one under it:
+`<id>#<n>` is item `n` of instruction `<id>`, and it keeps that number in every kind that walks it.
+The file's bundle prints that address in front of every item.
+Take addresses from the bundle only: never number, list or count items yourself, and never through Bash.
+Each file of a target carries `plan`, an INDEX into `checklistPlans` (top level of the context
+JSON) — files of one kind share one plan, so the catalog holds a handful of entries for a diff of
+hundreds of files.
+A plan names the file's `kind` and its `role` (what such a file is), plus `notes` when the kind has
+any — read them: they say what the checklist alone does not.
+Its `checklist` lists one `<id>:<items>` entry per instruction the kind walks, in the order they are
+walked, where `<items>` names WHICH items of that instruction this file is walked against
+(`general:1-13`, and `accessibility:6-17,19-21,23-24,27-29` for a component class, which the
+markup-only items do not concern).
+`checklistTotal`, which stays on the FILE, is their sum: the number of items that file must be
+walked against.
+The plan is the authority on that: walk exactly the numbers it lists, under the addresses it gives
+them, and never renumber a narrowed instruction from 1 — `accessibility#12` is item 12 of that
+instruction, whether or not `#1-11` are in this file's plan.
+So a plan shorter than the rulebook is a decision, not an omission: the kind was written for that
+kind of file, an instruction that is not in the plan is never walked or ticked, and an item the plan
+does not list is not this file's rule — it is never walked, never ticked and never reported, not even
+when the file happens to break it.
+A plan with `kind: null` belongs to a path no kind describes (the context warned about it): it has no
+checklist, and that file is reviewed against `CLAUDE.md` and the universal points only.
+`checklistGates` (top level of the context JSON) holds the `gate` sentence of every instruction that
+declares one — a precondition answered per file, in Step 3 point 2, before that instruction is walked.
+`checklistPerFile` lists the ids of the instructions whose items are facets of one requirement: a
+file's breaches of one are a single finding naming each item broken (Step 3 point 3).
+The project `CLAUDE.md` is a rulebook, not a numbered checklist: its rules decide verdicts and
+override conflicting instruction items, but they get no `<id>#<n>` line of their own.

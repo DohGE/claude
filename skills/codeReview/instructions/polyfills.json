@@ -1,0 +1,85 @@
+{
+  "kind": "polyfills",
+  "pattern": "src/polyfills.ts",
+  "role": "Polyfills entry loaded before the app.",
+  "describedBy": [
+    {
+      "id": "app-config#7",
+      "text": "A zoneless application uses `provideZonelessChangeDetection()` (v20+) AND removes `zone.js` from `polyfills` — the provider together with a live `zone.js` polyfill is a finding; a project deliberately still on zone.js is not reported for that alone."
+    }
+  ],
+  "itemCount": 6,
+  "instructions": [
+    {
+      "id": "app-config",
+      "name": "Application configuration & bootstrap",
+      "selectedItems": "7",
+      "checklistSize": 10,
+      "items": [
+        {
+          "id": "app-config#7",
+          "text": "A zoneless application uses `provideZonelessChangeDetection()` (v20+) AND removes `zone.js` from `polyfills` — the provider together with a live `zone.js` polyfill is a finding; a project deliberately still on zone.js is not reported for that alone."
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        }
+      ]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "severity": "medium",
+      "preamble": [
+        "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+      ],
+      "selectedItems": "3,6-7",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "code-quality#3",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change.",
+          "facts": [
+            "export-unused",
+            "barrel-unused",
+            "guard-without-route",
+            "pipe-unused",
+            "i18n-unused-key"
+          ]
+        },
+        {
+          "id": "code-quality#6",
+          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+        },
+        {
+          "id": "code-quality#7",
+          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
+        }
+      ]
+    }
+  ]
+}
