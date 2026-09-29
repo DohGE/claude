@@ -1,0 +1,38 @@
+{
+  "file": ".eslintrc.json",
+  "role": "ESLint configuration of the workspace (legacy `.eslintrc` format).",
+  "itemCount": 3,
+  "instructions": [
+    {
+      "id": "general",
+      "name": "General code rules",
+      "source": "instructions/global/general.md",
+      "selectedItems": "12-13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#12",
+          "text": "The diff never weakens the compiler or template contract to make new code build: `strict`, `strictTemplates`, `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch` and the ESLint rule set stay at least as strict as they were, and no file is added to an `exclude`/ignore list for that purpose — a flag turned off hides the same class of error in every other file of the repo."
+        },
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "source": "instructions/global/security.md",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\"."
+        }
+      ]
+    }
+  ]
+}

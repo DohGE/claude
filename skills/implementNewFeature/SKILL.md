@@ -189,7 +189,18 @@ leaves step 5 — then start the queued task whose `Queued for the E2E slot` ent
    task. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`: the `doh`
    plugin's own Playwright is the only runner the pipeline ever uses — never the project's copy,
    never a fresh install in the target project.
-3. Start the server (pick the script for the OS):
+3. Write `<SESSION>/models.json` with the Write tool, BEFORE the server starts (it reads the file
+   once, at startup). It lists the models step 1 offers:
+   `[{"value":"opus","label":"Opus 5.5"},{"value":"sonnet","label":"Sonnet 5"}, …]`
+   - `value`: every value the Agent tool's `model` parameter accepts, copied from the tool's own
+     schema exactly as it stands there: it goes to the spawn as is, so a value the schema does not
+     list would only fail at that step's spawn.
+   - `label`: the name and version this session's environment information gives for the model
+     that value selects (e.g. `Opus 5.5`); the bare value when it names none.
+   - `value` and `label` are FIXED IDENTIFIERS — the server reads them, whatever `{{LANGUAGE}}` is.
+   A missing or unreadable file does not stop the run: the form then offers `opus`, `sonnet`,
+   `haiku` and `fable` without versions.
+4. Start the server (pick the script for the OS):
    - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
    - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`
    - `PORT` is **9999**, always. stdout is `{"port":9999}` — read it to confirm the server came
@@ -200,7 +211,7 @@ leaves step 5 — then start the queued task whose `Queued for the E2E slot` ent
      never shut down. Do NOT look for a free port and do NOT start the pipeline anyway: show the
      launcher's message, tell the user to close the other stepper with its "Shut down server"
      button, and stop your turn there.
-4. A run starts with one task, `t1`. POST `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}`
+5. A run starts with one task, `t1`. POST `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}`
    and enter the event loop.
 
 ## Spawning a sub-agent
@@ -255,14 +266,16 @@ Every field is `""` when the user left it on Inherit. A step reads its own overr
 falls back to the task-wide pair — `model = agents.steps[N].model || agents.model`, same for
 `effort`. Step 1 has no entry: the form is step 1.
 
-- **Model** goes to the Agent tool's `model` parameter: `opus`, `sonnet`, `haiku`, `fable`.
+- **Model** goes to the Agent tool's `model` parameter as is: one of the `value`s you wrote to
+  `models.json` in Setup step 3.
   Empty → omit the parameter entirely and let the session's default stand. Never invent a value;
   the server already refuses anything outside that list, so an empty string means inherit, not
   "ask the user".
   One exception: step 7 (Mockoon) resolves an empty model — both its own and the task-wide one —
-  to `sonnet`, not to the session's default. The step transcribes contracts and code the task
-  already has into one JSON environment, work Sonnet does as well as Opus at a fraction of the
-  tokens. A model the user picked for step 7, or task-wide, always wins.
+  to `sonnet` when `models.json` lists it, not to the session's default. The step transcribes
+  contracts and code the task already has into one JSON environment, work Sonnet does as well as
+  Opus at a fraction of the tokens. Without `sonnet` on the list the step inherits like any other.
+  A model the user picked for step 7, or task-wide, always wins.
 - **Effort has no parameter.** The Agent tool cannot set a sub-agent's reasoning effort — only an
   agent definition file can, and this pipeline spawns general-purpose agents. So effort is
   delivered as `{{EFFORT}}`, a directive inside the agent's own prompt:
@@ -544,7 +557,7 @@ stepper never shows it, and step 2's gate already moved `activeStep` straight to
 2. POST `{"taskId":"T","step":4,"status":"in_progress","activeStep":4,"progress":0}`.
 3. Spawn the implementation agent from `references/implementation-agent.md`, per "Spawning a
    sub-agent" (`ROOT` is the one step 4 just fixed). It reports progress itself via POST /api/state and writes code
-   against the `doh:codeReview` instruction checklists (its "Coding rulebook" section).
+   against the `doh:codeReview` checklist of each file's kind (its "Coding rulebook" section).
 4. Final JSON `{"type":"result","filesChanged":[…],"summary","deviations":[…]}` → POST
    `{"taskId":"T","step":4,"status":"completed","progress":100,"report":"<the summary, then every
    `deviations` entry on its own line>"}`. Keep the `filesChanged` COUNT, the summary and the

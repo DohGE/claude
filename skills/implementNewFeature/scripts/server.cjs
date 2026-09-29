@@ -38,7 +38,13 @@ const AGENT_STEPS = [2, 3, 4, 5, 6, 7];
 // What the Agent tool accepts as a model override, and the effort levels the
 // orchestrator knows how to turn into a thinking directive. Anything else is stored as
 // '' (inherit): a value the spawn cannot use would only fail halfway through the run.
-const AGENT_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
+// The models are the session's own: at setup the orchestrator copies the tool's
+// `model` enum into models.json, labelled with the versions it currently maps to. A
+// list written here went stale with every release and named versions nobody ran.
+// Without the file the bare aliases still spawn, they just cannot say which version.
+const MODELS_FILE = 'models.json';
+const FALLBACK_MODELS = [{ value: 'opus', label: 'Opus' }, { value: 'sonnet', label: 'Sonnet' },
+  { value: 'haiku', label: 'Haiku' }, { value: 'fable', label: 'Fable' }];
 const AGENT_EFFORTS = ['low', 'medium', 'high', 'max'];
 const MAX_BODY = 25 * 1024 * 1024;
 // The panel renders the last 15 entries and the whole state document is re-sent to
@@ -126,24 +132,48 @@ const names = v => (Array.isArray(v) ? v : []).map(safeName).filter(Boolean).sli
 
 const pick = (allowed, v) => (allowed.includes(String(v == null ? '' : v)) ? String(v) : '');
 
+// models.json as the orchestrator writes it: [{ "value": "opus", "label": "Opus 5.5" }].
+// The value goes to the spawn, so it has to look like a model name; the label is only
+// shown, so a missing one falls back to the value. A file that yields nothing usable -
+// absent, unparsable, the wrong shape - means the fallback, never an empty list: a
+// select holding only Inherit would hide that the setting exists at all.
+function loadModels(sessionDir) {
+  let raw;
+  try {
+    raw = JSON.parse(decodeBody(fs.readFileSync(path.join(sessionDir, MODELS_FILE))));
+  } catch (_e) {
+    return FALLBACK_MODELS;
+  }
+  const seen = new Set();
+  const models = (Array.isArray(raw) ? raw : []).flatMap(m => {
+    const value = m && typeof m.value === 'string' ? m.value.trim() : '';
+    if (!/^[A-Za-z0-9][\w.[\]-]{0,63}$/.test(value) || seen.has(value)) return [];
+    seen.add(value);
+    const label = typeof m.label === 'string' && m.label.trim() ? m.label.trim().slice(0, 40) : value;
+    return [{ value, label }];
+  }).slice(0, 20);
+  return models.length ? models : FALLBACK_MODELS;
+}
+
 // Which model each of this task's sub-agents runs on, and how hard it is told to think.
 // Stored as a full shape - every step present, unset values as '' - so the orchestrator
 // reads one key per step instead of guessing whether a missing one means inherit.
-function agentsOf(raw) {
+function agentsOf(raw, models) {
   const a = raw && typeof raw === 'object' ? raw : {};
   const steps = a.steps && typeof a.steps === 'object' ? a.steps : {};
   return {
-    model: pick(AGENT_MODELS, a.model), effort: pick(AGENT_EFFORTS, a.effort),
+    model: pick(models, a.model), effort: pick(AGENT_EFFORTS, a.effort),
     steps: Object.fromEntries(AGENT_STEPS.map(n => {
       const s = steps[n] && typeof steps[n] === 'object' ? steps[n] : {};
-      return [String(n), { model: pick(AGENT_MODELS, s.model),
+      return [String(n), { model: pick(models, s.model),
         effort: pick(AGENT_EFFORTS, s.effort) }];
     }))
   };
 }
 
-// The step-1 form, and nothing else a client happens to send.
-function formOf(body) {
+// The step-1 form, and nothing else a client happens to send. `models` are the values
+// this session can spawn.
+function formOf(body, models) {
   return {
     taskDescription: text(body.taskDescription),
     businessRequirements: text(body.businessRequirements),
@@ -152,7 +182,7 @@ function formOf(body) {
     hintsNote: text(body.hintsNote),
     mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
     authProvided: !!body.authProvided, generateMockups: !!body.generateMockups,
-    agents: agentsOf(body.agents)
+    agents: agentsOf(body.agents, models)
   };
 }
 
@@ -230,6 +260,9 @@ function createApp(sessionDir, opts = {}) {
   if (ensureDohGitignore && path.basename(dohDir) === 'doh') {
     try { ensureDohGitignore(dohDir); } catch { /* best effort */ }
   }
+  // Read once: the orchestrator writes the file before it starts the server.
+  const models = loadModels(sessionDir);
+  const modelValues = models.map(m => m.value);
   const stateFile = path.join(sessionDir, 'pipeline-state.json');
   let state;
   try {
@@ -242,6 +275,10 @@ function createApp(sessionDir, opts = {}) {
     // in here rather than defended against at each of those places.
     for (const t of state.tasks) {
       for (const st of t.steps || []) if (!Array.isArray(st.chat)) st.chat = [];
+      // A run resumed in a session whose Agent tool no longer offers a model it
+      // picked would fail at that step's spawn; it inherits instead, and the form
+      // shows it that way.
+      if (t.step1 && typeof t.step1 === 'object') t.step1.agents = agentsOf(t.step1.agents, modelValues);
     }
   } catch (_e) {
     // Losing the state silently is the worst outcome: the run reappears at step 1
@@ -454,7 +491,8 @@ function createApp(sessionDir, opts = {}) {
       if (req.method === 'GET' && url.pathname === '/api/state') {
         // projectKey is computed, never persisted: it follows the directory the
         // session lives in, so a moved project gets a new one rather than a stale one.
-        return sendJson(res, 200, { ...state, project: projectKey });
+        // The models are the session's too, so a resumed run offers what it can spawn now.
+        return sendJson(res, 200, { ...state, project: projectKey, models });
       }
       if (req.method === 'POST' && url.pathname === '/api/state') {
         const body = JSON.parse(await readBody(req, res) || '{}');
@@ -475,7 +513,7 @@ function createApp(sessionDir, opts = {}) {
           // and re-sent to the browser once a second, so anything else a client
           // sends would be paid for on every tick. Credentials never pass through
           // here — they go to /api/auth and only a flag comes back in the answer.
-          task.step1 = formOf(body);
+          task.step1 = formOf(body, modelValues);
           task.step1Submitted = true;
           task.branch = task.step1.branch;
           persist();
@@ -529,7 +567,7 @@ function createApp(sessionDir, opts = {}) {
         // of writing. `src` is read for the two things only the server has - the uploaded
         // files and auth.json. The branch is dropped whatever the caller sent: two tasks
         // cannot share one, and an empty required field forces a deliberate name.
-        task.step1 = formOf({ ...v, ...copied, branch: '', authProvided: task.authSaved });
+        task.step1 = formOf({ ...v, ...copied, branch: '', authProvided: task.authSaved }, modelValues);
         state.tasks.push(task);
         persist();
         return sendJson(res, 200, { id: task.id });

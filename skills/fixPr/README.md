@@ -181,8 +181,9 @@ which says when a repaired command's cause sat in files no comment fix had touch
 
 ## Output
 
-One Markdown report per branch, in Polish, next to the codeReview reports: `<project>/.claude/doh/{branch}/`
-when the project keeps a `.claude/` folder, otherwise `reports/{branch}/` inside this skill. It lists every
+One Markdown report per branch, in Polish, in `<project>/.claude/doh/{branch}/` when the project keeps a
+`.claude/` folder, otherwise in `reports/{branch}/` inside this skill. codeReview keeps its own reports
+apart, under `.claude/doh/codeReview/`. It lists every
 comment under `## Naprawione`, `## Odrzucone` and `## Bez akcji`, then `## Naprawione checki`,
 `## Weryfikacja` and `## Wynik`.
 

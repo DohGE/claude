@@ -7,7 +7,20 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const rr = require('./render-report.cjs');
+const rulebook = require('./rulebook.cjs');
 const { tempDir } = require('./test-helpers.cjs');
+
+// A project's own rulebook: one file kind under `.claude/doh/instructions/` walking
+// the given instructions, each an array of item texts numbered from 1.
+function writeProjectKind(projectRoot, textsById) {
+  const dest = path.join(projectRoot, '.claude', 'doh', 'instructions');
+  fs.mkdirSync(dest, { recursive: true });
+  const instructions = Object.entries(textsById).map(([id, texts]) => ({
+    id, name: id, items: texts.map((text, i) => ({ id: `${id}#${i + 1}`, text })),
+  }));
+  fs.writeFileSync(path.join(dest, 'house.json'),
+    JSON.stringify({ kind: 'house', pattern: '*.house.ts', role: 'House files.', instructions }), 'utf8');
+}
 
 // main() writes straight to the real streams; swap them for the call itself so
 // the test runner's own output is never captured.
@@ -54,7 +67,7 @@ function findingOf(overrides = {}) {
     severity: '🔴 **High**',
     lines: '1',
     problem: 'Coś.',
-    rule: 'general.md → coś',
+    rule: 'general → coś',
     expected: 'Naprawić.',
     prProblem: 'Something is wrong.',
     prExpected: 'Fix it.',
@@ -84,7 +97,7 @@ const REPORT = [
   '🟤 **Critical**',
   '- **Linia:** 9',
   '- **Problem:** Klucz API (`sk_live_...`) zaszyty na stałe.',
-  '- **Reguła:** security.md → brak sekretów w diffie (API keys/tokens)',
+  '- **Reguła:** security → brak sekretów w diffie (API keys/tokens)',
   '- **Expected Result:** Usunąć sekret z kodu.',
   '- **PR Problem:** A live API key is committed in the source.',
   '- **PR Expected:** Read the key from configuration and revoke the leaked one.',
@@ -93,7 +106,7 @@ const REPORT = [
   '🔴 **High**',
   '- **Linia:** 3, 23',
   '- **Problem:** Serwis HTTP wstrzykuje `Store`.',
-  '- **Reguła:** http-service.md → forbidden: injecting the store',
+  '- **Reguła:** http-service → forbidden: injecting the store',
   '- **Expected Result:** Usunąć zależność `Store`.',
   '- **PR Problem:** An HTTP service reaching for the store mixes two layers.',
   '- **PR Expected:** Keep the service free of store dependencies.',
@@ -104,7 +117,7 @@ const REPORT = [
   '🟡 **Medium**',
   '- **Linia:** 10, 37',
   '- **Problem:** `(click)` na `<div>` bez `role`.',
-  '- **Reguła:** component-template.md → interakcje na elementach natywnych; general.md → ARIA wiązane do sygnału',
+  '- **Reguła:** component-template → interakcje na elementach natywnych; general → ARIA wiązane do sygnału',
   '- **Expected Result:** Użyć `<button>`.',
   '- **PR Problem:** A click handler on a div is unreachable by keyboard.',
   '- **PR Expected:** Use a native button element.',
@@ -113,7 +126,7 @@ const REPORT = [
   '⚪ **Low**',
   '- **Linia:** 2',
   '- **Problem:** Tekst zaszyty na stałe.',
-  '- **Reguła:** general.md → każdy tekst przez klucz i18n',
+  '- **Reguła:** general → każdy tekst przez klucz i18n',
   '- **Expected Result:** Klucz i18n przez `| translate`.',
   '- **PR Problem:** The text is hardcoded and cannot be translated.',
   '- **PR Expected:** Move the text to an i18n key used with the translate pipe.',
@@ -122,7 +135,7 @@ const REPORT = [
   '🔵 **Missing Unit Test**',
   '- **Linia:** 1',
   '- **Problem:** Brak speca komponentu.',
-  '- **Reguła:** test-coverage.md → zmieniony plik ma matching spec',
+  '- **Reguła:** test-coverage → zmieniony plik ma matching spec',
   '- **Expected Result:** Dodać `tests/user.component.spec.ts`.',
   '- **PR Problem:** The changed component has no spec covering it.',
   '- **PR Expected:** Add the matching component spec.',
@@ -133,11 +146,13 @@ const REPORT = [
 test('parseArgs requires a report and derives the html path', () => {
   assert.deepStrictEqual(
     rr.parseArgs(['--report=reports/a-b.md']),
-    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false },
+    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false },
   );
   assert.strictEqual(rr.parseArgs(['--report=a.MD']).out, 'a.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--out=/tmp/x.html']).out, '/tmp/x.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--keep-source']).keepSource, true);
+  assert.strictEqual(rr.parseArgs(['--report=a.md', '--only-md']).onlyMd, true);
+  assert.strictEqual(rr.parseArgs(['--report=a.md', '--with-checklist']).withChecklist, true);
   // Exiting 0 after dropping a mistyped flag is the failure to avoid: the page still
   // renders, just without snippets or in the wrong place.
   assert.throws(() => rr.parseArgs(['--report=a.md', '--projekt=/repo']), /Unknown argument/);
@@ -145,69 +160,82 @@ test('parseArgs requires a report and derives the html path', () => {
   assert.throws(() => rr.parseArgs([]), /No report given/);
 });
 
-test('parseRuleField splits one instruction file from its rule text', () => {
+test('parseRuleField splits one instruction from its rule text', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('security.md → brak sekretów w diffie (API keys/tokens)'),
-    [{ file: 'security.md', rule: 'brak sekretów w diffie (API keys/tokens)' }],
+    rr.parseRuleField('security → brak sekretów w diffie (API keys/tokens)'),
+    [{ file: 'security', rule: 'brak sekretów w diffie (API keys/tokens)' }],
   );
 });
 
 test('parseRuleField splits `;` into one tag per segment', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('security.md → dane wrażliwe nigdy w query params; http-service.md → brak sekretów w URL'),
+    rr.parseRuleField('security → dane wrażliwe nigdy w query params; http-service → brak sekretów w URL'),
     [
-      { file: 'security.md', rule: 'dane wrażliwe nigdy w query params' },
-      { file: 'http-service.md', rule: 'brak sekretów w URL' },
+      { file: 'security', rule: 'dane wrażliwe nigdy w query params' },
+      { file: 'http-service', rule: 'brak sekretów w URL' },
     ],
   );
 });
 
-test('parseRuleField gives every file on the left the segment rule text', () => {
+test('parseRuleField gives every instruction on the left the segment rule text', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('ngrx-effects.md / performance.md → brak zbędnych duplikatów żądań'),
+    rr.parseRuleField('ngrx-effects / performance → brak zbędnych duplikatów żądań'),
     [
-      { file: 'ngrx-effects.md', rule: 'brak zbędnych duplikatów żądań' },
-      { file: 'performance.md', rule: 'brak zbędnych duplikatów żądań' },
+      { file: 'ngrx-effects', rule: 'brak zbędnych duplikatów żądań' },
+      { file: 'performance', rule: 'brak zbędnych duplikatów żądań' },
     ],
   );
   assert.deepStrictEqual(
-    rr.parseRuleField('general.md/component-template.md → każdy tekst przez translate'),
+    rr.parseRuleField('general/component-template → każdy tekst przez translate'),
     [
-      { file: 'general.md', rule: 'każdy tekst przez translate' },
-      { file: 'component-template.md', rule: 'każdy tekst przez translate' },
+      { file: 'general', rule: 'każdy tekst przez translate' },
+      { file: 'component-template', rule: 'każdy tekst przez translate' },
     ],
   );
 });
 
 test('parseRuleField leaves a slash on the right of the arrow alone', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('models.md → const to literał/Record, nigdy wynik funkcji'),
-    [{ file: 'models.md', rule: 'const to literał/Record, nigdy wynik funkcji' }],
+    rr.parseRuleField('models → const to literał/Record, nigdy wynik funkcji'),
+    [{ file: 'models', rule: 'const to literał/Record, nigdy wynik funkcji' }],
   );
 });
 
-test('parseRuleField keeps only the file name of a path-prefixed instruction', () => {
+test('parseRuleField reads a Markdown-era `<id>.md` name as the instruction id', () => {
+  // The rulebook used to be one Markdown file per instruction, and a reviewer may still
+  // cite it that way: the tag must land in the group the id and its address land in.
   assert.deepStrictEqual(
     rr.parseRuleField('instructions/local/angular-ts.md → "Obsługa błędów w subskrypcjach"'),
-    [{ file: 'angular-ts.md', rule: '"Obsługa błędów w subskrypcjach"' }],
+    [{ file: 'angular-ts', rule: '"Obsługa błędów w subskrypcjach"' }],
+  );
+  assert.deepStrictEqual(
+    rr.parseRuleField('general.md/component-template.md → każdy tekst przez translate'),
+    [
+      { file: 'general', rule: 'każdy tekst przez translate' },
+      { file: 'component-template', rule: 'każdy tekst przez translate' },
+    ],
+  );
+  assert.deepStrictEqual(
+    rr.parseRuleField('security.md → a; security → b; security#3').map((tag) => tag.file),
+    ['security', 'security', 'security'],
   );
 });
 
 test('parseRuleField takes the first arrow when the rule text contains another', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('http-service.md → GET→`load`, DELETE→`remove`'),
-    [{ file: 'http-service.md', rule: 'GET→`load`, DELETE→`remove`' }],
+    rr.parseRuleField('http-service → GET→`load`, DELETE→`remove`'),
+    [{ file: 'http-service', rule: 'GET→`load`, DELETE→`remove`' }],
   );
 });
 
 test('parseRuleField folds a `;` inside the rule text back into the previous rule', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('state-interface.md → flagi boolean; domyślnie false'),
-    [{ file: 'state-interface.md', rule: 'flagi boolean; domyślnie false' }],
+    rr.parseRuleField('state-interface → flagi boolean; domyślnie false'),
+    [{ file: 'state-interface', rule: 'flagi boolean; domyślnie false' }],
   );
 });
 
-test('parseRuleField accepts an instruction named without its extension', () => {
+test('parseRuleField accepts instruction ids and a point name on the left', () => {
   assert.deepStrictEqual(
     rr.parseRuleField('state-interface → „Optional fields are explicitly `| null`, never `?`"'),
     [{ file: 'state-interface', rule: '„Optional fields are explicitly `| null`, never `?`"' }],
@@ -239,8 +267,8 @@ test('parseRuleField falls back to a file-less tag', () => {
 
 test('parseRuleField deduplicates repeated tags', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('general.md → brak any; general.md → brak any'),
-    [{ file: 'general.md', rule: 'brak any' }],
+    rr.parseRuleField('general → brak any; general → brak any'),
+    [{ file: 'general', rule: 'brak any' }],
   );
 });
 
@@ -264,17 +292,17 @@ test('parseReport fills every finding field and derives tags', () => {
   assert.strictEqual(first.severity, 'critical');
   assert.strictEqual(first.lines, '9');
   assert.strictEqual(first.problem, 'Klucz API (`sk_live_...`) zaszyty na stałe.');
-  assert.strictEqual(first.rule, 'security.md → brak sekretów w diffie (API keys/tokens)');
+  assert.strictEqual(first.rule, 'security → brak sekretów w diffie (API keys/tokens)');
   assert.strictEqual(first.expected, 'Usunąć sekret z kodu.');
-  assert.deepStrictEqual(first.tags, [{ file: 'security.md', rule: 'brak sekretów w diffie (API keys/tokens)' }]);
+  assert.deepStrictEqual(first.tags, [{ file: 'security', rule: 'brak sekretów w diffie (API keys/tokens)' }]);
 
   assert.deepStrictEqual(
     report.files[1].findings.map((f) => f.severity),
     ['medium', 'low', 'missing-unit-test'],
   );
   assert.deepStrictEqual(report.files[1].findings[0].tags, [
-    { file: 'component-template.md', rule: 'interakcje na elementach natywnych' },
-    { file: 'general.md', rule: 'ARIA wiązane do sygnału' },
+    { file: 'component-template', rule: 'interakcje na elementach natywnych' },
+    { file: 'general', rule: 'ARIA wiązane do sygnału' },
   ]);
   assert.strictEqual(report.files[1].findings[0].lines, '10, 37');
 });
@@ -293,7 +321,7 @@ test('parseReport joins a wrapped field value instead of dropping it', () => {
     '- **Linia:** 4',
     '- **Problem:** Pierwsza część zdania',
     '  i jego dalszy ciąg.',
-    '- **Reguła:** general.md → spójność',
+    '- **Reguła:** general → spójność',
     '- **Expected Result:** Poprawić.',
     '- **PR Problem:** Inconsistent wording.',
     '- **PR Expected:** Use one wording.',
@@ -344,7 +372,7 @@ test('parseReport warns on a finding missing a field and on stray content', () =
     '',
     '🔴 **High**',
     '- **Linia:** 1',
-    '- **Reguła:** general.md → coś',
+    '- **Reguła:** general → coś',
     '- **Expected Result:** Naprawić.',
   ));
   assert.ok(report.warnings.some((w) => /znalezisko bez pola "Problem"/.test(w)));
@@ -358,7 +386,7 @@ test('parseReport treats a line after the last field as that field continuing', 
     '🔴 **High**',
     '- **Linia:** 1',
     '- **Problem:** Coś.',
-    '- **Reguła:** general.md → coś',
+    '- **Reguła:** general → coś',
     '- **Expected Result:** Naprawić',
     'i sprawdzić.',
     '- **PR Problem:** It breaks.',
@@ -391,7 +419,7 @@ test('findingId is content-derived, stable and unique within a report', () => {
 test('findingId suffixes a duplicated finding so ids stay unique', () => {
   const block = findingOf({
     severity: '🟡 **Medium**', lines: '4', problem: 'To samo.',
-    rule: 'general.md → spójność', expected: 'Poprawić.',
+    rule: 'general → spójność', expected: 'Poprawić.',
   });
   const report = rr.parseReport(reportOf('## a.ts', '', block, block));
   const ids = report.files[0].findings.map((f) => f.id);
@@ -407,12 +435,12 @@ test('buildPayload lists present severities and groups rules by instruction', ()
     ['critical', 'high', 'medium', 'low', 'missing-unit-test'],
   );
   const groups = payload.ruleGroups.map((g) => g.file);
-  assert.strictEqual(groups[0], 'general.md', 'the busiest instruction sorts first');
+  assert.strictEqual(groups[0], 'general', 'the busiest instruction sorts first');
   assert.deepStrictEqual(
     groups.slice(1).sort(),
-    ['component-template.md', 'http-service.md', 'security.md', 'test-coverage.md'],
+    ['component-template', 'http-service', 'security', 'test-coverage'],
   );
-  const general = payload.ruleGroups.find((g) => g.file === 'general.md');
+  const general = payload.ruleGroups.find((g) => g.file === 'general');
   assert.deepStrictEqual(
     general.rules.map((r) => r.rule).sort(),
     ['ARIA wiązane do sygnału', 'każdy tekst przez klucz i18n'],
@@ -425,8 +453,8 @@ test('buildPayload wires every finding to its rule tag keys', () => {
   payload.ruleGroups.forEach((g) => g.rules.forEach((r) => keyByRule.set(`${g.file}|${r.rule}`, r.key)));
   const medium = payload.files[1].findings[0];
   assert.deepStrictEqual(medium.tagKeys, [
-    keyByRule.get('component-template.md|interakcje na elementach natywnych'),
-    keyByRule.get('general.md|ARIA wiązane do sygnału'),
+    keyByRule.get('component-template|interakcje na elementach natywnych'),
+    keyByRule.get('general|ARIA wiązane do sygnału'),
   ]);
   const allKeys = new Set(keyByRule.values());
   payload.files.forEach((f) => f.findings.forEach((x) => x.tagKeys.forEach((k) => {
@@ -441,7 +469,7 @@ test('renderHtml keeps report text as data and cannot be broken out of', () => {
     findingOf({
       lines: '7',
       problem: '`<user-card>` renderuje `</script>` oraz A & B.',
-      rule: 'security.md → brak wstrzykiwania',
+      rule: 'security → brak wstrzykiwania',
       expected: 'Escapować treść.',
     }),
   ));
@@ -542,23 +570,109 @@ test('main writes the html next to the report and removes the source', (t) => {
   const proof = [...checklistOf('src/app/user.service.ts', 11), '<!-- coverage: src/app/user.service.ts 11/11 -->'];
   fs.writeFileSync(md, `${REPORT}\n${proof.join('\n')}\n`, 'utf8');
 
-  const result = runMain([`--report=${md}`]);
+  const result = runMain([`--report=${md}`, '--with-checklist']);
   assert.strictEqual(result.code, 0);
   assert.strictEqual(result.err, '', 'a clean parse with coverage proof is silent');
   assert.strictEqual(result.out.trim(), html);
   assert.ok(fs.existsSync(html));
   assert.ok(!fs.existsSync(md), 'the Markdown is only an intermediate in html mode');
-  assert.ok(fs.readFileSync(html, 'utf8').startsWith('<!doctype html>'));
+  const page = fs.readFileSync(html, 'utf8');
+  assert.ok(page.startsWith('<!doctype html>'));
+  assert.match(page, /id="coverage"/, '--with-checklist keeps the Pokrycie section');
 });
 
-test('main says so when a report carries no coverage proof', (t) => {
+test('main leaves the checklists out of the page unless --with-checklist is given', (t) => {
+  const dir = tempDir(t, 'cr-render-nochk-');
+  const md = path.join(dir, 'raport.md');
+  const html = path.join(dir, 'raport.html');
+  // A walk with an open item: under --with-checklist its `sprawdzono 1/2` keeps the Markdown.
+  const proof = [...checklistOf('src/app/user.service.ts', ['[x] general#1 nazwy — OK (L1)', '[ ] general#2 i18n — NIEZWERYFIKOWANE: poza recenzją: plik tłumaczeń']), '<!-- coverage: src/app/user.service.ts 1/2 -->'];
+  fs.writeFileSync(md, `${REPORT}\n${proof.join('\n')}\n`, 'utf8');
+
+  const result = runMain([`--report=${md}`]);
+  assert.strictEqual(result.code, 0);
+  assert.strictEqual(result.err, '', 'the cut proof raises no coverage warning');
+  assert.ok(!fs.existsSync(md), 'nothing drifted, so the Markdown goes');
+  const page = fs.readFileSync(html, 'utf8');
+  assert.ok(!page.includes('id="coverage"'), 'no Pokrycie section');
+  assert.deepStrictEqual(embeddedPayload(page).coverage, [], 'and no checklist data behind it');
+  assert.strictEqual(embeddedPayload(page).files[0].findings.length, 2, 'the findings are all there');
+});
+
+test('main says so when a --with-checklist report carries no coverage proof', (t) => {
   const dir = tempDir(t, 'cr-render-nocov-');
   const md = path.join(dir, 'branch-2026-08-06-09-00.md');
   fs.writeFileSync(md, REPORT, 'utf8');
-  const result = runMain([`--report=${md}`]);
+  const result = runMain([`--report=${md}`, '--with-checklist']);
   assert.strictEqual(result.code, 0);
   assert.match(result.err, /coverage/);
   assert.ok(!fs.existsSync(md), 'a missing marker is not a format deviation, so the Markdown still goes');
+  fs.writeFileSync(md, REPORT, 'utf8');
+  assert.strictEqual(runMain([`--report=${md}`]).err, '', 'without the flag there is no proof to miss');
+});
+
+test('main --only-md leaves the checklists out of the Markdown report and renders nothing', (t) => {
+  const dir = tempDir(t, 'cr-render-md-');
+  const md = path.join(dir, 'raport.md');
+  const proof = [...checklistOf('src/app/user.service.ts', 2), '<!-- coverage: src/app/user.service.ts 2/2 -->'];
+  const source = `${REPORT}\n\n${proof.join('\n')}\n`;
+  fs.writeFileSync(md, source, 'utf8');
+
+  const kept = runMain([`--report=${md}`, '--only-md', '--with-checklist']);
+  assert.strictEqual(kept.code, 0);
+  assert.strictEqual(kept.out.trim(), md);
+  assert.strictEqual(fs.readFileSync(md, 'utf8'), source, '--with-checklist leaves the report as it is');
+
+  const result = runMain([`--report=${md}`, '--only-md']);
+  assert.strictEqual(result.code, 0);
+  assert.strictEqual(result.err, '');
+  assert.strictEqual(result.out.trim(), md);
+  assert.strictEqual(fs.readFileSync(md, 'utf8'), rr.stripChecklists(source));
+  assert.ok(!fs.readFileSync(md, 'utf8').includes('<!--'), 'no checklist block, no coverage marker');
+  assert.ok(!fs.existsSync(path.join(dir, 'raport.html')), 'the Markdown is the report');
+});
+
+test('stripChecklists cuts the proof comments and nothing else', () => {
+  const source = [
+    '# Code Review: x → y | 2026-08-06 09:00',
+    '<!-- since-last: 2 unchanged file(s) skipped; previous report: a/raport.md -->',
+    '',
+    '## src/a.ts',
+    '',
+    ...findingOf({}),
+    '',
+    ...checklistOf('src/a.ts', 2),
+    '<!-- coverage: src/a.ts 2/2 -->',
+    '',
+    '<!-- coverage: src/b.ts mechanical -->',
+    '',
+    '<!-- unverified:',
+    'general#6 — poza recenzją: moduł nadrzędny',
+    '-->',
+    '<!-- unverified: -->',
+    '<!-- note',
+    '<!-- checklist: src/c.ts',
+    '-->',
+    '',
+  ].join('\n');
+  const stripped = rr.stripChecklists(source);
+  assert.strictEqual(stripped, [
+    '# Code Review: x → y | 2026-08-06 09:00',
+    '<!-- since-last: 2 unchanged file(s) skipped; previous report: a/raport.md -->',
+    '',
+    '## src/a.ts',
+    '',
+    ...findingOf({}),
+    '',
+    '<!-- note',
+    '<!-- checklist: src/c.ts',
+    '-->',
+    '',
+  ].join('\n'), 'a line inside another comment is that comment\'s, and a cut leaves one blank line');
+  assert.deepStrictEqual(rr.parseReport(stripped).files, rr.parseReport(source).files, 'the findings read the same');
+  assert.strictEqual(rr.stripChecklists(stripped), stripped, 'nothing left to cut');
+  assert.strictEqual(rr.stripChecklists(source.replace(/\n/g, '\r\n')), stripped.replace(/\n/g, '\r\n'), 'CRLF stays CRLF');
+  assert.strictEqual(rr.stripChecklists([...checklistOf('src/a.ts', 1), '<!-- coverage: src/a.ts 1/1 -->', ''].join('\n')), '');
 });
 
 test('main keeps the source when the parser warned', (t) => {
@@ -572,6 +686,21 @@ test('main keeps the source when the parser warned', (t) => {
   assert.ok(fs.existsSync(md), 'a kept Markdown is the signal that the format drifted');
   assert.match(result.err, /Ostrzeżenie parsera/);
   assert.match(result.err, /Zachowano źródłowy Markdown/);
+});
+
+test('main keeps a drifted Markdown without its checklists unless --with-checklist is given', (t) => {
+  const dir = tempDir(t, 'cr-render-');
+  const md = path.join(dir, 'weird.md');
+  const source = ['# Raport bez daty', '', ...checklistOf('a.ts', 1), '<!-- coverage: a.ts 1/1 -->', '', '## a.ts', ''].join('\n');
+  fs.writeFileSync(md, source, 'utf8');
+
+  const result = runMain([`--report=${md}`]);
+  assert.match(result.err, /Linia 1: nierozpoznany nagłówek raportu/);
+  assert.strictEqual(fs.readFileSync(md, 'utf8'), '# Raport bez daty\n\n## a.ts\n', 'the kept file is the text the warnings count lines in');
+
+  fs.writeFileSync(md, source, 'utf8');
+  runMain([`--report=${md}`, '--with-checklist']);
+  assert.strictEqual(fs.readFileSync(md, 'utf8'), source);
 });
 
 test('main honours --keep-source and --out', (t) => {
@@ -926,9 +1055,9 @@ test('the page ships the full-view switch and its styles', (t) => {
 
 test('parseRuleField keeps an arrow inside quoted rule text out of the file list', () => {
   assert.deepStrictEqual(
-    rr.parseRuleField('models.md → "no functions (→ `shared/utils/`)"; no functions (→ `x`)" + "Mappers are consts"'),
+    rr.parseRuleField('models → "no functions (→ `shared/utils/`)"; no functions (→ `x`)" + "Mappers are consts"'),
     [{
-      file: 'models.md',
+      file: 'models',
       rule: '"no functions (→ `shared/utils/`)"; no functions (→ `x`)" + "Mappers are consts"',
     }],
     'prose on the left of an arrow is rule text, never an instruction file',
@@ -1599,41 +1728,38 @@ test('a checklist id that matches no instruction file is reported, not counted i
   assert.ok(!report.warnings.some((w) => /general|accessibility/i.test(w)), 'real ids pass, case-insensitively');
 });
 
-test('a collision id from a project rulebook is known, not reported as invented', (t) => {
+test('an instruction id from a project rulebook is known, not reported as invented', (t) => {
   const dir = tempDir(t, 'cr-ids-');
-  // The skill already ships global/security.md, so a project adding its own under
-  // local/ collides: the context builder hands the second one `local-security`, and
-  // a renderer that only knew file names called every tick under it uncovered.
-  const dest = path.join(dir, '.claude', 'doh', 'instructions', 'local');
-  fs.mkdirSync(dest, { recursive: true });
-  fs.writeFileSync(path.join(dest, 'security.md'), '---\nname: Security\n---\n- own rule\n', 'utf8');
+  // A project adds its own instructions through `.claude/doh/instructions/*.json`, and a
+  // renderer that only knew the skill's rulebook would call every tick under them uncovered.
+  writeProjectKind(dir, { 'house-rules': ['own rule'] });
   const report = { checklists: [{ path: 'src/a.ts', items: [
-    { id: 'local-security#1' }, { id: 'security#1' }, { id: 'nieistniejaca#1' },
+    { id: 'house-rules#1' }, { id: 'security#1' }, { id: 'nieistniejaca#1' },
   ] }], warnings: [] };
   rr.warnUnknownChecklistIds(report, dir);
   assert.strictEqual(report.warnings.length, 1, 'only the invented id is reported');
   assert.match(report.warnings[0], /nieistniejaca/);
+  assert.match(report.warnings[0], /nie ma takiej instrukcji w rulebooku/);
 });
 
 test('parseRuleField reads a bare <id>#<n> address next to a prose rule', () => {
-  assert.deepStrictEqual(rr.parseRuleField('security#3; general.md → spójność'), [
+  assert.deepStrictEqual(rr.parseRuleField('security#3; general → spójność'), [
     { file: 'security', rule: '', address: { id: 'security', n: 3 } },
-    { file: 'general.md', rule: 'spójność' },
+    { file: 'general', rule: 'spójność' },
   ]);
   assert.strictEqual(rr.parseRuleField('security#3; security#4').length, 2, 'two items of one instruction stay two tags');
 });
 
 test('resolveRuleAddresses expands an address into the item text and flags an unknown one', (t) => {
   const dir = tempDir(t, 'cr-addr-');
-  const dest = path.join(dir, '.claude', 'doh', 'instructions', 'local');
-  fs.mkdirSync(dest, { recursive: true });
-  fs.writeFileSync(path.join(dest, 'own-rules.md'), '---\nname: Own\n---\n- first rule\n- {styles} second rule\n', 'utf8');
+  writeProjectKind(dir, { 'own-rules': ['first rule', 'second rule'] });
+  const shipped = rulebook.loadRulebook([path.join(__dirname, '..', 'instructions')]).instructions;
   const report = rr.parseReport(reportOf(
     '## src/a.ts',
     '🟡 **Średni**',
     '- **Linia:** 1',
     '- **Problem:** p',
-    '- **Reguła:** own-rules#2; own-rules#9',
+    '- **Reguła:** own-rules#2; own-rules#9; security#1',
     '- **Expected Result:** e',
     '- **PR Problem:** p',
     '- **PR Expected:** e',
@@ -1641,12 +1767,15 @@ test('resolveRuleAddresses expands an address into the item text and flags an un
   ));
   rr.resolveRuleAddresses(report, dir);
   const finding = report.files[0].findings[0];
+  const security1 = shipped.get('security').items.get(1);
   assert.deepStrictEqual(finding.tags, [
-    { file: 'own-rules.md', rule: 'second rule' },
+    { file: 'own-rules', rule: 'second rule' },
     { file: 'own-rules', rule: 'own-rules#9' },
-  ]);
-  assert.strictEqual(finding.rule, 'own-rules.md → second rule; own-rules → own-rules#9');
+    { file: 'security', rule: security1 },
+  ], 'the project layer and the skill rulebook answer alike');
+  assert.strictEqual(finding.rule, `own-rules → second rule; own-rules → own-rules#9; security → ${security1}`);
   assert.ok(report.warnings.some((w) => /own-rules#9/.test(w)), 'an address past the checklist is reported');
+  assert.ok(!report.warnings.some((w) => /security#1/.test(w)), 'a shipped item resolves without a warning');
 });
 
 test('the page script the renderer emits actually parses', () => {
@@ -1658,7 +1787,7 @@ test('the page script the renderer emits actually parses', () => {
     '',
     findingOf({
       problem: 'Coś jest nie tak.',
-      rule: 'security.md → zasada',
+      rule: 'security → zasada',
       expected: 'Naprawić.',
     }),
   ));
@@ -1705,7 +1834,7 @@ test('the report page is self-contained: no external reference, no network call'
   const report = rr.parseReport(reportOf(
     '## src/a.ts',
     '',
-    findingOf({ problem: 'Coś jest nie tak.', rule: 'general.md → zasada', expected: 'Naprawić.' }),
+    findingOf({ problem: 'Coś jest nie tak.', rule: 'general → zasada', expected: 'Naprawić.' }),
   ));
   const html = rr.renderHtml(report, 'r.html');
   const external = [...html.matchAll(/(https?:)?\/\/[a-zA-Z0-9.-]+/g)].map((m) => m[0]);
@@ -1824,4 +1953,9 @@ test('a diff call that answers nothing warns once instead of silently flattening
   rr.attachSnippets(report, root, { mode: 'branch', branch: 'no-such-branch', base: 'no-such-base' });
   assert.equal(report.warnings.length, 1);
   assert.match(report.warnings[0], /git diff/);
+});
+
+test('reportNameOf names a report by its run stamp and branch folder', () => {
+  const out = path.resolve('doh', 'codeReview', 'runs', '2026-07-08-10-00-05', 'feature-a', 'raport.html');
+  assert.strictEqual(rr.reportNameOf(out), '2026-07-08-10-00-05/feature-a/raport.html');
 });

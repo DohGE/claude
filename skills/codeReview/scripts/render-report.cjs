@@ -11,7 +11,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const github = require('./github.cjs');
-const { checklistIdOf, parseChecklistItems } = require('./review-context.cjs');
+const rulebook = require('./rulebook.cjs');
 
 // Order is the display order and the sort rank of the flat global list.
 // `missing-unit-test` sorts last: it is orthogonal to the severity ladder, and
@@ -33,7 +33,6 @@ const fields = {
   // English wording used only for the PR comment - the report itself stays Polish.
   'PR Problem': 'prProblem', 'PR Expected': 'prExpected', 'PR Locations': 'prLocations',
 };
-
 // The severity lead line is accepted with and without a leading `- `: the
 // no-dash form is the current Step 4 rule, the dashed form is what every report
 // written before it looks like.
@@ -63,6 +62,9 @@ const reCoverage = /^<!--\s*coverage:\s*(.+?)\s+(mechanical|\d+\s*\/\s*\d+)\s*--
 // count downstream - ticked, total, per-item state - working per item.
 const reChecklistOpen = /^<!--\s*checklist:\s*(.+?)\s*$/;
 const reChecklistItem = /^\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)#(\d+(?:-\d+)?(?:\s*,\s*#?\d+(?:-\d+)?)*)\s+(.+)$/;
+// The cross-file part's answer for the items left open in several files. This parser
+// swallows it like any other comment; check-part.cjs reads its lines.
+const reUnverifiedOpen = /^<!--\s*unverified:\s*(-->)?$/;
 // Widest range a single line may collapse: a guard against `#1-99999` silently
 // inflating a block into a million items.
 const maxItemSpan = 500;
@@ -97,11 +99,19 @@ function expandItemSpec(spec) {
 }
 
 function parseArgs(argv) {
-  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false };
+  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--keep-source') {
       args.keepSource = true;
+      continue;
+    }
+    if (arg === '--only-md') {
+      args.onlyMd = true;
+      continue;
+    }
+    if (arg === '--with-checklist') {
+      args.withChecklist = true;
       continue;
     }
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -117,7 +127,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.md").');
   if (!args.out) args.out = args.report.replace(/\.md$/i, '') + '.html';
@@ -125,8 +135,9 @@ function parseArgs(argv) {
 }
 
 // Code snippets are read from the working tree, so the renderer needs the root
-// the report's paths are relative to. Reports live in `<project>/.claude/doh/
-// <branch>/`, which makes the root recoverable when `--project` is absent.
+// the report's paths are relative to. Reports live under `<project>/.claude/doh/`
+// (`codeReview/runs/<stamp>/<branch>/`), which makes the root recoverable when
+// `--project` is absent.
 function projectRootFor(reportPath, explicit) {
   if (explicit) return path.resolve(explicit);
   const parts = path.resolve(path.dirname(reportPath)).split(path.sep);
@@ -145,8 +156,8 @@ function splitInstructionNames(left) {
   return whole ? [whole] : [];
 }
 
-// `**Reguła:**` carries one or more `<instruction files> → <rule text>` segments
-// separated by `;`. Each instruction file named on the left becomes its own tag
+// `**Reguła:**` carries one or more `<instructions> → <rule text>` segments
+// separated by `;`. Each instruction named on the left becomes its own tag
 // sharing the segment's rule text, which is what feeds the two-level filter.
 // A segment may also be a bare `<id>#<n>` address - the same one the checklist
 // block ticks - which `resolveRuleAddresses` later expands into the item's text,
@@ -173,14 +184,15 @@ function parseRuleField(value) {
     }
     const left = segment.slice(0, arrow.index);
     const rule = segment.slice(arrow.index + arrow[0].length).trim();
-    // Reports name the instruction either with its extension (`security.md`)
-    // or bare (`state-interface`), and Step 4 also allows the violated point's
-    // name instead. Explicit `.md` tokens win - they survive a path prefix and
-    // pick several files out of one segment.
+    // Reports name the instruction by its id (`state-interface`), and Step 4 also
+    // allows the violated point's name instead. The rulebook used to be one Markdown
+    // file per instruction, so a reviewer may still write `security.md`: such tokens
+    // win - they survive a path prefix and pick several out of one segment - and lose
+    // the extension, so `security.md → …` lands in the group `security#3` resolves to.
     const explicit = left.match(/[A-Za-z0-9._+-]+\.md/g);
     const trimmedLeft = left.trim();
     let names;
-    if (explicit) names = explicit;
+    if (explicit) names = explicit.map((token) => token.slice(0, -'.md'.length));
     else if (!trimmedLeft) names = [noFileLabel];
     else if (reInstructionName.test(trimmedLeft)) names = splitInstructionNames(left);
     else names = [];
@@ -858,68 +870,48 @@ function treeEntries(report) {
 
 // A file that moved, vanished or is binary simply renders without a snippet -
 // the finding itself stays intact.
-// An id is how a ticked line says WHICH rulebook the items belong to, and nothing
+// An id is how a ticked line says WHICH instruction the items belong to, and nothing
 // else checks it: a mistyped or invented one (`a11y#1-30` for `accessibility`)
 // counts toward coverage all the same, so the report would claim a walk through a
-// checklist that does not exist. The ids are the instruction file names, from the
-// skill's rulebook plus the project's own when it has one.
-function rulebookFiles(projectRoot) {
-  const files = new Map();
-  const walk = (dir) => {
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      // Through the context builder's own `checklistIdOf`, never a second spelling of
-      // it: the id is a SLUG of the file name, and on a collision it falls back to the
-      // parent folder as a prefix (a project rulebook adding its own `security.md` under
-      // `local/` gets `local-security`). A lowercased file name was neither, so every
-      // tick under such an id was reported as covering nothing - a warning about the
-      // report that was really a bug here. Both forms are registered, because which one
-      // a run hands out depends on the rest of the rulebook.
-      else if (entry.isFile() && entry.name.endsWith('.md')) {
-        const bare = checklistIdOf(full, new Set());
-        const prefixed = checklistIdOf(full, new Set([bare]));
-        if (!files.has(bare)) files.set(bare, full);
-        if (!files.has(prefixed)) files.set(prefixed, full);
-      }
-    }
-  };
-  walk(path.join(__dirname, '..', 'instructions'));
-  if (projectRoot) walk(path.join(path.resolve(projectRoot), '.claude', 'doh', 'instructions'));
-  return files;
+// checklist that does not exist. The ids are the ones the file kinds declare - the
+// skill's `instructions/*.json` plus the project's own when it has one - read by the
+// context builder's own loader, never a second reading of the same files.
+function rulebookInstructions(projectRoot) {
+  return rulebook.loadRulebook([
+    path.join(__dirname, '..', 'instructions'),
+    projectRoot ? path.join(path.resolve(projectRoot), '.claude', 'doh', 'instructions') : null,
+  ]).instructions;
 }
 
 function knownChecklistIds(projectRoot) {
-  return new Set(rulebookFiles(projectRoot).keys());
+  return new Set(rulebookInstructions(projectRoot).keys());
 }
 
 // `**Reguła:** security#3` carries only the address; the page needs the words.
 // An address the rulebook cannot answer is a warning like any other drift, so the
 // Markdown stays behind instead of a finding filed under a rule nobody can read.
 function resolveRuleAddresses(report, projectRoot) {
-  let files = null;
-  const itemsCache = new Map();
+  let instructions = null;
   for (const section of report.files) {
     for (const finding of section.findings) {
       if (!finding.tags.some((tag) => tag.address)) continue;
-      if (!files) files = rulebookFiles(projectRoot);
+      if (!instructions) instructions = rulebookInstructions(projectRoot);
       for (const tag of finding.tags) {
         if (!tag.address) continue;
         const { id, n } = tag.address;
-        const file = files.get(id);
-        if (file && !itemsCache.has(file)) itemsCache.set(file, parseChecklistItems(file));
-        const item = file ? itemsCache.get(file)[n - 1] : null;
-        // Filed under the instruction's file name, the group a prose rule naming the same
-        // instruction (`code-quality.md → …`) already lands in.
-        if (item) Object.assign(tag, { file: path.basename(file), rule: item.text });
+        const text = instructions.has(id) ? instructions.get(id).items.get(n) : undefined;
+        // The tag keeps the id as its group, the one a prose rule naming the same
+        // instruction (`code-quality → …`) already lands in.
+        if (text) tag.rule = text;
         else {
           tag.rule = `${id}#${n}`;
           report.warnings.push(`${section.path}: reguła "${id}#${n}" nie istnieje w rulebooku - brak takiej instrukcji albo punktu.`);
         }
         delete tag.address;
       }
+      // The field as written stays in the page data: score-review.cjs scores a rendered
+      // report by its addresses, the way it scores the Markdown.
+      finding.ruleSource = finding.rule;
       finding.rule = finding.tags.map((tag) => `${tag.file} → ${tag.rule}`).join('; ');
     }
   }
@@ -937,7 +929,7 @@ function warnUnknownChecklistIds(report, projectRoot) {
       const id = String(item.id).split('#')[0].toLowerCase();
       if (known.has(id) || flagged.has(id)) continue;
       flagged.add(id);
-      report.warnings.push(`${block.path}: pozycje odchaczone pod nieznaną instrukcją "${id}" - nie ma takiego pliku w rulebooku, więc nic ich nie pokrywa.`);
+      report.warnings.push(`${block.path}: pozycje odchaczone pod nieznaną instrukcją "${id}" - nie ma takiej instrukcji w rulebooku, więc nic ich nie pokrywa.`);
     }
   }
 }
@@ -1024,6 +1016,7 @@ function buildPayload(report, reportName) {
         lines: finding.lines,
         problem: finding.problem,
         rule: finding.rule,
+        ...(finding.ruleSource ? { ruleSource: finding.ruleSource } : {}),
         expected: finding.expected,
         prProblem: finding.prProblem || '',
         prExpected: finding.prExpected || '',
@@ -2413,6 +2406,53 @@ ${coverage}  </div>
 `;
 }
 
+// What the page files its remembered state under (`storeKey`). Every report is called
+// `raport.html`, so the name alone would give every run one shared memory: the run
+// folder and branch folder above it are what tell two reports apart.
+function reportNameOf(out) {
+  return path.resolve(out).split(path.sep).slice(-3).join('/');
+}
+
+// The Markdown a run leaves behind without --with-checklist. The checklist blocks, the
+// coverage markers and the cross-file `<!-- unverified:` block are the review's working
+// proof, checked part by part before the assembly (check-part.cjs); the finished report
+// carries them only when the run asked for them. Comments are scoped as `parseReport`
+// scopes them, so nothing inside another comment is cut, and every other comment (the
+// since-last note) stays. A cut leaves no run of blank lines behind, and a report with
+// nothing to cut comes back unchanged.
+function stripChecklists(markdown) {
+  const text = String(markdown);
+  const out = [];
+  // The multi-line comment still open: `cut` when it is dropped, `keep` when it stays.
+  let open = null;
+  // Something was cut since the last kept line with text on it.
+  let gap = false;
+  let changed = false;
+  const keep = (raw) => {
+    if (raw.trim()) gap = false;
+    else if (gap && (out.length === 0 || !out[out.length - 1].trim())) return;
+    out.push(raw);
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (open) {
+      if (open === 'keep') keep(raw);
+      if (line.includes('-->')) open = null;
+      continue;
+    }
+    const multi = line.startsWith('<!--') && !line.includes('-->');
+    if (/^<!--\s*checklist:/.test(line) || reUnverifiedOpen.test(line) || reCoverage.test(line)) {
+      open = multi ? 'cut' : null;
+      gap = true;
+      changed = true;
+      continue;
+    }
+    if (multi) open = 'keep';
+    keep(raw);
+  }
+  return changed ? out.join(text.includes('\r\n') ? '\r\n' : '\n') : text;
+}
+
 function main(argv) {
   let args;
   try {
@@ -2428,7 +2468,23 @@ function main(argv) {
     process.stderr.write(`Nie można odczytać raportu: ${args.report} (${(err && err.message) || err})\n`);
     return 1;
   }
-  const report = parseReport(markdown);
+  // Cut before the parse, so the page, the warnings' line numbers and a Markdown
+  // left behind all read the same text.
+  const text = args.withChecklist ? markdown : stripChecklists(markdown);
+  if (args.onlyMd) {
+    // The Markdown is the report: nothing to render, only the checklists to leave out.
+    if (text !== markdown) {
+      try {
+        fs.writeFileSync(args.report, text, 'utf8');
+      } catch (err) {
+        process.stderr.write(`Nie można zapisać raportu: ${args.report} (${(err && err.message) || err})\n`);
+        return 1;
+      }
+    }
+    process.stdout.write(`${args.report}\n`);
+    return 0;
+  }
+  const report = parseReport(text);
   const projectRoot = projectRootFor(args.report, args.project);
   warnUnknownChecklistIds(report, projectRoot);
   resolveRuleAddresses(report, projectRoot);
@@ -2440,7 +2496,7 @@ function main(argv) {
   report.prWarning = pullRequest.warning || '';
   report.postCommand = report.pr ? postCommandFor(projectRoot, args.out) : '';
   try {
-    fs.writeFileSync(args.out, renderHtml(report, path.basename(args.out)), 'utf8');
+    fs.writeFileSync(args.out, renderHtml(report, reportNameOf(args.out)), 'utf8');
   } catch (err) {
     process.stderr.write(`Nie można zapisać raportu HTML: ${args.out} (${(err && err.message) || err})\n`);
     return 1;
@@ -2449,22 +2505,33 @@ function main(argv) {
   // makes the Markdown below stay behind.
   if (pullRequest.warning) process.stderr.write(`${pullRequest.warning}\n`);
   // Also not a parser warning: an older report simply has no markers, so this
-  // says the coverage could not be confirmed - it never keeps the Markdown.
-  if (report.coverage.length === 0 && !report.emptyState) {
+  // says the coverage could not be confirmed - it never keeps the Markdown. Without
+  // --with-checklist the markers were cut above, and check-part.cjs counted them.
+  if (args.withChecklist && report.coverage.length === 0 && !report.emptyState) {
     process.stderr.write('Raport nie zawiera znaczników coverage - nie potwierdzono pełnego przejścia checklist.\n');
   }
   for (const warning of report.warnings) process.stderr.write(`Ostrzeżenie parsera: ${warning}\n`);
   // The Markdown is only discarded when it was understood completely: a kept
   // source file is the signal that the report format drifted.
+  const inPlace = path.resolve(args.report) === path.resolve(args.out);
   if (report.warnings.length) {
     process.stderr.write(`Zachowano źródłowy Markdown: ${args.report}\n`);
-  } else if (!args.keepSource && path.resolve(args.report) !== path.resolve(args.out)) {
+  }
+  if (!report.warnings.length && !args.keepSource && !inPlace) {
     try {
       fs.unlinkSync(args.report);
     } catch (err) {
       // Without this the leftover .md would be indistinguishable from the
       // "parser hit something unexpected" signal above.
       process.stderr.write(`Nie udało się usunąć źródłowego Markdownu: ${args.report} (${(err && err.message) || err})\n`);
+    }
+  } else if (!inPlace && text !== markdown) {
+    // A Markdown left behind is a report too, and the one the warnings' line numbers
+    // point into.
+    try {
+      fs.writeFileSync(args.report, text, 'utf8');
+    } catch (err) {
+      process.stderr.write(`Nie udało się usunąć checklist ze źródłowego Markdownu: ${args.report} (${(err && err.message) || err})\n`);
     }
   }
   process.stdout.write(`${args.out}\n`);
@@ -2473,10 +2540,12 @@ function main(argv) {
 
 module.exports = {
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
-  projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, buildPayload, renderHtml, detectPullRequest,
-  changedFiles, treeEntries, main,
+  projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, buildPayload, renderHtml, reportNameOf, detectPullRequest,
+  changedFiles, treeEntries, stripChecklists, main,
   // check-part.cjs validates each part file against the same grammar this parser reads.
-  emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reViolationVerdict, expandItemSpec,
+  emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reUnverifiedOpen, reViolationVerdict, expandItemSpec,
+  // The severity lead lines a finding may open with, which the bundles and the assembly write.
+  severities,
 };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

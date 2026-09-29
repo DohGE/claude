@@ -2,7 +2,7 @@
 'use strict';
 
 // Deterministic mechanics for the doh:codeReview skill: argument parsing,
-// glob matching, instruction frontmatter parsing, base-branch detection and
+// glob matching, file-kind matching (rulebook.cjs), base-branch detection and
 // the review-context JSON consumed by SKILL.md.
 
 const { execFileSync } = require('node:child_process');
@@ -11,12 +11,21 @@ const path = require('node:path');
 
 const github = require('./github.cjs');
 const duplication = require('./duplication-scan.cjs');
+const rulebook = require('./rulebook.cjs');
+const repoFacts = require('./repo-facts.cjs');
+const reviewBundle = require('./review-bundle.cjs');
 
 const defaultSkillDir = path.resolve(__dirname, '..');
 const baseBranchNames = ['main', 'master', 'develop', 'dev'];
-const audiences = ['implement', 'review', 'both'];
 const reportsRetain = 30;
 const forkCandidateLimit = 60;
+// codeReview's own folder - `<project>/.claude/doh/codeReview/`, or `<skillDir>/reports/`
+// for a project without `.claude/` - holds two trees:
+//   runs/<YYYY-MM-DD-HH-mm-ss>/<branchDir>/raport.md|html   one folder per run and target
+//   cache/<branchDir>/                                      what the next run reads
+// check-part.cjs walks from a part back to its context through the same shape (runOf).
+const reportStem = 'raport';
+const reRunStamp = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$/;
 
 // Generated, vendored and binary files: reviewing them wastes context without
 // producing findings. Skipped paths are listed per target so the report can
@@ -55,12 +64,19 @@ function isSkippedPath(filePath) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, batch: true, dedupItems: false };
   const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
     // review of this target (see the snapshot written next to the report).
     if (arg === '--since-last') { args.sinceLast = true; continue; }
+    // The finished report keeps the walked checklists (render-report.cjs cuts them otherwise).
+    if (arg === '--with-checklist') { args.withChecklist = true; continue; }
+    // Every file walked in a response of its own, light ones included (review-bundle.cjs batches).
+    if (arg === '--no-batch') { args.batch = false; continue; }
+    // A bundle re-read in one compaction window shows an item's text once (review-hooks.cjs);
+    // opt-in until an A/B run shows it costs no finding.
+    if (arg === '--dedup-items') { args.dedupItems = true; continue; }
     const m = arg.match(/^--([a-z]+)=(.*)$/);
     // Anything unrecognised is refused rather than skipped: the user-facing flag
     // is `--only-md` while the script takes `--output=md`, so a silently dropped
@@ -75,7 +91,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --no-batch, --dedup-items; the skill's own --only-md maps to --output=md)`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -86,13 +102,10 @@ function parseArgs(argv) {
   return args;
 }
 
-// The compiled globs of one run, keyed by the pattern text. The rulebook holds a
-// few dozen patterns and a review asks about every one of them for every changed
-// file, three times over (does this instruction apply, which of its items does
-// this file walk, how many is that) - so an uncached compile here is tens of
-// thousands of `new RegExp` calls for one context build, and half a second of a
-// 300-file diff went nowhere else. The returned regexes carry no `g`/`y` flag, so
-// they hold no lastIndex and sharing one between callers is safe.
+// The compiled globs of one run, keyed by the pattern text, so a caller asking
+// about the same pattern for every changed file compiles it once. The returned
+// regexes carry no `g`/`y` flag, so they hold no lastIndex and sharing one
+// between callers is safe.
 const globCache = new Map();
 
 function globToRegExp(pattern) {
@@ -124,95 +137,6 @@ function compileGlob(pattern) {
   return new RegExp('^' + parts.join('') + '$');
 }
 
-// `scopes:` declares the named subsets an individual checklist item may narrow
-// itself to (`- {styles} Contrast ratios …`). One name, one glob list, written
-// either inline (`styles: ["**/*.scss", "**/*.css"]`) or as a nested list —
-// the same glob language as `applies-to`, `!` excludes included.
-function parseScopeList(value) {
-  const inline = String(value).trim().replace(/^\[|\]$/g, '');
-  return inline
-    .split(',')
-    .map((p) => p.trim().replace(/^["']|["']$/g, ''))
-    .filter(Boolean);
-}
-
-function parseFrontmatter(content) {
-  const lines = content.split(/\r?\n/);
-  const result = { appliesTo: [], appliesToDeclared: false, audience: undefined, gate: null, findings: null, scopes: {} };
-  if (!lines.length || lines[0].trim() !== '---') return result;
-  let inAppliesTo = false;
-  let inScopes = false;
-  let scopeName = null;
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === '---') break;
-    // Declared is not the same as readable: an inline `applies-to: **/*.ts` or a
-    // mis-indented list leaves the key present and the pattern list empty, which
-    // means something very different for a global than for a local.
-    if (/^applies-to:/.test(line)) result.appliesToDeclared = true;
-    if (/^applies-to:\s*$/.test(line)) {
-      inAppliesTo = true;
-      inScopes = false;
-      continue;
-    }
-    if (/^scopes:\s*$/.test(line)) {
-      inScopes = true;
-      inAppliesTo = false;
-      scopeName = null;
-      continue;
-    }
-    if (inScopes) {
-      const named = line.match(/^\s+([A-Za-z0-9][A-Za-z0-9_-]*):\s*(.*)$/);
-      if (named) {
-        scopeName = named[1].toLowerCase();
-        result.scopes[scopeName] = named[2].trim() ? parseScopeList(named[2]) : [];
-        continue;
-      }
-      const nested = line.match(/^\s+-\s+(.+)$/);
-      if (nested && scopeName) {
-        result.scopes[scopeName].push(nested[1].trim().replace(/^["']|["']$/g, ''));
-        continue;
-      }
-    }
-    const item = line.match(/^\s+-\s+(.+)$/);
-    if (inAppliesTo && item) {
-      result.appliesTo.push(item[1].trim().replace(/^["']|["']$/g, ''));
-      continue;
-    }
-    const audience = line.match(/^audience:\s*(.+?)\s*$/);
-    if (audience) {
-      result.audience = audience[1].replace(/^["']|["']$/g, '');
-      inAppliesTo = false;
-      inScopes = false;
-      continue;
-    }
-    // The precondition that decides whether this instruction has anything to
-    // say about a file at all. One sentence, answered by the reviewer from the
-    // file's content — a glob cannot see that a `.ts` file holds no markup.
-    const gate = line.match(/^gate:\s*(.+?)\s*$/);
-    if (gate) {
-      result.gate = gate[1].replace(/^["']|["']$/g, '') || null;
-      inAppliesTo = false;
-      inScopes = false;
-      continue;
-    }
-    // How the instruction's breaches in one file are counted: `per-file` makes them one
-    // finding. Absent, every item is its own requirement and its own finding.
-    const findings = line.match(/^findings:\s*(.+?)\s*$/);
-    if (findings) {
-      result.findings = findings[1].replace(/^["']|["']$/g, '');
-      inAppliesTo = false;
-      inScopes = false;
-      continue;
-    }
-    if (/^\S/.test(line)) {
-      inAppliesTo = false;
-      inScopes = false;
-    }
-  }
-  return result;
-}
-
 function sanitizeBranchName(branch) {
   return branch.replace(/[^A-Za-z0-9._-]/g, '-');
 }
@@ -222,7 +146,26 @@ function formatTimestamp(d) {
   return {
     date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
     time: `${p(d.getHours())}-${p(d.getMinutes())}`,
+    seconds: p(d.getSeconds()),
   };
+}
+
+function samePath(a, b) {
+  const x = path.resolve(a);
+  const y = path.resolve(b);
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+
+const cacheDirOf = (root, branchDir = '') => path.join(root, 'cache', branchDir);
+
+// The codeReview folder, run stamp and branch folder a report or part file lies in -
+// null when it lies in no run folder (a report written before runs/ existed, say).
+function runOf(file) {
+  const dir = path.dirname(path.resolve(file));
+  const stampDir = path.dirname(dir);
+  const runsDir = path.dirname(stampDir);
+  if (path.basename(runsDir) !== 'runs' || !reRunStamp.test(path.basename(stampDir))) return null;
+  return { root: path.dirname(runsDir), stamp: path.basename(stampDir), branchDir: path.basename(dir), dir };
 }
 
 // The buffer is sized for a whole target's patch: at the 1 MB default a large diff
@@ -398,6 +341,26 @@ function q(s) {
   return `"${s}"`;
 }
 
+// A target's whole assembly as one Bash call (references/assembly.md), written out here so
+// neither the reviewer nor a session resumed after a compaction composes it. The part check
+// gates the rest (`&&`); inside the braces `;`, so a target with nothing to concatenate still
+// renders.
+function assembleCommand(target, contextPath, project, skillDir) {
+  const slash = (p) => String(p).replace(/\\/g, '/');
+  const scripts = `${slash(skillDir)}/scripts`;
+  const report = slash(target.reportPath);
+  const stem = report.replace(/\.md$/, '');
+  const render = target.htmlReportPath
+    ? [`--report=${q(report)}`, `--project=${q(slash(project))}`, `--mode=${q(target.kind)}`, `--branch=${q(target.branch)}`,
+      ...(target.baseBranch ? [`--base=${q(target.baseBranch)}`] : [])]
+    : [`--report=${q(report)}`, '--only-md'];
+  if (target.withChecklist) render.push('--with-checklist');
+  const removed = [`${q(stem)}.part*.md`, ...(target.importLedger ? [q(slash(target.importLedger))] : [])];
+  return `node ${q(`${scripts}/check-part.cjs`)} --context=${q(slash(contextPath))} --report=${q(report)}`
+    + ` && { cat ${q(stem)}.part*.md >> ${q(report)}; rm -f ${removed.join(' ')}; rm -rf ${q(slash(target.workDir))};`
+    + ` node ${q(`${scripts}/render-report.cjs`)} ${render.join(' ')}; }`;
+}
+
 // All files under dir, recursive, as project-relative forward-slash paths
 // (sorted). `.git` is never entered; everything else is left to skipGlobs.
 function listFolderFiles(project, dir) {
@@ -521,20 +484,6 @@ function splitPatchByPath(patch) {
   return byPath;
 }
 
-// An instruction as the reviewer reads it: every top-level `- ` bullet prefixed with
-// the `<id>#<n>` it is ticked and cited by, counted exactly as parseChecklistItems
-// counts. Numbering twenty-odd bullets by eye, or through a shell whose output may
-// arrive compressed, is where a tick and a finding came to name the wrong item.
-function numberChecklist(text, id) {
-  const fm = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
-  const head = fm ? fm[0] : '';
-  let n = 0;
-  const body = text.slice(head.length).split('\n')
-    .map((line) => (/^- \S/.test(line) ? `- ${id}#${++n}: ${line.slice(2)}` : line))
-    .join('\n');
-  return head + body;
-}
-
 // `git diff --raw` carries status, path AND the post-image blob id in one line,
 // so a single call replaces `--name-status` and hands `--since-last` its content
 // fingerprint: `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\t<path>`.
@@ -560,333 +509,6 @@ function parseRawDiff(output) {
   return files;
 }
 
-// A checklist item may narrow itself to part of its instruction's scope with a
-// leading tag naming one or more entries of the frontmatter `scopes:` map:
-// `- {styles} Contrast ratios …` is walked for stylesheets only. Numbering is
-// unaffected — `<id>#<n>` still counts every top-level bullet in file order —
-// so a rule that does not apply to a file drops out of that file's plan
-// instead of costing it a verdict it cannot reach.
-// A name written `+name` REACHES instead of narrowing: the item is also walked
-// for every file of that scope, even one outside the instruction's `applies-to`.
-// A rule is often broken in a file its own instruction never covers - a guard
-// factory is invoked (or not) in the routes file, a pipe goes missing from a
-// component's `imports`, a translation key is concatenated in a component - and
-// without the reach that finding had no plan item to be reported under.
-const reItemScopeTag = /^\{\s*(\+?\s*[A-Za-z0-9][A-Za-z0-9 ,_+-]*)\}\s+\S/;
-
-// The checklist of an instruction, item by item: `n` is its `<id>#<n>` address,
-// `scopes` the narrowing names of its scope tag (empty = wherever the instruction
-// applies), `reach` its `+name` names (the scopes it is carried to beyond that),
-// `text` the item without that tag - what a report's `<id>#<n>` rule expands to.
-function parseChecklistItems(file) {
-  let body;
-  try {
-    body = fs.readFileSync(file, 'utf8');
-  } catch {
-    return [];
-  }
-  body = body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
-  const items = [];
-  for (const line of body.split('\n')) {
-    if (!/^- \S/.test(line)) continue;
-    const tag = line.slice(2).match(reItemScopeTag);
-    const names = tag ? tag[1].split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
-    items.push({
-      n: items.length + 1,
-      scopes: names.filter((s) => !s.startsWith('+')),
-      reach: names.filter((s) => s.startsWith('+')).map((s) => s.slice(1).trim()).filter(Boolean),
-      text: (tag ? line.slice(2).replace(/^\{[^}]*\}\s+/, '') : line.slice(2)).trim(),
-    });
-  }
-  return items;
-}
-
-// How many checklist items an instruction carries: the top-level `- ` bullets
-// of its body. The reviewer reports its per-file coverage against this number,
-// which turns "I walked every item" from a promise into a checkable figure.
-function countChecklistItems(file) {
-  return parseChecklistItems(file).length;
-}
-
-// Which items of an instruction this file is actually walked against. Inside the
-// instruction's own scope (`inScope`): every untagged item, plus the tagged ones
-// whose narrowing scope the file falls into. Anywhere: the items one of whose
-// `+name` scopes the file falls into. A narrowing name the instruction never
-// declared keeps the item (a typo must not silently delete a rule); an undeclared
-// reaching name reaches nothing (a typo must not spread a rule over the whole
-// diff). `loadInstructions` reports both as warnings.
-function matchChecklistItems(items, namedScopes, filePath, inScope = true) {
-  const normalized = filePath.replace(/\\/g, '/');
-  const named = namedScopes || {};
-  const declared = (name) => Object.prototype.hasOwnProperty.call(named, name);
-  const selected = [];
-  for (const item of items) {
-    const reach = item.reach || [];
-    if (reach.some((name) => declared(name) && matchesScope(named[name], normalized, false))) {
-      selected.push(item.n);
-      continue;
-    }
-    if (!inScope) continue;
-    if (item.scopes.length === 0) {
-      selected.push(item.n);
-      continue;
-    }
-    const hit = item.scopes.some((name) => !declared(name) || matchesScope(named[name], normalized, false));
-    if (hit) selected.push(item.n);
-  }
-  return selected;
-}
-
-// The items of one loaded instruction a file walks, own scope and reach together:
-// `scope` is the instruction's `loadInstructions` entry, `isGlobal` decides what an
-// `applies-to` without an including pattern means (see matchesScope). The review
-// and implementNewFeature both ask this, so code is written against exactly the
-// rules it is later reviewed against.
-function itemsWalkedBy(items, scope, isGlobal, filePath) {
-  const normalized = filePath.replace(/\\/g, '/');
-  const inScope = matchesScope((scope && scope.appliesTo) || [], normalized, isGlobal);
-  return matchChecklistItems(items, scope && scope.itemScopes, normalized, inScope);
-}
-
-// `[1,2,3,5,9,10]` -> `1-3,5,9-10`: the plan says WHICH items a file walks, not
-// just how many, so a narrowed checklist stays addressable as `<id>#<n>`.
-function formatItemSpec(numbers) {
-  const parts = [];
-  let start = null;
-  let prev = null;
-  for (const n of numbers) {
-    if (start === null) {
-      start = prev = n;
-      continue;
-    }
-    if (n === prev + 1) {
-      prev = n;
-      continue;
-    }
-    parts.push(start === prev ? `${start}` : `${start}-${prev}`);
-    start = prev = n;
-  }
-  if (start !== null) parts.push(start === prev ? `${start}` : `${start}-${prev}`);
-  return parts.join(',');
-}
-
-// How the reviewer cites one checklist item while ticking it off: `<id>#<n>`,
-// n being the n-th top-level `- ` bullet of that instruction. The id is the
-// instruction's file name, so a tick line stays readable next to the report.
-// `taken` holds the ids already handed out: a collision (a project rulebook
-// adding its own `security.md` under `local/`) falls back to the parent folder
-// as a prefix and then to a numeric suffix, so ids stay unique and deterministic.
-function checklistIdOf(file, taken = new Set()) {
-  const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const base = slug(path.basename(file, '.md')) || 'instruction';
-  const parent = slug(path.basename(path.dirname(file)));
-  for (const candidate of [base, parent ? `${parent}-${base}` : '']) {
-    if (candidate && !taken.has(candidate)) return candidate;
-  }
-  let n = 2;
-  while (taken.has(`${base}-${n}`)) n++;
-  return `${base}-${n}`;
-}
-
-// audience: 'review' | 'implement' | undefined (no filtering). An instruction
-// declares `audience: implement|review|both` in its frontmatter (default both)
-// to control which consumer loads it — e.g. a coding persona is implement-only.
-// `instructionsDirs` is one directory or a layered list, lowest priority first:
-// the skill's own tree plus, when the reviewed project has one, its
-// `.claude/doh/instructions/`. A project file at the same relative path
-// (`global/security.md`) REPLACES the skill's file — a project may restate a
-// rule its own way — and every other project file is one more instruction.
-function loadInstructions(instructionsDirs, audience) {
-  const dirs = (Array.isArray(instructionsDirs) ? instructionsDirs : [instructionsDirs])
-    .filter(Boolean);
-  const warnings = [];
-  const list = (dir) => {
-    if (!fs.existsSync(dir)) return [];
-    const files = [];
-    const walk = (d) => {
-      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-        const full = path.join(d, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile() && entry.name.endsWith('.md')) files.push(full);
-      }
-    };
-    walk(dir);
-    return files.sort();
-  };
-  const keep = (file, fm) => {
-    const declared = fm.audience === undefined ? 'both' : fm.audience;
-    if (!audiences.includes(declared)) {
-      warnings.push(`Unknown audience "${fm.audience}" (expected implement|review|both), treating as both: ${file}`);
-      return true;
-    }
-    return !audience || declared === 'both' || declared === audience;
-  };
-  // Layered by path relative to the bucket, so the order stays alphabetical by
-  // instruction name instead of following whichever layer supplied the file.
-  const collect = (bucket) => {
-    const byRelative = new Map();
-    for (const dir of dirs) {
-      const root = path.join(dir, bucket);
-      for (const file of list(root)) {
-        byRelative.set(path.relative(root, file).split(path.sep).join('/'), file);
-      }
-    }
-    return [...byRelative.keys()].sort().map((rel) => byRelative.get(rel));
-  };
-  // `scopes` carries what narrows an instruction to a subset of the diff:
-  // `applies-to` globs and the natural-language `gate`. Locals must declare
-  // globs (no globs = never matches); a global without them keeps applying to
-  // every file, so narrowing a global is opt-in and silence means "everywhere".
-  const scopes = {};
-  // A scope tag pointing at a name the frontmatter never declared would silently
-  // widen (fail-open) instead of narrowing, and a declared scope no item uses is
-  // dead config — both are reported once per instruction, at load time.
-  const checkItemScopes = (file, declared) => {
-    const items = parseChecklistItems(file);
-    const used = new Set();
-    const reaching = new Set();
-    for (const item of items) {
-      for (const name of item.scopes) used.add(name);
-      for (const name of item.reach) reaching.add(name);
-    }
-    const isDeclared = (name) => Object.prototype.hasOwnProperty.call(declared, name);
-    const unknown = [...used].filter((name) => !isDeclared(name));
-    if (unknown.length > 0) {
-      warnings.push(`Checklist item scope(s) not declared in the "scopes:" frontmatter (items kept unnarrowed): ${unknown.join(', ')} in ${file}`);
-    }
-    const unknownReach = [...reaching].filter((name) => !isDeclared(name));
-    if (unknownReach.length > 0) {
-      warnings.push(`Checklist item reach scope(s) not declared in the "scopes:" frontmatter (the items reach no file outside applies-to): ${unknownReach.map((name) => `+${name}`).join(', ')} in ${file}`);
-    }
-    const unused = Object.keys(declared).filter((name) => !used.has(name) && !reaching.has(name));
-    if (unused.length > 0) {
-      warnings.push(`Declared scope(s) no checklist item uses: ${unused.join(', ')} in ${file}`);
-    }
-  };
-  // A declared but unreadable `applies-to` fails in opposite directions, and
-  // silently in both: a global falls back to matching everything, a local to
-  // matching nothing.
-  // Brace alternation is the mistake this glob engine cannot warn about by itself:
-  // `**/*.{ts,html}` is a perfectly good-looking pattern that matches NOTHING here,
-  // because braces are literal (see the syntax the README documents). Nothing else
-  // would notice - the pattern is textually an including one, so the check below
-  // stays quiet and the instruction simply never applies to a file again.
-  const checkBraces = (file, fm) => {
-    const patterns = [...fm.appliesTo, ...Object.values(fm.scopes || {}).flat()];
-    const braced = [...new Set(patterns.filter((g) => /[{}]/.test(String(g))))];
-    if (braced.length === 0) return;
-    warnings.push(`Brace alternation is not supported and matches nothing - write one pattern per alternative (${braced.join(', ')}): ${file}`);
-  };
-  const checkAppliesTo = (file, fm, bucket) => {
-    if (!fm.appliesToDeclared || fm.appliesTo.length > 0) return;
-    const effect = bucket === 'global'
-      ? 'so this global now applies to EVERY reviewed file instead of the subset you meant'
-      : 'so this local now matches nothing';
-    warnings.push(`\"applies-to\" is declared but no pattern could be read from it (entries must be a block list of \"  - <glob>\" lines), ${effect}: ${file}`);
-  };
-  // An instruction whose checklist has no top-level "- " bullet is never walked:
-  // the reviewer has nothing to tick, so the file is loaded and then ignored.
-  const checkItems = (file) => {
-    if (parseChecklistItems(file).length === 0) {
-      warnings.push(`No checklist items found (items must be top-level \"- \" bullets; \"*\" and \"+\" are not counted), so this instruction is never walked: ${file}`);
-    }
-  };
-  // `per-file` is the one value that changes anything, so a misspelt one would silently leave
-  // a file's single defect to be split into a finding per item.
-  const checkFindings = (file, fm) => {
-    if (fm.findings !== null && fm.findings !== 'per-file') {
-      warnings.push(`Unknown findings "${fm.findings}" (expected per-file), treating every item as its own finding: ${file}`);
-    }
-  };
-  const globals = [];
-  for (const file of collect('global')) {
-    const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
-    if (!keep(file, fm)) continue;
-    checkItemScopes(file, fm.scopes);
-    checkAppliesTo(file, fm, 'global');
-    checkBraces(file, fm);
-    checkItems(file);
-    checkFindings(file, fm);
-    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, findings: fm.findings, itemScopes: fm.scopes };
-    globals.push(file);
-  }
-  const locals = [];
-  for (const file of collect('local')) {
-    const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
-    if (!keep(file, fm)) continue;
-    if (splitPatterns(fm.appliesTo).include.length === 0) {
-      warnings.push(`Local instruction has no including applies-to pattern and will never match: ${file}`);
-    }
-    checkItemScopes(file, fm.scopes);
-    checkAppliesTo(file, fm, 'local');
-    checkBraces(file, fm);
-    checkItems(file);
-    checkFindings(file, fm);
-    scopes[file] = { appliesTo: fm.appliesTo, gate: fm.gate, findings: fm.findings, itemScopes: fm.scopes };
-    locals.push({ file, appliesTo: fm.appliesTo });
-  }
-  return { globals, locals, scopes, warnings };
-}
-
-// An `applies-to` entry starting with `!` EXCLUDES what it matches. Splitting
-// them apart is what lets a broad instruction carve out a folder it has nothing
-// to say about (`test-coverage` over every `.ts` except `**/models/**`) without
-// enumerating every folder it does cover.
-// Keyed by the array itself: a scope list belongs to one loaded instruction and
-// is asked about once per changed file, so splitting it again per file is work
-// whose answer cannot have changed. A WeakMap keeps a rulebook that is reloaded
-// (the tests build several) from pinning the old one in memory.
-const splitCache = new WeakMap();
-
-function splitPatterns(patterns) {
-  if (!patterns) return { include: [], exclude: [] };
-  // Only an object can key a WeakMap, and every caller passes the array a
-  // frontmatter scope list parsed to. Anything else still works, uncached.
-  const cacheable = typeof patterns === 'object';
-  const cached = cacheable ? splitCache.get(patterns) : null;
-  if (cached) return cached;
-  const include = [];
-  const exclude = [];
-  for (const raw of patterns) {
-    const p = String(raw).trim();
-    if (p.startsWith('!')) exclude.push(p.slice(1).trim());
-    else include.push(p);
-  }
-  const split = { include, exclude };
-  if (cacheable) splitCache.set(patterns, split);
-  return split;
-}
-
-// Does this file fall inside the instruction's declared scope? `emptyIncludes`
-// decides what "no include pattern" means: for a global it is "everywhere"
-// (narrowing is opt-in), for a local it is "nowhere" (a local must say what it
-// covers). Excludes always win over includes.
-function matchesScope(patterns, normalized, emptyIncludes) {
-  const { include, exclude } = splitPatterns(patterns);
-  if (exclude.some((p) => globToRegExp(p).test(normalized))) return false;
-  if (include.length === 0) return emptyIncludes;
-  return include.some((p) => globToRegExp(p).test(normalized));
-}
-
-function matchLocalInstructions(locals, filePath) {
-  const normalized = filePath.replace(/\\/g, '/');
-  return locals
-    .filter((l) => matchesScope(l.appliesTo, normalized, false))
-    .map((l) => l.file);
-}
-
-// Which global instructions this file is walked against. A global that declares
-// no `applies-to` applies to everything (the default, and what every global did
-// before scoping existed); one that declares patterns is narrowed exactly like a
-// local. This is what stops a one-line polyfill from walking 30 WCAG criteria.
-function matchGlobalInstructions(globals, scopes, filePath) {
-  const normalized = filePath.replace(/\\/g, '/');
-  return globals.filter((file) => {
-    const patterns = (scopes && scopes[file] && scopes[file].appliesTo) || [];
-    return matchesScope(patterns, normalized, true);
-  });
-}
-
 // Keep only the reportsRetain newest reports so the reports folder does not
 // grow without bound across runs. Both output formats count toward the cap, so
 // a folder of HTML reports is capped exactly like a folder of Markdown ones.
@@ -910,7 +532,8 @@ function pruneReports(reportsDir, retain = reportsRetain) {
   for (const entry of entries) {
     // `instructions/` is the project's own rulebook living next to the reports:
     // its .md files are not reports and the folder is not a branch folder.
-    if (entry.name === 'instructions') continue;
+    // `codeReview/` keeps its own runs and caps them itself (pruneRuns).
+    if (entry.name === 'instructions' || entry.name === 'codeReview') continue;
     if (entry.isDirectory()) branchDirs.push(path.join(reportsDir, entry.name));
     else if (isReport(entry.name)) files.push(path.join(reportsDir, entry.name));
   }
@@ -950,6 +573,64 @@ function pruneReports(reportsDir, retain = reportsRetain) {
   for (const dir of branchDirs) {
     try {
       fs.rmdirSync(dir);
+    } catch {}
+  }
+}
+
+// The same cap over codeReview's runs/: one run is one `runs/<stamp>/<branchDir>/`
+// folder - its report in either format, or the parts of a review that never assembled -
+// and its age is the stamp its name carries. `keep` are the folders the current run
+// writes to: a resumed one carries an old stamp and must not be pruned from under it.
+// Only runs/ is ever touched, never the cache/ the next run reads. Best-effort.
+function pruneRuns(runsDir, keep = [], retain = reportsRetain) {
+  let stamps;
+  try {
+    stamps = fs.readdirSync(runsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && reRunStamp.test(entry.name))
+      .map((entry) => entry.name);
+  } catch {
+    return;
+  }
+  const runs = [];
+  for (const stamp of stamps) {
+    try {
+      for (const entry of fs.readdirSync(path.join(runsDir, stamp), { withFileTypes: true })) {
+        if (entry.isDirectory()) runs.push({ stamp, dir: path.join(runsDir, stamp, entry.name) });
+      }
+    } catch {}
+  }
+  const counted = runs.filter((run) => !keep.some((dir) => samePath(dir, run.dir)))
+    .sort((a, b) => b.stamp.localeCompare(a.stamp) || a.dir.localeCompare(b.dir));
+  for (const { dir } of counted.slice(retain)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+  // An import ledger and a work folder outlive their run only when it never assembled;
+  // while its parts are there they wait for the resume, which rewrites them. The day of
+  // grace is for a review another session has just started: no part written yet, and
+  // its work folder is what it is about to read.
+  const stale = Date.now() - 24 * 60 * 60 * 1000;
+  for (const { dir } of counted.slice(0, retain)) {
+    try {
+      const names = fs.readdirSync(dir);
+      if (names.some((name) => name.startsWith(`${reportStem}.part`))) continue;
+      for (const name of [`${reportStem}.imports.txt`, `${reportStem}.work`]) {
+        const full = path.join(dir, name);
+        if (names.includes(name) && fs.statSync(full).mtimeMs < stale) fs.rmSync(full, { recursive: true, force: true });
+      }
+    } catch {}
+  }
+  // A run folder, and then a stamp folder, that the above emptied goes with it; rmdir
+  // on one that still holds something throws and is ignored.
+  for (const { dir } of counted) {
+    try {
+      fs.rmdirSync(dir);
+    } catch {}
+  }
+  for (const stamp of stamps) {
+    try {
+      fs.rmdirSync(path.join(runsDir, stamp));
     } catch {}
   }
 }
@@ -1064,6 +745,155 @@ function readBlobs(project, blobs) {
   return out;
 }
 
+// Blob sizes through one `git cat-file --batch-check`; a blob git cannot size is absent.
+function blobSizes(project, blobs) {
+  const wanted = [...new Set(blobs.filter((b) => /^[0-9a-f]{7,64}$/.test(b)))];
+  const out = new Map();
+  if (wanted.length === 0) return out;
+  let text;
+  try {
+    text = execFileSync('git', ['-C', project, 'cat-file', '--batch-check'], {
+      input: wanted.join('\n') + '\n', encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    return out;
+  }
+  for (const line of text.split('\n')) {
+    const m = line.match(/^([0-9a-f]+) blob (\d+)$/);
+    if (m) out.set(m[1], Number(m[2]));
+  }
+  return out;
+}
+
+// Every path of the reviewed revision, mapped to its blob - or to null in a folder review,
+// which reads the working tree as git sees it (tracked and untracked files, not the ignored
+// ones). Null when git cannot list it. Paths are the ones `git diff` prints.
+function listRevision(project, source) {
+  const records = (args) => {
+    const out = tryGit(project, args);
+    return out === null ? null : out.split('\0').filter(Boolean);
+  };
+  const entries = new Map();
+  if (source.workTree) {
+    const listed = records(['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+    if (!listed) return null;
+    for (const p of listed) entries.set(p, null);
+  } else if (source.index) {
+    const listed = records(['ls-files', '-s', '-z', '--full-name']);
+    if (!listed) return null;
+    for (const record of listed) {
+      // Stage 0 only: the stages of an unresolved conflict are not the reviewed revision.
+      const m = record.match(/^(\d{6}) ([0-9a-f]+) 0\t([\s\S]+)$/);
+      if (m && m[1] !== '120000' && m[1] !== '160000') entries.set(m[3], m[2]);
+    }
+  } else {
+    const listed = records(['ls-tree', '-r', '-z', '--full-tree', source.ref]);
+    if (!listed) return null;
+    for (const record of listed) {
+      const m = record.match(/^(\d{6}) blob ([0-9a-f]+)\t([\s\S]+)$/);
+      if (m && m[1] !== '120000') entries.set(m[3], m[2]);
+    }
+  }
+  return entries;
+}
+
+// Caps on what the repository facts read. Past one, the facts come from the files nearest
+// the reviewed ones, and every fact only points at its line: a consumer or a translation key
+// in a file left out would otherwise read as missing.
+const factFileLimit = 5000;
+const factFileBytes = 2 * 1024 * 1024;
+const factTotalBytes = 48 * 1024 * 1024;
+
+// The files repo-facts.cjs reads (path -> text): the fact sources of the reviewed revision
+// around the reviewed files, and those files as the review reads them (`reviewed`, path ->
+// text). `factRoot` is the nearest folder above the reviewed files with a tsconfig - its path
+// aliases decide what an import resolves to - and the files come from the workspace around it
+// (the nearest Nx or Angular workspace root, else the fact root itself): a library's
+// consumers live in the applications next to it. `partial` when git or a cap left files out.
+function loadFactUniverse(project, source, reviewed) {
+  const entries = listRevision(project, source);
+  const paths = new Set(entries ? entries.keys() : []);
+  for (const p of reviewed.keys()) paths.add(p);
+  const up = (dir) => dir.slice(0, Math.max(0, dir.lastIndexOf('/')));
+  const nearest = (from, names) => {
+    for (let dir = from; ; dir = up(dir)) {
+      if (names.some((name) => paths.has(dir ? `${dir}/${name}` : name))) return dir;
+      if (dir === '') return null;
+    }
+  };
+  let common = null;
+  for (const p of reviewed.keys()) {
+    const parts = up(p).split('/');
+    let i = 0;
+    while (common !== null && i < common.length && common[i] === parts[i]) i++;
+    common = common === null ? parts : common.slice(0, i);
+  }
+  const from = (common || []).join('/');
+  const factRoot = nearest(from, ['tsconfig.json', 'tsconfig.base.json']) ?? nearest(from, ['angular.json', 'package.json']) ?? '';
+  const scope = nearest(factRoot, ['nx.json', 'angular.json']) ?? factRoot;
+  const inScope = (p) => scope === '' || p.startsWith(`${scope}/`);
+  const candidates = [...paths].filter((p) => repoFacts.isFactSource(p) && (reviewed.has(p) || (inScope(p) && !isSkippedPath(p))));
+  // Nearest first: the reviewed files, the tsconfigs, then by the deepest folder a path
+  // shares with a reviewed file.
+  const depthOf = new Map();
+  for (const p of reviewed.keys()) {
+    for (let dir = up(p); ; dir = up(dir)) {
+      depthOf.set(dir, dir === '' ? 0 : dir.split('/').length);
+      if (dir === '') break;
+    }
+  }
+  const nearness = (p) => {
+    for (let dir = up(p); ; dir = up(dir)) if (depthOf.has(dir) || dir === '') return depthOf.get(dir) || 0;
+  };
+  const rank = (p) => (reviewed.has(p) ? 0 : /(?:^|\/)tsconfig[^/]*\.json$/.test(p) ? 1 : 2);
+  candidates.sort((a, b) => (rank(a) - rank(b)) || (nearness(b) - nearness(a)) || (a < b ? -1 : a > b ? 1 : 0));
+  const sizes = entries && !source.workTree ? blobSizes(project, candidates.map((p) => entries.get(p)).filter(Boolean)) : null;
+  let partial = entries === null;
+  let total = 0;
+  const files = new Map();
+  const fromBlobs = [];
+  for (const p of candidates) {
+    let size;
+    if (reviewed.has(p)) size = Buffer.byteLength(reviewed.get(p));
+    else if (sizes) size = sizes.has(entries.get(p)) ? sizes.get(entries.get(p)) : -1;
+    else {
+      try {
+        const stat = fs.statSync(path.join(project, p));
+        size = stat.isFile() ? stat.size : -1;
+      } catch {
+        size = -1;
+      }
+    }
+    // A tracked file deleted from the working tree is simply not there; a blob git could
+    // not size is a file left out.
+    if (size < 0) {
+      if (sizes) partial = true;
+      continue;
+    }
+    if (!reviewed.has(p) && (files.size + fromBlobs.length >= factFileLimit || size > factFileBytes || total + size > factTotalBytes)) {
+      partial = true;
+      continue;
+    }
+    total += size;
+    if (reviewed.has(p)) files.set(p, reviewed.get(p));
+    else if (sizes) fromBlobs.push(p);
+    else {
+      try {
+        files.set(p, fs.readFileSync(path.join(project, p), 'utf8'));
+      } catch {}
+    }
+  }
+  if (fromBlobs.length > 0) {
+    const texts = readBlobs(project, fromBlobs.map((p) => entries.get(p)));
+    for (const p of fromBlobs) {
+      if (texts.has(entries.get(p))) files.set(p, texts.get(entries.get(p)));
+      else partial = true;
+    }
+  }
+  for (const [p, text] of files) if (text.includes('\u0000')) files.delete(p);
+  return { files, factRoot, partial };
+}
+
 // The context goes to a file the reviewer Reads instead of to stdout: tool output
 // may be compressed on its way into the conversation, a Read file is not. One line
 // per element down to the file entries, because Read cuts lines past 2000 chars.
@@ -1078,46 +908,55 @@ function layoutJson(value, depth = 4, indent = '') {
   return `${open}\n${indent} ${entries.join(`,\n${indent} `)}\n${indent}${close}`;
 }
 
-// A review that died before its assembly leaves `<stem>.partNN.md` files behind, and
-// every finished file among them carries its coverage marker. The latest such stem of
-// this target is resumed - but only while the snapshot proves the target still holds
-// what that run was reviewing; parts written against other content would be spliced
-// into a report about code they never saw.
-const reStampedPart = /^(.*)-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2})\.part(\d+)\.md$/;
+// A review that died before its assembly leaves `raport.partNN.md` files in its run
+// folder, and every finished file among them carries its coverage marker. `reportPath`
+// is the report a target's snapshot names - its latest run - so an older interrupted
+// run is never picked up in place of a newer one. Resumed only while the snapshot proves
+// the target still holds what that run was reviewing; parts written against other
+// content would be spliced into a report about code they never saw.
+const rePart = new RegExp(`^${reportStem}\\.part\\d+\\.md$`);
 const reCoverageMarker = /<!--\s*coverage:\s*(.+?)\s+(?:mechanical|\d+\s*\/\s*\d+)\s*-->/g;
 
 function findInterruptedRun(reportPath) {
-  const dir = path.dirname(reportPath);
-  const name = path.basename(reportPath).replace(/-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.md$/, '');
-  let entries;
+  const run = runOf(reportPath);
+  if (!run || path.basename(reportPath) !== `${reportStem}.md`) return null;
+  let parts;
   try {
-    entries = fs.readdirSync(dir);
+    parts = fs.readdirSync(run.dir).filter((entry) => rePart.test(entry));
   } catch {
     return null;
   }
-  const byStamp = new Map();
-  for (const entry of entries) {
-    const m = entry.match(reStampedPart);
-    if (!m || m[1] !== name) continue;
-    if (!byStamp.has(m[2])) byStamp.set(m[2], []);
-    byStamp.get(m[2]).push(path.join(dir, entry));
-  }
-  if (byStamp.size === 0) return null;
-  const stamp = [...byStamp.keys()].sort().pop();
+  if (parts.length === 0) return null;
   const doneFiles = new Set();
-  for (const part of byStamp.get(stamp)) {
+  for (const part of parts) {
     let text = '';
     try {
-      text = fs.readFileSync(part, 'utf8');
+      text = fs.readFileSync(path.join(run.dir, part), 'utf8');
     } catch {}
     for (const m of text.matchAll(reCoverageMarker)) doneFiles.add(m[1]);
   }
-  return {
-    stamp,
-    stem: path.join(dir, `${name}-${stamp}`),
-    doneFiles,
-    otherStamps: [...byStamp.keys()].filter((s) => s !== stamp),
-  };
+  return { ...run, doneFiles };
+}
+
+// The drafts of refused parts (check-part.cjs) whose part never reached the disk: a resumed
+// run promotes them instead of walking their files again, so the rewrite of the work folder
+// keeps them.
+function keptDrafts(workDir, reportPath) {
+  let entries;
+  try {
+    entries = fs.readdirSync(workDir).filter((entry) => entry.endsWith('.draft.md'));
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => !fs.existsSync(path.join(path.dirname(reportPath), entry.replace(/\.draft\.md$/, '.md'))))
+    .flatMap((entry) => {
+      try {
+        return [[`${workDir}/${entry}`, fs.readFileSync(path.join(workDir, entry), 'utf8')]];
+      } catch {
+        return [];
+      }
+    });
 }
 
 function buildContext(options) {
@@ -1131,8 +970,9 @@ function buildContext(options) {
   const wantsHtml = options.output !== 'md';
   const result = {
     outputFormat: wantsHtml ? 'html' : 'md',
-    globalInstructions: [],
-    localInstructionsCatalog: [],
+    // The root every file `path` is relative to - where the part check finds a file an OK names.
+    project,
+    instructionsCatalog: [],
     checklistPlans: [],
     checklistGates: {},
     checklistPerFile: [],
@@ -1153,135 +993,120 @@ function buildContext(options) {
   }
 
   // The project may extend or override the skill's rulebook from its own
-  // `.claude/doh/instructions/` (same `global/` + `local/` layout), so a repo
+  // `.claude/doh/instructions/` (file kinds as JSON, like the skill's), so a repo
   // carries its conventions next to its code instead of in the shared skill.
   const projectInstructionsDir = path.join(project, '.claude', 'doh', 'instructions');
   const hasProjectInstructions = isDirectory(projectInstructionsDir);
-  const instructions = loadInstructions(
+  const rules = rulebook.loadRulebook(
     [path.join(skillDir, 'instructions'), hasProjectInstructions ? projectInstructionsDir : null],
-    'review',
   );
   const ts = formatTimestamp(now);
-  // When the reviewed project already has a `.claude/` folder, write reports
-  // into `<project>/.claude/doh/` (created on demand) instead of the skill's
+  // When the reviewed project already has a `.claude/` folder, write into
+  // `<project>/.claude/doh/codeReview/` (created on demand) instead of the skill's
   // own `reports/` dir, so real projects collect their artifacts under doh.
+  // `legacyDir` is where the layout before runs/ + cache/ kept everything.
   const projectClaudeDir = path.join(project, '.claude');
   const useProjectDoh = isDirectory(projectClaudeDir);
-  const reportsDir = useProjectDoh
+  const legacyDir = useProjectDoh
     ? path.join(projectClaudeDir, 'doh')
     : path.join(skillDir, 'reports');
-  // Every report of a branch lands in that branch's own folder, so a reports
-  // dir shared by many branches stays browsable. The file name keeps the branch
-  // prefix on purpose: the HTML page namespaces its localStorage by file name,
-  // and two branches reviewed in the same minute would otherwise collide.
+  const root = useProjectDoh ? path.join(legacyDir, 'codeReview') : legacyDir;
+  const runsDir = path.join(root, 'runs');
+  // Every run gets its own folder named after its start, and every target of it a
+  // branch folder inside, so the report itself is always `raport.md|html` and runs of
+  // one branch sort by time. Down to the second: two runs started a minute apart must
+  // not share a folder.
   // The Markdown report is always the working file the reviewer writes to. In
   // html mode `render-report.cjs` turns it into `htmlReportPath` at the end of
   // the run and removes it, so the analysis steps never see the format choice.
-  const reportPaths = (branchName, suffix = '') => {
-    const branchDir = sanitizeBranchName(branchName);
-    const name = suffix ? `${branchDir}-${suffix}` : branchDir;
-    const reportPath = path.join(reportsDir, branchDir, `${name}-${ts.date}-${ts.time}.md`);
-    return { reportPath, htmlReportPath: wantsHtml ? reportPath.replace(/\.md$/, '.html') : null };
+  // `withChecklist` is the other output choice, read only by the assembly: every
+  // part still carries its checklist, and the renderer cuts them from the finished
+  // report unless it is true.
+  const reportPaths = (branchName) => {
+    const reportPath = path.join(runsDir, `${ts.date}-${ts.time}-${ts.seconds}`, sanitizeBranchName(branchName), `${reportStem}.md`);
+    return {
+      reportPath,
+      htmlReportPath: wantsHtml ? reportPath.replace(/\.md$/, '.html') : null,
+      withChecklist: !!options.withChecklist,
+      ...(options.dedupItems ? { dedupItems: true } : {}),
+    };
   };
   const claudeMdPath = path.join(project, 'CLAUDE.md');
-  result.globalInstructions = instructions.globals;
   result.projectInstructionsDir = hasProjectInstructions ? projectInstructionsDir : null;
   result.claudeMd = fs.existsSync(claudeMdPath) ? claudeMdPath : null;
-  result.warnings = [...instructions.warnings];
-  if (instructions.globals.length === 0 && instructions.locals.length === 0) {
-    result.warnings.push('instructions/global and instructions/local are empty - review uses only the project CLAUDE.md and the universal points (cross-file consistency, regressions, readability).');
+  result.warnings = [...rules.warnings];
+  if (rules.kinds.length === 0) {
+    result.warnings.push('instructions/ holds no file kind - review uses only the project CLAUDE.md and the universal points (cross-file consistency, regressions, readability).');
   }
 
-  // Checklist sizes are read once per run and turned into a per-file total, so
-  // the reviewer can state coverage as `<checked>/<total>` per file.
-  const itemCache = new Map();
-  const parsedItemsOf = (file) => {
-    if (!itemCache.has(file)) itemCache.set(file, parseChecklistItems(file));
-    return itemCache.get(file);
-  };
-  const itemsOf = (file) => parsedItemsOf(file).length;
-  const scopes = instructions.scopes || {};
-  // Which items of an instruction a given file walks: the tagged ones whose
-  // scope it falls outside are not its rules and never reach its plan, and the
-  // reaching ones carry their instruction to files its `applies-to` never names.
-  // Memoised per pair, because `makeFiles` asks the same question three times
-  // for every one of them - is this instruction applicable, which items go in
-  // the plan, how many items is that - and the answer cannot differ between
-  // those three. The key separator is a newline: no path or file name holds one.
-  const globalSet = new Set(instructions.globals);
-  const itemsCache = new Map();
-  const itemsFor = (file, filePath) => {
-    const key = `${file}\n${filePath}`;
-    let items = itemsCache.get(key);
-    if (items === undefined) {
-      items = itemsWalkedBy(parsedItemsOf(file), scopes[file], globalSet.has(file), filePath);
-      itemsCache.set(key, items);
-    }
-    return items;
+  // The kind of a path is decided once per run: a file listed on two targets is
+  // still one kind. A path two kinds describe equally well keeps its tie here, to be
+  // reported once for the files still under review when the context is done.
+  const kindMatches = new Map();
+  const kindOf = (filePath) => {
+    if (!kindMatches.has(filePath)) kindMatches.set(filePath, rulebook.matchKind(rules, filePath));
+    return kindMatches.get(filePath).kind;
   };
 
-  // Ids are handed out over EVERY loaded instruction, matched or not, so the
-  // same instruction keeps the same id no matter what a given diff touches.
-  const idOf = new Map();
-  const takenIds = new Set();
-  for (const file of [...instructions.globals, ...instructions.locals.map((l) => l.file)]) {
-    if (idOf.has(file)) continue;
-    const id = checklistIdOf(file, takenIds);
-    takenIds.add(id);
-    idOf.set(file, id);
-  }
-  // The ticking plan of one file: `general:1-13` names the items of that
-  // instruction this file is walked against, `accessibility:6-9,12` a checklist
-  // its scope tags narrowed. An instruction the file takes no item from is left
-  // out — there is nothing to tick in it.
-  const planOf = (files, filePath) => files
-    .map((f) => ({ id: idOf.get(f), numbers: itemsFor(f, filePath) }))
-    .filter((entry) => entry.numbers.length > 0)
-    .map((entry) => `${entry.id}:${formatItemSpec(entry.numbers)}`);
-
-  // Every run records the post-image blob of each reviewed file next to the
-  // report, so the next `--since-last` run can drop files whose content never
+  // Every run records the post-image blob of each reviewed file in the target's
+  // cache folder, so the next `--since-last` run can drop files whose content never
   // moved. Written even when the flag is off — the first incremental run needs
   // something to compare against — and trusted only as far as the previous run
-  // got: a review that died half-way still recorded the whole file list.
+  // got: a review that died half-way still recorded the whole file list. The same
+  // snapshot names the run's report, which is how the next run finds one to resume.
   const pendingSnapshots = new Map();
   // The revision each target reviews, in the form the duplication scan reads it
   // (duplication-scan.cjs) - kept out of the target, which is the reviewer's JSON.
   const scanSources = new Map();
   const snapshotPathOf = (target) =>
-    path.join(path.dirname(target.reportPath), `.last-review-${target.kind}.json`);
+    path.join(cacheDirOf(root, sanitizeBranchName(target.branch)), `.last-review-${target.kind}.json`);
+  // The layout before runs/ + cache/ kept the snapshot in the branch's report folder.
+  // Moved, not copied, the first time the branch is reviewed since: a --since-last run
+  // right after the upgrade still has something to compare against, and no second copy
+  // is left to go stale. The reports themselves stay where they are.
+  const adoptLegacySnapshot = (target) => {
+    const to = snapshotPathOf(target);
+    const from = path.join(legacyDir, sanitizeBranchName(target.branch), `.last-review-${target.kind}.json`);
+    if (fs.existsSync(to) || !fs.existsSync(from)) return;
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync(from, to);
+    } catch {}
+  };
   const resumeFrom = (target, currentBlobs) => {
-    const run = findInterruptedRun(target.reportPath);
-    if (!run) return false;
-    const leftovers = (stamps) => stamps.map((s) => `"${run.stem.slice(0, -s.length)}${s}".part*.md`).join(' ');
-    if (run.otherStamps.length > 0) {
-      result.warnings.push(`[${target.branch}] Parts of older interrupted reviews stay behind and are not used: ${run.otherStamps.join(', ')} - remove them with rm -f ${leftovers(run.otherStamps)}.`);
-    }
     let previous = null;
     try {
       previous = JSON.parse(fs.readFileSync(snapshotPathOf(target), 'utf8'));
     } catch {}
+    // Only a run of this codeReview folder: a report path from before runs/ existed is
+    // --since-last's to read, never a run to continue.
+    const run = previous && typeof previous.reportPath === 'string' ? findInterruptedRun(previous.reportPath) : null;
+    if (!run || !samePath(run.root, root) || run.branchDir !== sanitizeBranchName(target.branch)) return false;
+    const runDir = run.dir.replace(/\\/g, '/');
     if (currentBlobs) {
-      const same = previous && previous.files && path.resolve(String(previous.reportPath)) === path.resolve(`${run.stem}.md`)
+      const same = previous.files
         && Object.keys(previous.files).length === currentBlobs.size
         && [...currentBlobs].every(([p, blob]) => previous.files[p] === blob);
       if (!same) {
-        result.warnings.push(`[${target.branch}] The interrupted review from ${run.stamp} was of different content than this target holds now, so it is not resumed - this run starts from scratch. Its parts: rm -f ${leftovers([run.stamp])}.`);
+        result.warnings.push(`[${target.branch}] The interrupted review from ${run.stamp} was of different content than this target holds now, so it is not resumed - this run starts from scratch. Its run folder: rm -rf "${runDir}".`);
         return false;
       }
+    } else if (previous.folder !== target.folder) {
+      result.warnings.push(`[${target.branch}] The interrupted review from ${run.stamp} was of folder "${previous.folder}", not "${target.folder}", so it is not resumed - this run starts from scratch. Its run folder: rm -rf "${runDir}".`);
+      return false;
     } else {
-      result.warnings.push(`[${target.branch}] Resuming the interrupted review from ${run.stamp} without a content check (folder mode keeps no snapshot) - if files of this folder changed since, delete its parts (rm -f ${leftovers([run.stamp])}) and run again.`);
+      result.warnings.push(`[${target.branch}] Resuming the interrupted review from ${run.stamp} without a content check (folder mode keeps no snapshot of file contents) - if files of this folder changed since, delete its run folder (rm -rf "${runDir}") and run again.`);
     }
-    if (previous && Array.isArray(previous.reviewed)) {
+    if (Array.isArray(previous.reviewed)) {
       const reviewed = new Set(previous.reviewed);
       target.files = target.files.filter((f) => reviewed.has(f.path));
     }
-    if (previous && previous.sinceLast) {
+    if (previous.sinceLast) {
       target.unchangedSinceLastReview = previous.sinceLast.unchanged;
       target.previousReportPath = previous.sinceLast.previousReportPath;
     }
-    target.reportPath = `${run.stem}.md`;
-    target.htmlReportPath = wantsHtml ? `${run.stem}.html` : null;
+    target.reportPath = previous.reportPath;
+    target.htmlReportPath = wantsHtml ? previous.reportPath.replace(/\.md$/, '.html') : null;
     const doneFiles = target.files.map((f) => f.path).filter((p) => run.doneFiles.has(p));
     target.resume = { from: run.stamp, doneFiles, headerWritten: fs.existsSync(target.reportPath) };
     result.warnings.push(`[${target.branch}] Resuming the review interrupted at ${run.stamp}: ${doneFiles.length} of ${target.files.length} file(s) already have their part and are not analyzed again.`);
@@ -1294,6 +1119,7 @@ function buildContext(options) {
     if (currentBlobs) pendingSnapshots.set(target, currentBlobs);
     if (diffArgs) pendingDiffArgs.set(target, diffArgs);
     scanSources.set(target, scanSource);
+    adoptLegacySnapshot(target);
     if (resumeFrom(target, currentBlobs)) {
       if (options.sinceLast) result.warnings.push(`[${target.branch}] --since-last is ignored while resuming: the resumed run keeps the file list it started with.`);
     } else if (options.sinceLast && !currentBlobs) {
@@ -1332,7 +1158,7 @@ function buildContext(options) {
     // for two reviews and would end with one file and no sign of the other.
     const clash = result.targets.find((t) => t.reportPath === target.reportPath);
     if (clash) {
-      result.warnings.push(`Branches "${clash.branch}" and "${target.branch}" produce the same report name (${path.basename(target.reportPath)}), so the second review would overwrite the first and both would share one --since-last snapshot. Review them in separate runs.`);
+      result.warnings.push(`Branches "${clash.branch}" and "${target.branch}" produce the same report folder (${path.basename(path.dirname(target.reportPath))}), so the second review would overwrite the first and both would share one --since-last snapshot. Review them in separate runs.`);
     }
     result.targets.push(target);
   };
@@ -1351,53 +1177,37 @@ function buildContext(options) {
   // changedLines: new-file line ranges precomputed from `git diff -U0`
   // (rangesArgsFor), so the reviewer never derives them from hunks itself;
   // null for added (every line is new) and deleted (no new file) files.
-  // Files of one KIND get byte-identical plans - the plan is decided by the path
-  // patterns and the scope tags, nothing else - so a 200-file diff repeats about eight
-  // distinct plans twenty-five times each. Measured there: 36 850 B of `checklist` plus
-  // 10 775 B of `globalInstructionsSkipped`, against 2 274 B as a catalog and an index -
-  // roughly 13 000 tokens of the orchestrator's own context, which is the thing this
-  // whole architecture exists to protect. Same move as `localInstructionsCatalog` right
-  // below, and the reviewer resolves it the same way.
+  // Files of one KIND share one plan - the kind IS the plan - so a 200-file diff
+  // repeats about eight distinct plans twenty-five times each. Measured with the
+  // plans written out per file: 36 850 B of `checklist`, against 2 274 B as a catalog
+  // and an index - roughly 13 000 tokens of the orchestrator's own context, which is
+  // the thing this whole architecture exists to protect.
   const planCatalog = [];
   const planIndex = new Map();
-  const planFor = (checklist, skipped) => {
-    const key = `${checklist.join('|')}` + String.fromCharCode(10) + skipped.join('|');
+  const planFor = (kind) => {
+    const key = kind ? kind.name : null;
     let at = planIndex.get(key);
     if (at === undefined) {
       at = planCatalog.length;
-      planCatalog.push({ checklist, globalInstructionsSkipped: skipped });
+      planCatalog.push(kind);
       planIndex.set(key, at);
     }
     return at;
   };
 
   const makeFiles = (rawFiles, rangesByPath) => rawFiles.map((f) => {
-    // An instruction whose every item the file's scope tags took away has
-    // nothing to say about it, so it is not one of the file's instructions —
-    // neither to read nor to tick. One outside the file's scope still is when
-    // an item reaches the file.
-    const applicable = (file) => itemsFor(file, f.path).length > 0;
-    const locals = instructions.locals.map((l) => l.file).filter(applicable);
-    // Globals are matched per file too: one that declares `applies-to` is
-    // narrowed like a local, one that declares none still applies everywhere.
-    const globals = instructions.globals.filter(applicable);
-    const plan = [...planOf(globals, f.path), ...planOf(locals, f.path)];
+    const kind = kindOf(f.path);
     return {
       path: f.path,
       status: f.status,
       // Only a rename/copy has one; the mechanical-change gate compares the two
       // names (and their folders) against the naming instructions.
       ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-      localInstructions: locals,
-      // An INDEX into `checklistPlans`, which holds this file's ticking plan (one
-      // `<id>:<items>` entry per instruction, globals first, then the matched locals)
-      // and the globals its path took it out of, named by checklist id so a shorter
-      // plan reads as a decision instead of an omission.
-      plan: planFor(plan, instructions.globals.filter((g) => !globals.includes(g)).map((g) => idOf.get(g))),
-      // Matched global + matched local checklist items this file must be walked
-      // against; the reviewer reports `<checked>/<checklistTotal>` per file.
-      checklistTotal: globals.reduce((n, p) => n + itemsFor(p, f.path).length, 0)
-        + locals.reduce((n, p) => n + itemsFor(p, f.path).length, 0),
+      // An INDEX into `checklistPlans`, which holds the plan of this file's kind: its
+      // name and role, and one `<id>:<items>` entry per instruction it walks.
+      plan: planFor(kind),
+      // Every item of that plan; the reviewer reports `<checked>/<checklistTotal>` per file.
+      checklistTotal: kind ? kind.itemCount : 0,
       changedLines: f.status === 'A' || f.status === 'D'
         ? null
         : (rangesByPath.get(f.path) || ''),
@@ -1468,7 +1278,7 @@ function buildContext(options) {
       baseBranch: null,
       baseSource: null,
       prNumber: null,
-      ...reportPaths(branchName, 'staged'),
+      ...reportPaths(branchName),
       commands: {
         grep: gitc(`grep -n -I --cached -E ${q('<pattern>')} --`),
       },
@@ -1507,7 +1317,7 @@ function buildContext(options) {
         baseSource: null,
         prNumber: null,
         folder: rel,
-        ...reportPaths(branchName, `folder-${sanitizeBranchName(rel)}`),
+        ...reportPaths(branchName),
         commands: {
           grep: gitc(`grep -n -I --untracked -E ${q('<pattern>')} --`),
         },
@@ -1551,6 +1361,8 @@ function buildContext(options) {
   // `07-a.ts.diff` feed `<stem>.part07.md`. Folder mode reads the working tree
   // itself, so its `contentPath` is the file and it has no patch.
   const pendingWork = new Map();
+  // What the cross-file bundle of each target is written from, once the walked items are known.
+  const pendingCross = new Map();
   for (const target of result.targets) {
     const blobs = pendingSnapshots.get(target);
     const contents = blobs ? readBlobs(project, target.files.map((f) => blobs.get(f.path) || '')) : null;
@@ -1563,6 +1375,28 @@ function buildContext(options) {
       }
     };
     pendingLedgers.set(target, formatImportLedger(target.files, readContent).text);
+    // The repository facts (repo-facts.cjs) about the reviewed files, from the revision the
+    // review reads. A failure costs the bundles their facts, never the review.
+    const reviewedTexts = new Map();
+    for (const f of target.files) {
+      const text = f.status === 'D' ? null : readContent(f.path);
+      if (text !== null && !text.includes('\u0000')) reviewedTexts.set(f.path, text);
+    }
+    let universe = { files: reviewedTexts, factRoot: '', partial: false };
+    let collected = { facts: new Map(), exportsByFile: new Map(), cross: [] };
+    if (reviewedTexts.size > 0) {
+      try {
+        universe = loadFactUniverse(project, scanSources.get(target), reviewedTexts);
+        collected = repoFacts.collectFacts({ files: universe.files, reviewed: new Set(reviewedTexts.keys()), root: universe.factRoot });
+      } catch (err) {
+        universe = { files: reviewedTexts, factRoot: '', partial: false };
+        result.warnings.push(`[${target.branch}] Repository facts were not collected (${(err && err.message) || err}) - the file bundles carry the plan without them.`);
+      }
+    }
+    if (universe.partial) {
+      result.warnings.push(`[${target.branch}] Repository facts come from part of the repository (git could not list it, or it holds more than ${factFileLimit} files / ${factTotalBytes / 1024 / 1024} MB of sources) - every fact only points at its line.`);
+    }
+    const factFiles = {};
     target.importLedger = target.reportPath.replace(/\.md$/, '.imports.txt');
     // Forward slashes: the same path works in a Read, in fs, and in a POSIX shell,
     // and a JSON string of it is not doubled by escaping.
@@ -1576,6 +1410,8 @@ function buildContext(options) {
     // The part files' own width (check-part.cjs), so `03-a.ts` pairs with `part03.md`.
     const width = Math.max(2, String(target.files.length + 2).length);
     const writes = [];
+    // Rendered once every file is known: a bundle ends with the Reads of the next batch.
+    const bundles = [];
     target.files.forEach((f, i) => {
       const stem = `${target.workDir}/${String(i + 1).padStart(width, '0')}-${path.basename(f.path).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')}`;
       f.contentPath = null;
@@ -1602,97 +1438,188 @@ function buildContext(options) {
           writes.push([f.diffPath, patch.endsWith('\n') ? patch : `${patch}\n`]);
         }
       }
+      // The file's bundle (review-bundle.cjs): what Step 3 reads next to the file. `f.plan`
+      // still indexes the full plan catalog here; it is remapped below.
+      const kind = planCatalog[f.plan];
+      const text = reviewedTexts.has(f.path) ? reviewedTexts.get(f.path) : null;
+      const bound = reviewBundle.bindFile({
+        plan: kind ? kind.plan : [],
+        instructions: rules.instructions,
+        filePath: f.path,
+        text,
+        facts: collected.facts.get(f.path) || [],
+        context: {
+          // A template's signal reads are told from its component's methods; a class with an
+          // inline template is walked by the template probes as well.
+          companionText: /\.html?$/.test(f.path) ? universe.files.get(f.path.replace(/\.html?$/, '.ts')) : undefined,
+          inlineTemplate: text !== null && /\.[cm]?[jt]sx?$/.test(f.path) && /\btemplate\s*:\s*`/.test(text),
+        },
+        partial: universe.partial,
+      });
+      if (Object.keys(bound.items).length > 0 || bound.info.length > 0) factFiles[f.path] = bound;
+      f.bundlePath = `${stem}.bundle.md`;
+      bundles.push({
+        file: f,
+        number: i + 1,
+        lineCount: reviewBundle.lineCountOf(reviewedTexts.get(f.path)),
+        render: {
+          file: f,
+          kind,
+          instructions: rules.instructions,
+          bound,
+          exports: collected.exportsByFile.get(f.path) || [],
+          candidates: (target.duplicationCandidates || []).filter((c) => c.path === f.path),
+          factRoot: universe.factRoot,
+          partial: universe.partial,
+        },
+      });
+    });
+    target.factsPath = `${target.workDir}/${reviewBundle.factsFileName}`;
+    writes.push([target.factsPath, JSON.stringify(reviewBundle.factsDocument({
+      files: factFiles, factRoot: universe.factRoot, partial: universe.partial, rules: reviewBundle.rulesOf(rules.instructions),
+    }))]);
+    target.crossBundlePath = `${target.workDir}/${reviewBundle.crossBundleName}`;
+    // The batches of the files still to walk - a resumed run's finished files keep their
+    // bundle, outside any batch. `batches` lists the multi-file ones as [first, last] file
+    // numbers (check-part.cjs lets their parts come in one response), and `start` the Reads
+    // the walk opens with.
+    const n = target.files.length;
+    const done = new Set(target.resume ? target.resume.doneFiles : []);
+    const pending = bundles.filter((b) => !done.has(b.file.path));
+    const batches = options.batch === false
+      ? pending.map((b) => [b.number])
+      : reviewBundle.planBatches(pending.map((b) => ({ number: b.number, lines: b.lineCount, items: b.file.checklistTotal })));
+    const byNumber = new Map(bundles.map((b) => [b.number, b]));
+    const crossPartPath = reviewBundle.partPathOf(target.reportPath, n + 1, n);
+    const batchOf = new Map();
+    batches.forEach((batch, k) => {
+      const next = k + 1 < batches.length ? batches[k + 1].map((number) => byNumber.get(number).file) : [];
+      for (const number of batch) batchOf.set(number, { batch, next });
+    });
+    for (const b of bundles) {
+      const at = batchOf.get(b.number);
+      const last = at && at.batch[at.batch.length - 1] === b.number;
+      writes.push([b.file.bundlePath, reviewBundle.renderBundle({
+        ...b.render,
+        lineCount: b.lineCount,
+        partPath: reviewBundle.partPathOf(target.reportPath, b.number, n),
+        batch: at && at.batch.length > 1 ? at.batch.map((number) => byNumber.get(number).file.path) : null,
+        next: last ? reviewBundle.renderNext({ nextFiles: at.next, crossBundlePath: target.crossBundlePath, crossPartPath }) : null,
+      })]);
+    }
+    target.batches = batches.filter((batch) => batch.length > 1).map((batch) => [batch[0], batch[batch.length - 1]]);
+    target.start = batches.length > 0
+      ? reviewBundle.readsOf(batches[0].map((number) => byNumber.get(number).file))
+      : n > 0 ? [target.crossBundlePath, `${reviewBundle.skillDir}/references/cross-file.md`] : [];
+    pendingCross.set(target, {
+      cross: collected.cross,
+      factRoot: universe.factRoot,
+      partial: universe.partial,
+      crossPartPath,
+      closingPartPath: reviewBundle.partPathOf(target.reportPath, n + 2, n),
+      withPr: !!target.htmlReportPath,
     });
     pendingWork.set(target, writes);
   }
 
-  // Surface files that matched no local instruction — the files a reviewer is
-  // most tempted to skim; global checklists still fully apply to them.
+  // Only the plans a reviewed file still points at are handed out - a file dropped
+  // by `--since-last` or by the reviewed subset takes its kind's plan with it - and
+  // every file's index is remapped onto that shorter list, in order of first use.
+  const planAt = new Map();
+  const noKind = new Set();
+  const tied = new Set();
   for (const target of result.targets) {
-    const noLocal = target.files.filter((f) => f.localInstructions.length === 0).map((f) => f.path);
-    if (noLocal.length > 0) {
-      // Capped: a 200-file diff would otherwise spend thousands of tokens on one
-      // warning line the reviewer has to read and translate.
-      const shown = noLocal.slice(0, 10).join(', ');
-      const rest = noLocal.length > 10 ? `, (+${noLocal.length - 10} more)` : '';
-      result.warnings.push(`[${target.branch}] ${noLocal.length} file(s) match no local instruction (global checklists still apply): ${shown}${rest}`);
+    for (const file of target.files) {
+      if (!planAt.has(file.plan)) planAt.set(file.plan, planAt.size);
+      file.plan = planAt.get(file.plan);
+      const match = kindMatches.get(file.path);
+      if (!match.kind) noKind.add(file.path);
+      else if (match.tied.length > 0) tied.add(`${file.path} (${match.tied.join(' = ')})`);
     }
+  }
+  const plannedKinds = [...planAt.keys()].map((at) => planCatalog[at]);
+  result.checklistPlans = plannedKinds.map((kind) => (kind
+    ? {
+      kind: kind.name,
+      role: kind.role,
+      ...(kind.notes.length > 0 ? { notes: kind.notes } : {}),
+      checklist: kind.plan.map((step) => `${step.id}:${rulebook.formatItemSpec(step.numbers)}`),
+    }
+    : { kind: null, role: 'No file kind matches this path.', checklist: [] }));
+  // Capped: a 200-file diff would otherwise spend thousands of tokens on one
+  // warning line the reviewer has to read and translate.
+  const capped = (entries) => entries.slice(0, 10).join(', ') + (entries.length > 10 ? `, (+${entries.length - 10} more)` : '');
+  if (noKind.size > 0 && rules.kinds.length > 0) {
+    result.warnings.push(`${noKind.size} file(s) match no file kind - reviewed only against the project CLAUDE.md and the universal points: ${capped([...noKind])}`);
+  }
+  if (tied.size > 0) {
+    result.warnings.push(`${tied.size} file(s) match two file kinds equally well - each is reviewed as the first kind named, and the rulebook needs a more specific pattern: ${capped([...tied])}`);
   }
 
-  // Deduplicate matched local instruction paths into one catalog; per-file
-  // localInstructions become indexes into it (read each catalog file once).
-  const catalog = new Set();
-  for (const target of result.targets) {
-    for (const file of target.files) for (const p of file.localInstructions) catalog.add(p);
-  }
-  result.localInstructionsCatalog = [...catalog].sort();
-  result.checklistPlans = planCatalog;
-  // Globals are narrowed to the ones at least one reviewed file actually walks:
-  // a diff of stylesheets never reads the TypeScript rulebook. Every file still
-  // names what it was taken out of in its own `globalInstructionsSkipped`.
-  if (result.targets.length > 0) {
-    const usedGlobals = new Set();
-    for (const target of result.targets) {
-      for (const file of target.files) {
-        for (const g of instructions.globals) {
-          if (itemsFor(g, file.path).length > 0) usedGlobals.add(g);
-        }
-      }
+  // What the run's plans walk, instruction by instruction: the items its numbered
+  // copy lists, and the instructions whose gate and per-file rule are handed out.
+  const walked = new Map();
+  for (const kind of plannedKinds) {
+    for (const step of kind ? kind.plan : []) {
+      const numbers = walked.get(step.id) || new Set();
+      for (const n of step.numbers) numbers.add(n);
+      walked.set(step.id, numbers);
     }
-    result.globalInstructions = instructions.globals.filter((g) => usedGlobals.has(g));
   }
-  // An id and the file it stands for are one fact, so they travel as one entry of the
-  // catalog that already lists the file. Kept apart they were the same thirty-five paths
-  // written twice - a fifth of a real context - and two places to look one thing up in.
-  // The `gate:` sentence of every instruction that declares one. The reviewer
+  const walkedIds = [...walked.keys()].sort();
+  const instructionOf = (id) => rules.instructions.get(id);
+  // The `gate` sentence of every instruction that declares one. The reviewer
   // answers it once per file before walking that instruction's items: a failed
   // gate collapses the whole instruction into one ticked range line.
-  result.checklistGates = Object.fromEntries(
-    [...result.globalInstructions, ...result.localInstructionsCatalog]
-      .filter((f) => itemsOf(f) > 0 && scopes[f] && scopes[f].gate)
-      .map((f) => [idOf.get(f), scopes[f].gate]),
-  );
+  result.checklistGates = Object.fromEntries(walkedIds
+    .filter((id) => instructionOf(id).gate)
+    .map((id) => [id, instructionOf(id).gate]));
   // Instructions declaring `findings: per-file`: their items are facets of one requirement, so
   // a file's breaches of one are a single finding naming every item broken (SKILL.md Step 3
   // point 3) - the part check lets that finding name several of its items, and refuses a second.
-  result.checklistPerFile = [...result.globalInstructions, ...result.localInstructionsCatalog]
-    .filter((f) => itemsOf(f) > 0 && scopes[f] && scopes[f].findings === 'per-file')
-    .map((f) => idOf.get(f));
-  const indexOf = new Map(result.localInstructionsCatalog.map((p, i) => [p, i]));
-  for (const target of result.targets) {
-    for (const file of target.files) {
-      file.localInstructions = file.localInstructions.map((p) => indexOf.get(p));
-    }
+  result.checklistPerFile = walkedIds.filter((id) => instructionOf(id).findings === 'per-file');
+  for (const [target, cross] of pendingCross) {
+    pendingWork.get(target).push([target.crossBundlePath, reviewBundle.renderCrossBundle({
+      ...cross,
+      instructions: rules.instructions,
+      walked,
+      candidates: target.duplicationCandidates || null,
+      importLedger: target.importLedger,
+    })]);
   }
 
-  // Done last: everything above addresses these two lists by path.
-  // `numberedPath` is the copy of the instruction the reviewer reads, its bullets
-  // already carrying their `<id>#<n>` (numberChecklist), written with the reports.
-  const rulesDir = result.targets.length > 0
-    ? path.join(path.dirname(result.targets[0].reportPath), `.review-rules-${result.targets[0].kind}`).replace(/\\/g, '/')
+  // `numberedPath` is the copy of the instruction the reviewer reads (renderNumbered),
+  // written with the reports into the first target's cache folder - where the run's
+  // context goes too.
+  const runCacheDir = result.targets.length > 0 ? cacheDirOf(root, sanitizeBranchName(result.targets[0].branch)) : null;
+  const rulesDir = runCacheDir
+    ? path.join(runCacheDir, 'checklists', result.targets[0].kind).replace(/\\/g, '/')
     : null;
-  const withId = (p) => ({
-    id: idOf.get(p),
-    path: p,
-    ...(rulesDir ? { numberedPath: `${rulesDir}/${idOf.get(p)}.md` } : {}),
-  });
-  result.globalInstructions = result.globalInstructions.map(withId);
-  result.localInstructionsCatalog = result.localInstructionsCatalog.map(withId);
+  // `items` names the numbers that copy lists: an agent reviewing again with the copy
+  // of an earlier run in its context re-reads it only when this names one it lacks.
+  result.instructionsCatalog = walkedIds.map((id) => ({
+    id,
+    name: instructionOf(id).name,
+    items: rulebook.formatItemSpec([...walked.get(id)].sort((a, b) => a - b)),
+    ...(rulesDir ? { numberedPath: `${rulesDir}/${id}.md` } : {}),
+  }));
 
   if (result.targets.length > 0) {
-    fs.mkdirSync(reportsDir, { recursive: true });
-    if (useProjectDoh) ensureDohGitignore(reportsDir);
-    // Pruning runs in both locations: the project's `.claude/doh/` is shared
-    // with other artifacts, but only run-stamped report names are ever counted
-    // or deleted (see pruneReports), so nothing else there is at risk.
-    pruneReports(reportsDir);
+    fs.mkdirSync(root, { recursive: true });
+    if (useProjectDoh) ensureDohGitignore(legacyDir);
+    // Pruning runs in both locations and only ever inside runs/ (see pruneRuns).
+    pruneRuns(runsDir, result.targets.map((target) => path.dirname(target.reportPath)));
     // Rewritten whole every run, so a copy never outlives a change to its instruction.
     try {
       fs.rmSync(rulesDir, { recursive: true, force: true });
       fs.mkdirSync(rulesDir, { recursive: true });
-      for (const entry of [...result.globalInstructions, ...result.localInstructionsCatalog]) {
-        fs.writeFileSync(entry.numberedPath, numberChecklist(fs.readFileSync(entry.path, 'utf8'), entry.id));
+      for (const entry of result.instructionsCatalog) {
+        const numbers = [...walked.get(entry.id)].sort((a, b) => a - b);
+        fs.writeFileSync(entry.numberedPath, rulebook.renderNumbered(instructionOf(entry.id), numbers));
       }
+      // Step 2 reads this one file; the items reach the reviewer in the file bundles.
+      result.rulebookNotesPath = `${rulesDir}/${reviewBundle.notesFileName}`;
+      fs.writeFileSync(result.rulebookNotesPath, reviewBundle.renderRulebookNotes(walkedIds.map(instructionOf)));
     } catch (err) {
       result.errors.push(`Could not write the numbered instructions to ${rulesDir} (${(err && err.message) || err}) - the review reads its checklists from there, so it cannot run.`);
       // Dropped, not just reported: no target left is what stops Step 1 (exit 1),
@@ -1701,7 +1628,7 @@ function buildContext(options) {
     }
     // A target whose work folder could not be written has nothing to be read from.
     const unwritten = new Set();
-    // After the pruning, so an emptied branch folder is not removed right after
+    // After the pruning, so an emptied run folder is not removed right after
     // being created for this run.
     for (const target of result.targets) {
       fs.mkdirSync(path.dirname(target.reportPath), { recursive: true });
@@ -1710,23 +1637,27 @@ function buildContext(options) {
       } catch {
         result.warnings.push(`[${target.branch}] Could not write the import ledger ${target.importLedger} - collect the import edges while reading each file.`);
       }
-      // Emptied first: a resumed run rewrites what the interrupted one wrote.
+      // Emptied first: a resumed run rewrites what the interrupted one wrote, all but its drafts.
       try {
+        const drafts = target.resume ? keptDrafts(target.workDir, target.reportPath) : [];
         fs.rmSync(target.workDir, { recursive: true, force: true });
         fs.mkdirSync(target.workDir, { recursive: true });
-        for (const [file, text] of pendingWork.get(target) || []) fs.writeFileSync(file, text);
+        for (const [file, text] of [...(pendingWork.get(target) || []), ...drafts]) fs.writeFileSync(file, text);
+        if (drafts.length > 0) target.resume.drafts = drafts.map(([file]) => file);
       } catch (err) {
         result.errors.push(`[${target.branch}] Could not write the work folder ${target.workDir} (${(err && err.message) || err}) - the files under review are read from it, so this target is not reviewed.`);
         unwritten.add(target);
         continue;
       }
       const blobs = pendingSnapshots.get(target);
-      if (!blobs) continue;
       try {
+        fs.mkdirSync(path.dirname(snapshotPathOf(target)), { recursive: true });
         fs.writeFileSync(snapshotPathOf(target), JSON.stringify({
           at: now.toISOString(),
           reportPath: target.reportPath,
-          files: Object.fromEntries(blobs),
+          // Folder mode reads the working tree, which has no blobs to record: its
+          // snapshot only names the folder, so a resume continues the same one.
+          ...(blobs ? { files: Object.fromEntries(blobs) } : { folder: target.folder }),
           // What a resumed run restores: the file list this run reviews and the
           // `--since-last` narrowing it was built with.
           reviewed: target.files.map((f) => f.path),
@@ -1737,6 +1668,10 @@ function buildContext(options) {
       } catch {}
     }
     result.targets = result.targets.filter((target) => !unwritten.has(target));
+    if (result.targets.length > 0) {
+      result.contextPath = path.join(runCacheDir, `.review-context-${result.targets[0].kind}.json`);
+      for (const target of result.targets) target.commands.assemble = assembleCommand(target, result.contextPath, project, skillDir);
+    }
   }
   return result;
 }
@@ -1754,13 +1689,14 @@ function main() {
 
 // FIXED IDENTIFIERS (SKILL.md Step 1 reads them): `contextPath`, `errors`, `warnings`,
 // `targets[].branch|files|reportPath|resumed`. The whole context goes to `contextPath`,
-// next to the first target's report; stdout carries only what Step 1 acts on at once.
+// in the first target's cache folder; stdout carries only what Step 1 acts on at once.
 // A run with no target has nothing worth a file, so it prints everything as before.
 function writeContext(context) {
   if (!context.targets || context.targets.length === 0) return context;
   const first = context.targets[0];
-  const contextPath = path.join(path.dirname(first.reportPath), `.review-context-${first.kind}.json`);
-  const { errors, warnings, ...rest } = context;
+  const { errors, warnings, contextPath: planned, ...rest } = context;
+  // A context not built by buildContext names no path; it goes next to its first report.
+  const contextPath = planned || path.join(path.dirname(first.reportPath), `.review-context-${first.kind}.json`);
   try {
     fs.writeFileSync(contextPath, layoutJson(rest) + '\n');
   } catch (err) {
@@ -1774,6 +1710,6 @@ function writeContext(context) {
   };
 }
 
-module.exports = { ensureDohGitignore, extractImports, formatImportLedger, readBlobs, unquoteGitPath, patchPathOf, splitPatchByPath, numberChecklist, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, parseFrontmatter, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, countChecklistItems, parseChecklistItems, matchChecklistItems, itemsWalkedBy, formatItemSpec, checklistIdOf, parseHunkRanges, loadInstructions, splitPatterns, matchesScope, matchLocalInstructions, matchGlobalInstructions, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { reportStem, runOf, cacheDirOf, pruneRuns, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

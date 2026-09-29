@@ -1,5 +1,5 @@
 {
-  "description": "doh lean mode: gives every sub-agent of a session in which a doh skill ran the caveman ultra rules (shared/caveman-ultra.md). See shared/README.md.",
+  "description": "doh lean mode: gives every sub-agent of a session in which a doh skill ran the caveman ultra rules (shared/caveman-ultra.md). See shared/README.md. codeReview: after a compaction in the middle of a review, names where the run stands and what to read again (skills/codeReview/scripts/review-hooks.cjs); silent in every other session.",
   "hooks": {
     "SubagentStart": [
       {
@@ -8,6 +8,19 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs", "--event=subagent"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs", "--event=compact"],
             "timeout": 10
           }
         ]

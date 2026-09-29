@@ -1,0 +1,1630 @@
+{
+  "description": "Per-file review checklists derived from skills/codeReview/instructions: one JSON per reviewed file of skills/codeReview/test-environment (its README.md is documentation, not a reviewed file) and one per file kind the instructions describe that the environment lacks. Each JSON carries the full text of every checklist item that file must satisfy, chosen by the file's real role and content — not by the global/local split, applies-to patterns or scope tags.",
+  "conventions": {
+    "itemId": "`<instruction>#<n>`: n is the item's position in the source checklist, the same address a review report uses.",
+    "text": "The item text as written in the source, without its scope tag; `{{…}}` placeholders are left as written.",
+    "preamble": "The instruction's own paragraphs before its checklist (ownership, severity, scope), when it has any.",
+    "gate": "The instruction's applicability condition from its frontmatter, copied as is.",
+    "selectedItems": "The selected item numbers in range form; checklistSize is the size of the full source checklist.",
+    "order": "In every file the instructions specific to its kind come first, the cross-cutting ones last."
+  },
+  "instructions": [
+    {
+      "id": "app-config",
+      "name": "Application configuration & bootstrap",
+      "source": "instructions/local/code/app-config.md",
+      "itemCount": 10
+    },
+    {
+      "id": "routes",
+      "name": "Route definitions",
+      "source": "instructions/local/code/shared/routes.md",
+      "itemCount": 10
+    },
+    {
+      "id": "guards",
+      "name": "Route guards",
+      "source": "instructions/local/code/shared/guards.md",
+      "itemCount": 9
+    },
+    {
+      "id": "interceptors",
+      "name": "HTTP interceptors",
+      "source": "instructions/local/code/shared/interceptors.md",
+      "itemCount": 9
+    },
+    {
+      "id": "directives",
+      "name": "Attribute directives",
+      "source": "instructions/local/code/shared/directives.md",
+      "itemCount": 8
+    },
+    {
+      "id": "pipes",
+      "name": "Pipes",
+      "source": "instructions/local/code/shared/pipes.md",
+      "itemCount": 9
+    },
+    {
+      "id": "utils",
+      "name": "Utility functions",
+      "source": "instructions/local/code/shared/utils.md",
+      "itemCount": 11
+    },
+    {
+      "id": "http-service",
+      "name": "HTTP service",
+      "source": "instructions/local/code/+state/http-service.md",
+      "itemCount": 14
+    },
+    {
+      "id": "ngrx-actions",
+      "name": "NgRx actions",
+      "source": "instructions/local/code/+state/ngrx-actions.md",
+      "itemCount": 12
+    },
+    {
+      "id": "ngrx-effects",
+      "name": "NgRx effects",
+      "source": "instructions/local/code/+state/ngrx-effects.md",
+      "itemCount": 22
+    },
+    {
+      "id": "ngrx-facade",
+      "name": "NgRx facade",
+      "source": "instructions/local/code/+state/ngrx-facade.md",
+      "itemCount": 10
+    },
+    {
+      "id": "ngrx-reducer",
+      "name": "NgRx reducer",
+      "source": "instructions/local/code/+state/ngrx-reducer.md",
+      "itemCount": 18
+    },
+    {
+      "id": "ngrx-selectors",
+      "name": "NgRx selectors",
+      "source": "instructions/local/code/+state/ngrx-selectors.md",
+      "itemCount": 16
+    },
+    {
+      "id": "state-interface",
+      "name": "State interface and initial state",
+      "source": "instructions/local/code/models/state-interface.md",
+      "itemCount": 8
+    },
+    {
+      "id": "models",
+      "name": "Models folder",
+      "source": "instructions/local/code/models/models.md",
+      "itemCount": 24
+    },
+    {
+      "id": "feature-component",
+      "name": "Feature (smart) component",
+      "source": "instructions/local/code/components/feature-component.md",
+      "itemCount": 16
+    },
+    {
+      "id": "ui-component",
+      "name": "UI (presentational) component",
+      "source": "instructions/local/code/components/ui-component.md",
+      "itemCount": 8
+    },
+    {
+      "id": "component",
+      "name": "Angular component (common)",
+      "source": "instructions/local/code/components/component.md",
+      "itemCount": 26
+    },
+    {
+      "id": "component-template",
+      "name": "Component template",
+      "source": "instructions/local/code/components/component-template.md",
+      "itemCount": 21
+    },
+    {
+      "id": "component-styles",
+      "name": "Component styles",
+      "source": "instructions/local/code/components/component-styles.md",
+      "itemCount": 7
+    },
+    {
+      "id": "components-folder",
+      "name": "Components folder contents",
+      "source": "instructions/local/code/components/components-folder.md",
+      "itemCount": 3
+    },
+    {
+      "id": "ngrx-effects-unit-test",
+      "name": "NgRx effects unit test",
+      "source": "instructions/local/unit-tests/+state/ngrx-effects-unit-test.md",
+      "itemCount": 11
+    },
+    {
+      "id": "ngrx-facade-unit-test",
+      "name": "NgRx facade unit test",
+      "source": "instructions/local/unit-tests/+state/ngrx-facade-unit-test.md",
+      "itemCount": 8
+    },
+    {
+      "id": "ngrx-reducer-unit-test",
+      "name": "NgRx reducer unit test",
+      "source": "instructions/local/unit-tests/+state/ngrx-reducer-unit-test.md",
+      "itemCount": 10
+    },
+    {
+      "id": "ngrx-selectors-unit-test",
+      "name": "NgRx selectors unit test",
+      "source": "instructions/local/unit-tests/+state/ngrx-selectors-unit-test.md",
+      "itemCount": 9
+    },
+    {
+      "id": "component-unit-test",
+      "name": "Component unit test",
+      "source": "instructions/local/unit-tests/component-unit-test.md",
+      "itemCount": 9
+    },
+    {
+      "id": "util-guard-unit-test",
+      "name": "Util and guard unit tests",
+      "source": "instructions/local/unit-tests/util-guard-unit-test.md",
+      "itemCount": 7
+    },
+    {
+      "id": "unit-tests",
+      "name": "Unit tests (common)",
+      "source": "instructions/local/unit-tests/unit-tests.md",
+      "itemCount": 25
+    },
+    {
+      "id": "i18n",
+      "name": "Translations",
+      "source": "instructions/local/i18n.md",
+      "itemCount": 12
+    },
+    {
+      "id": "architecture",
+      "name": "Feature architecture",
+      "source": "instructions/global/architecture.md",
+      "itemCount": 12
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "source": "instructions/global/general.md",
+      "itemCount": 13
+    },
+    {
+      "id": "best-practices",
+      "name": "Angular & TypeScript best practices",
+      "source": "instructions/global/best-practices.md",
+      "itemCount": 23
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "source": "instructions/global/security.md",
+      "itemCount": 13
+    },
+    {
+      "id": "performance",
+      "name": "Performance & change detection",
+      "source": "instructions/global/performance.md",
+      "itemCount": 17
+    },
+    {
+      "id": "accessibility",
+      "name": "Accessibility — WCAG 2.2 level AA",
+      "source": "instructions/global/accessibility.md",
+      "itemCount": 31
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "source": "instructions/global/code-quality.md",
+      "itemCount": 8
+    },
+    {
+      "id": "test-coverage",
+      "name": "Test coverage — untested cases & edge cases",
+      "source": "instructions/global/test-coverage.md",
+      "itemCount": 9
+    }
+  ],
+  "excluded": [
+    {
+      "id": "guidelines",
+      "source": "instructions/global/guidelines.md",
+      "reason": "`audience: implement` — it binds code writing, not review, and has no checklist; the details of its canonical component shape that the review enforces are component#3, component#8 and component-styles#3."
+    }
+  ],
+  "files": [
+    {
+      "file": ".eslintrc.json",
+      "json": "test-environment/.eslintrc.json.json",
+      "role": "ESLint configuration of the workspace (legacy `.eslintrc` format).",
+      "itemCount": 3,
+      "perInstruction": {
+        "general": 2,
+        "security": 1
+      }
+    },
+    {
+      "file": "tsconfig.json",
+      "json": "test-environment/tsconfig.json.json",
+      "role": "Root TypeScript compiler configuration.",
+      "itemCount": 2,
+      "perInstruction": {
+        "general": 1,
+        "security": 1
+      }
+    },
+    {
+      "file": "src/index.html",
+      "json": "test-environment/src/index.html.json",
+      "role": "Host HTML document of the single-page app (`lang`, `<title>`, root element).",
+      "itemCount": 30,
+      "perInstruction": {
+        "accessibility": 16,
+        "i18n": 1,
+        "general": 2,
+        "security": 3,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/main.ts",
+      "json": "test-environment/src/main.ts.json",
+      "role": "Browser bootstrap entry point of the app.",
+      "itemCount": 26,
+      "perInstruction": {
+        "app-config": 2,
+        "architecture": 2,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/polyfills.ts",
+      "json": "test-environment/src/polyfills.ts.json",
+      "role": "Polyfills entry loaded before the app.",
+      "itemCount": 6,
+      "perInstruction": {
+        "app-config": 1,
+        "general": 1,
+        "security": 1,
+        "code-quality": 3
+      }
+    },
+    {
+      "file": "src/assets/i18n/en.json",
+      "json": "test-environment/src/assets/i18n/en.json.json",
+      "role": "Source-language (English) translation file — the only i18n file edited by hand.",
+      "itemCount": 14,
+      "perInstruction": {
+        "i18n": 9,
+        "security": 1,
+        "code-quality": 4
+      }
+    },
+    {
+      "file": "src/assets/i18n/pl.json",
+      "json": "test-environment/src/assets/i18n/pl.json.json",
+      "role": "Polish translation file, maintained outside code changes.",
+      "itemCount": 6,
+      "perInstruction": {
+        "i18n": 3,
+        "security": 1,
+        "code-quality": 2
+      }
+    },
+    {
+      "file": "src/assets/i18n/tests/en.json.spec.ts",
+      "json": "test-environment/src/assets/i18n/tests/en.json.spec.ts.json",
+      "role": "Jest spec asserting on the English translation JSON.",
+      "itemCount": 41,
+      "perInstruction": {
+        "i18n": 1,
+        "unit-tests": 19,
+        "general": 9,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/app.config.ts",
+      "json": "test-environment/src/app/app.config.ts.json",
+      "role": "Root `ApplicationConfig` (HTTP, router, store and error-handling providers) plus module-level constants and a custom `ErrorHandler` class.",
+      "itemCount": 52,
+      "perInstruction": {
+        "app-config": 10,
+        "interceptors": 1,
+        "architecture": 6,
+        "general": 9,
+        "best-practices": 4,
+        "security": 5,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/app.config.server.ts",
+      "json": "test-environment/src/app/app.config.server.ts.json",
+      "role": "Server-side (SSR) `ApplicationConfig` merged with the root config.",
+      "itemCount": 34,
+      "perInstruction": {
+        "app-config": 8,
+        "architecture": 4,
+        "general": 8,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/layout/data-access/+state/layout.actions.ts",
+      "json": "test-environment/src/app/layout/data-access/+state/layout.actions.ts.json",
+      "role": "NgRx action group of the layout slice (`createActionGroup`).",
+      "itemCount": 42,
+      "perInstruction": {
+        "ngrx-actions": 12,
+        "models": 3,
+        "architecture": 6,
+        "general": 8,
+        "best-practices": 3,
+        "security": 2,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/user-panel.module.ts",
+      "json": "test-environment/src/app/user-panel/user-panel.module.ts.json",
+      "role": "NgModule wrapper of the user-panel area.",
+      "itemCount": 24,
+      "perInstruction": {
+        "architecture": 4,
+        "general": 7,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/shell/user-panel-shell.routes.ts",
+      "json": "test-environment/src/app/user-panel/shell/user-panel-shell.routes.ts.json",
+      "role": "Wizard-shell routes of the user-panel area (`shell/` routing variant).",
+      "itemCount": 44,
+      "perInstruction": {
+        "routes": 8,
+        "guards": 3,
+        "models": 2,
+        "i18n": 2,
+        "architecture": 5,
+        "general": 9,
+        "best-practices": 4,
+        "security": 3,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/routes/user-panel.routes.ts",
+      "json": "test-environment/src/app/user-panel/shared/routes/user-panel.routes.ts.json",
+      "role": "Area routes of the user panel (`shared/routes` variant) plus a path-building function.",
+      "itemCount": 44,
+      "perInstruction": {
+        "routes": 8,
+        "guards": 3,
+        "models": 2,
+        "i18n": 2,
+        "architecture": 5,
+        "general": 9,
+        "best-practices": 4,
+        "security": 3,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/routes/tests/user-panel.routes.spec.ts",
+      "json": "test-environment/src/app/user-panel/shared/routes/tests/user-panel.routes.spec.ts.json",
+      "role": "Jest spec asserting on the area route config.",
+      "itemCount": 40,
+      "perInstruction": {
+        "routes": 1,
+        "unit-tests": 18,
+        "general": 9,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts",
+      "json": "test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts.json",
+      "role": "Feature (smart) component of the user panel: wires state to the UI, handles route input and user actions; declares inline `styles`.",
+      "itemCount": 155,
+      "perInstruction": {
+        "feature-component": 15,
+        "component": 26,
+        "http-service": 1,
+        "models": 3,
+        "component-styles": 7,
+        "i18n": 3,
+        "architecture": 9,
+        "general": 11,
+        "best-practices": 20,
+        "security": 8,
+        "performance": 12,
+        "accessibility": 23,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html",
+      "json": "test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html.json",
+      "role": "Template of the user-panel feature component.",
+      "itemCount": 83,
+      "perInstruction": {
+        "component-template": 21,
+        "feature-component": 2,
+        "i18n": 2,
+        "architecture": 1,
+        "general": 3,
+        "best-practices": 4,
+        "security": 6,
+        "performance": 8,
+        "accessibility": 28,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts",
+      "json": "test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts.json",
+      "role": "Attribute-style directive placed next to the feature component (DOM highlighting).",
+      "itemCount": 94,
+      "perInstruction": {
+        "directives": 8,
+        "components-folder": 2,
+        "http-service": 1,
+        "models": 3,
+        "component": 1,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 11,
+        "best-practices": 13,
+        "security": 8,
+        "performance": 8,
+        "accessibility": 13,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts",
+      "json": "test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts.json",
+      "role": "Helper file next to the feature component declaring a const, an interface and a function.",
+      "itemCount": 53,
+      "perInstruction": {
+        "components-folder": 2,
+        "utils": 7,
+        "models": 3,
+        "util-guard-unit-test": 1,
+        "i18n": 3,
+        "architecture": 5,
+        "general": 9,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.ts",
+      "json": "test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.ts.json",
+      "role": "Dialog feature component of the user panel.",
+      "itemCount": 128,
+      "perInstruction": {
+        "feature-component": 11,
+        "component": 26,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 8,
+        "general": 11,
+        "best-practices": 20,
+        "security": 8,
+        "performance": 8,
+        "accessibility": 13,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.html",
+      "json": "test-environment/src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.html.json",
+      "role": "Template of the user-panel dialog component.",
+      "itemCount": 83,
+      "perInstruction": {
+        "component-template": 21,
+        "feature-component": 2,
+        "i18n": 2,
+        "architecture": 1,
+        "general": 3,
+        "best-practices": 4,
+        "security": 6,
+        "performance": 8,
+        "accessibility": 28,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/ui/index.ts",
+      "json": "test-environment/src/app/user-panel/components-user-panel/ui/index.ts.json",
+      "role": "Barrel re-exporting the UI components of the area.",
+      "itemCount": 8,
+      "perInstruction": {
+        "components-folder": 1,
+        "architecture": 2,
+        "general": 1,
+        "code-quality": 4
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts",
+      "json": "test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts.json",
+      "role": "Presentational (dumb) user-card component: inputs, outputs and view logic.",
+      "itemCount": 125,
+      "perInstruction": {
+        "ui-component": 8,
+        "component": 26,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 8,
+        "general": 11,
+        "best-practices": 20,
+        "security": 8,
+        "performance": 8,
+        "accessibility": 13,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html",
+      "json": "test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html.json",
+      "role": "Template of the user-card UI component.",
+      "itemCount": 83,
+      "perInstruction": {
+        "component-template": 21,
+        "ui-component": 3,
+        "i18n": 2,
+        "architecture": 1,
+        "general": 3,
+        "best-practices": 4,
+        "security": 6,
+        "performance": 7,
+        "accessibility": 28,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss",
+      "json": "test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss.json",
+      "role": "Stylesheet of the user-card UI component.",
+      "itemCount": 24,
+      "perInstruction": {
+        "component-styles": 5,
+        "general": 2,
+        "security": 1,
+        "accessibility": 10,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts",
+      "json": "test-environment/src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts.json",
+      "role": "Jest + ng-mocks spec of the user-card UI component.",
+      "itemCount": 63,
+      "perInstruction": {
+        "component-unit-test": 9,
+        "unit-tests": 23,
+        "component": 1,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/index.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/index.ts.json",
+      "role": "Barrel re-exporting the NgRx `+state` files of the area.",
+      "itemCount": 7,
+      "perInstruction": {
+        "architecture": 2,
+        "general": 1,
+        "code-quality": 4
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/user-panel.actions.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/user-panel.actions.ts.json",
+      "role": "NgRx action group of the user-panel slice.",
+      "itemCount": 42,
+      "perInstruction": {
+        "ngrx-actions": 12,
+        "models": 3,
+        "architecture": 6,
+        "general": 8,
+        "best-practices": 3,
+        "security": 2,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/user-panel.effects.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/user-panel.effects.ts.json",
+      "role": "NgRx effects of the user-panel slice.",
+      "itemCount": 75,
+      "perInstruction": {
+        "ngrx-effects": 22,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 7,
+        "general": 11,
+        "best-practices": 6,
+        "security": 4,
+        "performance": 2,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/user-panel.facade.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/user-panel.facade.ts.json",
+      "role": "Facade of the user-panel slice: state as signals and dispatch methods for components.",
+      "itemCount": 60,
+      "perInstruction": {
+        "ngrx-facade": 10,
+        "http-service": 1,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 7,
+        "general": 9,
+        "best-practices": 7,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/user-panel.reducer.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/user-panel.reducer.ts.json",
+      "role": "Reducer and initial state of the user-panel slice.",
+      "itemCount": 65,
+      "perInstruction": {
+        "ngrx-reducer": 18,
+        "utils": 1,
+        "models": 5,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 9,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/user-panel.selectors.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/user-panel.selectors.ts.json",
+      "role": "Selectors of the user-panel slice, including derived values.",
+      "itemCount": 61,
+      "perInstruction": {
+        "ngrx-selectors": 16,
+        "utils": 1,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 9,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts.json",
+      "role": "Spec of the user-panel effects.",
+      "itemCount": 61,
+      "perInstruction": {
+        "ngrx-effects-unit-test": 11,
+        "unit-tests": 20,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts.json",
+      "role": "Spec of the user-panel facade.",
+      "itemCount": 58,
+      "perInstruction": {
+        "ngrx-facade-unit-test": 8,
+        "unit-tests": 20,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts.json",
+      "role": "Spec of the user-panel reducer.",
+      "itemCount": 58,
+      "perInstruction": {
+        "ngrx-reducer-unit-test": 10,
+        "unit-tests": 19,
+        "general": 9,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/+state/tests/user-panel.selectors.spec.ts",
+      "json": "test-environment/src/app/user-panel/data-access/+state/tests/user-panel.selectors.spec.ts.json",
+      "role": "Spec of the user-panel selectors.",
+      "itemCount": 59,
+      "perInstruction": {
+        "ngrx-selectors-unit-test": 9,
+        "unit-tests": 20,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/services/user-panel.service.ts",
+      "json": "test-environment/src/app/user-panel/data-access/services/user-panel.service.ts.json",
+      "role": "HTTP service of the user-panel area (REST calls through `HttpClient`).",
+      "itemCount": 52,
+      "perInstruction": {
+        "http-service": 13,
+        "models": 3,
+        "architecture": 6,
+        "general": 9,
+        "best-practices": 7,
+        "security": 5,
+        "performance": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/services/user-panel.service.spec.ts",
+      "json": "test-environment/src/app/user-panel/data-access/services/user-panel.service.spec.ts.json",
+      "role": "Spec of the user-panel HTTP service, stored next to it.",
+      "itemCount": 42,
+      "perInstruction": {
+        "http-service": 1,
+        "unit-tests": 19,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts",
+      "json": "test-environment/src/app/user-panel/data-access/services/user-panel-ui-state.service.ts.json",
+      "role": "Service in `data-access/services/` holding UI state in `BehaviorSubject`s; it performs no HTTP request.",
+      "itemCount": 47,
+      "perInstruction": {
+        "architecture": 7,
+        "models": 3,
+        "general": 8,
+        "best-practices": 9,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/index.ts",
+      "json": "test-environment/src/app/user-panel/models/index.ts.json",
+      "role": "Barrel of the area models, plus a stray const.",
+      "itemCount": 10,
+      "perInstruction": {
+        "models": 2,
+        "architecture": 2,
+        "general": 1,
+        "security": 1,
+        "code-quality": 4
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/consts/user-panel-initial-state.const.ts",
+      "json": "test-environment/src/app/user-panel/models/consts/user-panel-initial-state.const.ts.json",
+      "role": "Feature key and initial state of the user-panel slice.",
+      "itemCount": 34,
+      "perInstruction": {
+        "models": 9,
+        "state-interface": 3,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/consts/user-panel-title.const.ts",
+      "json": "test-environment/src/app/user-panel/models/consts/user-panel-title.const.ts.json",
+      "role": "Const holding the panel title text.",
+      "itemCount": 32,
+      "perInstruction": {
+        "models": 7,
+        "i18n": 2,
+        "architecture": 5,
+        "general": 8,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/consts/user-role-options.const.ts",
+      "json": "test-environment/src/app/user-panel/models/consts/user-role-options.const.ts.json",
+      "role": "Option list for the user-role select.",
+      "itemCount": 33,
+      "perInstruction": {
+        "models": 8,
+        "i18n": 2,
+        "architecture": 5,
+        "general": 8,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/enums/user-status.enum.ts",
+      "json": "test-environment/src/app/user-panel/models/enums/user-status.enum.ts.json",
+      "role": "User status and role enums, plus a status-label function.",
+      "itemCount": 32,
+      "perInstruction": {
+        "models": 7,
+        "i18n": 2,
+        "architecture": 5,
+        "general": 8,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/interfaces/user-dto.interface.ts",
+      "json": "test-environment/src/app/user-panel/models/interfaces/user-dto.interface.ts.json",
+      "role": "API envelope and user DTO interfaces, plus the user view model.",
+      "itemCount": 33,
+      "perInstruction": {
+        "models": 12,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/interfaces/user-panel-state.interface.ts",
+      "json": "test-environment/src/app/user-panel/models/interfaces/user-panel-state.interface.ts.json",
+      "role": "State interface of the user-panel NgRx slice.",
+      "itemCount": 38,
+      "perInstruction": {
+        "state-interface": 7,
+        "models": 9,
+        "ngrx-actions": 1,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/interfaces/user-table-cell.interface.ts",
+      "json": "test-environment/src/app/user-panel/models/interfaces/user-table-cell.interface.ts.json",
+      "role": "Interface of a user-table cell.",
+      "itemCount": 31,
+      "perInstruction": {
+        "models": 10,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/types/user-table.type.ts",
+      "json": "test-environment/src/app/user-panel/models/types/user-table.type.ts.json",
+      "role": "User-table row type, drag-and-drop data interface and column-label enum.",
+      "itemCount": 38,
+      "perInstruction": {
+        "models": 13,
+        "i18n": 2,
+        "architecture": 5,
+        "general": 8,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "file": "src/app/user-panel/models/tests/user-status.enum.spec.ts",
+      "json": "test-environment/src/app/user-panel/models/tests/user-status.enum.spec.ts.json",
+      "role": "Jest spec over the user-status enum.",
+      "itemCount": 40,
+      "perInstruction": {
+        "models": 1,
+        "unit-tests": 18,
+        "general": 9,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/index.ts",
+      "json": "test-environment/src/app/user-panel/shared/index.ts.json",
+      "role": "Barrel re-exporting the shared guards, pipe and utils of the area.",
+      "itemCount": 8,
+      "perInstruction": {
+        "architecture": 2,
+        "utils": 1,
+        "general": 1,
+        "code-quality": 4
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/guards/user-panel-init.guard.ts",
+      "json": "test-environment/src/app/user-panel/shared/guards/user-panel-init.guard.ts.json",
+      "role": "Functional init guard of the user-panel routes.",
+      "itemCount": 59,
+      "perInstruction": {
+        "guards": 8,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 11,
+        "best-practices": 6,
+        "security": 5,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/guards/user-panel.guard.ts",
+      "json": "test-environment/src/app/user-panel/shared/guards/user-panel.guard.ts.json",
+      "role": "Class-based access guard of the user panel plus a step-guard factory.",
+      "itemCount": 61,
+      "perInstruction": {
+        "guards": 9,
+        "http-service": 1,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 11,
+        "best-practices": 6,
+        "security": 5,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/guards/tests/user-panel.guard.spec.ts",
+      "json": "test-environment/src/app/user-panel/shared/guards/tests/user-panel.guard.spec.ts.json",
+      "role": "Spec of the user-panel guard.",
+      "itemCount": 55,
+      "perInstruction": {
+        "util-guard-unit-test": 3,
+        "unit-tests": 21,
+        "guards": 1,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts",
+      "json": "test-environment/src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts.json",
+      "role": "Class-based HTTP interceptor adding auth data to requests, declared inside the area.",
+      "itemCount": 60,
+      "perInstruction": {
+        "interceptors": 9,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 11,
+        "best-practices": 6,
+        "security": 5,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/pipes/user-status.pipe.ts",
+      "json": "test-environment/src/app/user-panel/shared/pipes/user-status.pipe.ts.json",
+      "role": "Pipe turning a user status into a display label.",
+      "itemCount": 57,
+      "perInstruction": {
+        "pipes": 9,
+        "models": 4,
+        "component": 1,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 9,
+        "best-practices": 5,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/utils/build-user-summary.util.ts",
+      "json": "test-environment/src/app/user-panel/shared/utils/build-user-summary.util.ts.json",
+      "role": "Utils building the user summary and aggregating user tags.",
+      "itemCount": 57,
+      "perInstruction": {
+        "utils": 10,
+        "models": 5,
+        "util-guard-unit-test": 1,
+        "i18n": 3,
+        "architecture": 5,
+        "general": 10,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/utils/build-user-table.util.ts",
+      "json": "test-environment/src/app/user-panel/shared/utils/build-user-table.util.ts.json",
+      "role": "Util building the user-table data, plus a row formatter.",
+      "itemCount": 57,
+      "perInstruction": {
+        "utils": 10,
+        "models": 5,
+        "util-guard-unit-test": 1,
+        "i18n": 3,
+        "architecture": 5,
+        "general": 10,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/utils/format-user-name.utils.ts",
+      "json": "test-environment/src/app/user-panel/shared/utils/format-user-name.utils.ts.json",
+      "role": "Util formatting a user name (file named `.utils.ts`).",
+      "itemCount": 57,
+      "perInstruction": {
+        "utils": 10,
+        "models": 5,
+        "util-guard-unit-test": 1,
+        "i18n": 3,
+        "architecture": 5,
+        "general": 10,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/utils/map-user-dto.util.ts",
+      "json": "test-environment/src/app/user-panel/shared/utils/map-user-dto.util.ts.json",
+      "role": "Utils mapping the user DTO to the view model and a status to a label.",
+      "itemCount": 57,
+      "perInstruction": {
+        "utils": 10,
+        "models": 5,
+        "util-guard-unit-test": 1,
+        "i18n": 3,
+        "architecture": 5,
+        "general": 10,
+        "best-practices": 3,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.ts",
+      "json": "test-environment/src/app/user-panel/shared/utils/tests/build-user-table.util.spec.ts.json",
+      "role": "Spec of the build-user-table util, with a snapshot.",
+      "itemCount": 54,
+      "perInstruction": {
+        "util-guard-unit-test": 4,
+        "unit-tests": 20,
+        "utils": 1,
+        "general": 9,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "file": "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap",
+      "json": "test-environment/src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap.json",
+      "role": "Jest snapshot of the build-user-table util spec, stored directly in `tests/`.",
+      "itemCount": 4,
+      "perInstruction": {
+        "util-guard-unit-test": 1,
+        "unit-tests": 2,
+        "security": 1
+      }
+    }
+  ],
+  "described": [
+    {
+      "kind": "directive",
+      "pattern": "src/app/<area>/shared/directives/<name>.directive.ts",
+      "json": "described/directive.json",
+      "role": "Standalone attribute directive in the canonical shared location.",
+      "itemCount": 91,
+      "perInstruction": {
+        "directives": 8,
+        "models": 3,
+        "component": 1,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 11,
+        "best-practices": 13,
+        "security": 8,
+        "performance": 8,
+        "accessibility": 13,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "kind": "directive-spec",
+      "pattern": "src/app/<area>/shared/directives/tests/<name>.directive.spec.ts",
+      "json": "described/directive-spec.json",
+      "role": "Spec of a shared directive, rendered on a host component.",
+      "itemCount": 54,
+      "perInstruction": {
+        "directives": 1,
+        "unit-tests": 23,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "kind": "pipe-spec",
+      "pattern": "src/app/<area>/shared/pipes/tests/<name>.pipe.spec.ts",
+      "json": "described/pipe-spec.json",
+      "role": "Spec of a shared pipe.",
+      "itemCount": 50,
+      "perInstruction": {
+        "pipes": 1,
+        "unit-tests": 20,
+        "general": 9,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "kind": "interceptor",
+      "pattern": "src/app/**/interceptors/<name>.interceptor.ts",
+      "json": "described/interceptor.json",
+      "role": "App-level functional HTTP interceptor, outside every feature area.",
+      "itemCount": 60,
+      "perInstruction": {
+        "interceptors": 9,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 11,
+        "best-practices": 6,
+        "security": 5,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "kind": "interceptor-spec",
+      "pattern": "src/app/**/interceptors/tests/<name>.interceptor.spec.ts",
+      "json": "described/interceptor-spec.json",
+      "role": "Spec of an app-level interceptor.",
+      "itemCount": 52,
+      "perInstruction": {
+        "interceptors": 1,
+        "unit-tests": 21,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "kind": "feature-component-styles",
+      "pattern": "src/app/<area>/components-<area>/feature/<name>/<name>.component.scss",
+      "json": "described/feature-component-styles.json",
+      "role": "Stylesheet of a feature or dialog component.",
+      "itemCount": 24,
+      "perInstruction": {
+        "component-styles": 5,
+        "general": 2,
+        "security": 1,
+        "accessibility": 10,
+        "code-quality": 6
+      }
+    },
+    {
+      "kind": "feature-component-spec",
+      "pattern": "src/app/<area>/components-<area>/feature/<name>/tests/<name>.component.spec.ts",
+      "json": "described/feature-component-spec.json",
+      "role": "Jest + ng-mocks spec of a feature or dialog component.",
+      "itemCount": 63,
+      "perInstruction": {
+        "component-unit-test": 9,
+        "unit-tests": 23,
+        "component": 1,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "kind": "app-routes",
+      "pattern": "src/app/app.routes.ts",
+      "json": "described/app-routes.json",
+      "role": "Root route table lazily loading the feature areas.",
+      "itemCount": 32,
+      "perInstruction": {
+        "routes": 5,
+        "app-config": 1,
+        "guards": 2,
+        "i18n": 1,
+        "architecture": 1,
+        "general": 8,
+        "best-practices": 4,
+        "security": 2,
+        "code-quality": 8
+      }
+    },
+    {
+      "kind": "main-server",
+      "pattern": "src/main.server.ts",
+      "json": "described/main-server.json",
+      "role": "Server (SSR) bootstrap entry point.",
+      "itemCount": 25,
+      "perInstruction": {
+        "app-config": 1,
+        "architecture": 2,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8
+      }
+    },
+    {
+      "kind": "root-app-component",
+      "pattern": "src/app/app.ts",
+      "json": "described/root-app-component.json",
+      "role": "Root `App` component passed to `bootstrapApplication(App, appConfig)`.",
+      "itemCount": 118,
+      "perInstruction": {
+        "component": 26,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 8,
+        "general": 11,
+        "best-practices": 20,
+        "security": 8,
+        "performance": 8,
+        "accessibility": 14,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "kind": "root-app-template",
+      "pattern": "src/app/app.html",
+      "json": "described/root-app-template.json",
+      "role": "Template of the root `App` component (layout shell, router outlet).",
+      "itemCount": 80,
+      "perInstruction": {
+        "component-template": 21,
+        "i18n": 2,
+        "architecture": 1,
+        "general": 3,
+        "best-practices": 4,
+        "security": 6,
+        "performance": 7,
+        "accessibility": 28,
+        "code-quality": 8
+      }
+    },
+    {
+      "kind": "feature-key-const",
+      "pattern": "src/app/<area>/models/consts/<area>-feature-key.const.ts",
+      "json": "described/feature-key-const.json",
+      "role": "Feature key of an area slice.",
+      "itemCount": 30,
+      "perInstruction": {
+        "models": 8,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "kind": "mapper-const",
+      "pattern": "src/app/<area>/models/consts/<subject>-mapper.const.ts",
+      "json": "described/mapper-const.json",
+      "role": "`Record<EnumKey, Value>` mapper const replacing a switch/lookup function.",
+      "itemCount": 33,
+      "perInstruction": {
+        "models": 8,
+        "i18n": 2,
+        "architecture": 5,
+        "general": 8,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "kind": "api-interface",
+      "pattern": "src/app/<area>/models/interfaces/<endpoint>-(request|response).interface.ts",
+      "json": "described/api-interface.json",
+      "role": "Request/response interfaces mirroring one API endpoint.",
+      "itemCount": 33,
+      "perInstruction": {
+        "models": 12,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "code-quality": 6
+      }
+    },
+    {
+      "kind": "domain-interface",
+      "pattern": "src/app/<area>/models/interfaces/<name>.interface.ts",
+      "json": "described/domain-interface.json",
+      "role": "Domain model interface of an area, separate from the API contract.",
+      "itemCount": 31,
+      "perInstruction": {
+        "models": 10,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "code-quality": 6
+      }
+    },
+    {
+      "kind": "step-enum",
+      "pattern": "src/app/<area>/models/enums/<area>-step.enum.ts",
+      "json": "described/step-enum.json",
+      "role": "String enum of wizard steps used as route paths.",
+      "itemCount": 29,
+      "perInstruction": {
+        "models": 7,
+        "architecture": 5,
+        "general": 7,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 6
+      }
+    },
+    {
+      "kind": "component-signal-store",
+      "pattern": "src/app/<area>/**/<name>.store.ts",
+      "json": "described/component-signal-store.json",
+      "role": "Component-scoped `signalStore()` for self-contained local state (e.g. a dialog), provided in `@Component.providers`.",
+      "itemCount": 39,
+      "perInstruction": {
+        "architecture": 1,
+        "models": 3,
+        "general": 8,
+        "best-practices": 6,
+        "security": 3,
+        "performance": 1,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "kind": "resolver",
+      "pattern": "src/app/<area>/**/<name>.resolver.ts",
+      "json": "described/resolver.json",
+      "role": "Functional `ResolveFn` of an area route.",
+      "itemCount": 51,
+      "perInstruction": {
+        "guards": 3,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 6,
+        "general": 10,
+        "best-practices": 6,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "kind": "resolver-spec",
+      "pattern": "src/app/<area>/**/tests/<name>.resolver.spec.ts",
+      "json": "described/resolver-spec.json",
+      "role": "Spec of a functional resolver.",
+      "itemCount": 51,
+      "perInstruction": {
+        "unit-tests": 21,
+        "general": 9,
+        "best-practices": 4,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 8
+      }
+    },
+    {
+      "kind": "error-handler",
+      "pattern": "src/app/**/<name>-error-handler.ts",
+      "json": "described/error-handler.json",
+      "role": "Project `ErrorHandler` registered in the app config.",
+      "itemCount": 33,
+      "perInstruction": {
+        "app-config": 1,
+        "general": 9,
+        "best-practices": 5,
+        "security": 1,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "kind": "layout-facade",
+      "pattern": "src/app/layout/data-access/+state/layout.facade.ts",
+      "json": "described/layout-facade.json",
+      "role": "Facade of the app-level layout slice.",
+      "itemCount": 60,
+      "perInstruction": {
+        "ngrx-facade": 10,
+        "http-service": 1,
+        "models": 3,
+        "i18n": 3,
+        "architecture": 7,
+        "general": 9,
+        "best-practices": 7,
+        "security": 3,
+        "code-quality": 8,
+        "test-coverage": 9
+      }
+    },
+    {
+      "kind": "angular-json",
+      "pattern": "angular.json",
+      "json": "described/angular-json.json",
+      "role": "Angular workspace configuration (builders, polyfills, budgets).",
+      "itemCount": 3,
+      "perInstruction": {
+        "general": 1,
+        "app-config": 1,
+        "security": 1
+      }
+    },
+    {
+      "kind": "package-json",
+      "pattern": "package.json",
+      "json": "described/package-json.json",
+      "role": "npm manifest with the dependency list.",
+      "itemCount": 3,
+      "perInstruction": {
+        "security": 2,
+        "general": 1
+      }
+    },
+    {
+      "kind": "eslint-flat-config",
+      "pattern": "eslint.config.*",
+      "json": "described/eslint-flat-config.json",
+      "role": "ESLint flat configuration.",
+      "itemCount": 3,
+      "perInstruction": {
+        "general": 2,
+        "security": 1
+      }
+    },
+    {
+      "kind": "prettier-config",
+      "pattern": ".prettierrc*",
+      "json": "described/prettier-config.json",
+      "role": "Prettier configuration.",
+      "itemCount": 3,
+      "perInstruction": {
+        "general": 2,
+        "security": 1
+      }
+    },
+    {
+      "kind": "tsconfig-variant",
+      "pattern": "tsconfig.*.json",
+      "json": "described/tsconfig-variant.json",
+      "role": "TypeScript configuration of one target (app, spec, server).",
+      "itemCount": 2,
+      "perInstruction": {
+        "general": 1,
+        "security": 1
+      }
+    },
+    {
+      "kind": "jest-config",
+      "pattern": "jest.config.*",
+      "json": "described/jest-config.json",
+      "role": "Jest configuration and its setup file.",
+      "itemCount": 9,
+      "perInstruction": {
+        "unit-tests": 2,
+        "general": 1,
+        "security": 1,
+        "code-quality": 5
+      }
+    },
+    {
+      "kind": "environment",
+      "pattern": "src/environments/environment*.ts",
+      "json": "described/environment.json",
+      "role": "Build-time environment constants.",
+      "itemCount": 12,
+      "perInstruction": {
+        "security": 2,
+        "app-config": 1,
+        "general": 3,
+        "code-quality": 6
+      }
+    },
+    {
+      "kind": "e2e-spec",
+      "pattern": "e2e/**/*.e2e-spec.ts",
+      "json": "described/e2e-spec.json",
+      "role": "End-to-end spec.",
+      "itemCount": 21,
+      "perInstruction": {
+        "general": 9,
+        "best-practices": 3,
+        "security": 1,
+        "code-quality": 8
+      }
+    }
+  ]
+}

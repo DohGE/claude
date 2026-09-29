@@ -28,18 +28,20 @@ Every string you draw ends up as a translation entry written in step 4 and revie
 `doh:codeReview` rulebook in step 6, and every name you pick propagates into spec.md, the components
 and the translation keys. So the copy is final copy, and the names are the app's names.
 
-1. Run the matcher twice — once bare for the rules that bind everything, once for the files this
-   feature will create:
-   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` → the `globals`
-     catalogue; the naming and consistency rules live there.
+1. Run the matcher twice — once bare for the file kinds the rulebook knows, once for the files whose
+   checklists judge your copy and your names:
+   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` → `kinds[]`, each
+     file kind's `kind`, `pattern` and `role`: where the rulebook expects every file this feature adds,
+     and so the shape of the names you pick.
    - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<the project's base i18n file>,<one template path from plan.md>"`
-     → read every file under `globalInstructions` and `localInstructions` of those two paths; the
-     globals are narrowed there the way step 6 narrows them, and the Translations and template
-     checklists are exactly what step 6 will judge the result by.
-   Both runs layer the project's OWN rulebook from `{{PROJECT}}/.claude/doh/instructions/` on top of
-   the skill's (reported as `projectInstructionsDir`): when it is not null those files are in the
-   lists you just read, and a project file replaces the skill file of the same name — a repo that
-   wrote down its own naming or copy conventions outranks the defaults.
+     → read the `rules` file of each of those two paths: the whole checklist of the translations
+     kind and of the template kind, item by item under `<id>#<n>`, the naming and consistency items
+     among them — exactly what step 6 will judge the result by.
+   Both runs layer the project's OWN file kinds from `{{PROJECT}}/.claude/doh/instructions/` on top of
+   the skill's (reported as `projectInstructionsDir`): when it is not null they are in what you just
+   read — a project kind replaces the skill's kind of the same name, and an item a project kind
+   restates reads the project's text — so a repo that wrote down its own naming or copy conventions
+   outranks the defaults.
    Matcher missing or exiting non-zero → note it in your summary and fall back to the conventions
    you can read from the project itself.
 2. Read the project's base translation file (`**/assets/i18n/en.json` or its equivalent) before

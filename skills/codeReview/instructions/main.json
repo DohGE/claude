@@ -1,0 +1,218 @@
+{
+  "kind": "main",
+  "pattern": "src/main.ts",
+  "role": "Browser bootstrap entry point of the app.",
+  "describedBy": [
+    {
+      "id": "app-config#1",
+      "text": "Bootstrap is `bootstrapApplication(App, appConfig)` with a flat `providers` array — no root `NgModule`, no `platformBrowserDynamic()`."
+    }
+  ],
+  "itemCount": 26,
+  "instructions": [
+    {
+      "id": "app-config",
+      "name": "Application configuration & bootstrap",
+      "selectedItems": "1,7",
+      "checklistSize": 10,
+      "items": [
+        {
+          "id": "app-config#1",
+          "text": "Bootstrap is `bootstrapApplication(App, appConfig)` with a flat `providers` array — no root `NgModule`, no `platformBrowserDynamic()`."
+        },
+        {
+          "id": "app-config#7",
+          "text": "A zoneless application uses `provideZonelessChangeDetection()` (v20+) AND removes `zone.js` from `polyfills` — the provider together with a live `zone.js` polyfill is a finding; a project deliberately still on zone.js is not reported for that alone."
+        }
+      ]
+    },
+    {
+      "id": "architecture",
+      "name": "Feature architecture",
+      "selectedItems": "8,11",
+      "checklistSize": 12,
+      "items": [
+        {
+          "id": "architecture#8",
+          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
+        },
+        {
+          "id": "architecture#11",
+          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit.",
+          "secondQuestion": "Czy plik albo jego fragment to nietknięty szkielet generatora (Angular CLI) lub kopia starszego sąsiedniego kodu - co z tego zostało niedostosowane?"
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "1-6,8,11,13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#1",
+          "text": "Named `const` values are camelCase — never SCREAMING_SNAKE_CASE and never PascalCase; interfaces, types, enums and classes are PascalCase.",
+          "probe": [
+            {
+              "pattern": "\\bconst\\s+(?<at>[A-Z][\\w$]*)\\s*[:=]",
+              "message": "nazwa const zaczyna się wielką literą (SCREAMING_SNAKE_CASE albo PascalCase)",
+              "paths": "^(?!.*\\.spec\\.[cm]?[jt]s$)"
+            }
+          ]
+        },
+        {
+          "id": "general#2",
+          "text": "Names are full and descriptive — no abbreviations and no one-letter identifiers; shortening is allowed only for well-established abbreviations or when the full name would exceed ~25–30 characters or 4–5 words.",
+          "sameAs": [
+            "models#10"
+          ]
+        },
+        {
+          "id": "general#3",
+          "text": "No unnecessary type assertions (`as`), especially `as never` and assertions on primitive types; use a single `as Type` only when the compiler requires it; `as unknown as Type` only when the compiler/ESLint rejects a single assertion because of an incompatible shape."
+        },
+        {
+          "id": "general#4",
+          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
+        },
+        {
+          "id": "general#5",
+          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
+        },
+        {
+          "id": "general#6",
+          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.",
+          "facts": [
+            "cross-area-import"
+          ]
+        },
+        {
+          "id": "general#8",
+          "text": "No `console.log` or other leftover debug statements."
+        },
+        {
+          "id": "general#11",
+          "text": "Errors are never swallowed: no empty `catch` blocks, no `.catch(() => {})`, no `catchError` that drops the failure without mapping it to a fail action/error state — every failure path either surfaces to state/UI or carries an explicit justification in the PR description. In an effect a `catchError` returning `EMPTY` is always a finding (NgRx effects instruction); elsewhere — legacy components/services — `EMPTY` alone is not reported under this rule.",
+          "sameAs": [
+            "interceptors#6"
+          ]
+        },
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "best-practices",
+      "name": "Angular & TypeScript best practices",
+      "preamble": [
+        "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
+      ],
+      "selectedItems": "1-3,22",
+      "checklistSize": 23,
+      "items": [
+        {
+          "id": "best-practices#1",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.",
+          "sameAs": [
+            "utils#2"
+          ]
+        },
+        {
+          "id": "best-practices#2",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction."
+        },
+        {
+          "id": "best-practices#3",
+          "text": "Standalone components/directives/pipes only — no new `NgModule`s; `standalone: true` is never written explicitly (it is the framework default)."
+        },
+        {
+          "id": "best-practices#22",
+          "text": "A suppression comment added by the diff (`@ts-ignore`, `@ts-expect-error`, `eslint-disable*`) carries a one-line justification and the narrowest scope that works (line-level over file-level); `@ts-expect-error` is used wherever it compiles, because it fails once the underlying problem is fixed. The `/* eslint-disable @typescript-eslint/member-ordering */` allowed by the effects instruction is the one standing exception."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
+          "severity": "critical"
+        }
+      ]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "severity": "medium",
+      "preamble": [
+        "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+      ],
+      "selectedItems": "1-8",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "code-quality#1",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates.",
+          "facts": [
+            "repeated-literal",
+            "repeated-condition",
+            "mapping-duplicate",
+            "mapping-duplicate-caller"
+          ],
+          "probe": [
+            {
+              "builtin": "markup-repeat"
+            }
+          ],
+          "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
+          "severity": "high"
+        },
+        {
+          "id": "code-quality#2",
+          "text": "No copy-paste-with-a-tweak: two near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset).",
+          "severity": "high"
+        },
+        {
+          "id": "code-quality#3",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change.",
+          "facts": [
+            "export-unused",
+            "barrel-unused",
+            "guard-without-route",
+            "pipe-unused",
+            "i18n-unused-key"
+          ]
+        },
+        {
+          "id": "code-quality#4",
+          "text": "No unnecessary code: a wrapper that only forwards to the wrapped call, a variable used once on the very next line, `else` after a `return`, a condition that can never be false, `?.`/`??`/`try` guarding a value the types already guarantee, a hand-written helper an existing shared function already provides, an abstraction (interface, base class, generic, options object) introduced for a single consumer \"for the future\"."
+        },
+        {
+          "id": "code-quality#5",
+          "text": "No boilerplate: empty or pass-through lifecycle hooks and constructors, getters/methods that only return a field, scaffolding and generator leftovers (placeholder markup, sample fields, `TODO` stubs nothing tracks), values re-declared although the framework already defaults to them, and ceremony that adds no behavior."
+        },
+        {
+          "id": "code-quality#6",
+          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+        },
+        {
+          "id": "code-quality#7",
+          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
+        },
+        {
+          "id": "code-quality#8",
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+        }
+      ]
+    }
+  ]
+}

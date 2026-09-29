@@ -2,6 +2,7 @@
 
 Part of the `doh` plugin.
 Reviews git changes against instruction checklists and writes one concise report per reviewed branch — an interactive HTML page by default, Markdown with `--only-md`.
+The report carries the findings; the checklists every file was walked against stay in it only with `--with-checklist`.
 Reports are always written in Polish.
 Report-only: the skill writes no code and makes no commits; the sole repo side effect is `git add .` in staged mode, which stages every pending change before reviewing it.
 Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
@@ -17,6 +18,9 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own detected base; one report per branch |
 | `/codeReview folder src/app/user-panel` | every file currently in that folder of the working tree — no diff needed, so every line counts as changed |
 | `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
+| `/codeReview [target] --with-checklist` | any of the above, but the report keeps every file's walked checklist and coverage marker (the page's **Pokrycie checklist** section) |
+| `/codeReview [target] --no-batch` | any of the above, but every file is walked in a message of its own instead of small files together (see [Token cost](#token-cost)) |
+| `/codeReview [target] --dedup-items` | any of the above, but an item an earlier bundle already showed reaches the reviewer as a reference to that bundle — opt-in until an A/B run shows it costs no finding (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
 
 A branch list is split on `,` and `;`. Git allows both characters inside a ref name, so a branch
@@ -24,8 +28,10 @@ literally called `feature/a,b` cannot be named in that list — it would be read
 reported as two "Branch not found" errors for names you never typed. Check that branch out and run
 `/codeReview` with no arguments instead: auto mode reviews the current branch without naming it.
 
-`--only-md` may sit anywhere in the arguments and is stripped before the rest is mapped to a mode.
+`--only-md`, `--with-checklist`, `--no-batch` and `--dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
 The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
+`--with-checklist` changes only what the finished report keeps: every file is walked, written and checked with its checklist either way, and without the flag the renderer cuts the checklists, the coverage markers and the cross-file `<!-- unverified:` block from it — from the page and from an `--only-md` Markdown alike.
+The run's summary still states the coverage, read off the line the assembly prints.
 
 `--project=<path>` moves the whole review to another repository: which tree is read and (in `staged`
 mode) staged, where the reports land, and which `CLAUDE.md` and `.claude/doh/instructions/` bind.
@@ -36,24 +42,37 @@ every cycle, so one task's review can never stage or report on another task's tr
 
 Branch names are sanitised for the filesystem, so two branches can land on one name — `feature/x` and `feature-x` both become `feature-x`. Reviewing both in one run would overwrite the first report with the second and make them share one `--since-last` snapshot; the context script warns and names both branches, and the fix is to review them in separate runs.
 
-Reports are grouped per branch: every report of a branch lands in `reports/{branch}/` inside this skill, named `{branch}-{YYYY-MM-DD}-{HH-mm}.html` (staged variant: `{branch}-staged-{YYYY-MM-DD}-{HH-mm}.html`, folder variant: `{branch}-folder-{path}-{YYYY-MM-DD}-{HH-mm}.html`), or the same name with `.md` under `--only-md`.
-A multi-branch run writes one folder per reviewed branch. The branch stays in the file name too, so the HTML page's `localStorage` key (namespaced by file name) never collides between branches reviewed in the same minute.
-When the reviewed project has its own `.claude/` folder, reports go to `<project>/.claude/doh/{branch}/` instead.
-Branch names are sanitized for file and folder names (any character outside `A-Z a-z 0-9 . _ -` becomes `-`); the time uses `HH-mm` because `:` is not allowed in Windows file names.
-Only the 30 newest reports are kept — older ones (either format, in any branch folder) are pruned automatically at the start of a run, and a branch folder emptied by that pruning is removed with them.
-Pruning counts only run-stamped report names (`…-YYYY-MM-DD-HH-mm.md|html`), so it shares `.claude/doh/` with implementNewFeature's session folders and the project's `instructions/` without ever touching them.
+When the reviewed project has its own `.claude/` folder, everything the review writes lives in `<project>/.claude/doh/codeReview/`; otherwise the same layout sits in `reports/` inside this skill:
 
-`--since-last` turns a run into a re-review: every run records the post-image blob of each reviewed file in `.last-review-<kind>.json` next to the report, and the next incremental run drops the files whose blob has not moved (they are listed in a warning, and the previous report stays the reference for them).
+```
+runs/<YYYY-MM-DD-HH-mm-ss>/<branch>/raport.html | raport.md
+cache/<branch>/.last-review-<kind>.json
+               .review-context-<kind>.json
+               checklists/<kind>/<id>.md
+```
+
+Every run gets a folder stamped with its start time, holding one folder per reviewed branch; the report inside is always named `raport` (`.html`, or `.md` under `--only-md`), in every mode.
+While a run works, its part files (`raport.partNN.md`), import ledger (`raport.imports.txt`) and work folder (`raport.work/`) sit next to the report and are removed once it is assembled.
+The HTML page's `localStorage` key is `<stamp>/<branch>/raport.html`, so it never collides between runs or branches.
+`cache/<branch>/` keeps what outlives a run: the `--since-last` snapshot, the context of the latest run, and the numbered checklists it read.
+Branch names are sanitized for folder names (any character outside `A-Z a-z 0-9 . _ -` becomes `-`); the time uses `HH-mm-ss` because `:` is not allowed in Windows file names.
+Only the 30 newest branch folders under `runs/` are kept — older ones are pruned at the start of a run, together with a stamp folder emptied by that. `cache/` is never pruned.
+Reports written before this layout (`.claude/doh/{branch}/{branch}-…md|html`) stay where they are; a `--since-last` snapshot found there is moved into `cache/<branch>/` on the next run.
+
+`--since-last` turns a run into a re-review: every run records the post-image blob of each reviewed file in `cache/<branch>/.last-review-<kind>.json`, and the next incremental run drops the files whose blob has not moved (they are listed in a warning, and the previous report stays the reference for them).
 It is meant for a target already reviewed in this session — the implementNewFeature review loop uses it from cycle 2 on; on a first review it warns and reviews everything.
 The snapshot is recorded while the context is built, before the first file is analyzed, so it says what the previous run intended to review rather than what it completed. A run that died half-way still recorded every file, and the next `--since-last` will skip the ones it never reached — an unchanged tree then reports "nothing to review". After an interrupted review, re-run the target in full instead. The same applies once the previous report has been pruned away: the run warns that nothing on disk covers the skipped files any more.
 
-An interrupted review resumes by itself: a run that died before its assembly leaves its part files (`<report>.partNN.md`) behind, and the next run of the same target picks them up.
+An interrupted review resumes by itself: a run that died before its assembly leaves its part files (`raport.partNN.md`) in its run folder, and the next run of the same target picks them up.
 The context script lists every file whose part already carries a coverage marker in `target.resume.doneFiles`, points `reportPath` at the interrupted report, and the review analyzes only the rest before writing the cross-file pass anew.
-It resumes only while the `.last-review-<kind>.json` snapshot proves the target still holds the content that run reviewed; otherwise it warns, names the leftover parts to delete and starts from scratch.
+A part the check had refused and the run never promoted comes back as its draft (`target.resume.drafts`): the resumed run promotes it instead of walking that file again.
+It resumes only while the `.last-review-<kind>.json` snapshot proves the target still holds the content that run reviewed; otherwise it warns, names the run folder to delete and starts from scratch.
+In folder mode, where no content is recorded, it resumes only for the same folder and warns that it did not check the content.
 A resumed run keeps the file list it started with, so `--since-last` is ignored for it.
 After a break longer than an hour (a usage limit, a closed laptop) run `/clear` and then the same command instead of typing "continue": the finished files come back from their parts, while "continue" would re-read the whole old conversation at cache-write price.
+A compaction in the middle of a run needs nothing from you: the plugin's hook tells the compacted session where the run stands and what to read again (see [Mechanics](#mechanics)).
 
-Each analyzed file ends its block with the checklist it was walked against — one ticked line per item — and a coverage marker, `<!-- coverage: <path> <checked>/<total> -->`, `<total>` being the number of checklist items the context script counted for that file. See [Checklist coverage](#checklist-coverage).
+Each analyzed file ends its block with the checklist it was walked against — one ticked line per item — and a coverage marker, `<!-- coverage: <path> <checked>/<total> -->`, `<total>` being the number of checklist items the context script counted for that file; the finished report keeps both only under `--with-checklist`. See [Checklist coverage](#checklist-coverage).
 Three groups of files are excluded from review and listed in one `Pominięto pliki wygenerowane/binarne:` line of the report:
 
 - **generated** — lockfiles, `*.min.*`, source maps, `dist/`/`build/`/`out/`/`coverage/`/`node_modules/`/`.angular/`/`.idea/` output, plus code generated INTO the source tree where the convention says so: `__generated__/`, `*.generated.*`, `*.gen.ts`, `*.g.ts`, `*.pb.ts`, `*_pb.{ts,js}`. A folder merely named `generated/` is NOT skipped — the name alone does not prove nobody maintains it by hand;
@@ -62,131 +81,179 @@ Three groups of files are excluded from review and listed in one `Pominięto pli
 
 The third group is the one to know about: a documentation-only change is never reviewed, and the report still files it under the "wygenerowane/binarne" label, which describes the other two groups rather than this one. Nothing is lost — the instruction checklists are about code — but do not read an untouched `README.md` in the skipped list as a claim that the file is generated.
 
+## Token cost
+
+Small files are walked in batches.
+Consecutive files of at most 60 lines and 60 checklist items each form one, up to 3 files, 150 lines and 120 items in all; any other file is a batch of its own.
+One message reads a whole batch — every file's bundle, content and diff — and one message writes its parts, together with the Reads of the next batch, which the batch's last bundle names under `## Dalej`.
+Inside a batch every file is still walked on its own, one after another, against its own checklist, and every part is checked as before.
+The context lists the batches in `target.batches`, and a bundle's `partia:` line names the files of its batch.
+`--no-batch` makes every file a batch of its own.
+
+`--dedup-items` shortens every bundle read after the first: an item an earlier bundle of the run already showed arrives as a reference to that bundle, while the facts and probe hits under it stay this file's own.
+A compaction resets it, so the bundles read after one show every item in full again.
+It is opt-in until an A/B run (`scripts/score-review.cjs --explain`, see `test-environment/README.md`) shows it costs no finding.
+
+A compaction re-attaches only the head of `SKILL.md`, so that file is ordered by need rather than by step.
+What the walk of every file needs comes first; Steps 1–2, which run once, stand after a `<!-- one-time:start -->` marker; the cross-file pass and the assembly are `references/cross-file.md` and `references/assembly.md`, read when the run reaches them.
+After a compaction the plugin's hook names where the run stands and what to read again (see [Mechanics](#mechanics)).
+
+Every MCP server of a session costs tokens on every request — its tool names and its instructions — while the review calls no MCP tool but headroom's `headroom_retrieve`, for a tool output the headroom proxy compressed.
+A session that loads only that server is leaner:
+
+    claude --strict-mcp-config --mcp-config review-mcp.json
+
+with `review-mcp.json`:
+
+    { "mcpServers": { "headroom": { "type": "stdio", "command": "headroom", "args": ["mcp", "serve"] } } }
+
+`--strict-mcp-config` ignores every other MCP configuration, the claude.ai connectors included; the skill, its hooks and the plugins load as usual.
+Without the headroom proxy, `{ "mcpServers": {} }` in that file starts the session with no MCP server at all.
+
 ## Instructions
 
-Review rules live in two folders inside this skill (they start empty — add your own):
+The review rulebook is `instructions/`: one JSON file per **file kind** — a feature component, its template, an NgRx reducer, the spec of each, a config file, … — with `other` for every path no other kind identifies.
+A kind says where its files live and carries the whole checklist such a file is walked against:
 
-- `instructions/global/**/*.md` — apply to every reviewed file, unless the file itself narrows that with `applies-to` globs (subfolders are scanned recursively).
-- `instructions/local/**/*.md` — apply only to files matching the `applies-to` globs declared in their frontmatter (subfolders are scanned recursively).
+    {
+      "kind": "ngrx-reducer",
+      "pattern": "src/app/<area>/data-access/+state/<name>.reducer.ts",
+      "role": "Reducer of a feature slice.",
+      "itemCount": 65,
+      "instructions": [
+        {
+          "id": "ngrx-reducer",
+          "name": "NgRx Reducer",
+          "selectedItems": "1-18",
+          "checklistSize": 18,
+          "items": [
+            { "id": "ngrx-reducer#1", "text": "File lives in `<area>/data-access/+state/<area>.reducer.ts`; …" },
+            …
+          ]
+        },
+        …
+      ]
+    }
 
-A reviewed project can also carry its own rules in `<project>/.claude/doh/instructions/`, with the same `global/` + `local/` layout.
-That folder is layered on top of the skill's tree: a file at the same relative path (`global/security.md`) replaces the skill's version, any other file is one more instruction.
-It is reported as `projectInstructionsDir` in the context JSON, the implementNewFeature coding rulebook layers it the same way, and the `.claude/doh/.gitignore` written for run artifacts explicitly un-ignores it so the rulebook can be committed and shared.
+- `kind` names it, and `role` says in one line what such a file is; optional `notes` tell the reviewer what the checklist alone does not (why an unusual instruction is in the plan, what a finding there means).
+- `pattern` is where the files live — one pattern or a list of them, see [Patterns](#patterns).
+- `instructions` is the plan, in the order it is walked: one entry per instruction, holding the items this kind walks, every item under its address `<id>#<n>` and with its text.
+  `selectedItems` (those numbers), `checklistSize` (how many items the instruction has in all) and the kind's `itemCount` are checks: a count that disagrees with the items listed is reported as a warning.
 
-The reviewed project's own `CLAUDE.md` (repo root, if present) is loaded as an additional global instruction.
-Files with no matching local instruction are still reviewed against all global instructions and the universal points (cross-file consistency incl. architecture and naming, regressions, readability); performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, every added comment, inconsistency — always 🟡 Medium) and test coverage are covered by the dedicated global instruction files.
+An item may carry six more keys, each checked when the rulebook loads, so a typo warns instead of silently binding nothing:
 
-An instruction may declare `audience: implement|review|both` in its frontmatter (default `both`):
-`review`-audience files load only for this skill, `implement`-audience files only for the implementNewFeature coding rulebook (e.g. the developer persona in `guidelines.md`).
+- `facts` — the repository fact kinds (`scripts/repo-facts.cjs`) that contradict an OK on this item, e.g. `["export-unused", "barrel-unused"]`.
+  A fact of such a kind found in a reviewed file is printed under the item in that file's bundle as a `FAKT` line, and the part check refuses a clean verdict that does not answer it.
+- `probe` — one probe or a list: code that often breaks the item (`{ "pattern": "<regex>", "message": "…" }`), code that should be there and is not (`{ "absent": "<regex>", "anchor": "<regex>", "message": "…" }`), a built-in scan (`{ "builtin": "for-without-empty" }`) or a fact kind that points rather than contradicts (`{ "fact": "export-single-importer" }`).
+  A hit is a `SONDA` line of the bundle: it never makes a finding by itself, it names a line the item's verdict must answer.
+- `secondQuestion` — one question an OK on the item must also answer (`drugie pytanie: <answer>`).
+  It is kept for the items the scorer's false-OK list (`scripts/score-review.cjs`, see `test-environment/README.md`) shows ticked OK where the answer key has them broken and the entry went unreported, and which no `facts` or `probe` of the item would have contradicted.
+- `severity` — the severity every finding naming the item is reported with (`critical`, `high`, `medium`, `low` or `missing-unit-test`), in place of its instruction's (see below); the bundle prints it under the item as `ważność stała:`.
+- `sameAs` — the items one defect breaks together with this one, each naming this one back.
+  A bundle whose plan holds both prints `ta sama wada:` under the item, and such a defect is ONE finding naming both addresses.
+- `unverified` — the prepared `NIEZWERYFIKOWANE` reason of an item no review can settle from the files (the order the tests run in, a green spec run), opening with `narzędzie:`, `poza recenzją:` or `działająca aplikacja:`.
+  The bundle prints the whole verdict line under the item as `gotowy werdykt:`, and the part copies it unless it reports a `NARUSZENIE`.
 
-### Local instruction template
+An instruction appears in every kind that walks any of it, and its items keep their numbers everywhere: `security#7` (no secrets in the diff) is the same rule in `ngrx-reducer`, which walks `security:7-8,13`, and in `other`, which walks `#7` alone.
+So narrowing a checklist changes which numbers a kind lists, never what a number means.
+Two kinds of one layer that disagree about an item's text or its other keys, or about an instruction's `name`, `gate`, `findings`, `preamble`, `checklistSize` or `severity`, are an edit that reached one copy only: it is reported, and the file first in path order wins.
 
-    ---
-    name: Angular TS
-    applies-to:
-      - "**/*.component.ts"
-      - "**/*.service.ts"
-    ---
-    ## Checklist
-    - OnPush change detection for presentational components
-    - No logic in constructors
+`preamble` holds the paragraphs the reviewer reads before an instruction's items — what the instruction owns and what it leaves to another one.
 
-A global instruction is the same file placed under `instructions/global/`. It may declare `applies-to` too, and is then narrowed by path exactly like a local one — a global WITHOUT the key applies to every file, so narrowing is opt-in and silence means everywhere (`accessibility.md` limits itself to templates, styles, components and directives this way).
-List items under `applies-to:` must be indented, one `- pattern` per line; quotes around patterns are
-optional. The block form is the ONLY form: a YAML flow sequence on one line — `applies-to: ["**/*.ts"]`
-— parses to no patterns at all, and the two instruction kinds then fail in opposite directions.
-A LOCAL with no pattern then matches nothing; a GLOBAL with no pattern is indistinguishable from a
-global that never declared one, so it binds EVERY reviewed file — doing more than its author asked
-rather than less. Both are reported: a declared `applies-to` that yields no pattern warns on its own,
-naming which of the two directions this instruction just failed in.
-Note the asymmetry that makes this easy to walk into: the inline form DOES work one level down, under
-`scopes:` (`markup: ["**/*.html"]` parses fine), so an author whose `scopes:` line works has every
-reason to expect `applies-to: [...]` to work too. It does not. Only `applies-to` insists on bullets.
-A local instruction without any including `applies-to` pattern never matches and is reported as a warning.
+An instruction may declare a one-line `gate` — a precondition the reviewer answers from the file's CONTENT before walking the items, for what a pattern cannot see (a `.ts` file holding no markup, a barrel carrying no behaviour).
+A failed gate collapses the whole instruction into one ticked range line naming what is absent; an unclear answer means the gate holds and the items are walked.
+Gates reach the reviewer as the top-level `checklistGates` map.
 
-**Checklist items must start with `- `, at the left margin.** That is what `<id>#<n>` counts, so the
-marker is part of the format, not a style choice: an item written `* rule` or `+ rule` is not counted,
-and a file whose items are ALL written that way has zero items — it is then dropped from every plan,
-from both instruction catalogs, because an instruction with nothing to check has nothing to
-say. That drop is reported too: an instruction with no readable items warns by name, so the bullet
-character is named as the cause instead of leaving you to debug the glob.
-Indented `- ` sub-bullets under an item are safe: they are not counted and do not shift the numbering,
-so an item may carry sub-points without moving `#12` to `#14`.
+An instruction may also declare `findings: "per-file"` when its items are facets of one requirement rather than separate ones.
+`test-coverage` does: a file without a spec leaves its branches, failure paths and edge cases untested at once, and that is one defect to fix.
+A file's breaches of such an instruction are one finding naming every item broken, and the part check refuses a second one.
+Without the key every item is its own requirement, so the part check refuses a finding naming two items of one instruction.
+The ids reach the reviewer as the top-level `checklistPerFile` list; any other value warns and is ignored.
 
-Any instruction may also declare a one-line `gate:` — a precondition the reviewer answers from the file’s CONTENT before walking the items, for what a glob cannot see (a `.ts` file holding no markup, a barrel carrying no behaviour). A failed gate collapses the whole instruction into one ticked range line naming what is absent; an unclear answer means the gate holds and the items are walked. Gates reach the reviewer as the top-level `checklistGates` map.
+An instruction may fix the severity of its findings the same way, with `severity` on the instruction; an item's own `severity` wins over it.
+The bundle prints it under the instruction's heading as `Ważność stała:`.
+A finding naming several addresses takes the highest severity they fix — or the reviewer's own, when one of its addresses fixes none and the reviewer's is higher.
+The assembly sets that severity on every finding, whatever the part said, and prints how many it changed.
 
-### Per-item scopes
+Performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, every added comment, inconsistency — always 🟡 Medium) and test coverage have instructions of their own, walked by every kind they concern.
+The reviewed project's own `CLAUDE.md` (repo root, if present) is one more rulebook: its rules decide verdicts and override conflicting checklist items, but get no `<id>#<n>` of their own.
+Every file is also reviewed against the universal points (cross-file consistency incl. architecture and naming, regressions, readability), whatever its kind.
 
-`applies-to` narrows a whole instruction; `scopes:` narrows a single checklist item, so one topic can stay in one file while each of its rules is walked only where it can be answered.
-A scope is a name and a glob list (inline or as an indented list, `!` excludes included), and an item opts into one or more of them with a leading `{tag}`:
+A reviewed project can also carry its own kinds in `<project>/.claude/doh/instructions/` (every `.json` under it), layered on top of the skill's:
 
-    ---
-    name: Accessibility — WCAG 2.2 level AA
-    applies-to:
-      - "**/*.html"
-      - "**/*.scss"
-    scopes:
-      markup: ["**/*.html"]
-      styles: ["**/*.scss", "**/*.css"]
-    ---
-    ## Checklist
-    - {markup} Every `<img>` carries a text alternative
-    - {markup, styles} Contrast ratios hold for every colour pair the diff introduces
-    - Every rule without a tag is walked wherever the instruction applies
+- a project kind of the same `kind` name REPLACES the skill's kind — its pattern and its plan with it;
+- any other project kind is one more kind;
+- an instruction a project kind lists overrides, in every kind, only what it restates: its `name`, `gate`, `findings`, `preamble`, `checklistSize` or `severity`, and the texts of the items it lists.
+  Everything else keeps the skill's text.
 
-An item is walked when its instruction matches the file AND (it carries no tag OR the file matches one of its tagged scopes).
-Numbering never moves: `<id>#<n>` stays the n-th bullet of the file, so narrowing a checklist changes which numbers a file walks, never what they mean.
-An instruction every item of which is out of scope for a file drops out of that file's plan entirely — it is not read, walked or ticked for it.
-A tag naming a scope the frontmatter does not declare keeps the item (a typo must never delete a rule) and is reported as a warning, as is a declared scope no item uses.
+Markdown files in that folder are the rulebook format from before kinds existed: they are ignored, and named in a warning.
+The folder is reported as `projectInstructionsDir` in the context JSON, the implementNewFeature coding rulebook layers it the same way, and the `.claude/doh/.gitignore` written for run artifacts explicitly un-ignores it so the rulebook can be committed and shared.
 
-A name written `+name` REACHES instead of narrowing: the item is also walked for every file of scope `name`, even one outside the instruction's `applies-to`.
-A rule is often broken in a file its own instruction never covers, and without the reach such a finding has no item to be reported under:
+### Matching
 
-    scopes:
-      routes: ["**/*.routes.ts"]
-    ---
-    ## Checklist
-    - {+routes} A guard factory is invoked inside `canActivate`, never passed uncalled
+A reviewed file walks the checklist of the ONE kind that describes its path most specifically, compared in this order:
 
-A reached file's plan carries that instruction with its reaching items only, and a declared `gate:` is answered for it like for any other file.
-Both kinds combine: `{spec, +spec}` is walked for the files of `spec` only, whether or not the instruction covers them.
-A reaching name the frontmatter does not declare reaches nothing (a typo must never spread a rule over the whole diff) and is reported as a warning; a reaching scope needs at least one including pattern.
+1. the literal characters of the pattern's file-name segment — `<name>.component.html` beats `*.html` wherever both match;
+2. a match of the whole path beats a match of the file name alone;
+3. the literal characters of the pattern's folders.
 
-### Glob subset
+A kind still matches by file name alone when the file sits somewhere its pattern does not expect: a `user.actions.ts` outside `+state/` is still NgRx actions, reviewed as such, and its misplacement is one of the kind's own items.
+`"exactLocation": true` turns that off — the kind then covers only the paths its pattern spells out, which is how `component-folder-directive` takes a directive only while it sits in a components folder.
+Two kinds describing a path equally well are a rulebook defect: the context warns, and the file is reviewed as the project's kind before the skill's, then as the one first by name.
+A path no kind describes is warned about and reviewed only against `CLAUDE.md` and the universal points; with the shipped `other` kind that happens only when a project replaces `other` with a narrower pattern.
 
-`**` matches any number of directories, `*` matches within one path segment, `?` matches a single character.
-Matching is case-sensitive, against `/`-separated paths relative to the repo root.
-Everything else is matched literally. Brace alternation (`{ts,html}`) is therefore literal too — it matches nothing, and the context script warns about it rather than letting the instruction fall silent.
+### Patterns
 
-A pattern starting with `!` EXCLUDES what it matches, and an exclude always wins over an include — which is how a broad instruction carves out a folder it has nothing to say about (`test-coverage`, `performance`, `security` and `accessibility` all declare `"!**/models/**"`, because a folder of consts, interfaces, enums and types has no behaviour to test, no render cost, no attack surface and no UI).
-A global with only excluding patterns covers everything except them; a local still needs at least one INCLUDING pattern, or it never matches and is reported as a warning.
+A pattern is a `/`-separated path, matched case-sensitively against the END of the path relative to the repo root, so `src/app/<area>/…` also covers the same tree inside a workspace (`apps/web/src/app/<area>/…`).
+
+- `<name>` (any word in angle brackets) is one or more characters of one path segment; the word only documents what the segment holds.
+- `*` is any run of characters within one segment, none included; `**` is a whole segment standing for any number of folders.
+- `(a|b)` spells alternatives: `<name>.component.(scss|css)` is two patterns, and groups may nest.
+- A list of patterns is one kind covering each of them; the best-matching one scores the path.
+- Everything else is literal.
+
+Braces (`{ts,html}`) and a leading `!` are errors: the kind is skipped with a warning naming the pattern.
+Write `(ts|html)` instead, and let a more specific kind take the files you meant to exclude.
 
 ## Checklist coverage
 
-The context script hands every file a `plan` index into `checklistPlans` — files of one kind share one entry, so a 200-file diff carries about eight plans instead of two hundred copies (measured: 53% off the whole context JSON). A plan's `checklist` lists one `<id>:<items>` entry per instruction that applies to that file (globals first, then the matched locals), where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-9,12-14,17,20` for one the file's kind narrowed. `checklistTotal` stays on the FILE and is their sum; which instruction file each `<id>` stands for travels with its path in `globalInstructions` and `localInstructionsCatalog`.
-Globals narrowed by `applies-to` drop out of the plans of files they do not cover, and the plan's `globalInstructionsSkipped` names them — by checklist id, the same address the report ticks items under, because an absolute path repeated once per file per skipped global was two fifths of the context JSON — so a shorter plan reads as a decision rather than an omission; `globalInstructions` itself lists only the globals at least one reviewed file walks, so a diff of stylesheets never loads the TypeScript rulebook.
-Item `<id>#<n>` is the n-th top-level `- ` bullet of that instruction — the address the reviewer ticks it off under, whether or not the file walks every neighbour.
+The context script hands every file a `plan` index into `checklistPlans` — files of one kind share one entry, so the plans grow with the kinds in the diff, not with its files.
+A plan names its `kind` and `role` (and `notes`, when the kind has any), and its `checklist` lists one `<id>:<items>` entry per instruction of that kind, in walking order, where `<items>` names WHICH items the file walks — `general:1-13` for a full checklist, `accessibility:6-17,19-21,23-24,27-29` for one the kind narrowed.
+`checklistTotal` stays on the FILE and is their sum.
+`instructionsCatalog` lists every instruction the run's plans walk, once: its `id`, `name`, `items` (the numbers any plan walks) and `numberedPath`, a copy of just those items kept for a lookup — so a diff of stylesheets never loads the TypeScript rulebook.
+The reviewer reads only the instructions' preambles up front (`rulebookNotesPath`), and each item's text in the bundle of the file it is walked on (see [Mechanics](#mechanics)).
+Item `<id>#<n>` keeps its number in every kind — the address the reviewer ticks it off under, whether or not the file walks every neighbour.
 
 The reviewer walks that list item by item and writes the result next to the file's findings, as one HTML comment block per file:
 
     <!-- checklist: src/app/user.component.ts
     [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
     [x] general#1-5,#7-13 — OK (brak wystąpień)
-    [x] general#6 nazwy const camelCase — NARUSZENIE (12, 18)
+    [x] general#6 importy między obszarami — NARUSZENIE (12, 18)
     [x] component#1 OnPush — NARUSZENIE (4)
     [x] component#2-14,#16-27 — OK (brak wystąpień)
-    [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: formularz w klasie bazowej
+    [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: poza recenzją: src/app/shared/base-form.component.ts
     -->
     <!-- coverage: src/app/user.component.ts 96/97 -->
 
 Items of one instruction that share a verdict are collapsed into ONE line addressed by a range or list of ranges (`general#1-5,#7-13`); expanded, the block still holds exactly `<total>` items, each exactly once. `NARUSZENIE` and `NIEZWERYFIKOWANE` keep their own line and their own short label, while a collapsed OK or BRAMKA range needs none — the address is the reference.
 `[x]` is set only for an item checked 100%: `OK (<lines or "brak wystąpień">)` when the file complies, `NARUSZENIE (<lines>)` when the item produced the finding above it, `BRAMKA: <what is absent>` when the instruction’s gate failed for this file.
 Anything the reviewer could not verify stays `[ ]` with the reason — an honest gap, not a rounding error.
+The reason names what was missing, after one of three prefixes: `narzędzie:` (a tool the run did not run), `poza recenzją: <path>` (a file outside the review — it must exist, and must not be reviewed itself) or `działająca aplikacja:` (data only the running app has).
+The project lacking what an item requires is a `NARUSZENIE`, never a reason.
+An item under which the file's bundle printed a fact, a probe hit or a second question gets a line of its own whose verdict answers them: an OK against a `FAKT` carries `fakt nie dotyczy: <why>`, every line a `FAKT`, `WSKAZÓWKA` or `SONDA` points at is cited, and an OK on an item with a second question carries `drugie pytanie: <answer>`.
+An item left `[ ]` in 3 or more files is answered once more, for the whole target, in the cross-file part's `<!-- unverified:` block.
 A file whose whole diff is mechanical writes `<!-- coverage: <path> mechanical -->` and no block: its walk was the gate's two questions, not the checklist.
 
 The renderer expands every range and recounts the ticks instead of trusting the marker: a missing block, a block shorter than `<total>`, a marker the ticks do not back up, an item ticked twice by overlapping ranges, a malformed range, an id that matches no instruction file (a mistyped `a11y#1-30` would otherwise count toward coverage as if `accessibility` had been walked) and an unticked item all become warnings, and the ticked lines become the page's **Pokrycie checklist** section.
+All of that happens under `--with-checklist`; without it the renderer cuts the blocks and markers before it parses, and the coverage is checked by `check-part.cjs` alone, which prints it once the parts pass (`check-part: pliki z pełnym przejściem checklisty: <full>/<files>`, then every file with an open item and its `<checked>/<total>`).
 
-Any warning keeps the Markdown next to the HTML, but the two kinds mean opposite things. A `nierozpoznana`/`nieczytelny` warning is a line the parser could not read: the report drifted from the format and the HTML lost that finding or that tick — worth fixing. A `sprawdzono <checked>/<total>` warning is the parser succeeding: the block was read perfectly and simply carries an item left `[ ]` with its reason. That is the honest gap above, working as designed — never close it by ticking an item nobody checked. (Two more warnings go to stderr only and never keep the Markdown, because neither says anything about the format: a report with no coverage markers at all, and a failure to detect the pull request.)
+Any warning keeps the Markdown next to the HTML, but the two kinds mean opposite things.
+A `nierozpoznana`/`nieczytelny` warning is a line the parser could not read: the report drifted from the format and the HTML lost that finding or that tick — worth fixing.
+A `sprawdzono <checked>/<total>` warning is the parser succeeding: the block was read perfectly and simply carries an item left `[ ]` with its reason.
+That is the honest gap above, working as designed — never close it by ticking an item nobody checked.
+Only a `--with-checklist` run raises it, because otherwise the renderer cuts the blocks unread; the assembly's coverage line names the same gap either way.
+(Two more warnings go to stderr only and never keep the Markdown, because neither says anything about the format: a `--with-checklist` report with no coverage markers at all, and a failure to detect the pull request.)
 
 ## Review scope
 
@@ -251,7 +318,7 @@ It follows the reader's light/dark theme, and a button in the top right corner o
 The heading names the branches the review compares; when an open pull request was found, its own title and number go under them, and the title is appended to the page's `<title>` as well — the browser tab is where the branch names alone say the least.
 
 - **Code snippet** — every finding carries a collapsible view of the cited lines with three lines of context. When those lines changed, it is a side-by-side diff like GitHub's split view: the file before the change on the left under its own line numbers, after it on the right, the k-th removal facing the k-th addition inside a change block and a blank cell facing whatever has no counterpart. Each side scrolls horizontally on its own. A snippet with nothing changed in it (a folder review, or a finding on a line the diff left alone) stays a single column. A switch in the snippet header swaps between the cited lines and the whole file; the full view renders under the same rules — split diff when the file changed, single column when it did not — highlights the cited lines, scrolls inside its own box and opens on the first highlight. Files over 3000 lines are not embedded, and their switch says so.
-- **Pokrycie checklist** — a collapsed section under the findings: one row per analyzed file with its `<checked>/<total>`, opening to every checklist item the reviewer walked, marked ✓ compliant, ✗ reported or ○ unverified. A file that did not finish its walk shows its count in the High colour. It is the one part of the page no filter touches, and a report with no findings still carries it.
+- **Pokrycie checklist** (only under `--with-checklist`) — a collapsed section under the findings: one row per analyzed file with its `<checked>/<total>`, opening to every checklist item the reviewer walked, marked ✓ compliant, ✗ reported or ○ unverified. A file that did not finish its walk shows its count in the High colour. It is the one part of the page no filter touches, and a report with no findings still carries it.
 - **File tree** — the sidebar maps the whole change, not the review: every path in `git diff --name-status` between the base and the reviewed branch (or in the index, for a staged review), nested by directory, with chains of single-child directories folded into one row the way GitHub folds them. The name says what the change did to the file, in the diff's own colours: green for a file it introduced, yellow for one it only touched (a rename or a copy included — it appears solely under the name the change leaves it with), struck-through red for one it removed. A deleted file is otherwise left out, since it is not part of the structure the change ends with, unless it drew a finding — no finding is ever left without a row. Whether a file drew one is the icon's job instead: a file written about is marked with the severity badge of the worst finding the current filters leave in it, the same 🟤🔴🟡⚪🔵 the finding itself carries, followed by how many there are. Every row reserves the slot whether or not it fills it, so one icon never pushes its neighbours' names out of line. The counts and the badges move with the filters, the structure does not, and a file with nothing to show keeps its row. Clicking a file with findings opens and flashes its section. A folder review has no diff, and an older report was rendered before the tree carried one, so both fall back to the files that were reported on.
 - **Severity filter** — one toggle chip per severity present in the report, with a count.
 - **Rule filter** — a two-level checkbox tree: instruction file, expanding to its concrete rules. Toggling the file toggles all of its rules; a partial selection shows an indeterminate parent. A finding stays visible while at least one of its rules is selected, so a finding citing two rules survives either way.
@@ -289,32 +356,61 @@ A finding no checklist item covers (the cross-file pass, a `CLAUDE.md` rule) nam
 They are written for a reviewer who never opens the report: `PR Problem` gets two sentences (what is wrong + the consequence), `PR Expected` two to three (the target state + how to reach it), and `PR Locations` lists every file and symbol the fix touches — every concrete name the Polish fields propose has to appear in them.
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
-Every file also carries its ticked checklist and coverage marker as HTML comments — see [Checklist coverage](#checklist-coverage).
+Every file's part also carries its ticked checklist and coverage marker as HTML comments, and the finished report keeps them only under `--with-checklist` — see [Checklist coverage](#checklist-coverage).
 Line numbers refer to the file's real content (as the Read of the file's `contentPath` numbers it), never to diff hunk numbering.
 The context script additionally precomputes each file's changed-line ranges (`changedLines`, from `git diff -U0`) as the authoritative list of lines the diff touched, and carries the source path of a renamed file (`oldPath`, from the rename pair `git diff --raw` reports) so the rename can be checked against the naming rules.
 No findings → the report is the single line `Nie wykryto problemów.`; empty diff → `Nie wykryto zmian do analizy.`
 
 ## Mechanics
 
-`scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, instruction matching, report paths, the files the reviewer reads and a ready-to-run search command.
-It writes the full context to `.review-context-<kind>.json` next to the first report and prints only a summary (`contextPath`, `errors`, `warnings`, one line per target), which the skill then Reads — tool output can be compressed on its way into the conversation, a Read file is not.
+`scripts/review-context.cjs` (Node, zero dependencies) does all deterministic work: base-branch detection, changed-file listing, changed-line ranges, file-kind matching, report paths, the files the reviewer reads and a ready-to-run search command.
+It writes the full context to `cache/<branch>/.review-context-<kind>.json`, in the cache folder of the run's first target, and prints only a summary (`contextPath`, `errors`, `warnings`, one line per target), which the skill then Reads — tool output can be compressed on its way into the conversation, a Read file is not.
 It also writes each target's import ledger (`<report>.imports.txt`, one `<file>:<line> → <specifier>` edge per line, read from the reviewed revision) for the cross-file layering question; files in a language it has no extractor for are named on a `# not parsed` line.
 It writes each target's work folder (`<report>.work/`, the context's `workDir`): every reviewed file's content in the reviewed revision (`contentPath`) and its own section of the target's diff (`diffPath`), both taken from git once and Read by the reviewer file by file.
+Next to them sits each file's bundle (`bundlePath`, `NN-<name>.bundle.md`): its plan with every item's text under its address — so the reviewer takes every address from the bundle instead of numbering anything itself — the facts and probe hits bound to those items, the consumers of its exports and its jscpd candidates.
+The cross-file pass has a bundle of its own (`crossBundlePath`): the facts that span files, the items that pass reports under, the candidates.
+The facts behind the bundles are in `facts.json` (`factsPath`), which the part check reads.
 A folder review reads the working tree, so its `contentPath` is the file itself and it has no diff.
 `target.commands.grep` searches the reviewed revision into a file of that folder and prints only the match count and the file's path.
-Next to the context it writes `.review-rules-<kind>/`: a copy of every instruction whose checklist items each start with their address (`- general#6: …`, the catalog entry's `numberedPath`), so the reviewer takes every address from that copy instead of counting bullets.
+A resumed run rewrites the work folder but keeps the drafts of parts the check refused and the run never wrote, listed in `target.resume.drafts`.
+Next to the context it writes `checklists/<kind>/<id>.md` (the catalog entry's `numberedPath`), a copy of every instruction the run walks with the items its plans walk, kept for a lookup of one item, and `rulebook-notes.md` (`rulebookNotesPath`), the preambles the reviewer reads before the first file.
+`scripts/rulebook.cjs` loads the kinds and their item keys, `scripts/repo-facts.cjs` computes the facts from the whole reviewed revision (export consumers, a barrel nobody imports through, a guard no route uses, a pipe used in one template or none, i18n keys missing, unused or duplicated, relative imports that leave their area, repeated literals and conditions, one label mapping implemented twice, NgRx action trios and loading flags, spec inputs and outputs, snapshot placement) and runs the probes, and `scripts/review-bundle.cjs` binds both to plan items and renders the bundles.
+A fact binds to the first item of the file's plan whose `facts` names its kind; one no item names is listed under `## Fakty spoza planu (bez wymogu)` and requires nothing.
+When the facts could be drawn from part of the repository only (a size limit, a git failure), every fact merely points, like a probe hit.
 A write failure there drops the targets it concerns, and a run with no target left exits 1.
 It runs the [duplication scan](#duplication-scan) through `scripts/duplication-scan.cjs`, which fetches jscpd with npx at run time instead of depending on it.
-Branch reviews never touch the working tree (`git diff base...branch`, `git show branch:path`); staged reviews first run `git add .`, then read index content (`git show :path`).
+Branch reviews never touch the working tree: the file list comes from `git diff --raw base...branch`, and every file's content from its blob in that list, read through one `git cat-file --batch`; staged reviews first run `git add .`, then read the index blobs of `git diff --cached --raw` the same way.
 
 `scripts/check-part.cjs` (Node, zero dependencies) checks the report's part files against the context, with the grammar `render-report.cjs` parses.
 As the skill's PreToolUse hook it runs on every Write or Edit of a `<report>.partNN.md` file: a failing part is not written (exit 2), and the reviewer gets the list of problems back.
-Run with `--context=<contextPath> --report=<reportPath>`, it checks the whole target before the assembly and exits 1 on any problem, which leaves the parts on disk.
-It holds the part numbering and order, a checklist block covering exactly the file's plan with the marker's total, verdict lines that name their evidence (`OK (L12, L18)` or `OK (brak wystąpień)`, never another item's address), a finding behind every `NARUSZENIE`, at most one item of each instruction per finding (two items of one checklist are two defects, so two findings), gates only where an instruction declares one, and cited lines that exist in the file.
+It also sees every Bash command of the review and refuses one that writes a part — a redirect or heredoc into it, `tee`, `cp` or `mv` onto it, `sed -i` on it, a `cd` into the report's folder followed by any of these — since the check would never see that part.
+It refuses, too, a command that prints a reviewed file, its diff or its bundle (`cat`, `head`, `sed`, `awk` and 23 more readers, over the files of every run whose work folder still exists, with braces, globs and `for` loops expanded): shell output may reach the reviewer compressed and without the line numbers a part cites.
+`grep` and `wc` pass, and so does `sed -n '<N>p' <file>` for a line longer than the 2,000 characters Read shows.
+A part that fails is saved as a draft, `<workDir>/<stem>.partNN.draft.md`, so a fix is an Edit of the lines named instead of the whole part sent again: after every Edit of a draft, the skill's PostToolUse hook checks it again and, once it passes, moves it into place together with the drafts waiting behind it; `--context=<contextPath> --promote=<draft>` does the same by hand.
+A part written less than 2 seconds after the part before it is refused unless both belong to one batch of `target.batches` (see [Token cost](#token-cost)): one message writes one batch, with the next batch's Reads riding along.
+A part refused for that alone waits in its draft, unchanged, for the promote.
+Run with `--context=<contextPath> --report=<reportPath>`, it checks the whole target before the assembly and exits 1 on any problem, which leaves the parts on disk; once everything passes it rewrites the numbers of every coverage marker from the block above it, so a miscounted marker is never a refusal, sets the fixed severities (see [Instructions](#instructions)) on the findings, and prints the target's coverage line.
+It holds the part numbering and order, a checklist block covering exactly the file's plan, verdict lines that name their evidence (never another item's address), a finding behind every `NARUSZENIE`, at most one item of each instruction per finding (two items of one checklist are two defects, so two findings) except for a `findings: per-file` instruction, which is instead one finding per file, gates only where an instruction declares one, and cited lines that exist in the file.
+An OK's evidence answers one item: lines of the file (`OK (L12, L18)`), never a span of half or more of a file of 20+ lines nor a line past its end, or the path of an existing file that meets the requirement (`OK (tests/a.spec.ts)`), looked up from the reviewed file's folder, the facts' root or the context's `project` root.
+Only `OK (brak wystąpień)` closes a range of items, since lines that answer one item say nothing about the next.
+From `facts.json` it holds each item to what its bundle showed: `NARUSZENIE`, or an OK with `fakt nie dotyczy:` against a `FAKT` (never `NIEZWERYFIKOWANE`), every line a fact or probe points at cited by a clean verdict, no `brak wystąpień` where lines are pointed at, `drugie pytanie:` where the item asks one, and a line of its own for such an item.
+A `NIEZWERYFIKOWANE` reason starts with `narzędzie:`, `poza recenzją:` or `działająca aplikacja:`, and a `poza recenzją:` path must exist and lie outside the review.
+An item with a prepared verdict (`gotowy werdykt:`) takes that line word for word or a `NARUSZENIE`, never an OK.
+The cross-file part's `<!-- unverified:` block holds exactly the items left `[ ]` in 3 or more file parts, prepared ones aside, each once, never with `BRAMKA`, and every `NARUSZENIE` there has a finding of that part.
+A finding of the cross-file part whose lines a file part's finding already covers, under the same address or its `sameAs` partner, is refused; a part whose two findings over the same lines name the two sides of a `sameAs` pair is written with a note asking to merge them.
+
+`scripts/review-hooks.cjs` (Node, zero dependencies) holds the skill's other hooks, one `--event` each; none of them ever breaks a session, since a failure ends in no output.
+`--event=read` runs before every Read.
+Reading a run's context or one of its bundles ties the session to that run; before the cross-file bundle is read, its live section is rewritten from the parts on disk — what the file parts already report, and which addresses the `<!-- unverified:` block must answer; under `--dedup-items` a file bundle's Read is pointed at a copy in which an item an earlier bundle showed is a reference to that bundle.
+`--event=draft` runs after every Write or Edit and promotes a draft that now passes.
+`--event=compact` runs when a session is compacted, from the plugin's `hooks/hooks.json`, since a skill's frontmatter cannot register a SessionStart hook.
+It names the target and where it stands, the Reads that resume it (the next batch, the cross-file pass or the assembly), the drafts waiting, and the lines of `SKILL.md` between the re-attached head and the `<!-- one-time:start -->` marker to read again.
+Its state is one small JSON file per session.
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
-Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source]`.
-It reads the per-file checklist blocks and coverage markers too, and reconciles them: the ticks are recounted, and a short walk, a missing or malformed block or a marker the ticks contradict warns (and keeps the Markdown), while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions. Any other multi-line HTML comment in the report is swallowed whole instead of being read as findings.
+Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source] [--only-md] [--with-checklist]`.
+Without `--with-checklist` it first cuts the checklist blocks, coverage markers and the `<!-- unverified:` block, so the page has no **Pokrycie checklist** section and a Markdown it leaves behind (a drift, `--keep-source`) carries none either; `--only-md` does only that cut, in place, and renders nothing.
+Under `--with-checklist` it reads the per-file checklist blocks and coverage markers too, and reconciles them: the ticks are recounted, and a short walk, a missing or malformed block or a marker the ticks contradict warns (and keeps the Markdown), while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions. Any other multi-line HTML comment in the report is swallowed whole instead of being read as findings.
 Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
 The cited lines come from `**Linia:**`: bare numbers and spans, plus the other spellings of the same list (`L12`, an em dash or minus sign between the ends, `;` between entries, backticks); a note in parentheses is set aside whole.
 Any other entry warns and names itself, and a field that points at no line at all warns too.
@@ -322,7 +418,7 @@ Any other entry warns and names itself, and a field that points at no line at al
 The old-file line numbers the left side prints are derived from the `-U0` hunk headers, which state how far the old numbering runs ahead of the new one from each hunk on.
 The full source of every file with a finding is embedded once per file, so a file with four findings carries one copy, not four.
 Files longer than 3000 lines are left out and the `Cały plik` button reports the count instead — the fragment still renders.
-`--project` names the root the report paths are relative to; when it is omitted the root is recovered from a report living in `<project>/.claude/doh/<branch>/`, and a file that cannot be read simply renders without a snippet.
+`--project` names the root the report paths are relative to; when it is omitted the root is recovered from a report living under `<project>/.claude/doh/`, and a file that cannot be read simply renders without a snippet.
 It accepts the severity lead line with and without a leading `- ` (reports written before `ee76300` use the dashed form), and reads `**Reguła:**` as `<id>#<n>` addresses, and — in older reports and prose rules — whether the instruction is named with its `.md` extension, without it, or replaced by the violated point's name.
 
 `scripts/github.cjs` (Node, no dependencies) is the only place that talks to GitHub: the owner/repo read off the remote URL, the token lookup, and the three calls the skill needs (find the open PR, read its diff, post the review).
@@ -339,5 +435,5 @@ Findings anchored on lines the PR diff shows become inline review comments (a wh
 The button is tied to the *branch*, not to the review mode: a `staged` or `folder <path>` review run on a branch that has an open PR gets it too.
 That is intentional but worth knowing — those modes review code the PR diff need not contain, so most or all of their findings end up in the review body rather than pinned to lines.
 
-Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/check-part.test.cjs skills/codeReview/scripts/score-review.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs skills/codeReview/scripts/duplication-scan.test.cjs`
+Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/rulebook.test.cjs skills/codeReview/scripts/repo-facts.test.cjs skills/codeReview/scripts/review-bundle.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/check-part.test.cjs skills/codeReview/scripts/review-hooks.test.cjs skills/codeReview/scripts/score-review.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs skills/codeReview/scripts/duplication-scan.test.cjs`
 (paths are listed explicitly because PowerShell does not expand globs for native commands).

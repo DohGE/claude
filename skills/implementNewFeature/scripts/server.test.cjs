@@ -1037,6 +1037,74 @@ test('formularz bez ustawień agenta daje pełny, pusty zestaw', async t => {
   assert.deepStrictEqual(agents.steps['5'], { model: '', effort: '' });
 });
 
+const FALLBACK_MODELS = [{ value: 'opus', label: 'Opus' }, { value: 'sonnet', label: 'Sonnet' },
+  { value: 'haiku', label: 'Haiku' }, { value: 'fable', label: 'Fable' }];
+
+test('lista modeli pochodzi z models.json sesji i tylko ona przechodzi do stanu', async t => {
+  const dir = tmpDir();
+  const models = [{ value: 'opus', label: 'Opus 5.5' }, { value: 'claude-sonnet-5', label: 'Sonnet 5' }];
+  fs.writeFileSync(path.join(dir, 'models.json'), JSON.stringify(models));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.deepStrictEqual((await getState(base)).models, models);
+  // Haiku jest aliasem, który przechodził wcześniej — ta sesja go nie oferuje.
+  await step1(base, { agents: { model: 'claude-sonnet-5', steps: { 4: { model: 'haiku' } } } });
+  const { agents } = (await task0(base)).step1;
+  assert.strictEqual(agents.model, 'claude-sonnet-5');
+  assert.strictEqual(agents.steps['4'].model, '');
+  // Lista jest wyliczana, nie zapisywana: stan na dysku jej nie niesie.
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'pipeline-state.json'), 'utf8'));
+  assert.strictEqual(saved.models, undefined);
+});
+
+test('bez używalnego models.json serwer podaje aliasy bez wersji', async t => {
+  const cases = [null, '{', '{"models":[{"value":"opus"}]}', '[]',
+    JSON.stringify([{ value: '' }, { value: 'rm -rf /', label: 'x' }, { label: 'Opus' }, 'opus'])];
+  for (const body of cases) {
+    const dir = tmpDir();
+    if (body !== null) fs.writeFileSync(path.join(dir, 'models.json'), body);
+    const app = createApp(dir);
+    const base = await listen(app);
+    const { models } = await getState(base);
+    app.server.close();
+    assert.deepStrictEqual(models, FALLBACK_MODELS, `models.json: ${body}`);
+  }
+});
+
+test('models.json: brak etykiety to wartość, duplikat wypada, UTF-16 z PowerShella się czyta', async t => {
+  const dir = tmpDir();
+  const list = [{ value: 'opus', label: '  Opus 5.5  ' }, { value: 'opus', label: 'drugi' },
+    { value: 'fable' }, { value: 'x y', label: 'spacja' }];
+  // Out-File w Windows PowerShell pisze UTF-16LE z BOM-em.
+  fs.writeFileSync(path.join(dir, 'models.json'),
+    Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(JSON.stringify(list), 'utf16le')]));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.deepStrictEqual((await getState(base)).models,
+    [{ value: 'opus', label: 'Opus 5.5' }, { value: 'fable', label: 'fable' }]);
+});
+
+test('wznowiony run z modelem, którego sesja już nie oferuje, dziedziczy', async t => {
+  const dir = tmpDir();
+  const first = createApp(dir);
+  const firstBase = await listen(first);
+  await step1(firstBase, { agents: { model: 'fable', effort: 'high',
+    steps: { 6: { model: 'sonnet', effort: 'low' } } } });
+  await new Promise(r => first.server.close(r));
+  fs.writeFileSync(path.join(dir, 'models.json'),
+    JSON.stringify([{ value: 'opus', label: 'Opus 5.5' }, { value: 'sonnet', label: 'Sonnet 5' }]));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const { agents } = (await task0(base)).step1;
+  // Spawn z fable padłby dopiero na tym kroku; effort zostaje, bo nie zależy od modelu.
+  assert.strictEqual(agents.model, '');
+  assert.strictEqual(agents.effort, 'high');
+  assert.deepStrictEqual(agents.steps['6'], { model: 'sonnet', effort: 'low' });
+});
+
 test('każdy krok startuje z pustym czatem', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);

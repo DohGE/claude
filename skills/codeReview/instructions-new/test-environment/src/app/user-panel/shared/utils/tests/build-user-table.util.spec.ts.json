@@ -1,0 +1,309 @@
+{
+  "file": "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.ts",
+  "role": "Spec of the build-user-table util, with a snapshot.",
+  "itemCount": 54,
+  "instructions": [
+    {
+      "id": "util-guard-unit-test",
+      "name": "Util and guard unit tests",
+      "source": "instructions/local/unit-tests/util-guard-unit-test.md",
+      "selectedItems": "1-4",
+      "checklistSize": 7,
+      "items": [
+        {
+          "id": "util-guard-unit-test#1",
+          "text": "Util specs are plain `describe`/`it` — no TestBed, no ng-mocks, no mocks; every util file has one, with a `describe` per exported function when the file groups several related functions."
+        },
+        {
+          "id": "util-guard-unit-test#2",
+          "text": "Util coverage: the happy path plus edge cases (empty array/`null` input); small results are asserted whole with `toEqual`, large ones per field or slice; a copy-returning util asserts `result` `not.toBe(input)` while `toEqual(input)`."
+        },
+        {
+          "id": "util-guard-unit-test#3",
+          "text": "API→domain mapping utils assert the complete field-by-field mapping in one `toEqual`."
+        },
+        {
+          "id": "util-guard-unit-test#4",
+          "text": "Large summary structures may use `toMatchSnapshot()` with snapshots stored in `tests/__snapshots__/`; snapshots are refreshed only after reviewing the diff."
+        }
+      ]
+    },
+    {
+      "id": "unit-tests",
+      "name": "Unit tests (common)",
+      "source": "instructions/local/unit-tests/unit-tests.md",
+      "selectedItems": "1-2,4-15,18,21-25",
+      "checklistSize": 25,
+      "items": [
+        {
+          "id": "unit-tests#1",
+          "text": "Specs live in a `tests/` folder next to the code under test; snapshots in `tests/__snapshots__/`."
+        },
+        {
+          "id": "unit-tests#2",
+          "text": "Stack is Jest + ng-mocks; suites sharing a fixture/TestBed use `ngMocks.faster()` with setup in `beforeAll`."
+        },
+        {
+          "id": "unit-tests#4",
+          "text": "`afterEach` restores all shared state: `jest.clearAllMocks()`, every signal mutated inside tests reset to its initial value, selector overrides reset; data (re)established in `beforeEach` is reset in `beforeEach`, not undone in `afterEach`."
+        },
+        {
+          "id": "unit-tests#5",
+          "text": "Named test constants (fixtures, mocks, datasets) are camelCase — never SCREAMING_SNAKE_CASE or PascalCase."
+        },
+        {
+          "id": "unit-tests#6",
+          "text": "Variables holding an injected dependency (mock, spy, `TestBed.inject(...)` result) use the full descriptive name derived from the dependency type (keeping the feature/area part of the class name), never shortened to a generic role name."
+        },
+        {
+          "id": "unit-tests#7",
+          "text": "A dependency mock/stub is checked against the real contract instead of cast into it: `satisfies SomeService` for a full stub, `satisfies Partial<SomeService>` or an annotated `Partial<SomeService>` for the deliberate subsets the facade, component and guard test instructions prescribe — never `as SomeService`, which silences every drift between the mock and the contract it stands for."
+        },
+        {
+          "id": "unit-tests#8",
+          "text": "Test-loop data is passed directly: `it.each` / `describe.each` / `test.each` receives its rows as an array literal written inside the call, and each row keeps its values as literals in place — never a named dataset const passed to `it.each(dataset)`, and never per-case variables (fixtures, inputs, expected values) declared above and referenced from the rows. Rows that repeat a value write it out again; the no-duplicated-test-data rule below never pulls data out of a dataset row."
+        },
+        {
+          "id": "unit-tests#9",
+          "text": "Every `describe` title is either the exact code identifier under test — matching its real casing (`describe('myFunction')`, `describe('UserPanelFacade')`) — or a descriptive phrase whose first word is capitalized (`describe('Tests for myFunction')`); a descriptive title never starts with a lowercase word (`describe('tests for myFunction')`)."
+        },
+        {
+          "id": "unit-tests#10",
+          "text": "Every `it` description starts with `should` and states the expected behavior (e.g. `it('should return an empty list when the request fails')`); `it.each` description templates follow the same rule."
+        },
+        {
+          "id": "unit-tests#11",
+          "text": "Fixtures are complete objects of their domain type; `{} as X` is acceptable only when the code under test never reads the payload's fields."
+        },
+        {
+          "id": "unit-tests#12",
+          "text": "The same test data is never duplicated across cases: define a shared object/dataset once and reuse it directly when the data is identical, or derive near-identical variants from it with the spread operator (`{ ...baseFixture, changedField: value }`) — never hand-write a second copy of an equivalent literal."
+        },
+        {
+          "id": "unit-tests#13",
+          "text": "No existence-only tests — never `it('should be created', () => expect(x).toBeTruthy())` or `toBeDefined()`-style assertions (zero diagnostic value)."
+        },
+        {
+          "id": "unit-tests#14",
+          "text": "WHICH cases a spec must cover (branches, edge cases, failure paths, state permutations, missing specs for changed behavior) is owned by the global test-coverage instruction and reported there as 🔵 Missing Unit Test — the rules below govern only the SHAPE of the spec."
+        },
+        {
+          "id": "unit-tests#15",
+          "text": "Any spy or mock called with arguments is asserted on those arguments with `toHaveBeenCalledWith(...)` (or `toHaveBeenLastCalledWith(...)` for effect-driven repeats) — a bare `toHaveBeenCalled()`/`toHaveBeenCalledTimes(n)` that ignores the payload is insufficient; `toHaveBeenCalled()` is reserved for genuinely argument-less calls."
+        },
+        {
+          "id": "unit-tests#18",
+          "text": "The spec runs the change-detection mode the application runs: when `app.config.ts` provides `provideZonelessChangeDetection()`, the TestBed setup provides it too — a spec left zone-based passes on zone.js' automatic ticks and hides exactly the missing signal write that leaves the real app stale. Without the polyfill `fakeAsync`/`tick()` no longer exist; flush with `TestBed.tick()` (v20+) or `fixture.detectChanges()`."
+        },
+        {
+          "id": "unit-tests#21",
+          "text": "No focused or skipped specs (`fdescribe`/`fit`/`.only`/`xit`) reach the diff — see the general instruction."
+        },
+        {
+          "id": "unit-tests#22",
+          "text": "No double casts (`as unknown as X`) where a single `as X` suffices; no `as never`; no string-index type access."
+        },
+        {
+          "id": "unit-tests#23",
+          "text": "Snapshots are updated (`-u`) only after consciously reviewing the diff."
+        },
+        {
+          "id": "unit-tests#24",
+          "text": "Behavior-bearing code follows TDD: a failing test first (failing for the expected reason), then the minimal implementation, then refactor with tests green."
+        },
+        {
+          "id": "unit-tests#25",
+          "text": "After changing any source file, its spec is run and green before commit (the pre-commit hook lints but does not run tests)."
+        }
+      ]
+    },
+    {
+      "id": "utils",
+      "name": "Utility functions",
+      "source": "instructions/local/code/shared/utils.md",
+      "selectedItems": "11",
+      "checklistSize": 11,
+      "items": [
+        {
+          "id": "utils#11",
+          "text": "Every util file has a spec in the sibling `tests/` folder, covering every function the file exports (one `describe` per exported function)."
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "source": "instructions/global/general.md",
+      "selectedItems": "1-6,8-9,13",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "general#1",
+          "text": "Named `const` values are camelCase — never SCREAMING_SNAKE_CASE and never PascalCase; interfaces, types, enums and classes are PascalCase."
+        },
+        {
+          "id": "general#2",
+          "text": "Names are full and descriptive — no abbreviations and no one-letter identifiers; shortening is allowed only for well-established abbreviations or when the full name would exceed ~25–30 characters or 4–5 words."
+        },
+        {
+          "id": "general#3",
+          "text": "No unnecessary type assertions (`as`), especially `as never` and assertions on primitive types; use a single `as Type` only when the compiler requires it; `as unknown as Type` only when the compiler/ESLint rejects a single assertion because of an incompatible shape."
+        },
+        {
+          "id": "general#4",
+          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
+        },
+        {
+          "id": "general#5",
+          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
+        },
+        {
+          "id": "general#6",
+          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area."
+        },
+        {
+          "id": "general#8",
+          "text": "No `console.log` or other leftover debug statements."
+        },
+        {
+          "id": "general#9",
+          "text": "No focused or skipped tests in the diff: `fdescribe`, `fit`, `describe.only`, `it.only`, `xdescribe`, `xit`, `test.skip` — a committed `.only` silently reduces CI to one suite while staying green (report as 🔴 High)."
+        },
+        {
+          "id": "general#13",
+          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
+        }
+      ]
+    },
+    {
+      "id": "best-practices",
+      "name": "Angular & TypeScript best practices",
+      "source": "instructions/global/best-practices.md",
+      "preamble": [
+        "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
+      ],
+      "selectedItems": "1-2,22",
+      "checklistSize": 23,
+      "items": [
+        {
+          "id": "best-practices#1",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types."
+        },
+        {
+          "id": "best-practices#2",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction."
+        },
+        {
+          "id": "best-practices#22",
+          "text": "A suppression comment added by the diff (`@ts-ignore`, `@ts-expect-error`, `eslint-disable*`) carries a one-line justification and the narrowest scope that works (line-level over file-level); `@ts-expect-error` is used wherever it compiles, because it fails once the underlying problem is fixed. The `/* eslint-disable @typescript-eslint/member-ordering */` allowed by the effects instruction is the one standing exception."
+        }
+      ]
+    },
+    {
+      "id": "security",
+      "name": "Security",
+      "source": "instructions/global/security.md",
+      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
+      "selectedItems": "7",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "security#7",
+          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\"."
+        }
+      ]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code quality — duplication, dead code, boilerplate & consistency",
+      "source": "instructions/global/code-quality.md",
+      "preamble": [
+        "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+      ],
+      "selectedItems": "1-8",
+      "checklistSize": 8,
+      "items": [
+        {
+          "id": "code-quality#1",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates."
+        },
+        {
+          "id": "code-quality#2",
+          "text": "No copy-paste-with-a-tweak: two near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset)."
+        },
+        {
+          "id": "code-quality#3",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change."
+        },
+        {
+          "id": "code-quality#4",
+          "text": "No unnecessary code: a wrapper that only forwards to the wrapped call, a variable used once on the very next line, `else` after a `return`, a condition that can never be false, `?.`/`??`/`try` guarding a value the types already guarantee, a hand-written helper an existing shared function already provides, an abstraction (interface, base class, generic, options object) introduced for a single consumer \"for the future\"."
+        },
+        {
+          "id": "code-quality#5",
+          "text": "No boilerplate: empty or pass-through lifecycle hooks and constructors, getters/methods that only return a field, scaffolding and generator leftovers (placeholder markup, sample fields, `TODO` stubs nothing tracks), values re-declared although the framework already defaults to them, and ceremony that adds no behavior."
+        },
+        {
+          "id": "code-quality#6",
+          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+        },
+        {
+          "id": "code-quality#7",
+          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
+        },
+        {
+          "id": "code-quality#8",
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+        }
+      ]
+    },
+    {
+      "id": "test-coverage",
+      "name": "Test coverage — untested cases & edge cases",
+      "source": "instructions/global/test-coverage.md",
+      "gate": "the file carries behaviour a spec could execute - a function or class method with a body (however trivial - a one-line setter or a lone .next() call is behaviour), a branch, handler or effect - not only declarations, re-exports or route/config literals",
+      "findings": "per-file",
+      "preamble": [
+        "This instruction OWNS coverage gaps — which behavioral cases, branches, edge cases and state permutations the diff leaves untested; every finding here is 🔵 **Missing Unit Test**. The unit-tests instruction owns the SHAPE of a spec (location, setup, naming, assertion style). A gap is reported ONCE, here — never also as a unit-tests finding. The items below are facets of one requirement — the file's behaviour is tested — so everything a file breaks here is ONE finding: its Problem lists each untested case with its line, and its Reguła names every item it breaks. A file with no spec at all leaves its branches, failure paths and edge cases untested too: those items are broken, not passed, and that one finding names them."
+      ],
+      "selectedItems": "2-9",
+      "checklistSize": 9,
+      "items": [
+        {
+          "id": "test-coverage#2",
+          "text": "Do not assume coverage from the spec's mere existence — enumerate the behavioral cases the changed lines introduce and cross-check each one against the spec's actual test cases."
+        },
+        {
+          "id": "test-coverage#3",
+          "text": "Every conditional branch introduced or modified by the diff is tested for BOTH outcomes: each `if`/`else`, ternary, `switch` case (including `default`), guard clause, early return and short-circuit path (`&&`, `||`, `??`, `?.`)."
+        },
+        {
+          "id": "test-coverage#4",
+          "text": "Every failure path is tested, not only the happy path: rejected promises, erroring observables/HTTP calls, thrown exceptions, `catch`/`catchError` blocks, timeout/retry logic and fallback values."
+        },
+        {
+          "id": "test-coverage#5",
+          "text": "Edge cases of the data the changed code reads are covered: empty array/collection, `null`/`undefined` input, empty string, `0` and negative numbers, boundary values of every comparison (test the exact limit of `<` vs `<=`), first/last element handling, duplicates where uniqueness matters."
+        },
+        {
+          "id": "test-coverage#6",
+          "text": "State permutations are covered: every boolean/loading/error flag the changed code reads is exercised in its non-default state as well as its default, and each flag is asserted independently so a single flag flipping the result is caught."
+        },
+        {
+          "id": "test-coverage#7",
+          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding."
+        },
+        {
+          "id": "test-coverage#8",
+          "text": "Public API surface changed by the diff (new method, new input/output, new selector/action handling) has at least one test exercising it through that public surface, not only through internals."
+        },
+        {
+          "id": "test-coverage#9",
+          "text": "Each finding names the concrete untested case — the input, state or branch that lacks a test, with the source line it lives on; a generic \"add more tests\" is not a valid finding."
+        }
+      ]
+    }
+  ]
+}

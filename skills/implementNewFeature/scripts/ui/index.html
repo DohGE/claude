@@ -300,8 +300,10 @@ const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
 // Step 1 has no agent of its own - the form IS step 1 - so the overrides start at 2.
 const AGENT_STEPS = [2, 3, 4, 5, 6, 7];
 // '' is "inherit": no model override on the spawn, no thinking directive in the prompt.
-const AGENT_MODELS = [['', 'Inherit'], ['opus', 'Opus 5'], ['sonnet', 'Sonnet 5'],
-  ['haiku', 'Haiku 4.5'], ['fable', 'Fable 5.1']];
+// The models are the server's - what this session's Agent tool can spawn - so they
+// are read off the state document, never listed here.
+const agentModels = () => [['', 'Inherit'],
+  ...((lastState && lastState.models) || []).map(m => [m.value, m.label])];
 const AGENT_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'],
   ['high', 'High'], ['max', 'Max']];
 const EYE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"'
@@ -359,10 +361,13 @@ const STEP1_INPUTS = {
 // nothing downstream needs to know which one it was handed. Unset is always ''.
 function agentValue(d, key, step) {
   const flat = d[`agent${key[0].toUpperCase()}${key.slice(1)}${step || ''}`];
-  if (flat !== undefined) return flat;
   const a = d.agents || {};
   const from = step ? (a.steps || {})[step] || {} : a;
-  return from[key] || '';
+  const value = flat !== undefined ? flat : from[key] || '';
+  // A model this session does not offer - remembered from one that did - has no
+  // option to select, so the screen shows Inherit. Reading it as '' keeps what is
+  // compared and sent the same as what is shown.
+  return key === 'model' && !agentModels().some(([v]) => v === value) ? '' : value;
 }
 
 // A whole record - draft, submitted form, or both merged - as the nested shape the
@@ -417,9 +422,10 @@ function agentsForForm(task, d) {
   return agentsOf({ agents: readStore(LS_AGENTS, null) });
 }
 
+// Escaped: the model labels come from a file the orchestrator writes, not from here.
 const agentSelect = (id, options, value) =>
   `<select id="${id}">${options.map(([v, label]) =>
-    `<option value="${v}"${v === value ? ' selected' : ''}>${label}</option>`).join('')}</select>`;
+    `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
 
 // Whatever is typed into a step-1 form but not submitted yet. Switching tabs or
 // creating a task re-renders the panel, and without this the text would be gone.
@@ -986,7 +992,7 @@ function renderStep1(task) {
       the steps that have not started yet — never the one already running.</p>
     <div class="agent-row">
       <div><label for="agentModel">Model</label>
-        ${agentSelect('agentModel', AGENT_MODELS, ag.model)}</div>
+        ${agentSelect('agentModel', agentModels(), ag.model)}</div>
       <div><label for="agentEffort">Effort</label>
         ${agentSelect('agentEffort', AGENT_EFFORTS, ag.effort)}</div>
     </div>
@@ -994,7 +1000,7 @@ function renderStep1(task) {
       <summary>Per-step overrides</summary>
       <div class="agent-grid">
         ${AGENT_STEPS.map(n => `<span>${esc(STEP_NAMES[n - 1])}</span>
-          ${agentSelect(`agentModel-${n}`, AGENT_MODELS, ag.steps[n].model)}
+          ${agentSelect(`agentModel-${n}`, agentModels(), ag.steps[n].model)}
           ${agentSelect(`agentEffort-${n}`, AGENT_EFFORTS, ag.steps[n].effort)}`).join('')}
       </div>
     </details>

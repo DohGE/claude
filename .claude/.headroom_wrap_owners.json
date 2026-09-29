@@ -1,0 +1,40 @@
+{
+  "ENABLE_TOOL_SEARCH": {
+    "original": "true",
+    "holders": [
+      {
+        "pid": 21356,
+        "start_src": null,
+        "start_time": null,
+        "port": null,
+        "inherited": true
+      },
+      {
+        "pid": 22508,
+        "start_src": null,
+        "start_time": null,
+        "port": null,
+        "inherited": true
+      }
+    ]
+  },
+  "ANTHROPIC_BASE_URL": {
+    "original": null,
+    "holders": [
+      {
+        "pid": 21356,
+        "start_src": null,
+        "start_time": null,
+        "port": 8787,
+        "inherited": true
+      },
+      {
+        "pid": 22508,
+        "start_src": null,
+        "start_time": null,
+        "port": 8787,
+        "inherited": true
+      }
+    ]
+  }
+}
