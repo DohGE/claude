@@ -115,18 +115,22 @@
   {
    "id": "v001",
    "files": [
-    "src/main.ts"
+    "src/main.ts",
+    "src/app/app.config.ts"
    ],
    "instructions": [
-    "app-config"
+    "app-config",
+    "code-quality"
    ],
    "items": [
-    "app-config#1"
+    "app-config#1",
+    "code-quality#3"
    ],
    "severity": null,
-   "text": "`platformBrowserDynamic().bootstrapModule(UserPanelModule)` — bootstrap must be `bootstrapApplication(App, appConfig)` with a flat providers array; no root `NgModule`, no `platformBrowserDynamic()`.",
+   "text": "`platformBrowserDynamic().bootstrapModule(UserPanelModule)` — bootstrap must be `bootstrapApplication(App, appConfig)` with a flat providers array; no root `NgModule`, no `platformBrowserDynamic()` — so `appConfig` (`app.config.ts:38`) has no consumer.",
    "lines": {
-    "src/main.ts": "5"
+    "src/main.ts": "5",
+    "src/app/app.config.ts": "38"
    }
   },
   {
@@ -234,13 +238,18 @@
     "src/app/app.config.ts"
    ],
    "instructions": [
-    "app-config"
+    "app-config",
+    "code-quality"
    ],
    "items": [
-    "app-config#10"
+    "app-config#10",
+    "code-quality#3"
    ],
    "severity": null,
-   "text": "API base URL, poll interval and debounce time declared inline here instead of coming from the central app-config token — the effects' hard-coded `timer(0, 5000)` and the card's missing `debounceTime` are exactly the consumers that should read them."
+   "text": "API base URL, poll interval and debounce time (`API_BASE_URL`, `POLL_INTERVAL_MS`, `SEARCH_DEBOUNCE_MS`) declared inline here instead of coming from the central app-config token, and consumed by nothing — the effects' hard-coded `timer(0, 5000)` and the card's missing `debounceTime` are exactly the consumers that should read them.",
+   "lines": {
+    "src/app/app.config.ts": "27-29"
+   }
   },
   {
    "id": "v009",
@@ -694,13 +703,18 @@
     "src/app/user-panel/models/consts/user-panel-initial-state.const.ts"
    ],
    "instructions": [
-    "state-interface"
+    "state-interface",
+    "best-practices"
    ],
    "items": [
-    "state-interface#8"
+    "state-interface#8",
+    "best-practices#2"
    ],
    "severity": null,
-   "text": "initial state typed via `as` cast instead of explicit `: UserPanelState` annotation (compiler no longer enforces completeness)."
+   "text": "`USER_PANEL_INITIAL_STATE = {` is typed via the `} as UserPanelState` cast instead of an explicit `: UserPanelState` annotation (compiler no longer enforces completeness).",
+   "lines": {
+    "src/app/user-panel/models/consts/user-panel-initial-state.const.ts": "5, 13"
+   }
   },
   {
    "id": "v036",
@@ -725,10 +739,12 @@
     "src/app/user-panel/models/consts/user-panel-initial-state.const.ts"
    ],
    "instructions": [
-    "state-interface"
+    "state-interface",
+    "models"
    ],
    "items": [
-    "state-interface#3"
+    "state-interface#3",
+    "models#12"
    ],
    "severity": null,
    "text": "loading flag initialized to `null` instead of `false`; `users: undefined`.",
@@ -788,11 +804,15 @@
    ],
    "instructions": [
     "general",
-    "i18n"
+    "i18n",
+    "code-quality",
+    "architecture"
    ],
    "items": [
     "general#7",
-    "i18n#11"
+    "i18n#11",
+    "code-quality#1",
+    "architecture#9"
    ],
    "severity": null,
    "text": "hard-coded user-facing text (`'User management panel'`).",
@@ -834,13 +854,15 @@
     "src/app/user-panel/models/interfaces/user-dto.interface.ts"
    ],
    "instructions": [
-    "models"
+    "models",
+    "code-quality"
    ],
    "items": [
-    "models#2"
+    "models#2",
+    "code-quality#3"
    ],
    "severity": null,
-   "text": "helper interface used only internally but exported (`ApiEnvelope`).",
+   "text": "`ApiEnvelope` is exported but nothing uses it, not even `user-dto.interface.ts` itself — a dead declaration.",
    "lines": {
     "src/app/user-panel/models/interfaces/user-dto.interface.ts": "1"
    }
@@ -1009,13 +1031,20 @@
     "src/app/user-panel/models/types/user-table.type.ts"
    ],
    "instructions": [
-    "models"
+    "models",
+    "i18n",
+    "general"
    ],
    "items": [
-    "models#18"
+    "models#18",
+    "i18n#11",
+    "general#7"
    ],
    "severity": null,
-   "text": "`...DisplayedColumnsLabels` enum values are texts, not i18n keys, and values ≠ keys."
+   "text": "`UserTableDisplayedColumnsLabels` enum values are texts (`'Full name'`, `'Status!'`), not i18n keys, and values ≠ keys.",
+   "lines": {
+    "src/app/user-panel/models/types/user-table.type.ts": "14-16"
+   }
   },
   {
    "id": "v056",
@@ -1023,10 +1052,12 @@
     "src/app/user-panel/models/types/user-table.type.ts"
    ],
    "instructions": [
-    "models"
+    "models",
+    "architecture"
    ],
    "items": [
-    "models#19"
+    "models#19",
+    "architecture#9"
    ],
    "severity": null,
    "text": "`UserTableDragSourceData` is a separate source-data interface duplicating the domain item — drag-and-drop table types are parameterized with the existing domain item type.",
@@ -1057,10 +1088,12 @@
     "src/app/user-panel/models/consts/user-role-options.const.ts"
    ],
    "instructions": [
-    "models"
+    "models",
+    "architecture"
    ],
    "items": [
-    "models#22"
+    "models#22",
+    "architecture#9"
    ],
    "severity": null,
    "text": "local duplicate of the shared-library option interface (`SelectOption`).",
@@ -1074,10 +1107,14 @@
     "src/app/user-panel/models/consts/user-role-options.const.ts"
    ],
    "instructions": [
-    "models"
+    "models",
+    "i18n",
+    "general"
    ],
    "items": [
-    "models#22"
+    "models#22",
+    "i18n#11",
+    "general#7"
    ],
    "severity": null,
    "text": "option `label` values are raw texts, not i18n keys.",
@@ -1125,10 +1162,12 @@
     "src/app/user-panel/models/enums/user-status.enum.ts"
    ],
    "instructions": [
-    "models"
+    "models",
+    "architecture"
    ],
    "items": [
-    "models#21"
+    "models#21",
+    "architecture#6"
    ],
    "severity": null,
    "text": "function (`userStatusLabel`) inside a models file — model files are purely declarative; its whole body is a `switch` translating one value into another, so it must become a `Record` mapper const in a `-mapper.const.ts` file, not a function; it also returns hardcoded UI texts instead of i18n keys.",
@@ -1187,10 +1226,12 @@
     "src/app/user-panel/models/index.ts"
    ],
    "instructions": [
-    "models"
+    "models",
+    "code-quality"
    ],
    "items": [
-    "models#7"
+    "models#7",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "declaration inside the barrel (`export const modelsVersion = 2`).",
@@ -1218,10 +1259,16 @@
     "src/app/user-panel/data-access/+state/user-panel.actions.ts"
    ],
    "instructions": [
-    "ngrx-actions"
+    "ngrx-actions",
+    "models",
+    "architecture",
+    "code-quality"
    ],
    "items": [
-    "ngrx-actions#1"
+    "ngrx-actions#1",
+    "models#1",
+    "architecture#6",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "more than one export — local `enum ActionTypes`, a constant (`DEFAULT_PAGE_SIZE`), plus the group.",
@@ -1421,10 +1468,12 @@
     "src/app/user-panel/data-access/+state/user-panel.actions.ts"
    ],
    "instructions": [
-    "ngrx-actions"
+    "ngrx-actions",
+    "code-quality"
    ],
    "items": [
-    "ngrx-actions#11"
+    "ngrx-actions#11",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "forbidden + unused import of the HTTP service (`UserPanelService`).",
@@ -1455,10 +1504,14 @@
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
    ],
    "instructions": [
-    "ngrx-reducer"
+    "ngrx-reducer",
+    "models",
+    "architecture"
    ],
    "items": [
-    "ngrx-reducer#1"
+    "ngrx-reducer#1",
+    "models#1",
+    "architecture#6"
    ],
    "severity": null,
    "text": "exports named `initialState` + `reducer` — initial state belongs in `models/`, single export must be `userPanelReducer`.",
@@ -1501,10 +1554,12 @@
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
    ],
    "instructions": [
-    "ngrx-reducer"
+    "ngrx-reducer",
+    "best-practices"
    ],
    "items": [
-    "ngrx-reducer#3"
+    "ngrx-reducer#3",
+    "best-practices#1"
    ],
    "severity": null,
    "text": "state mutation (`(state as any).isLoading = true; return state;`) + `as any`.",
@@ -1588,10 +1643,12 @@
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
    ],
    "instructions": [
-    "ngrx-reducer"
+    "ngrx-reducer",
+    "architecture"
    ],
    "items": [
-    "ngrx-reducer#12"
+    "ngrx-reducer#12",
+    "architecture#4"
    ],
    "severity": null,
    "text": "derived value stored in state (`userCount`); extra fields not in the interface (`refreshedAt`, `resultLabel`, `selectedUserName`).",
@@ -1707,11 +1764,15 @@
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
    ],
    "instructions": [
-    "ngrx-reducer"
+    "ngrx-reducer",
+    "utils",
+    "models"
    ],
    "items": [
     "ngrx-reducer#13",
-    "ngrx-reducer#16"
+    "ngrx-reducer#16",
+    "utils#8",
+    "models#21"
    ],
    "severity": null,
    "text": "inline `for` loop mapping + inline id concatenation (`firstName + '-' + last_name`) + `switch` mapping inside the reducer — belongs in utils/mappers.",
@@ -1812,10 +1873,12 @@
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
    ],
    "instructions": [
-    "ngrx-reducer"
+    "ngrx-reducer",
+    "code-quality"
    ],
    "items": [
-    "ngrx-reducer#18"
+    "ngrx-reducer#18",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "forbidden import of the selectors file (unused too)."
@@ -1872,10 +1935,12 @@
     "src/app/user-panel/data-access/+state/user-panel.selectors.ts"
    ],
    "instructions": [
-    "ngrx-selectors"
+    "ngrx-selectors",
+    "general"
    ],
    "items": [
-    "ngrx-selectors#6"
+    "ngrx-selectors#6",
+    "general#8"
    ],
    "severity": null,
    "text": "impure selector — `console.log` + `Date.now()` (`selectSelectedUserName`).",
@@ -1923,10 +1988,12 @@
     "src/app/user-panel/data-access/+state/user-panel.selectors.ts"
    ],
    "instructions": [
-    "ngrx-selectors"
+    "ngrx-selectors",
+    "code-quality"
    ],
    "items": [
-    "ngrx-selectors#7"
+    "ngrx-selectors#7",
+    "code-quality#4"
    ],
    "severity": null,
    "text": "`selectVisibleUsers` rebuilds every element (`users.map((user) => ({ ...user }))`) so no unchanged reference survives — memoization is defeated and every OnPush consumer re-renders.",
@@ -2039,10 +2106,12 @@
     "src/app/user-panel/data-access/+state/user-panel.selectors.ts"
    ],
    "instructions": [
-    "ngrx-selectors"
+    "ngrx-selectors",
+    "general"
    ],
    "items": [
-    "ngrx-selectors#15"
+    "ngrx-selectors#15",
+    "general#1"
    ],
    "severity": null,
    "text": "query object misnamed and PascalCase (`UserPanelSelectors` instead of `userPanelQuery`; `UserPanelTableQuery` instead of `userPanelTableQuery`), and its export order is alphabetical instead of thematic.",
@@ -2140,10 +2209,12 @@
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
    ],
    "instructions": [
-    "ngrx-effects"
+    "ngrx-effects",
+    "code-quality"
    ],
    "items": [
-    "ngrx-effects#22"
+    "ngrx-effects#22",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "forbidden facade injection; `store.dispatch(...)` inside the class; manual `subscribe()` in the constructor."
@@ -2171,10 +2242,12 @@
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
    ],
    "instructions": [
-    "ngrx-effects"
+    "ngrx-effects",
+    "general"
    ],
    "items": [
-    "ngrx-effects#5"
+    "ngrx-effects#5",
+    "general#8"
    ],
    "severity": "high",
    "text": "`refreshUsers$` uses `mapResponse` whose `error` branch returns nothing (just a `console.log`) — the reducer never receives a fail action, `isLoading` stays `true` and the user is told nothing (🔴 High); the `console.log` is also leftover debug output (general).",
@@ -2291,10 +2364,12 @@
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
    ],
    "instructions": [
-    "ngrx-effects"
+    "ngrx-effects",
+    "best-practices"
    ],
    "items": [
-    "ngrx-effects#22"
+    "ngrx-effects#22",
+    "best-practices#1"
    ],
    "severity": null,
    "text": "`Date.now()` in a success payload (+ `as any` to smuggle it).",
@@ -2448,10 +2523,12 @@
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
    ],
    "instructions": [
-    "ngrx-effects"
+    "ngrx-effects",
+    "performance"
    ],
    "items": [
-    "ngrx-effects#16"
+    "ngrx-effects#16",
+    "performance#10"
    ],
    "severity": null,
    "text": "`forkJoin` composing two identical requests instead of returning an action array (also a duplicate backend request — performance).",
@@ -2536,10 +2613,12 @@
     "src/app/user-panel/data-access/+state/user-panel.facade.ts"
    ],
    "instructions": [
-    "ngrx-facade"
+    "ngrx-facade",
+    "code-quality"
    ],
    "items": [
-    "ngrx-facade#3"
+    "ngrx-facade#3",
+    "code-quality#8"
    ],
    "severity": null,
    "text": "signal name ≠ selector name (`list` vs `selectUsers`-style); `isLoading` wired to an unrelated selector (`selectSelectedUserName`) — copy-paste regression.",
@@ -2553,10 +2632,12 @@
     "src/app/user-panel/data-access/+state/user-panel.facade.ts"
    ],
    "instructions": [
-    "ngrx-facade"
+    "ngrx-facade",
+    "code-quality"
    ],
    "items": [
-    "ngrx-facade#7"
+    "ngrx-facade#7",
+    "code-quality#1"
    ],
    "severity": null,
    "text": "raw `select()` observable in the public API (`users$`).",
@@ -2587,10 +2668,12 @@
     "src/app/user-panel/data-access/+state/user-panel.facade.ts"
    ],
    "instructions": [
-    "ngrx-facade"
+    "ngrx-facade",
+    "code-quality"
    ],
    "items": [
-    "ngrx-facade#8"
+    "ngrx-facade#8",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "local caching of state (`cachedUsers`).",
@@ -2621,10 +2704,12 @@
     "src/app/user-panel/data-access/+state/user-panel.facade.ts"
    ],
    "instructions": [
-    "best-practices"
+    "best-practices",
+    "ngrx-facade"
    ],
    "items": [
-    "best-practices#14"
+    "best-practices#14",
+    "ngrx-facade#2"
    ],
    "severity": null,
    "text": "constructor DI instead of `inject()`; store `public`, not `private readonly _store`.",
@@ -2719,13 +2804,18 @@
     "src/app/user-panel/data-access/services/user-panel.service.ts"
    ],
    "instructions": [
-    "security"
+    "security",
+    "general"
    ],
    "items": [
-    "security#7"
+    "security#7",
+    "general#1"
    ],
    "severity": null,
-   "text": "hardcoded API key (`API_KEY = 'sk_live_...'`) — secret in the diff; also SCREAMING_SNAKE (general)."
+   "text": "hardcoded API key (`API_KEY = 'sk_live_…'`) — secret in the diff; also SCREAMING_SNAKE (general).",
+   "lines": {
+    "src/app/user-panel/data-access/services/user-panel.service.ts": "9"
+   }
   },
   {
    "id": "v160",
@@ -2778,9 +2868,9 @@
     "code-quality#1"
    ],
    "severity": "high",
-   "text": "`endpoints.users` and `endpoints.usersList` hold the SAME URL — one entry serves several verbs, the entry is never duplicated.",
+   "text": "`endpoints.users` and `endpoints.usersList` hold the SAME URL (`'https://api.internal.example.com/v1/users'`) — one entry serves several verbs, the entry is never duplicated.",
    "lines": {
-    "src/app/user-panel/data-access/services/user-panel.service.ts": "29, 50, 54"
+    "src/app/user-panel/data-access/services/user-panel.service.ts": "12-13, 29, 50, 54"
    }
   },
   {
@@ -2824,11 +2914,13 @@
    ],
    "instructions": [
     "http-service",
-    "best-practices"
+    "best-practices",
+    "architecture"
    ],
    "items": [
     "http-service#5",
-    "best-practices#14"
+    "best-practices#14",
+    "architecture#4"
    ],
    "severity": null,
    "text": "constructor injection in a new service; store injected into an HTTP service."
@@ -2857,10 +2949,13 @@
     "src/app/user-panel/data-access/services/user-panel.service.ts"
    ],
    "instructions": [
-    "http-service"
+    "http-service",
+    "general"
    ],
    "items": [
-    "http-service#7"
+    "http-service#7",
+    "general#8",
+    "general#11"
    ],
    "severity": null,
    "text": "`.pipe(map, catchError, tap)` inside the service — mapping/error handling belong to reducer/effects; `catchError(() => of([]))` swallows failures (general); `tap` + `console.log` logging.",
@@ -2992,10 +3087,12 @@
     "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts"
    ],
    "instructions": [
-    "architecture"
+    "architecture",
+    "best-practices"
    ],
    "items": [
-    "architecture#12"
+    "architecture#12",
+    "best-practices#4"
    ],
    "severity": null,
    "text": "self-contained local UI state kept in a hand-rolled `BehaviorSubject` service — it must be an `@ngrx/signals` `signalStore()` provided in `@Component.providers` and mutated only through `patchState`.",
@@ -3118,11 +3215,13 @@
     "src/app/user-panel/data-access/services/user-panel.service.spec.ts"
    ],
    "instructions": [
-    "unit-tests"
+    "unit-tests",
+    "general"
    ],
    "items": [
     "unit-tests#13",
-    "unit-tests#22"
+    "unit-tests#22",
+    "general#3"
    ],
    "severity": null,
    "text": "existence-only test (`toBeDefined`); `{} as unknown as X` double cast.",
@@ -3150,10 +3249,12 @@
     "src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts"
    ],
    "instructions": [
-    "ngrx-reducer-unit-test"
+    "ngrx-reducer-unit-test",
+    "code-quality"
    ],
    "items": [
-    "ngrx-reducer-unit-test#1"
+    "ngrx-reducer-unit-test#1",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "TestBed + `provideMockStore` in a reducer spec (no TestBed, no mocks allowed).",
@@ -3479,12 +3580,14 @@
     "src/app/user-panel/data-access/+state/tests/user-panel.selectors.spec.ts"
    ],
    "instructions": [
-    "ngrx-selectors-unit-test"
+    "ngrx-selectors-unit-test",
+    "test-coverage"
    ],
    "items": [
     "ngrx-selectors-unit-test#5",
     "ngrx-selectors-unit-test#6",
-    "ngrx-selectors-unit-test#2"
+    "ngrx-selectors-unit-test#2",
+    "test-coverage#2"
    ],
    "absences": true,
    "severity": null,
@@ -3648,12 +3751,14 @@
     "src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts"
    ],
    "instructions": [
-    "ngrx-effects-unit-test"
+    "ngrx-effects-unit-test",
+    "test-coverage"
    ],
    "items": [
     "ngrx-effects-unit-test#5",
     "ngrx-effects-unit-test#8",
-    "ngrx-effects-unit-test#9"
+    "ngrx-effects-unit-test#9",
+    "test-coverage#2"
    ],
    "absences": true,
    "severity": null,
@@ -3665,10 +3770,13 @@
     "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts"
    ],
    "instructions": [
-    "ngrx-facade-unit-test"
+    "ngrx-facade-unit-test",
+    "unit-tests"
    ],
    "items": [
-    "ngrx-facade-unit-test#1"
+    "ngrx-facade-unit-test#1",
+    "unit-tests#7",
+    "unit-tests#22"
    ],
    "severity": null,
    "text": "TestBed instead of `MockBuilder(Facade).mock(Store, storeMock)`; store mock cast with `as unknown as Store` instead of `Partial<Store>`.",
@@ -3750,12 +3858,14 @@
     "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts"
    ],
    "instructions": [
-    "ngrx-facade-unit-test"
+    "ngrx-facade-unit-test",
+    "test-coverage"
    ],
    "items": [
     "ngrx-facade-unit-test#2",
     "ngrx-facade-unit-test#4",
-    "ngrx-facade-unit-test#8"
+    "ngrx-facade-unit-test#8",
+    "test-coverage#2"
    ],
    "severity": null,
    "text": "no `afterEach` with `jest.clearAllMocks()`; no null-parameter variant tests; `searchAndReturn` untested."
@@ -3846,10 +3956,12 @@
     "src/app/user-panel/shared/guards/user-panel.guard.ts"
    ],
    "instructions": [
-    "guards"
+    "guards",
+    "best-practices"
    ],
    "items": [
-    "guards#7"
+    "guards#7",
+    "best-practices#2"
    ],
    "severity": null,
    "text": "`userPanelStepGuardFactory` returns a bare untyped arrow, not a `CanActivateFn`, and the routes file passes the factory itself (uninvoked) into `canActivate`.",
@@ -3925,10 +4037,12 @@
     "src/app/user-panel/shared/guards/user-panel-init.guard.ts"
    ],
    "instructions": [
-    "guards"
+    "guards",
+    "architecture"
    ],
    "items": [
-    "guards#5"
+    "guards#5",
+    "architecture#4"
    ],
    "severity": null,
    "text": "injects the `Store` and dispatches an action from a guard (facades only, and a guard reads state, it does not write it).",
@@ -4122,10 +4236,12 @@
     "src/app/user-panel/shared/guards/tests/user-panel.guard.spec.ts"
    ],
    "instructions": [
-    "util-guard-unit-test"
+    "util-guard-unit-test",
+    "test-coverage"
    ],
    "items": [
-    "util-guard-unit-test#7"
+    "util-guard-unit-test#7",
+    "test-coverage#2"
    ],
    "severity": null,
    "text": "only one branch is exercised, and neither the returned value nor the exact `router.navigate(...)` call is asserted (`toHaveBeenCalledWith` / `toHaveBeenCalledTimes(1)`)."
@@ -4372,10 +4488,12 @@
     "src/app/user-panel/shared/pipes/user-status.pipe.ts"
    ],
    "instructions": [
-    "pipes"
+    "pipes",
+    "best-practices"
    ],
    "items": [
-    "pipes#3"
+    "pipes#3",
+    "best-practices#1"
    ],
    "severity": null,
    "text": "`transform(value: any, mode?: any): any` — no explicit parameter/return types, `any` everywhere.",
@@ -4389,10 +4507,14 @@
     "src/app/user-panel/shared/pipes/user-status.pipe.ts"
    ],
    "instructions": [
-    "pipes"
+    "pipes",
+    "architecture",
+    "general"
    ],
    "items": [
-    "pipes#4"
+    "pipes#4",
+    "architecture#4",
+    "general#8"
    ],
    "severity": null,
    "text": "injects the `Store`; `console.log`; DOM access (`document.title`).",
@@ -4540,15 +4662,21 @@
     "src/app/user-panel/shared/utils/build-user-table.util.ts"
    ],
    "instructions": [
-    "utils"
+    "utils",
+    "architecture",
+    "i18n",
+    "best-practices"
    ],
    "items": [
-    "utils#5"
+    "utils#5",
+    "architecture#9",
+    "i18n#11",
+    "best-practices#2"
    ],
    "severity": null,
-   "text": "`displayedColumns` hard-coded instead of `Object.values(<ColumnsEnum>)`; labels are texts, not i18n keys; rows lack an explicit row type; id not from the shared ID-generator util.",
+   "text": "`displayedColumns` hard-coded instead of `Object.values(<ColumnsEnum>)`; labels are texts, not i18n keys; rows lack an explicit row type (`rows: users.map`); id not from the shared ID-generator util (`'tbl-' + Math.random()`).",
    "lines": {
-    "src/app/user-panel/shared/utils/build-user-table.util.ts": "7, 11-12"
+    "src/app/user-panel/shared/utils/build-user-table.util.ts": "7, 9, 11-13"
    }
   },
   {
@@ -4605,10 +4733,12 @@
     "src/app/user-panel/shared/utils/build-user-summary.util.ts"
    ],
    "instructions": [
-    "utils"
+    "utils",
+    "best-practices"
    ],
    "items": [
-    "utils#6"
+    "utils#6",
+    "best-practices#2"
    ],
    "severity": null,
    "text": "branching conditions written inline in the `if`s instead of well-named local flags; `const rows = []` is an untyped (implicit `any[]`) accumulator instead of an explicitly typed one.",
@@ -4676,13 +4806,15 @@
    ],
    "instructions": [
     "utils",
-    "code-quality"
+    "code-quality",
+    "architecture"
    ],
    "items": [
     "utils#4",
     "utils#5",
     "utils#8",
-    "code-quality#1"
+    "code-quality#1",
+    "architecture#9"
    ],
    "severity": "high",
    "text": "the `Math.random()` id and the hard-coded `displayedColumns` array re-implement what `build-user-table.util.ts` already does — impure, and both must come from the shared ID generator / the columns enum.",
@@ -4697,11 +4829,13 @@
    ],
    "instructions": [
     "utils",
-    "test-coverage"
+    "test-coverage",
+    "util-guard-unit-test"
    ],
    "items": [
     "utils#11",
-    "test-coverage#1"
+    "test-coverage#1",
+    "util-guard-unit-test#1"
    ],
    "severity": "missing-unit-test",
    "text": "no spec in the sibling `tests/` folder (🔵)."
@@ -4778,18 +4912,22 @@
   {
    "id": "v283",
    "files": [
-    "src/app/user-panel/shared/utils/map-user-dto.util.ts"
+    "src/app/user-panel/shared/utils/map-user-dto.util.ts",
+    "src/app/user-panel/models/enums/user-status.enum.ts"
    ],
    "instructions": [
-    "code-quality"
+    "code-quality",
+    "architecture"
    ],
    "items": [
-    "code-quality#1"
+    "code-quality#1",
+    "architecture#9"
    ],
    "severity": "high",
    "text": "`mapStatusToLabel` is the fourth implementation of the same status/result label (`userStatusLabel`, `buildResultLabel`, `UserStatusPipeClass`).",
    "lines": {
-    "src/app/user-panel/shared/utils/map-user-dto.util.ts": "9"
+    "src/app/user-panel/shared/utils/map-user-dto.util.ts": "9",
+    "src/app/user-panel/models/enums/user-status.enum.ts": "12"
    }
   },
   {
@@ -4822,7 +4960,8 @@
    "items": [
     "utils#11",
     "util-guard-unit-test#3",
-    "test-coverage#1"
+    "test-coverage#1",
+    "util-guard-unit-test#1"
    ],
    "severity": "missing-unit-test",
    "text": "no spec — an API→domain mapping util asserts the complete field-by-field mapping in one `toEqual` (🔵)."
@@ -4852,13 +4991,17 @@
     "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap"
    ],
    "instructions": [
-    "unit-tests"
+    "unit-tests",
+    "general",
+    "best-practices"
    ],
    "items": [
     "unit-tests#5",
     "unit-tests#10",
     "unit-tests#11",
-    "unit-tests#13"
+    "unit-tests#13",
+    "general#3",
+    "best-practices#1"
    ],
    "severity": null,
    "text": "SCREAMING_SNAKE fixture (`MOCK_USERS`); `as any` incomplete fixture; existence-only test; `it('builds table')` description not starting with `should`.",
@@ -4873,10 +5016,12 @@
     "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap"
    ],
    "instructions": [
-    "util-guard-unit-test"
+    "util-guard-unit-test",
+    "unit-tests"
    ],
    "items": [
-    "util-guard-unit-test#4"
+    "util-guard-unit-test#4",
+    "unit-tests#1"
    ],
    "severity": null,
    "text": "snapshot of impure output (id/timestamp change every run); `.snap` stored directly in `tests/` instead of `tests/__snapshots__/`."
@@ -4888,10 +5033,12 @@
     "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap"
    ],
    "instructions": [
-    "util-guard-unit-test"
+    "util-guard-unit-test",
+    "unit-tests"
    ],
    "items": [
-    "util-guard-unit-test#4"
+    "util-guard-unit-test#4",
+    "unit-tests#23"
    ],
    "severity": null,
    "text": "the stored snapshot is also stale — it omits `rows` and `displayedColumnsLabels`, which the util returns, so the comparison fails even ignoring the non-deterministic fields."
@@ -4900,17 +5047,24 @@
    "id": "v290",
    "files": [
     "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.ts",
-    "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap"
+    "src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap",
+    "src/app/user-panel/shared/utils/build-user-table.util.ts"
    ],
    "instructions": [
-    "util-guard-unit-test"
+    "util-guard-unit-test",
+    "utils"
    ],
    "items": [
-    "util-guard-unit-test#2"
+    "util-guard-unit-test#2",
+    "utils#11",
+    "util-guard-unit-test#1"
    ],
    "absences": true,
    "severity": null,
-   "text": "no empty/null edge cases; no `not.toBe(input)` copy assertion; `formatUserRow` untested."
+   "text": "no empty/null edge cases; no `not.toBe(input)` copy assertion; `formatUserRow` untested.",
+   "lines": {
+    "src/app/user-panel/shared/utils/build-user-table.util.ts": "20"
+   }
   },
   {
    "id": "v291",
@@ -4932,15 +5086,19 @@
     "src/app/user-panel/shared/utils/format-user-name.utils.ts"
    ],
    "instructions": [
-    "utils"
+    "utils",
+    "best-practices",
+    "code-quality"
    ],
    "items": [
     "utils#2",
     "utils#8",
-    "utils#9"
+    "utils#9",
+    "best-practices#2",
+    "code-quality#3"
    ],
    "severity": null,
-   "text": "arrow const export, `any` parameter, no explicit return type, trivial single-consumer logic, duplicated inline name-joining already done in reducer/util (define once, reuse).",
+   "text": "arrow const export, `any` parameter, no explicit return type; `formatUserName` has no consumer, and its name-joining is duplicated inline in the reducer/util (define once, reuse).",
    "lines": {
     "src/app/user-panel/shared/utils/format-user-name.utils.ts": "1"
    }
@@ -4952,11 +5110,13 @@
    ],
    "instructions": [
     "utils",
-    "test-coverage"
+    "test-coverage",
+    "util-guard-unit-test"
    ],
    "items": [
     "utils#11",
-    "test-coverage#1"
+    "test-coverage#1",
+    "util-guard-unit-test#1"
    ],
    "severity": "missing-unit-test",
    "text": "no spec (🔵)."
@@ -5009,10 +5169,12 @@
     "src/app/user-panel/shared/routes/user-panel.routes.ts"
    ],
    "instructions": [
-    "routes"
+    "routes",
+    "best-practices"
    ],
    "items": [
-    "routes#1"
+    "routes#1",
+    "best-practices#2"
    ],
    "severity": null,
    "text": "export named `routes` and untyped (must be `userPanelRoutes: Routes`).",
@@ -5076,10 +5238,12 @@
     "src/app/user-panel/shared/routes/user-panel.routes.ts"
    ],
    "instructions": [
-    "routes"
+    "routes",
+    "code-quality"
    ],
    "items": [
-    "routes#9"
+    "routes#9",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "helper function (`buildPath`) — no logic allowed in a routes file; it also returns `'/'` for an empty segment, so the route `path` is `'/'` instead of `''` and never matches.",
@@ -5110,10 +5274,12 @@
     "src/app/user-panel/shared/routes/user-panel.routes.ts"
    ],
    "instructions": [
-    "routes"
+    "routes",
+    "general"
    ],
    "items": [
-    "routes#8"
+    "routes#8",
+    "general#3"
    ],
    "severity": null,
    "text": "`data` carries an untyped `Record<string, any>` bag (and it is `as`-cast into that type).",
@@ -5339,7 +5505,7 @@
     "component#2"
    ],
    "severity": null,
-   "text": "inline `styles: [...]` — no own `.scss` file; hard-coded color in it (component-styles)."
+   "text": "inline `styles: [...]` — no own `.scss` file."
   },
   {
    "id": "v319",
@@ -5381,10 +5547,12 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "architecture"
+    "architecture",
+    "models"
    ],
    "items": [
-    "architecture#8"
+    "architecture#8",
+    "models#7"
    ],
    "severity": null,
    "text": "models imported by concrete paths from outside `models/` (`../../../models/enums/user-status.enum`, `../../../models/consts/user-panel-title.const`) instead of through the models barrel.",
@@ -5466,12 +5634,14 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "best-practices"
+    "best-practices",
+    "component"
    ],
    "items": [
     "best-practices#1",
     "best-practices#3",
-    "best-practices#4"
+    "best-practices#4",
+    "component#6"
    ],
    "severity": null,
    "text": "explicit `standalone: true`; `@Input()`/`@Output()` decorators with `!` definite assignment and `EventEmitter<any>` instead of `input.required`/`output()`.",
@@ -5538,10 +5708,12 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "component"
+    "component",
+    "general"
    ],
    "items": [
-    "component#5"
+    "component#5",
+    "general#2"
    ],
    "severity": null,
    "text": "injected fields public and unprefixed (`facade`, `store`, `svc` — generic name, `cdr`, `zone`, `uiState`), not `private readonly _...`.",
@@ -5588,7 +5760,8 @@
   {
    "id": "v333",
    "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
     "performance"
@@ -5599,7 +5772,8 @@
    "severity": null,
    "text": "mutable class fields bound in the template (`title`, `resultCount`, `showTooltip`, `isOverlayOpen`, `activeTab`, `toastMessage`, `bannerIndex`, `banners`, `rowCounter`, `secondsLeft`, `isBrowser`); `resultCount` mutated in `ngDoCheck` every CD cycle; `ngDoCheck` itself forbidden.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "78-83, 88-90, 153, 173, 177-178, 196, 224, 226, 240, 249"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "78-83, 88-90, 153, 173, 177-178, 196, 224, 226, 240, 249",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "11, 19, 34, 36, 48-49, 52, 61, 76, 80, 103-104, 107, 144, 161, 163, 170-171"
    }
   },
   {
@@ -5752,11 +5926,13 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "feature-component"
+    "feature-component",
+    "component"
    ],
    "items": [
     "feature-component#4",
-    "feature-component#5"
+    "feature-component#5",
+    "component#11"
    ],
    "severity": null,
    "text": "`computed()` wrapping a facade signal (`filtered`) and `pipe(map(...))` on a facade stream (`userNames$`) — derived state belongs in a selector (historically under-reported rule).",
@@ -5850,10 +6026,12 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "component"
+    "component",
+    "code-quality"
    ],
    "items": [
-    "component#10"
+    "component#10",
+    "code-quality#5"
    ],
    "severity": null,
    "text": "local state behind a setter (`set pageSize`) instead of a `signal()`; `get currentPageSize()` is a getter that only returns a field (code-quality: boilerplate); `ngAfterContentInit()` is an empty lifecycle hook (code-quality).",
@@ -6007,12 +6185,14 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "component"
+    "component",
+    "best-practices"
    ],
    "items": [
     "component#14",
     "component#15",
-    "component#16"
+    "component#16",
+    "best-practices#18"
    ],
    "severity": null,
    "text": "untyped form (`UntypedFormGroup`/`UntypedFormControl`) instead of `_fb.nonNullable.group` with explicit generics; `addValidators` without `updateValueAndValidity()`; `valueChanges` without `distinctUntilChanged(isEqual)`.",
@@ -6216,10 +6396,12 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "general"
+    "general",
+    "code-quality"
    ],
    "items": [
-    "general#8"
+    "general#8",
+    "code-quality#7"
    ],
    "severity": null,
    "text": "`console.log` calls; commented-out `refresh()` code block.",
@@ -6537,11 +6719,13 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "performance"
+    "performance",
+    "best-practices"
    ],
    "items": [
     "performance#11",
-    "performance#15"
+    "performance#15",
+    "best-practices#19"
    ],
    "severity": null,
    "text": "LCP hero image inside `@defer (on viewport)` (layout shift + deferred LCP); `<img>` without `ngSrc`, without `height`, no `priority`.",
@@ -6844,10 +7028,12 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "component-template"
+    "component-template",
+    "code-quality"
    ],
    "items": [
-    "component-template#15"
+    "component-template#15",
+    "code-quality#2"
    ],
    "severity": null,
    "text": "duplicated branch markup: the `Found {{ resultCount }} users` and `Found 0 users` blocks each repeat the paragraph and the Export button, instead of one ng-template + ngTemplateOutlet.",
@@ -6861,10 +7047,12 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "component-template"
+    "component-template",
+    "best-practices"
    ],
    "items": [
-    "component-template#8"
+    "component-template#8",
+    "best-practices#12"
    ],
    "severity": null,
    "text": "`async` pipe (`userNames$ | async`).",
@@ -7489,10 +7677,7 @@
     "feature-component#7"
    ],
    "severity": null,
-   "text": "rich presentation markup rendered directly in the feature (belongs in `ui-*` children); deferred `user-card` imported through the `ui` barrel `index.ts` (performance: barrel import keeps it in the main bundle).",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "167, 173-174"
-   }
+   "text": "rich presentation markup rendered directly in the feature (belongs in `ui-*` children)."
   },
   {
    "id": "v438",
@@ -7500,13 +7685,18 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "i18n"
+    "i18n",
+    "code-quality"
    ],
    "items": [
-    "i18n#11"
+    "i18n#11",
+    "code-quality#1"
    ],
    "severity": null,
-   "text": "every user-facing text hard-coded; `page.userPanel.labels.greeting` exists in en.json but code concatenates instead."
+   "text": "every user-facing text hard-coded; `page.userPanel.labels.greeting` exists in en.json but code concatenates instead, and `page.userPanel.labels.requiredEmail` exists but `Email is required` (L124) is hard-coded.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "124"
+   }
   },
   {
    "id": "v439",
@@ -7529,14 +7719,18 @@
    ],
    "instructions": [
     "architecture",
-    "models"
+    "models",
+    "components-folder",
+    "utils"
    ],
    "items": [
     "architecture#6",
-    "models#1"
+    "models#1",
+    "components-folder#2",
+    "utils#9"
    ],
    "severity": null,
-   "text": "interface (`HelperUser`) belongs in `models/`, const in `models/consts`, function in `shared/utils/`.",
+   "text": "interface (`HelperUser`) belongs in `models/`, const in `models/consts`; `buildGreeting` has one consumer and a one-line body, so it is inlined at its call site (`feature-user-panel.component.ts:289`) rather than moved to `shared/utils/`.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts": "3, 8"
    }
@@ -7547,10 +7741,14 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
    ],
    "instructions": [
-    "general"
+    "general",
+    "i18n",
+    "code-quality"
    ],
    "items": [
-    "general#7"
+    "general#7",
+    "i18n#8",
+    "code-quality#1"
    ],
    "severity": null,
    "text": "SCREAMING_SNAKE const (`MAX_USERS`); hard-coded user-facing text built by concatenation (`'Welcome ' + user.name`) — i18n.",
@@ -7890,14 +8088,21 @@
    ],
    "instructions": [
     "feature-component",
-    "performance"
+    "performance",
+    "component",
+    "best-practices",
+    "code-quality"
    ],
    "items": [
     "feature-component#15",
-    "performance#1"
+    "performance#1",
+    "component#10",
+    "best-practices#4",
+    "code-quality#3",
+    "code-quality#4"
    ],
    "severity": null,
-   "text": "dialog-local UI state kept in plain mutable fields (`isConfirmed`, `result`) instead of `signal()`s — and both are bound in the template.",
+   "text": "dialog-local UI state in plain mutable fields (`isConfirmed`, `result`) instead of `signal()`s — and neither needs to exist: `isConfirmed` is written (L19 and the template's `No` button) but never read, and `result` only relays `'confirmed'` into the dispatch; the fix deletes both rather than wrapping them in signals.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.ts": "15-16, 19-20, 22",
     "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.html": "3"
@@ -8174,11 +8379,13 @@
    ],
    "instructions": [
     "ui-component",
-    "models"
+    "models",
+    "code-quality"
    ],
    "items": [
     "ui-component#7",
-    "models#1"
+    "models#1",
+    "code-quality#1"
    ],
    "severity": null,
    "text": "local duplicate model (`CardUser`) instead of a `models/` type.",
@@ -8260,10 +8467,13 @@
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
    ],
    "instructions": [
-    "ui-component"
+    "ui-component",
+    "component"
    ],
    "items": [
-    "ui-component#4"
+    "ui-component#4",
+    "component#12",
+    "component#19"
    ],
    "severity": null,
    "text": "`valueChanges` subscription in the constructor without `takeUntilDestroyed`, `debounceTime` (central config) or `distinctUntilChanged` — emits on every keystroke and leaks; the constructor is also supposed to hold `effect()` calls only.",
@@ -8881,10 +9091,12 @@
     "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts"
    ],
    "instructions": [
-    "component-unit-test"
+    "component-unit-test",
+    "unit-tests"
    ],
    "items": [
-    "component-unit-test#2"
+    "component-unit-test#2",
+    "unit-tests#7"
    ],
    "severity": null,
    "text": "facade mock cast `as unknown as UserPanelFacade` instead of `Partial<Facade>` with real `signal(...)` values; signal mocked as `jest.fn`.",
@@ -8898,11 +9110,13 @@
     "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts"
    ],
    "instructions": [
-    "component-unit-test"
+    "component-unit-test",
+    "unit-tests"
    ],
    "items": [
     "component-unit-test#5",
-    "component-unit-test#6"
+    "component-unit-test#6",
+    "unit-tests#2"
    ],
    "severity": null,
    "text": "TestBed + `beforeEach` fixture instead of `MockBuilder`/`ngMocks.faster()` + one shared `MockRender` in `beforeAll`.",
@@ -8916,13 +9130,15 @@
     "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts"
    ],
    "instructions": [
-    "unit-tests"
+    "unit-tests",
+    "code-quality"
    ],
    "items": [
     "unit-tests#5",
     "unit-tests#6",
     "unit-tests#10",
-    "unit-tests#13"
+    "unit-tests#13",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "SCREAMING_SNAKE fixture (`MOCK_USERS`); injected-dependency variable named `svc`; existence-only `should create` test; `it.each` row values unused in assertions (test asserts nothing per-case); `it`/`it.each` descriptions not starting with `should` (`'renders the card'`, `'renders %s %s'`, `'opens details'`, `'collapses the card'`, `'emits the note'`).",
@@ -8989,11 +9205,13 @@
     "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts"
    ],
    "instructions": [
-    "component-unit-test"
+    "component-unit-test",
+    "unit-tests"
    ],
    "items": [
     "component-unit-test#3",
-    "component-unit-test#7"
+    "component-unit-test#7",
+    "unit-tests#4"
    ],
    "severity": null,
    "text": "bare `toHaveBeenCalled()` without arguments; no `afterEach` (`jest.clearAllMocks`, signal resets).",
@@ -9388,11 +9606,13 @@
     "src/assets/i18n/pl.json"
    ],
    "instructions": [
-    "i18n"
+    "i18n",
+    "code-quality"
    ],
    "items": [
     "i18n#10",
-    "i18n#1"
+    "i18n#1",
+    "code-quality#3"
    ],
    "severity": null,
    "text": "duplicate key (`labels.userName` twice); key existing only in Polish (`newKeyOnlyInPolish`).",
@@ -9681,6 +9901,369 @@
    "text": "operators imported from `rxjs/operators` (deprecated since RxJS 7.2 — import from `rxjs`).",
    "lines": {
     "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts": "5-6"
+   }
+  },
+  {
+   "id": "v565",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.ts",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.html"
+   ],
+   "instructions": [
+    "feature-component"
+   ],
+   "items": [
+    "feature-component#15"
+   ],
+   "severity": null,
+   "text": "the `No` button only sets `isConfirmed = false` and never closes the dialog, so the user cannot cancel it.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.ts": "15",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.html": "3"
+   }
+  },
+  {
+   "id": "v566",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "`UserPanelDialogComponent` has no consumer — the effects open `UserCardComponent` as the dialog target, so the whole dialog component is dead code.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel-dialog/feature-user-panel-dialog.component.ts": "12"
+   }
+  },
+  {
+   "id": "v567",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
+   ],
+   "instructions": [
+    "component-styles"
+   ],
+   "items": [
+    "component-styles#3"
+   ],
+   "severity": null,
+   "text": "the inline-style class names (`.panel {`, `.panel-title`, `.section-title`, `.promo`, `.icon-btn`, `.remove {`, `.panel-actions`) are not BEM with the component root block.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "49-55"
+   }
+  },
+  {
+   "id": "v568",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
+   ],
+   "instructions": [
+    "component-styles"
+   ],
+   "items": [
+    "component-styles#4"
+   ],
+   "severity": null,
+   "text": "hard-coded colors in the inline styles (`#333333`, `#cccccc`, `#ffffff`) instead of theme custom properties; no dark-mode counterparts.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "50, 52, 55"
+   }
+  },
+  {
+   "id": "v569",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts"
+   ],
+   "instructions": [
+    "component"
+   ],
+   "items": [
+    "component#3"
+   ],
+   "severity": "high",
+   "text": "`standalone: false` directive (`selector: 'highlight'`) declared only in the non-exported `UserPanelModule` that nothing imports — the feature cannot list it in `imports`, so `<highlight>` (`feature-user-panel.component.html:65`) does not resolve and the template breaks (🔴).",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts": "16-17"
+   }
+  },
+  {
+   "id": "v570",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html"
+   ],
+   "instructions": [
+    "best-practices"
+   ],
+   "items": [
+    "best-practices#19"
+   ],
+   "severity": null,
+   "text": "the avatar `<img>` binds `[src]` instead of `ngSrc` (`NgOptimizedImage`).",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "2-3"
+   }
+  },
+  {
+   "id": "v571",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#1"
+   ],
+   "severity": null,
+   "text": "two select buttons repeat the same handler (`selected.emit(user()!)`) — one action, two copies.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "15, 18"
+   }
+  },
+  {
+   "id": "v572",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "the `readonly onSelect = output<CardUser>()` and `readonly change = output<void>()` outputs are bound by nothing — the feature's `<user-card` binds only `[user]`, `[index]`, `(validityChanged)` and `title=\"User details\"`.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "54-55"
+   }
+  },
+  {
+   "id": "v573",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-panel.effects.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "`this.buildResultLabel(data);` discards its return value — the call has no effect.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-panel.effects.ts": "45"
+   }
+  },
+  {
+   "id": "v574",
+   "files": [
+    "src/app/user-panel/models/consts/user-panel-initial-state.const.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "`userPanelFeatureKey` and `USER_PANEL_INITIAL_STATE` have no consumer — the selectors repeat the literal `'userPanel'` and the reducer declares its own `initialState`.",
+   "lines": {
+    "src/app/user-panel/models/consts/user-panel-initial-state.const.ts": "3, 5"
+   }
+  },
+  {
+   "id": "v575",
+   "files": [
+    "src/app/user-panel/models/enums/user-status.enum.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "`UserRole` is exported but has no consumer.",
+   "lines": {
+    "src/app/user-panel/models/enums/user-status.enum.ts": "7"
+   }
+  },
+  {
+   "id": "v576",
+   "files": [
+    "src/app/user-panel/models/enums/user-status.enum.ts"
+   ],
+   "instructions": [
+    "models"
+   ],
+   "items": [
+    "models#21"
+   ],
+   "severity": null,
+   "text": "`userStatusLabel` has no case for `UserStatus.Pending`, so pending users get the label `'Unknown'` — a `Record<UserStatus, string>` mapper would make the compiler enforce completeness.",
+   "lines": {
+    "src/app/user-panel/models/enums/user-status.enum.ts": "12, 19"
+   }
+  },
+  {
+   "id": "v577",
+   "files": [
+    "src/app/user-panel/models/types/user-table.type.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "none of the three exports (`UserTableRow`, `UserTableDragSourceData`, `UserTableDisplayedColumnsLabels`) has a consumer.",
+   "lines": {
+    "src/app/user-panel/models/types/user-table.type.ts": "3, 7, 14"
+   }
+  },
+  {
+   "id": "v578",
+   "files": [
+    "src/app/user-panel/shared/guards/tests/user-panel.guard.spec.ts"
+   ],
+   "instructions": [
+    "unit-tests"
+   ],
+   "items": [
+    "unit-tests#7"
+   ],
+   "severity": "high",
+   "text": "the `FACADE` stub holds only `list` but is provided as `Store`, `UserPanelService` and `Router`; `canActivate()` calls `this.store.select` (`user-panel.guard.ts:18`), so the test throws a `TypeError` and cannot pass.",
+   "lines": {
+    "src/app/user-panel/shared/guards/tests/user-panel.guard.spec.ts": "4, 8, 10"
+   }
+  },
+  {
+   "id": "v579",
+   "files": [
+    "src/app/user-panel/shared/pipes/user-status.pipe.ts"
+   ],
+   "instructions": [
+    "architecture",
+    "models"
+   ],
+   "items": [
+    "architecture#8",
+    "models#7"
+   ],
+   "severity": null,
+   "text": "the models enum helper is imported by concrete path (`import { userStatusLabel } from '../../models/enums/user-status.enum'`) from outside `models/` instead of through the models barrel.",
+   "lines": {
+    "src/app/user-panel/shared/pipes/user-status.pipe.ts": "4"
+   }
+  },
+  {
+   "id": "v580",
+   "files": [
+    "src/app/user-panel/shared/utils/build-user-summary.util.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "`buildUserSummary` and `aggregateUserTags` are exported but have no consumer.",
+   "lines": {
+    "src/app/user-panel/shared/utils/build-user-summary.util.ts": "3, 21"
+   }
+  },
+  {
+   "id": "v581",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
+   ],
+   "instructions": [
+    "performance"
+   ],
+   "items": [
+    "performance#13"
+   ],
+   "severity": null,
+   "text": "the deferred `<user-card` element's `UserCardComponent` is imported through the `ui` barrel `index.ts` — the barrel import keeps it in the main bundle, so the defer block around it defers nothing.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "10, 46",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "167"
+   }
+  },
+  {
+   "id": "v582",
+   "files": [
+    "src/app/user-panel/shared/guards/user-panel.guard.ts"
+   ],
+   "instructions": [
+    "best-practices"
+   ],
+   "items": [
+    "best-practices#1"
+   ],
+   "severity": null,
+   "text": "`userPanelStepGuardFactory(step: string)` types the step as a free string and compares it with the magic string `'step-1'` instead of a step enum.",
+   "lines": {
+    "src/app/user-panel/shared/guards/user-panel.guard.ts": "35-36"
+   }
+  },
+  {
+   "id": "v583",
+   "files": [
+    "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#4"
+   ],
+   "severity": "high",
+   "text": "`refreshAttempts > 0` is always true right after the increment, so `intercept()` calls itself for the refresh request with no exit — unbounded recursion that overflows the stack on the first request.",
+   "lines": {
+    "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts": "28"
+   }
+  },
+  {
+   "id": "v584",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts"
+   ],
+   "instructions": [
+    "unit-tests"
+   ],
+   "items": [
+    "unit-tests#18"
+   ],
+   "severity": null,
+   "text": "the spec is zone-based (`TestBed.configureTestingModule` without `provideZonelessChangeDetection()`) although `app.config.ts` provides it.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts": "19"
+   }
+  },
+  {
+   "id": "v585",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#2"
+   ],
+   "severity": null,
+   "text": "the two `<div class=\"tab\" role=\"tab\"` divs are the same construct copy-pasted with a different value and label.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "48-49"
    }
   }
  ],

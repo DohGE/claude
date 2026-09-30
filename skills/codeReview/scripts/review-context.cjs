@@ -341,24 +341,13 @@ function q(s) {
   return `"${s}"`;
 }
 
-// A target's whole assembly as one Bash call (references/assembly.md), written out here so
-// neither the reviewer nor a session resumed after a compaction composes it. The part check
-// gates the rest (`&&`); inside the braces `;`, so a target with nothing to concatenate still
-// renders.
+// A target's whole assembly as one short Bash call (references/assembly.md), written out here so
+// neither the reviewer nor a session resumed after a compaction composes it. check-part.cjs
+// --assemble runs the part check and, only when it passes, appends the parts, removes the parts,
+// the import ledger and the work folder, and renders - one process, so no step is left out.
 function assembleCommand(target, contextPath, project, skillDir) {
   const slash = (p) => String(p).replace(/\\/g, '/');
-  const scripts = `${slash(skillDir)}/scripts`;
-  const report = slash(target.reportPath);
-  const stem = report.replace(/\.md$/, '');
-  const render = target.htmlReportPath
-    ? [`--report=${q(report)}`, `--project=${q(slash(project))}`, `--mode=${q(target.kind)}`, `--branch=${q(target.branch)}`,
-      ...(target.baseBranch ? [`--base=${q(target.baseBranch)}`] : [])]
-    : [`--report=${q(report)}`, '--only-md'];
-  if (target.withChecklist) render.push('--with-checklist');
-  const removed = [`${q(stem)}.part*.md`, ...(target.importLedger ? [q(slash(target.importLedger))] : [])];
-  return `node ${q(`${scripts}/check-part.cjs`)} --context=${q(slash(contextPath))} --report=${q(report)}`
-    + ` && { cat ${q(stem)}.part*.md >> ${q(report)}; rm -f ${removed.join(' ')}; rm -rf ${q(slash(target.workDir))};`
-    + ` node ${q(`${scripts}/render-report.cjs`)} ${render.join(' ')}; }`;
+  return `node ${q(`${slash(skillDir)}/scripts/check-part.cjs`)} --context=${q(slash(contextPath))} --report=${q(slash(target.reportPath))} --assemble`;
 }
 
 // All files under dir, recursive, as project-relative forward-slash paths
@@ -1383,7 +1372,7 @@ function buildContext(options) {
       if (text !== null && !text.includes('\u0000')) reviewedTexts.set(f.path, text);
     }
     let universe = { files: reviewedTexts, factRoot: '', partial: false };
-    let collected = { facts: new Map(), exportsByFile: new Map(), cross: [] };
+    let collected = { facts: new Map(), exportsByFile: new Map(), cross: [], answers: new Map() };
     if (reviewedTexts.size > 0) {
       try {
         universe = loadFactUniverse(project, scanSources.get(target), reviewedTexts);
@@ -1416,6 +1405,7 @@ function buildContext(options) {
       const stem = `${target.workDir}/${String(i + 1).padStart(width, '0')}-${path.basename(f.path).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')}`;
       f.contentPath = null;
       f.diffPath = null;
+      let diffChars = 0;
       if (f.status !== 'D') {
         if (!blobs) {
           f.contentPath = `${project.replace(/\\/g, '/')}/${f.path}`;
@@ -1435,6 +1425,7 @@ function buildContext(options) {
           || tryGit(project, [...quiet, 'diff', ...patchFlags, ...diffArgs, '--', f.path]);
         if (patch) {
           f.diffPath = `${stem}.diff`;
+          diffChars = patch.length;
           writes.push([f.diffPath, patch.endsWith('\n') ? patch : `${patch}\n`]);
         }
       }
@@ -1455,6 +1446,8 @@ function buildContext(options) {
           inlineTemplate: text !== null && /\.[cm]?[jt]sx?$/.test(f.path) && /\btemplate\s*:\s*`/.test(text),
         },
         partial: universe.partial,
+        // An answer states what the whole repository holds: from part of it, the reviewer searches.
+        answers: universe.partial ? {} : collected.answers.get(f.path) || {},
       });
       if (Object.keys(bound.items).length > 0 || bound.info.length > 0) factFiles[f.path] = bound;
       f.bundlePath = `${stem}.bundle.md`;
@@ -1462,6 +1455,7 @@ function buildContext(options) {
         file: f,
         number: i + 1,
         lineCount: reviewBundle.lineCountOf(reviewedTexts.get(f.path)),
+        readChars: (text === null ? 0 : text.length) + diffChars,
         render: {
           file: f,
           kind,
@@ -1488,7 +1482,13 @@ function buildContext(options) {
     const pending = bundles.filter((b) => !done.has(b.file.path));
     const batches = options.batch === false
       ? pending.map((b) => [b.number])
-      : reviewBundle.planBatches(pending.map((b) => ({ number: b.number, lines: b.lineCount, items: b.file.checklistTotal })));
+      : reviewBundle.planBatches(pending.map((b) => ({
+        number: b.number,
+        lines: b.lineCount,
+        items: b.file.checklistTotal,
+        // The bundle as rendered below, less its `partia:` and `## Dalej` lines.
+        chars: b.readChars + reviewBundle.renderBundle({ ...b.render, lineCount: b.lineCount }).length,
+      })));
     const byNumber = new Map(bundles.map((b) => [b.number, b]));
     const crossPartPath = reviewBundle.partPathOf(target.reportPath, n + 1, n);
     const batchOf = new Map();
@@ -1706,7 +1706,33 @@ function writeContext(context) {
     contextPath,
     errors: errors || [],
     warnings: warnings || [],
-    targets: context.targets.map((t) => ({ branch: t.branch, files: t.files.length, reportPath: t.reportPath, resumed: !!t.resume })),
+    // What the review itself uses, so the reviewer never reads the whole context file: the
+    // scripts and hooks read that one. Keys a step needs beyond these stay in `contextPath`.
+    outputFormat: context.outputFormat,
+    rulebookNotesPath: context.rulebookNotesPath,
+    claudeMd: context.claudeMd,
+    targets: context.targets.map((t) => ({
+      branch: t.branch,
+      kind: t.kind,
+      baseBranch: t.baseBranch,
+      prNumber: t.prNumber,
+      files: t.files.length,
+      paths: t.files.map((f) => f.path),
+      reportPath: t.reportPath,
+      htmlReportPath: t.htmlReportPath,
+      workDir: t.workDir,
+      crossBundlePath: t.crossBundlePath,
+      batches: (t.batches || []).length,
+      withChecklist: t.withChecklist,
+      dedupItems: t.dedupItems,
+      skipped: t.skipped,
+      unchangedSinceLastReview: t.unchangedSinceLastReview,
+      previousReportPath: t.previousReportPath,
+      start: t.start,
+      commands: t.commands,
+      resumed: !!t.resume,
+      resume: t.resume || null,
+    })),
   };
 }
 

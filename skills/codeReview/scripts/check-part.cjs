@@ -32,6 +32,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const render = require('./render-report.cjs');
 const layout = require('./review-context.cjs');
 const bundle = require('./review-bundle.cjs');
@@ -286,6 +287,47 @@ function scanPart(text) {
   return { markers, blocks, unverified, lines: blocks.flatMap((b) => b.lines) };
 }
 
+// The draft lines a refusal is about, quoted, so the fix needs no search of the draft: for a
+// problem that opens with item addresses, the checklist lines covering those items and the
+// `**Reguła:**` lines citing them; for one about a finding's `Linia` field, that field's line.
+// Each problem gets ` [szkic L<n>: "<line>"; …]`; a problem it cannot place stays as it is.
+function withDraftLines(problems, text) {
+  const all = String(text).split(/\r?\n/);
+  const scan = scanPart(text);
+  const ticks = [...scan.lines, ...scan.unverified.flatMap((u) => u.lines)];
+  const reAddress = /([a-z][a-z0-9-]*)#((?:\d+(?:-\d+)?)(?:,#?\d+(?:-\d+)?)*)/g;
+  const itemsOf = (spec) => {
+    const set = new Set();
+    for (const m of String(spec).matchAll(reAddress)) {
+      for (const n of render.expandItemSpec(m[2].replace(/#/g, '')) || []) set.add(`${m[1]}#${n}`);
+    }
+    return set;
+  };
+  const quote = (lineNo) => `L${lineNo}: "${all[lineNo - 1].trim().slice(0, 110)}${all[lineNo - 1].trim().length > 110 ? '…' : ''}"`;
+  return problems.map((problem) => {
+    const head = String(problem).split(': ')[0];
+    const found = new Set();
+    const wanted = /^[a-z][a-z0-9-]*#[\d,#-]+(?:[;,] ?[a-z][a-z0-9-]*#[\d,#-]+)*$/.test(head) ? itemsOf(head) : new Set();
+    if (wanted.size) {
+      for (const tick of ticks) {
+        if ((tick.numbers || []).some((n) => wanted.has(`${tick.id}#${n}`))) found.add(tick.lineNo);
+      }
+      all.forEach((line, i) => {
+        if (/^- \*\*Reguła:\*\*/.test(line.trim()) && [...itemsOf(line)].some((item) => wanted.has(item))) found.add(i + 1);
+      });
+    }
+    const field = String(problem).match(/pol(?:a|e) Linia "([^"]*)"/);
+    if (field) {
+      all.forEach((line, i) => {
+        if (line.trim() === `- **Linia:** ${field[1]}`) found.add(i + 1);
+      });
+    }
+    if (!found.size) return problem;
+    const shown = [...found].sort((a, b) => a - b).slice(0, 3);
+    return `${problem} [szkic ${shown.map(quote).join('; ')}${found.size > shown.length ? `; … ${found.size - shown.length} więcej` : ''}]`;
+  });
+}
+
 // The renderer's own parse, so every drift it would warn about at the end is named while the
 // part can still be rewritten. A `sprawdzono N/M` warning is an honest `[ ]`, never a drift,
 // and an `--only-md` run writes no PR fields at all. The marker's numbers are the assembly's to
@@ -358,7 +400,7 @@ function checkTickLine(line, gates, count, finder = null) {
     if (!inner) {
       problems.push(`${at}: OK bez dowodu - zapis to "— OK (L12, L18)" z liniami tego pliku, "— OK (tests/a.spec.ts)" ze ścieżką pliku, który spełnia wymaganie, albo "— OK (${noOccurrence})".`);
     } else if (deferred) {
-      problems.push(`${at}: OK odsyła do ${deferred[0]} - kod, który łamie pozycję, nigdy jej nie spełnia: dostaje własne NARUSZENIE. Jej adres dochodzi do pola Reguła znaleziska ${deferred[0]} (najbardziej szczegółowy pierwszy), gdy to to samo wymaganie w innej instrukcji albo obie są pozycjami instrukcji z findings: per-file; inna pozycja tej samej instrukcji to inne wymaganie i własne znalezisko.`);
+      problems.push(`${at}: OK odsyła do ${deferred[0]} - kod, który łamie pozycję, nigdy jej nie spełnia: dostaje własne NARUSZENIE, a nie OK z innym uzasadnieniem. Jej adres dochodzi do pola Reguła znaleziska ${deferred[0]} (najbardziej szczegółowy pierwszy), gdy to to samo wymaganie w innej instrukcji albo obie są pozycjami instrukcji z findings: per-file; inna pozycja tej samej instrukcji to inne wymaganie i własne znalezisko.`);
     } else if (items > 1 && (numbered || elsewhere || !absent)) {
       problems.push(`${at}: jedno OK na ${items} pozycji z dowodem "(${inner})" - linie i pliki są dowodem jednej pozycji. Każda pozycja, której przedmiot występuje w pliku, ma własną linię z liniami, z których odczytano jej werdykt; w jedną linię zwijają się tylko pozycje, których przedmiotu plik nie zawiera: "— OK (${noOccurrence})".`);
     } else if (!absent && !numbered && !elsewhere) {
@@ -532,7 +574,8 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
   const facts = options.facts;
   const finder = pathFinder(context, file, options.root, facts && facts.factRoot);
   const bound = (facts && facts.files[file.path] && facts.files[file.path].items) || {};
-  const { prepared } = rulesOf(facts);
+  const { prepared, sameAs } = rulesOf(facts);
+  const ownFindings = report.files.filter((section) => section.path === file.path).flatMap((section) => section.findings);
   const verdictOf = new Map();
   const wordsById = new Map();
   const firstLine = new Map();
@@ -555,6 +598,22 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
     const ready = line.numbers.map((k) => `${line.id}#${k}`).filter((address) => prepared[address]);
     if (verdict.word === 'OK' && ready.length) {
       problems.push(`${compact(ready)}: OK przy pozycji z gotowym werdyktem w paczce - przepisz go bez zmian: "[ ] ${ready[0]} — NIEZWERYFIKOWANE: ${prepared[ready[0]]}".`);
+    }
+    // One defect breaks both sides of a `sameAs` pair: an OK on lines a partner's finding breaks
+    // is the partner's defect left out of this item.
+    if (verdict.word === 'OK' && line.numbers.length === 1) {
+      const address = `${line.id}#${line.numbers[0]}`;
+      const partners = sameAs[address] || [];
+      const inner = (verdict.after.match(/^\((.*)\)/) || [])[1] || '';
+      const okLines = new Set(citedSpans(inner).flatMap(([from, to]) => Array.from({ length: Math.min(to - from, 5000) + 1 }, (_, i) => from + i)));
+      const hit = partners.length && okLines.size && ownFindings.find((finding) => {
+        const addresses = addressesOf(finding);
+        return !addresses.includes(address) && addresses.some((a) => partners.includes(a)) && [...lineSet(finding.lines)].some((k) => okLines.has(k));
+      });
+      if (hit) {
+        const partner = addressesOf(hit).find((a) => partners.includes(a));
+        problems.push(`${address}: OK na liniach znaleziska ${partner} (Linia ${hit.lines}) - paczka oznacza te pozycje "ta sama wada", więc ta sama wada łamie obie: dopisz ${address} do pola Reguła tego znaleziska i daj mu NARUSZENIE (${hit.lines}).`);
+      }
     }
     if (!wordsById.has(line.id)) wordsById.set(line.id, new Set());
     wordsById.get(line.id).add(verdict.word);
@@ -1371,64 +1430,45 @@ function expandWord(word, dir) {
   return words;
 }
 
-// Where contexts are looked for: the skill's own reports folder, and each folder at or above the
-// given ones that holds a codeReview cache (`<project>/.claude/doh/codeReview`).
-function reviewRootsFor(dirs) {
-  const roots = new Map([[pathKey(path.join(__dirname, '..', 'reports')), path.join(__dirname, '..', 'reports')]]);
-  const seen = new Set();
-  for (const start of dirs) {
-    if (!start) continue;
-    for (let dir = path.resolve(start); !seen.has(pathKey(dir)); dir = path.dirname(dir)) {
-      seen.add(pathKey(dir));
-      const root = path.join(dir, '.claude', 'doh', 'codeReview');
-      if (fs.existsSync(layout.cacheDirOf(root))) roots.set(pathKey(root), root);
-    }
-  }
-  return [...roots.values()];
-}
-
 // What a review in progress reads with Read - each reviewed file and the content, diff and bundles
-// its context made of it - for every target whose work folder is still on disk. Keyed by path,
-// with the name the refusal shows.
-function guardedFiles(roots) {
+// its context made of it - for every target of the given contexts whose work folder is still on
+// disk. Keyed by path, with the name the refusal shows.
+function guardedFiles(contextPaths) {
   const guarded = new Map();
   const add = (file, name) => {
     if (typeof file === 'string' && file && !guarded.has(pathKey(file))) guarded.set(pathKey(file), name);
   };
-  for (const root of roots) {
-    const cache = layout.cacheDirOf(root);
-    const dirs = [cache];
+  for (const contextPath of contextPaths) {
+    let context;
     try {
-      for (const entry of fs.readdirSync(cache, { withFileTypes: true })) if (entry.isDirectory()) dirs.push(path.join(cache, entry.name));
+      context = JSON.parse(fs.readFileSync(contextPath, 'utf8'));
     } catch {
       continue;
     }
-    for (const dir of dirs) {
-      let names;
-      try {
-        names = fs.readdirSync(dir).filter((name) => reContextName.test(name));
-      } catch {
-        continue;
+    for (const target of context.targets || []) {
+      if (!target || !target.workDir || !fs.existsSync(target.workDir)) continue;
+      for (const file of target.files || []) {
+        if (context.project && file.path) add(path.resolve(context.project, file.path), file.path);
+        for (const key of ['contentPath', 'diffPath', 'bundlePath']) add(file[key], path.basename(String(file[key])));
       }
-      for (const name of names) {
-        let context;
-        try {
-          context = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-        } catch {
-          continue;
-        }
-        for (const target of context.targets || []) {
-          if (!target || !target.workDir || !fs.existsSync(target.workDir)) continue;
-          for (const file of target.files || []) {
-            if (context.project && file.path) add(path.resolve(context.project, file.path), file.path);
-            for (const key of ['contentPath', 'diffPath', 'bundlePath']) add(file[key], path.basename(String(file[key])));
-          }
-          for (const key of ['crossBundlePath', 'factsPath']) add(target[key], path.basename(String(target[key])));
-        }
-      }
+      for (const key of ['crossBundlePath', 'factsPath']) add(target[key], path.basename(String(target[key])));
     }
   }
   return guarded;
+}
+
+// The run a session reviews: review-hooks.cjs ties a session to a run when it reads the run's
+// context JSON or one of its bundles. A session tied to no run is guarded by nothing, so the work
+// folder an interrupted run left on disk never refuses a command of another session.
+function boundContextPath(sessionId, env = process.env) {
+  try {
+    const hooks = require('./review-hooks.cjs');
+    const file = hooks.statePath(sessionId, env);
+    const state = file ? hooks.readState(file) : null;
+    return state ? state.contextPath : null;
+  } catch {
+    return null;
+  }
 }
 
 // `sed -n '<N>p' <file>` on a line Read cuts short is the one read the shell keeps.
@@ -1449,18 +1489,128 @@ function longLineRead(words, file) {
   }
 }
 
-// A reviewed file printed from the shell - cat -n, head, sed -n, a for loop over the files -
-// reaches the reviewer compressed on its way back and without the line numbers Read gives and a
-// part cites. The command is refused whole, before it runs.
-function shellReviewRead(command, cwd, roots = null) {
+const grepNames = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag']);
+// Patterns that match every line (or every non-empty one): such a grep prints the file.
+const reAllLines = /^(?:|\^|\$|\.|\.\*|\^\.\*|\.\*\$|\^\.\*\$|\^\.|\.\+)$/;
+const reEmptyLine = /^\^(?:\\s\*|\[\[:space:\]\]\*|\s\*)?\$$/;
+
+// The files a grep prints whole: a pattern every line matches, or an inverted empty-line pattern.
+// A count or a list of names (-c, -l, -L, -q) prints no line of the file.
+function grepWholeFiles(words) {
+  let pattern = null;
+  let invert = false;
+  const files = [];
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i];
+    if (reShellRedirect.test(word) || word === '<') {
+      i++;
+      continue;
+    }
+    if (word === '-e' || word === '--regexp') {
+      pattern = words[++i];
+      continue;
+    }
+    if (word.startsWith('--regexp=')) {
+      pattern = word.slice('--regexp='.length);
+      continue;
+    }
+    if (word.startsWith('-') && word !== '-') {
+      if (/^-[a-zA-Z]*[clLq]|^--(?:count|files-with-matches|files-without-match|quiet|silent)$/.test(word)) return [];
+      if (/^-[a-zA-Z]*v/.test(word) || word === '--invert-match') invert = true;
+      if (/^-[ABCmdDf]$/.test(word)) i++;
+      continue;
+    }
+    if (pattern === null) pattern = word;
+    else files.push(word);
+  }
+  if (pattern === null) return [];
+  return (invert ? reEmptyLine.test(pattern) : reAllLines.test(pattern)) ? files : [];
+}
+
+// The files `find` hands to a printing command (-exec cat {} ;): under its start folders, named by
+// its -name patterns (every file when it has none).
+function findExecScope(words, dir) {
+  const k = words.findIndex((word) => /^-(?:exec|execdir|ok|okdir)$/.test(word));
+  if (k < 0 || !shellReaders.has(path.basename(String(words[k + 1] || '')).replace(/\.exe$/i, ''))) return null;
+  const roots = [];
+  let i = 1;
+  for (; i < words.length && !/^[-(!]/.test(words[i]); i++) roots.push(words[i]);
+  const names = [];
+  for (; i < words.length; i++) if (/^-i?name$/.test(words[i])) names.push({ glob: words[i + 1], insensitive: words[i] === '-iname' });
+  return { roots: (roots.length ? roots : ['.']).map((root) => resolveWord(root, dir)).filter(Boolean), names };
+}
+
+const reScriptRunner = /^(?:node|python3?|py|perl|ruby|bun|deno)$/;
+const reScriptRead = /readFileSync|readFile\(|createReadStream|open\(|read_text|readlines|File\.read|slurp/;
+
+// The files an inline script (`node -e`, `python -c`, …) reads by a path it spells out.
+function scriptReads(words, dir) {
+  const files = [];
+  for (let i = 1; i < words.length; i++) {
+    if (!/^(?:-e|-c|-p|-pe|-ne|--eval|--print)$/.test(words[i])) continue;
+    const code = String(words[i + 1] || '');
+    if (!reScriptRead.test(code)) continue;
+    for (const m of code.matchAll(/(['"`])([^'"`\n]+?)\1/g)) {
+      const file = resolveWord(m[2].replace(/\\\\/g, '\\'), dir);
+      if (file) files.push(file);
+    }
+  }
+  return files;
+}
+
+const globMatch = (glob, name, insensitive) => {
+  const re = new RegExp(`^${String(glob).replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, insensitive ? 'i' : '');
+  return re.test(name);
+};
+
+// A reviewed file printed from the shell - cat -n, head, sed -n, a for loop over the files, a grep
+// every line matches, xargs or find -exec feeding a printing command, a while-read loop, an inline
+// script reading it - reaches the reviewer compressed on its way back and without the line numbers
+// Read gives and a part cites. Only the session reviewing the run is held to it; the command is
+// refused whole, before it runs.
+function shellReviewRead(command, cwd, sessionId = null, env = process.env) {
   const loops = new Map();
   const reads = [];
+  const finds = [];
+  const mentioned = [];
+  let viaXargs = false;
   for (const { words, cwd: dir } of shellSteps(command, cwd)) {
     if (words[0] === 'for' && words[2] === 'in') {
       loops.set(words[1], words.slice(3).flatMap((word) => expandWord(word, dir)));
       continue;
     }
+    for (const word of words) {
+      for (const choice of expandWord(word, dir)) {
+        const file = resolveWord(choice, dir);
+        if (file) mentioned.push(file);
+      }
+    }
     const name = path.basename(words[0]).replace(/\.exe$/i, '');
+    if (name === 'xargs' && words.slice(1).some((word) => shellReaders.has(path.basename(word).replace(/\.exe$/i, '')))) viaXargs = true;
+    if (name === 'find') {
+      const scope = findExecScope(words, dir);
+      if (scope) finds.push(scope);
+      continue;
+    }
+    // `done < file` feeds a while-read loop that prints the file line by line.
+    if (name === 'done' && words.includes('<')) {
+      const file = resolveWord(words[words.indexOf('<') + 1], dir);
+      if (file) reads.push({ file, step: [name] });
+      continue;
+    }
+    if (reScriptRunner.test(name)) {
+      for (const file of scriptReads(words, dir)) reads.push({ file, step: [name] });
+      continue;
+    }
+    if (grepNames.has(name)) {
+      for (const word of grepWholeFiles(words)) {
+        for (const choice of expandWord(word, dir)) {
+          const file = resolveWord(choice, dir);
+          if (file) reads.push({ file, step: [name] });
+        }
+      }
+      continue;
+    }
     // An in-place sed rewrites the file instead of printing it.
     if (!shellReaders.has(name) || (name === 'sed' && words.some((word) => /^-[a-zA-Z]*i|^--in-place/.test(word)))) continue;
     const step = [name, ...words.slice(1)];
@@ -1484,19 +1634,35 @@ function shellReviewRead(command, cwd, roots = null) {
       }
     }
   }
-  if (!reads.length) return null;
-  const guarded = guardedFiles(roots || reviewRootsFor([cwd, ...reads.map((read) => path.dirname(read.file))]));
+  if (!reads.length && !finds.length && !viaXargs) return null;
+  const contextPath = boundContextPath(sessionId, env);
+  if (!contextPath) return null;
+  const guarded = guardedFiles([contextPath]);
   const hits = new Set();
   for (const { file, step } of reads) {
     const name = guarded.get(pathKey(file));
     if (name !== undefined && !longLineRead(step, file)) hits.add(name);
+  }
+  // xargs prints what the command before it names: any guarded file the command spells out.
+  if (viaXargs) {
+    for (const file of mentioned) {
+      const name = guarded.get(pathKey(file));
+      if (name !== undefined) hits.add(name);
+    }
+  }
+  for (const { roots, names } of finds) {
+    for (const [key, name] of guarded) {
+      const under = roots.some((root) => key === pathKey(root) || key.startsWith(`${pathKey(root)}${path.sep}`) || key.startsWith(`${pathKey(root)}/`));
+      const base = path.basename(key);
+      if (under && (!names.length || names.some(({ glob, insensitive }) => globMatch(glob, base, insensitive || process.platform === 'win32')))) hits.add(name);
+    }
   }
   if (hits.size === 0) return null;
   const shown = [...hits].slice(0, 5).join(', ') + (hits.size > 5 ? `, … (${hits.size} razem)` : '');
   return [
     `Polecenie NIE zostało wykonane: wypisuje z powłoki plik recenzji: ${shown} (codeReview SKILL.md, Step 3).`,
     'Recenzowany plik, jego diff i paczkę czyta się narzędziem Read (offset i limit dla fragmentu): wynik powłoki wraca skompresowany i bez numerów linii, które cytuje część.',
-    `Szukanie (grep) i liczenie (wc) przechodzą. Jedyny odczyt z powłoki to linia dłuższa niż ${readLineLimit} znaków, którą Read ucina: sed -n '<N>p' <plik>.`,
+    `Szukanie (grep ze wzorcem) i liczenie (wc, grep -c) przechodzą. Jedyny odczyt z powłoki to linia dłuższa niż ${readLineLimit} znaków, którą Read ucina: sed -n '<N>p' <plik>.`,
     '',
   ].join('\n');
 }
@@ -1528,7 +1694,7 @@ function sameDefectNotes(report, rules) {
 function hookResult(input) {
   const tool = input && input.tool_name;
   const args = (input && input.tool_input) || {};
-  if (tool === 'Bash') return shellPartWrite(args.command || '', input.cwd) || shellReviewRead(args.command || '', input.cwd);
+  if (tool === 'Bash') return shellPartWrite(args.command || '', input.cwd) || shellReviewRead(args.command || '', input.cwd, input.session_id);
   const file = args.file_path;
   if ((tool !== 'Write' && tool !== 'Edit') || typeof file !== 'string' || !rePartName.test(path.basename(file))) return null;
   const found = findContextFor(file);
@@ -1558,7 +1724,7 @@ function hookResult(input) {
   }
   return formatProblems(
     `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview SKILL.md, Step 3 point 4):`,
-    problems,
+    withDraftLines(problems, text),
     draftNotes(found.contextPath, draft, problems.every((problem) => problem.includes(timingRefusal))),
   );
 }
@@ -1647,7 +1813,7 @@ function promote(args) {
   if (result.state === 'refused') {
     process.stderr.write(formatProblems(
       `Szkic ${path.basename(draft)} NIE został przeniesiony do ${partName}: nie przeszedł kontroli formatu (codeReview SKILL.md, Step 3 point 4):`,
-      result.problems,
+      withDraftLines(result.problems, fs.readFileSync(draft, 'utf8')),
       draftNotes(found.contextPath, draft, result.problems.every((problem) => problem.includes(timingRefusal))),
     ));
     return 1;
@@ -1661,13 +1827,44 @@ function promote(args) {
   return 0;
 }
 
+// The renderer's arguments for a target: the snippet under every finding reads the revision the
+// review read (`--mode`/`--branch`/`--base`), and an `--only-md` target renders nothing.
+function renderArgsOf(target, project) {
+  const args = target.htmlReportPath
+    ? [`--report=${target.reportPath}`, `--project=${project}`, `--mode=${target.kind}`, `--branch=${target.branch}`,
+      ...(target.baseBranch ? [`--base=${target.baseBranch}`] : [])]
+    : [`--report=${target.reportPath}`, '--only-md'];
+  if (target.withChecklist) args.push('--with-checklist');
+  return args;
+}
+
+// Everything after a passed check, in one process so no step can be left out: the parts are
+// appended to the report (which already holds the header) in part order, the parts, the import
+// ledger and the work folder removed, and the renderer run. Exit code: the renderer's.
+function finishAssembly(context, target) {
+  const reportPath = target.reportPath;
+  const dir = path.dirname(reportPath);
+  const stem = path.basename(reportPath).replace(/\.md$/i, '');
+  // One zero-padded width for every part of a target, so the order of the names is the order of the parts.
+  const parts = fs.readdirSync(dir).filter((name) => name.startsWith(`${stem}.part`) && rePartName.test(name)).sort();
+  for (const part of parts) fs.appendFileSync(reportPath, fs.readFileSync(path.join(dir, part), 'utf8'));
+  for (const part of parts) fs.rmSync(path.join(dir, part), { force: true });
+  if (target.importLedger) fs.rmSync(target.importLedger, { force: true });
+  if (target.workDir) fs.rmSync(target.workDir, { recursive: true, force: true });
+  const rendered = spawnSync(process.execPath, [path.join(__dirname, 'render-report.cjs'), ...renderArgsOf(target, context.project)], { encoding: 'utf8' });
+  process.stdout.write(rendered.stdout || '');
+  process.stderr.write(rendered.stderr || '');
+  return rendered.status === null ? 1 : rendered.status;
+}
+
 function assemble(argv) {
   const args = {};
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
     if (m && (m[1] === 'context' || m[1] === 'report' || m[1] === 'promote')) args[m[1]] = m[2];
+    else if (arg === '--assemble') args.assemble = true;
     else {
-      process.stderr.write(`Nieznany argument: ${arg} (oczekiwano --context=<contextPath> --report=<reportPath> albo --promote=<szkic>).\n`);
+      process.stderr.write(`Nieznany argument: ${arg} (oczekiwano --context=<contextPath> --report=<reportPath> [--assemble] albo --promote=<szkic>).\n`);
       return 1;
     }
   }
@@ -1688,6 +1885,10 @@ function assemble(argv) {
     process.stderr.write(`Kontekst ${args.context} nie ma celu z reportPath ${args.report}.\n`);
     return 1;
   }
+  if (args.assemble && !fs.existsSync(target.workDir || '') && !fs.readdirSync(path.dirname(target.reportPath)).some((name) => rePartName.test(name))) {
+    process.stdout.write(`check-part: raport ${path.basename(args.report)} jest już złożony - nie ma czego składać.\n`);
+    return 0;
+  }
   const problems = checkAssembly(context, target);
   if (problems.length > 0) {
     process.stderr.write(formatProblems(
@@ -1704,10 +1905,11 @@ function assemble(argv) {
   if (severities) process.stdout.write(`check-part: ważność stała z rulebooka ustawiona w ${severities} ${severities === 1 ? 'znalezisku' : 'znaleziskach'}.\n`);
   const coverage = coverageLine(target, facts);
   if (coverage) process.stdout.write(`${coverage}\n`);
-  return 0;
+  return args.assemble ? finishAssembly(context, target) : 0;
 }
 
 module.exports = {
+  renderArgsOf, withDraftLines,
   checkPart, checkAssembly, findContextFor, hookResult, scanPart, planItems, compact,
   rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellWrites, expandWord,
   promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName,

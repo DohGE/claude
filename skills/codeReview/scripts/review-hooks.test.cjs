@@ -228,9 +228,9 @@ test('skillLines: from a little before the cut of the re-attached body to the on
   const dir = tempDir(t, 'review-hooks-skill-');
   const file = path.join(dir, 'SKILL.md');
   const body = `${'a'.repeat(99)}\n`.repeat(200);
-  // 3 frontmatter lines, then 100-char lines: the cut at body char 16000 opens line 3 + 160 + 1.
+  // 3 frontmatter lines, then 100-char lines: the cut at body char 19000 opens line 3 + 190 + 1.
   fs.writeFileSync(file, `---\nname: x\n---\n${body}${hooks.oneTimeMarker}\nraz\n`);
-  assert.deepStrictEqual(hooks.skillLines(file), { path: file, from: 164, limit: 40 });
+  assert.deepStrictEqual(hooks.skillLines(file), { path: file, from: 194, limit: 10 });
   fs.writeFileSync(file, `---\nname: x\n---\n${body}`);
   assert.strictEqual(hooks.skillLines(file), null);
   fs.writeFileSync(file, `---\nname: x\n---\n${hooks.oneTimeMarker}\n${body}`);
@@ -263,7 +263,7 @@ test('compact: where the run stands - the next file or batch with its Reads, the
     `- cel 1/1: feature, raport ${f.reportPath}`,
     `- rulebook (Step 2) wraca tylko z pliku: przeczytaj (Read) ${f.context.rulebookNotesPath}`,
   ];
-  const skill = `- SKILL.md wrócił po kompaktowaniu tylko do około linii 164: przeczytaj (Read) ${skillFile} z offset 164 i limit 40 - reszta kroku 3 i format raportu.`;
+  const skill = `- SKILL.md wrócił po kompaktowaniu tylko do około linii 194 (po wznowieniu sesji - wcale): przeczytaj (Read) ${skillFile} z offset 194 i limit 10 - reszta kroku 3 i format raportu.`;
   const [a, b] = f.target.files;
   assert.deepStrictEqual(at(), [
     ...head,
@@ -325,20 +325,23 @@ test('compact: the session\'s run, once assembled, ends its state; a session wit
   assert.ok(!fs.existsSync(path.join(f.stateDir, 's1.json')));
 });
 
-test('registration: SKILL.md runs the read and draft events, the plugin the compact one', () => {
+test('registration: the plugin runs every codeReview hook, SKILL.md none of them', () => {
+  // A hook in the skill's frontmatter stops firing once the session is compacted - the parts
+  // written after it went unchecked - so the plugin's hooks.json carries them all.
   // core.autocrlf may check SKILL.md out with CRLF; the YAML is the same.
   const text = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
   const front = text.match(/^---\n([\s\S]*?)\n---\n/)[1];
-  const args = (event) => `args: ["\${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs", "--event=${event}"]`;
-  const pre = front.slice(front.indexOf('\n  PreToolUse:\n'), front.indexOf('\n  PostToolUse:\n'));
-  const post = front.slice(front.indexOf('\n  PostToolUse:\n'));
-  assert.ok(pre.includes(`- matcher: "Read"\n      hooks:\n        - type: command\n          command: node\n          ${args('read')}\n`), pre);
-  assert.ok(post.includes(`- matcher: "Write|Edit"\n      hooks:\n        - type: command\n          command: node\n          ${args('draft')}\n`), post);
+  assert.ok(!/review-hooks\.cjs|check-part\.cjs/.test(front), front);
   const config = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'hooks', 'hooks.json'), 'utf8'));
-  assert.deepStrictEqual(config.hooks.SessionStart, [{
-    matcher: 'compact',
-    hooks: [{ type: 'command', command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs', '--event=compact'], timeout: 10 }],
-  }]);
+  const run = (name, args, timeout) => ({
+    hooks: [{ type: 'command', command: 'node', args: [`\${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/${name}`, ...args], timeout }],
+  });
+  assert.deepStrictEqual(config.hooks.SessionStart, [{ matcher: 'compact', ...run('review-hooks.cjs', ['--event=compact'], 10) }]);
+  assert.deepStrictEqual(config.hooks.PreToolUse, [
+    { matcher: 'Write|Edit|Bash', ...run('check-part.cjs', [], 30) },
+    { matcher: 'Read', ...run('review-hooks.cjs', ['--event=read'], 30) },
+  ]);
+  assert.deepStrictEqual(config.hooks.PostToolUse, [{ matcher: 'Write|Edit', ...run('review-hooks.cjs', ['--event=draft'], 30) }]);
   for (const event of ['read', 'draft', 'compact']) assert.strictEqual(hooks.parseArgs([`--event=${event}`]).event, event);
 });
 
@@ -360,4 +363,12 @@ test('CLI: prints the hook\'s JSON; a bad input is exit 0 with no output, a bad 
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /--event=read\|draft\|compact/);
   assert.strictEqual(run([], '{}').status, 1);
+});
+
+test('compact: the walk card rides in every compaction note, since a resumed session gets no SKILL.md back', () => {
+  const card = hooks.walkCard(path.join(__dirname, '..', 'SKILL.md'));
+  assert.ok(card && card.length >= 5, 'the shipped card is read');
+  assert.ok(card.join('\n').length <= 3000, 'the card stays short: it rides in every compaction');
+  assert.match(card.join('\n'), /Do odpowiedzi/);
+  assert.strictEqual(hooks.walkCard(path.join(__dirname, 'no-such-skill', 'SKILL.md')), null);
 });

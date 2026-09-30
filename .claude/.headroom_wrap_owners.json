@@ -3,18 +3,11 @@
     "original": "true",
     "holders": [
       {
-        "pid": 21356,
+        "pid": 11052,
         "start_src": null,
         "start_time": null,
         "port": null,
-        "inherited": true
-      },
-      {
-        "pid": 22508,
-        "start_src": null,
-        "start_time": null,
-        "port": null,
-        "inherited": true
+        "inherited": false
       }
     ]
   },
@@ -22,18 +15,11 @@
     "original": null,
     "holders": [
       {
-        "pid": 21356,
+        "pid": 11052,
         "start_src": null,
         "start_time": null,
         "port": 8787,
-        "inherited": true
-      },
-      {
-        "pid": 22508,
-        "start_src": null,
-        "start_time": null,
-        "port": 8787,
-        "inherited": true
+        "inherited": false
       }
     ]
   }

@@ -96,8 +96,12 @@ const has = (problems, fragment) => assert.ok(
   `expected a problem containing "${fragment}", got:\n${problems.join('\n')}`,
 );
 
-function hook(input) {
-  const r = spawnSync(process.execPath, [script], { input: typeof input === 'string' ? input : JSON.stringify(input), encoding: 'utf8' });
+function hook(input, env = null) {
+  const r = spawnSync(process.execPath, [script], {
+    input: typeof input === 'string' ? input : JSON.stringify(input),
+    encoding: 'utf8',
+    env: env ? { ...process.env, ...env } : process.env,
+  });
   return { status: r.status, stderr: r.stderr };
 }
 
@@ -446,20 +450,59 @@ function reviewProject(t) {
   fs.writeFileSync(bundlePath, '# src/a.ts\n');
   const cacheDir = path.join(root, 'cache', 'feature');
   fs.mkdirSync(cacheDir, { recursive: true });
-  fs.writeFileSync(path.join(cacheDir, '.review-context-branch.json'), JSON.stringify({
+  const contextPath = path.join(cacheDir, '.review-context-branch.json');
+  fs.writeFileSync(contextPath, JSON.stringify({
     project,
     targets: [{
       reportPath, workDir, crossBundlePath: `${workDir}/cross-file.bundle.md`, factsPath: `${workDir}/facts.json`,
       files: [{ path: 'src/a.ts', contentPath: `${project.replace(/\\/g, '/')}/src/a.ts`, diffPath: `${workDir}/01-a.ts.diff`, bundlePath }],
     }],
   }));
-  return { project, workDir, bundlePath };
+  // The session reviewing the run: review-hooks.cjs ties it when it reads the context or a bundle.
+  const stateDir = path.join(project, 'sessions');
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, 'reviewer.json'), JSON.stringify({ contextPath, shown: {} }));
+  return { project, workDir, bundlePath, contextPath, env: { DOH_REVIEW_STATE_DIR: stateDir } };
 }
+
+test('a refusal quotes the draft lines each problem is about', () => {
+  const text = partA();
+  const lineOf = (fragment) => text.split('\n').findIndex((line) => line.includes(fragment)) + 1;
+  const [one, inRange, rule, field, none] = cp.withDraftLines([
+    'component#1: NARUSZENIE bez linii - zapis to "— NARUSZENIE (<linie>)".',
+    'general#3: OK bez dowodu - zapis to "— OK (L12, L40)".',
+    'general#2: znalezisko cytuje tę pozycję, a checklista ma OK.',
+    'src/a.ts: pole Linia "4, 9" wskazuje linie spoza pliku.',
+    'najpierw brakujące wcześniejsze części: part01',
+  ], text);
+  assert.match(one, new RegExp(`\\[szkic .*L${lineOf('[x] component#1 OnPush')}: "\\[x\\] component#1 OnPush`));
+  assert.match(inRange, new RegExp(`\\[szkic L${lineOf('[x] general#1,#3')}: `), 'an item inside a collapsed line points at that line');
+  assert.match(rule, new RegExp(`L${lineOf('**Reguła:**')}: "- \\*\\*Reguła:\\*\\* component#1; general#2"`), 'the finding citing the item');
+  assert.match(rule, new RegExp(`L${lineOf('[x] general#2 nazwy')}: `));
+  assert.match(field, new RegExp(`\\[szkic L${lineOf('**Linia:** 4, 9')}: "- \\*\\*Linia:\\*\\* 4, 9"\\]`));
+  assert.strictEqual(none, 'najpierw brakujące wcześniejsze części: part01', 'a problem with no place stays as it is');
+});
+
+test('hook: a session that reviews no run is never refused a shell read', (t) => {
+  const r = reviewProject(t);
+  const bash = (command, session) => hook({ session_id: session, tool_name: 'Bash', tool_input: { command }, cwd: r.project }, r.env);
+  assert.strictEqual(bash('cat -n src/a.ts', 'reviewer').status, 2, 'the reviewing session is held to Read');
+  assert.strictEqual(bash('cat -n src/a.ts', 'other-session').status, 0, 'another session, the same work folder on disk');
+  assert.strictEqual(bash('cat -n src/a.ts', undefined).status, 0, 'no session id at all');
+});
 
 test('hook: a reviewed file printed from the shell is refused while its review runs', (t) => {
   const r = reviewProject(t);
-  const bash = (command) => hook({ tool_name: 'Bash', tool_input: { command }, cwd: r.project });
+  const bash = (command) => hook({ session_id: 'reviewer', tool_name: 'Bash', tool_input: { command }, cwd: r.project }, r.env);
   for (const command of [
+    "grep -n '' src/a.ts",
+    'grep -v "^$" src/a.ts',
+    'rg -n "^" src/a.ts',
+    'echo src/a.ts | xargs cat',
+    'while IFS= read -r l; do echo "$l"; done < src/a.ts',
+    'find src -name a.ts -exec cat {} \\;',
+    'find src -name "*.ts" -exec nl {} +',
+    `node -e "process.stdout.write(require('fs').readFileSync('src/a.ts','utf8'))"`,
     'cat -n src/a.ts',
     'head -40 src/a.ts | tail -5',
     "sed -n '1,20p' src/a.ts",
@@ -477,6 +520,11 @@ test('hook: a reviewed file printed from the shell is refused while its review r
   }
   for (const command of [
     'grep -n "const" src/a.ts',
+    "grep -c '' src/a.ts",
+    'find src -name a.ts',
+    'find src -name a.ts -exec grep -n "const" {} \\;',
+    'ls src | xargs wc -l',
+    'node -e "console.log(1)"',
     'wc -l src/a.ts',
     'cat src/notes.ts',
     'git diff -- src/a.ts',
@@ -566,6 +614,37 @@ test('assembly: every file has its part, the cross-file part exists, and a clean
   r = assemble();
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /part02\.md: general#1: OK bez dowodu/);
+});
+
+test('assembly --assemble: only a passed check appends the parts, removes them with the work folder and renders', (t) => {
+  const f = fixture(t);
+  const work = path.join(f.branchDir, 'raport.work');
+  const ledger = path.join(f.branchDir, 'raport.imports.txt');
+  fs.writeFileSync(ledger, 'src/a.ts:1 → ./b\n');
+  f.target.workDir = work;
+  f.target.importLedger = ledger;
+  f.target.htmlReportPath = null;
+  f.target.withChecklist = true;
+  fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
+  const assemble = () => spawnSync(process.execPath, [script, `--context=${f.contextPath}`, `--report=${f.reportPath}`, '--assemble'], { encoding: 'utf8' });
+  fs.writeFileSync(f.part(1), partA());
+  let r = assemble();
+  assert.strictEqual(r.status, 1, 'a missing part stops everything');
+  assert.ok(fs.existsSync(f.part(1)) && fs.existsSync(work) && fs.existsSync(ledger), 'a refused assembly removes nothing');
+  fs.writeFileSync(f.part(2), partB);
+  fs.writeFileSync(f.part(3), '');
+  r = assemble();
+  assert.strictEqual(r.status, 0, r.stderr);
+  const report = fs.readFileSync(f.reportPath, 'utf8');
+  assert.ok(report.startsWith('# Code Review: feature'), 'the header stays first');
+  assert.ok(report.indexOf('<!-- coverage: src/a.ts') < report.indexOf('<!-- coverage: src/b.ts'), 'the parts in part order');
+  assert.ok(![1, 2, 3].some((k) => fs.existsSync(f.part(k))), 'the parts are gone');
+  assert.ok(!fs.existsSync(work) && !fs.existsSync(ledger), 'the work folder and the ledger are gone');
+  assert.match(r.stdout, /^severity: critical=0 high=0 medium=1 low=0 missing-unit-test=0$/m, 'the renderer ran and counted');
+  r = assemble();
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /jest już złożony/, 'a second call after a finished assembly changes nothing');
+  assert.strictEqual(fs.readFileSync(f.reportPath, 'utf8'), report);
 });
 
 test('assembly: the coverage numbers are counted, not trusted', (t) => {
@@ -672,6 +751,16 @@ test('one defect, one finding: the cross-file pass does not report again what a 
   assert.deepStrictEqual(cross(finding('general#3', '9')), []);
   // A line the file part does not cover is news.
   assert.deepStrictEqual(cross(finding('general#2', '4, 12')), []);
+});
+
+test('an OK on the lines a sameAs partner\'s finding breaks is refused: one defect breaks both', (t) => {
+  const f = fixture(t);
+  const facts = withRules({ sameAs: { 'general#3': ['component#1'], 'component#1': ['general#3'] } });
+  const text = (evidence) => partA({ general13: `[x] general#1 — OK (brak wystąpień)\n[x] general#3 — OK (${evidence})` });
+  has(check(f, 1, text('L4'), { facts }), 'general#3: OK na liniach znaleziska component#1 (Linia 4, 9)');
+  // Lines the partner's finding does not name, or no pair at all, leave the OK standing.
+  assert.deepStrictEqual(check(f, 1, text('L5'), { facts }), []);
+  assert.deepStrictEqual(check(f, 1, text('L4')), []);
 });
 
 test('hook: two findings of one sameAs pair over the same lines pass, with a note to merge them', (t) => {

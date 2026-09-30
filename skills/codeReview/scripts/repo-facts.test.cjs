@@ -89,6 +89,52 @@ test('only reviewed files get facts, though the whole universe is read', () => {
   assert.deepStrictEqual([...result.facts.keys()], ['src/app/a/dead.ts']);
 });
 
+test('an area routed from both shared/routes/ and shell/ is a fact on each side', () => {
+  const result = collect({
+    'src/app/orders/shared/routes/orders.routes.ts': 'export const ORDERS_ROUTES = [];\n',
+    'src/app/orders/shell/orders-shell.routes.ts': 'export const ORDERS_SHELL_ROUTES = [];\n',
+    'src/app/users/shared/routes/users.routes.ts': 'export const USERS_ROUTES = [];\n',
+  });
+  const twice = (p) => factsOf(result, p, 'area-routes-twice').map((f) => f.lines);
+  assert.deepStrictEqual(twice('src/app/orders/shared/routes/orders.routes.ts'), [[1]]);
+  assert.deepStrictEqual(twice('src/app/orders/shell/orders-shell.routes.ts'), [[1]]);
+  assert.deepStrictEqual(twice('src/app/users/shared/routes/users.routes.ts'), []);
+  assert.deepStrictEqual(result.cross.filter((line) => /^Obszar /.test(line)), [
+    'Obszar orders ma trasy i w shared/routes/, i w shell/: src/app/orders/shared/routes/orders.routes.ts, src/app/orders/shell/orders-shell.routes.ts',
+  ]);
+});
+
+test('the repo-search answer names what the file shares with the others, and what it cannot compare', () => {
+  const result = collect({
+    'src/app/a/one.ts': "export const title = 'Order history page';\nexport const again = 'Order history page';\nexport const own = 'Only in this file here';\nexport const off = user.status === 'blocked';\n",
+    'src/app/a/two.ts': "export const t = 'Order history page';\n",
+    'src/app/a/none.ts': 'export const n = 1;\n',
+    'src/app/a/label.ts': "export function label(s: number): string {\n  return s === 1 ? 'Active user' : 'Blocked user';\n}\n",
+    'src/app/a/tests/one.spec.ts': "it('Order history page', () => {});\n",
+  });
+  const answer = (p) => result.answers.get(p)['repo-search'];
+  assert.match(answer('src/app/a/label.ts'), /: mapa etykiet label L1 - żadna funkcja innego pliku nie ma dwóch z jej etykiet; literał "Active user" L2 - nigdzie indziej;/);
+  assert.strictEqual(answer('src/app/a/one.ts'), 'porównane ze skryptami (bez testów), szablonami i bazowym plikiem tłumaczeń repozytorium: '
+    + 'literał "Order history page" L1, L2 - 2× w tym pliku, w 1 innym pliku; literał "Only in this file here" L3 - nigdzie indziej; '
+    + "warunek `user.status === 'blocked'` L4 - nigdzie indziej. Skrypt nie porównuje pojedynczych krótkich słów (`'active'`), "
+    + "ścieżek i adresów (`'/api/…'`), kluczy z kropką, literałów z `${}` ani pól, wywołań i wyrażeń bez literału - te wyszukaj sam.");
+  assert.match(answer('src/app/a/none.ts'), /^w pliku nie ma literału, warunku z wartością ani mapy etykiet do porównania\./);
+  // The literal pass reads no spec: of one, the answer would claim a search that never ran.
+  assert.deepStrictEqual(Object.keys(result.answers.get('src/app/a/tests/one.spec.ts')), ['input-binding']);
+});
+
+test('the input-binding answer names where the binding is on and where parameters are read by hand', () => {
+  const none = collect({ 'src/app/app.config.ts': 'export const appConfig = { providers: [provideRouter(routes)] };\n' });
+  assert.strictEqual(none.answers.get('src/app/app.config.ts')['input-binding'],
+    'withComponentInputBinding(): nie ma go w żadnym pliku repozytorium; parametry trasy czytane ręcznie (`ActivatedRoute`, `location.search`, `URLSearchParams`): nigdzie.');
+  const both = collect({
+    'src/app/app.config.ts': 'export const appConfig = { providers: [provideRouter(routes, withComponentInputBinding())] };\n',
+    'src/app/a/a.component.ts': 'export class A {\n  private readonly route = inject(ActivatedRoute);\n}\n',
+  });
+  assert.strictEqual(both.answers.get('src/app/a/a.component.ts')['input-binding'],
+    'withComponentInputBinding(): src/app/app.config.ts:1; parametry trasy czytane ręcznie (`ActivatedRoute`, `location.search`, `URLSearchParams`): src/app/a/a.component.ts:2.');
+});
+
 // The environment the answer key describes: each target entry's fact, on the lines the key
 // places it on.
 test('collectFacts finds the answer-key targets of the test environment', () => {
@@ -133,6 +179,8 @@ test('collectFacts finds the answer-key targets of the test environment', () => 
     [card, 'spec-input-not-set', [47, 48], false],
     ['src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap', 'snapshot-outside-folder', [1], false],
     ['src/app/user-panel/models/consts/user-panel-initial-state.const.ts', 'export-unused', [3], false],
+    ['src/app/user-panel/shared/routes/user-panel.routes.ts', 'area-routes-twice', [1], false],
+    ['src/app/user-panel/shell/user-panel-shell.routes.ts', 'area-routes-twice', [1], false],
   ];
   for (const [p, kind, lines, hint] of expected) {
     const found = factsOf(result, p, kind).find((f) => JSON.stringify(f.lines) === JSON.stringify(lines));

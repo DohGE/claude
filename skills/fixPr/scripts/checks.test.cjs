@@ -718,3 +718,22 @@ test('a timed-out command does not leave its runner running', { skip: process.pl
   assert.notStrictEqual(alive, String(pid), 'the runner is gone, not merely reported as gone');
 });
 
+
+test('e2e runs only as a --command step: its own verdict and errors, never part of the gate', (t) => {
+  const root = makeProject(t, { lint: 'eslint .', test: 'jest' });
+  assert.throws(() => checks.parseArgs(['--root=r', '--out-dir=o', '--only=e2e']), /Unknown step in --only: e2e/, 'without a command line');
+  const args = checks.parseArgs(['--root=r', '--out-dir=o', '--only=e2e', '--command=node cli.js test', '--env=NODE_PATH=/x/node_modules', '--env=E2E_TEST_DIR=/s/e2e']);
+  assert.deepStrictEqual(args.env, { NODE_PATH: '/x/node_modules', E2E_TEST_DIR: '/s/e2e' });
+  const run = fakeRunner({ e2e: { exitCode: 1, output: '  ✓  1 ok\n  ✘  2 [chromium] › a.spec.ts:9:1 › adds item\n\n    Error: expected "x"\n' } });
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, only: ['e2e'], command: 'node cli.js test', env: args.env });
+  assert.deepStrictEqual(result.steps.map((s) => [s.step, s.label, s.status]), [['e2e', 'e2e', 'failed']]);
+  assert.strictEqual(result.gate, 'red');
+  assert.strictEqual(run.calls[0].options.env.NODE_PATH, '/x/node_modules');
+  const errors = fs.readFileSync(result.steps[0].errorsPath, 'utf8');
+  assert.match(errors, /adds item/);
+  assert.doesNotMatch(errors, /✓/, 'a passing test never reaches the agent');
+  const green = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), only: ['e2e'], command: 'node cli.js test' });
+  assert.strictEqual(green.gate, 'green');
+  const gate = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner() });
+  assert.ok(!gate.steps.some((s) => s.step === 'e2e'), 'a full gate pass never runs e2e');
+});

@@ -222,8 +222,10 @@ On `{"type":"result", …}`:
 1. **Resolve the threads**, but only when `fixedThreadIds` is non-empty AND `committed` is true AND
    `pushed` is true. Any of the three missing → skip this point entirely and say why in the summary.
 
-       node "<SKILL_DIR>/scripts/resolve-threads.cjs" --project="<PROJECT>" --threads="<id,id,…>"
+       node "<SKILL_DIR>/scripts/resolve-threads.cjs" --project="<PROJECT>" --threads="<id,id,…>" --comments="<commentsPath>" --root="<worktree>" --commit="<commit>"
 
+   It resolves only the threads whose file the commit changes. Report `unverified[]` in Polish: the
+   agent called those threads fixed, but its commit does not touch their files, so they stay open.
    Report `failed[]` entries in Polish — usually a token that may not resolve other people's threads.
    A failed resolve never fails the branch: the fix is pushed, and an open thread is a leftover the
    user can close by hand.

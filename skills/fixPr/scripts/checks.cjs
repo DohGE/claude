@@ -45,6 +45,14 @@ const gateSteps = [
 
 const stepNames = gateSteps.map((s) => s.step);
 
+// Steps outside the fixPr gate, run only as `--only=<step> --command=<line>`: implementNewFeature's
+// Playwright suite, whose verdict is the exit code and whose failures reach the agent as
+// `errorsPath` like any other step. A full gate pass never runs them.
+const commandSteps = [
+  { step: 'e2e', label: 'e2e', scripts: [], timeoutMs: 30 * minute },
+];
+const commandStepNames = commandSteps.map((s) => s.step);
+
 // A runner left watching is a hang, not a pass, and `CI=1` alone does not stop
 // all of them. Matched against the text of the project's own `test` script, so
 // the flag is the one THAT runner understands rather than a guess sprayed at
@@ -56,7 +64,7 @@ const watchFlags = [
 ];
 
 function parseArgs(argv) {
-  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0 };
+  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {} };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -65,11 +73,12 @@ function parseArgs(argv) {
     else if (m[1] === 'out-dir') args.outDir = m[2];
     else if (m[1] === 'only') args.only = m[2].split(',').map((s) => s.trim()).filter(Boolean);
     else if (m[1] === 'command') args.command = m[2].trim();
+    else if (m[1] === 'env' && /^[A-Za-z_]\w*=/.test(m[2])) args.env[m[2].split('=')[0]] = m[2].slice(m[2].indexOf('=') + 1);
     else if (m[1] === 'timeout-ms') args.timeoutMs = Number(m[2]) || 0;
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --timeout-ms).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --timeout-ms).`);
   }
   // One command line is one step's command. Without the step named, its log, its
   // label and its verdict would belong to no step at all.
@@ -84,6 +93,7 @@ function parseArgs(argv) {
   // A misspelled step would run nothing at all and report a green gate for it,
   // which is the one answer this script must never give by accident.
   for (const name of args.only) {
+    if (commandStepNames.includes(name) && args.command !== null) continue;
     if (!stepNames.includes(name)) {
       throw new Error(`Unknown step in --only: ${name} (expected ${stepNames.join(', ')}).`);
     }
@@ -515,8 +525,10 @@ function runChecks(options) {
   fs.mkdirSync(outDir, { recursive: true });
   if (only.length === 0) clearLogs(outDir);
 
-  const env = { ...process.env, CI: '1', FORCE_COLOR: '0' };
-  for (const spec of gateSteps) {
+  // --env sets a variable for the command without a shell of its own (cmd.exe knows no VAR=x cmd).
+  const env = { ...process.env, ...(options.env || {}), CI: '1', FORCE_COLOR: '0' };
+  const commandStep = commandSteps.find((spec) => only.includes(spec.step));
+  for (const spec of commandStep ? [commandStep] : gateSteps) {
     if (only.length > 0 && !only.includes(spec.step)) {
       result.steps.push(skippedStep(spec, `not selected by --only=${only.join(',')}`, outDir));
       continue;
@@ -598,7 +610,7 @@ function runChecks(options) {
   // this pass skipped can still be red: their logs from the previous pass are on disk right
   // next to this one, saying so. The brief asks for a full last pass; this is what makes
   // that ask checkable instead of a promise.
-  else if (only.length > 0 && gateSteps.some((spec) => !only.includes(spec.step))) result.gate = 'partial';
+  else if (!commandStep && only.length > 0 && gateSteps.some((spec) => !only.includes(spec.step))) result.gate = 'partial';
   else if (result.steps.some((s) => s.status === 'passed')) result.gate = 'green';
   else result.gate = 'skipped';
   return result;

@@ -16,9 +16,9 @@ const render = require('./render-report.cjs');
 // FIXED IDENTIFIERS. The line prefixes are what SKILL.md tells the reviewer to answer: a
 // translated `FAKT` or `SONDA` is a line the reviewer no longer reads as binding. The file
 // names and the facts.json fields (`files`, `items`, `strong`, `hints`, `probes`,
-// `secondQuestion`, `info`, `factRoot`, `partial`, `rules`) are what check-part.cjs reads:
+// `secondQuestion`, `answer`, `info`, `factRoot`, `partial`, `rules`) are what check-part.cjs reads:
 // renamed, a binding is silently not enforced.
-const linePrefix = { strong: 'FAKT', hint: 'WSKAZÓWKA', probe: 'SONDA', second: 'drugie pytanie:' };
+const linePrefix = { strong: 'FAKT', hint: 'WSKAZÓWKA', probe: 'SONDA', second: 'drugie pytanie:', answer: 'odpowiedź skryptu:' };
 // What the plan says of an item beyond its text: the severity its finding carries, the item of
 // another instruction that states the same requirement, the verdict no review can do better than.
 const itemPrefix = { severity: 'ważność stała:', sameAs: 'ta sama wada:', prepared: 'gotowy werdykt:' };
@@ -37,7 +37,9 @@ const crossInstructions = [['code-quality', null], ['architecture', null], ['gen
 // Consecutive light files are walked in one response (SKILL.md Step 3 point 4): a turn re-sends
 // the whole conversation, which for a ten-line barrel costs more than its walk. A file over
 // either `file*` limit keeps a response of its own, and a batch stops at any of the others.
-const batchLimits = { fileLines: 60, fileItems: 60, files: 3, lines: 150, items: 120 };
+// `chars` weighs what the batch's Reads bring - bundles, contents, diffs - since a small file's
+// bundle is most of it: 48k is the largest batch the measured 3-file runs walked at full recall.
+const batchLimits = { fileLines: 60, fileItems: 60, files: 6, lines: 150, items: 120, chars: 50000 };
 // The skill folder, named in the bundles' pointers to its reference files.
 const skillDir = path.resolve(__dirname, '..').replace(/\\/g, '/');
 
@@ -68,7 +70,8 @@ function lineCountOf(text) {
 // from part of the repository only - and a probe hit are lines the verdict must answer. A
 // fact no walked item names, and no `{ fact }` probe points at, is information only.
 // `text` is null for a file with no readable content (deleted, binary): no probe runs on it.
-function bindFile({ plan, instructions, filePath, text, facts = [], context = {}, partial = false }) {
+// `answers` are the file's repo-facts.cjs answers by name, one per item whose `answer` names it.
+function bindFile({ plan, instructions, filePath, text, facts = [], context = {}, partial = false, answers = {} }) {
   const entries = new Map();
   const entry = (address) => {
     if (!entries.has(address)) entries.set(address, { strong: [], hints: [], probes: new Map() });
@@ -96,6 +99,7 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
       if (!extra) continue;
       const address = `${step.id}#${n}`;
       if (extra.secondQuestion) entry(address).secondQuestion = extra.secondQuestion;
+      if (extra.answer && answers[extra.answer]) entry(address).answer = answers[extra.answer];
       if (typeof text !== 'string') continue;
       for (const spec of extra.probes || []) {
         const hits = repoFacts.runProbe(spec, filePath, text, facts, context);
@@ -117,6 +121,7 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
     if (e.hints.length > 0) out.hints = e.hints;
     if (e.probes.size > 0) out.probes = [...e.probes].sort((a, b) => a[0] - b[0]).map(([line, texts]) => ({ line, text: texts.join('; ') }));
     if (e.secondQuestion) out.secondQuestion = e.secondQuestion;
+    if (e.answer) out.answer = e.answer;
     if (Object.keys(out).length > 0) items[address] = out;
   }
   return { items, info: unbound };
@@ -130,6 +135,7 @@ function renderBinding(binding) {
   for (const fact of binding.hints || []) out.push(`  - ${linePrefix.hint} [${fact.kind}] ${lineList(fact.lines)}: ${fact.text}`);
   for (const hit of binding.probes || []) out.push(`  - ${linePrefix.probe} L${hit.line}: ${hit.text}`);
   if (binding.secondQuestion) out.push(`  - ${linePrefix.second} ${binding.secondQuestion}`);
+  if (binding.answer) out.push(`  - ${linePrefix.answer} ${binding.answer}`);
   return out;
 }
 
@@ -183,6 +189,31 @@ function renderWriteRules({ file, kind, instructions, bound, lineCount }) {
   return out;
 }
 
+// The items whose verdict owes an answer to a line of this bundle, in plan order - the list the
+// check enforces, gathered so the reviewer never searches the bundle for them. `## Do odpowiedzi`
+// is a FIXED IDENTIFIER: SKILL.md Step 3 point 2 names it.
+function renderDuties({ kind, instructions, bound }) {
+  const out = [];
+  for (const step of kind ? kind.plan : []) {
+    const instruction = instructions.get(step.id);
+    if (!instruction) continue;
+    for (const n of step.numbers) {
+      const address = `${step.id}#${n}`;
+      const b = bound.items[address] || {};
+      const extra = instruction.extras.get(n) || {};
+      const what = [];
+      if ((b.strong || []).length) what.push(`${linePrefix.strong} ${b.strong.map((f) => lineList(f.lines)).join(', ')}`);
+      if ((b.hints || []).length) what.push(`${linePrefix.hint} ${b.hints.map((f) => lineList(f.lines)).join(', ')}`);
+      if ((b.probes || []).length) what.push(`${linePrefix.probe} ${b.probes.map((h) => `L${h.line}`).join(', ')}`);
+      if (b.secondQuestion) what.push(linePrefix.second.replace(/:$/, ''));
+      if (extra.unverified) what.push(itemPrefix.prepared.replace(/:$/, ''));
+      if ((extra.sameAs || []).length) what.push(itemPrefix.sameAs.replace(/:$/, ''));
+      if (what.length) out.push(`- ${address}: ${what.join('; ')}`);
+    }
+  }
+  return out;
+}
+
 // One file's bundle. `kind` is the file's kind from the rulebook (null when none matches),
 // `bound` what bindFile returned for it, `exports` its rows of repo-facts' exportsByFile,
 // `lineCount` the lines of its content (null without one), `partPath` the part it is written
@@ -207,6 +238,10 @@ function renderBundle({
   if (kind && kind.notes.length > 0) {
     out.push('', 'Uwagi rodzaju:');
     for (const note of kind.notes) out.push(`- ${note}`);
+  }
+  if (kind && kind.plan.length > 0) {
+    const duties = renderDuties({ kind, instructions, bound });
+    out.push('', '## Do odpowiedzi', '', ...(duties.length ? duties : ['—']));
   }
   out.push('', '## Plan', '');
   if (!kind || kind.plan.length === 0) out.push('Brak pozycji do przejścia.', '');
@@ -238,8 +273,9 @@ function renderBundle({
 }
 
 // Which files share a response: consecutive light ones, up to the batch limits. `entries` are
-// `{ number, lines, items }` in walk order (`lines` null for a file without content, which keeps
-// a response of its own); the result lists the numbers of each batch. A batch never spans a gap
+// `{ number, lines, items, chars }` in walk order (`lines` null for a file without content, which
+// keeps a response of its own; `chars` the size of its Reads, 0 when unknown); the result lists
+// the numbers of each batch. A batch never spans a gap
 // in the numbers (a resumed run's finished file), so [first, last] names exactly its members.
 function planBatches(entries, limits = batchLimits) {
   const batches = [];
@@ -248,13 +284,15 @@ function planBatches(entries, limits = batchLimits) {
     const light = entry.lines !== null && entry.lines <= limits.fileLines && entry.items <= limits.fileItems;
     if (light && current && current.numbers.length < limits.files
       && current.numbers[current.numbers.length - 1] + 1 === entry.number
-      && current.lines + entry.lines <= limits.lines && current.items + entry.items <= limits.items) {
+      && current.lines + entry.lines <= limits.lines && current.items + entry.items <= limits.items
+      && current.chars + (entry.chars || 0) <= limits.chars) {
       current.numbers.push(entry.number);
       current.lines += entry.lines;
       current.items += entry.items;
+      current.chars += entry.chars || 0;
       continue;
     }
-    current = light ? { numbers: [entry.number], lines: entry.lines, items: entry.items } : null;
+    current = light ? { numbers: [entry.number], lines: entry.lines, items: entry.items, chars: entry.chars || 0 } : null;
     batches.push(current ? current.numbers : [entry.number]);
   }
   return batches;

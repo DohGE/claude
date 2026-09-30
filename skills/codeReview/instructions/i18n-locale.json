@@ -78,7 +78,12 @@
             }
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
-          "severity": "high"
+          "answer": "repo-search",
+          "severity": "high",
+          "sameAs": [
+            "http-service#9",
+            "pipes#7"
+          ]
         },
         {
           "id": "code-quality#3",

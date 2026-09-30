@@ -153,9 +153,7 @@ The following are not repairs, and none of them may appear in your commit:
 
 ## Step 4 — Report, commit, push
 
-1. Write `{{REPORT}}` (in {{LANGUAGE}}, UTF-8) in ONE go — the Write tool, or a single Bash heredoc
-   if your harness refuses a `.md` write from a sub-agent. One write either way: a report assembled
-   from several appends is a report that ends half-written when anything goes wrong.
+1. Prepare the report below (in {{LANGUAGE}}); you write it once, in point 5, after the push.
 
        # fixPr: {{BRANCH}} → PR #{{PR_NUMBER}}
 
@@ -216,7 +214,10 @@ The following are not repairs, and none of them may appear in your commit:
    so a rejected push means the branch moved on the remote WHILE you were working: do not fight it.
    Report `pushed: false` with the rejection text in `summary` and leave the commit sitting on the
    local branch for the user.
-5. Append the outcome to `{{REPORT}}`:
+5. Write `{{REPORT}}` (UTF-8) in ONE Bash heredoc — `cat > "{{REPORT}}" <<'EOF'` … `EOF` — never
+   the Write tool, which this harness refuses to a sub-agent for a `.md` file. One write: a report
+   assembled from several appends ends half-written when anything goes wrong. It holds the sections
+   of point 1 and, last, the outcome:
 
        ## Wynik
        - Commit: <sha + message | nie powstał: reason>

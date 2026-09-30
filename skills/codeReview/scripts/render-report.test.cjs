@@ -573,7 +573,8 @@ test('main writes the html next to the report and removes the source', (t) => {
   const result = runMain([`--report=${md}`, '--with-checklist']);
   assert.strictEqual(result.code, 0);
   assert.strictEqual(result.err, '', 'a clean parse with coverage proof is silent');
-  assert.strictEqual(result.out.trim(), html);
+  assert.deepStrictEqual(result.out.trim().split('\n'), [html, 'severity: critical=1 high=1 medium=1 low=1 missing-unit-test=1'],
+    'the counts Step 5 prints come from the parsed report');
   assert.ok(fs.existsSync(html));
   assert.ok(!fs.existsSync(md), 'the Markdown is only an intermediate in html mode');
   const page = fs.readFileSync(html, 'utf8');
@@ -620,13 +621,13 @@ test('main --only-md leaves the checklists out of the Markdown report and render
 
   const kept = runMain([`--report=${md}`, '--only-md', '--with-checklist']);
   assert.strictEqual(kept.code, 0);
-  assert.strictEqual(kept.out.trim(), md);
+  assert.deepStrictEqual(kept.out.trim().split('\n'), [md, 'severity: critical=1 high=1 medium=1 low=1 missing-unit-test=1']);
   assert.strictEqual(fs.readFileSync(md, 'utf8'), source, '--with-checklist leaves the report as it is');
 
   const result = runMain([`--report=${md}`, '--only-md']);
   assert.strictEqual(result.code, 0);
   assert.strictEqual(result.err, '');
-  assert.strictEqual(result.out.trim(), md);
+  assert.strictEqual(result.out.trim().split('\n')[0], md);
   assert.strictEqual(fs.readFileSync(md, 'utf8'), rr.stripChecklists(source));
   assert.ok(!fs.readFileSync(md, 'utf8').includes('<!--'), 'no checklist block, no coverage marker');
   assert.ok(!fs.existsSync(path.join(dir, 'raport.html')), 'the Markdown is the report');

@@ -59,7 +59,10 @@
         },
         {
           "id": "http-service#9",
-          "text": "One endpoint function may serve several HTTP verbs on the same URL — the `endpoints` entry is not duplicated."
+          "text": "One endpoint function may serve several HTTP verbs on the same URL — the `endpoints` entry is not duplicated.",
+          "sameAs": [
+            "code-quality#1"
+          ]
         },
         {
           "id": "http-service#10",
@@ -118,6 +121,9 @@
         {
           "id": "architecture#1",
           "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
+          "facts": [
+            "area-routes-twice"
+          ],
           "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
         },
         {
@@ -146,7 +152,7 @@
         },
         {
           "id": "architecture#11",
-          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit.",
+          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit. A legacy shape that another item names is reported under that item, with `architecture#11` at most as its second address; this item is a finding of its own only for a shape no other item covers.",
           "secondQuestion": "Czy plik albo jego fragment to nietknięty szkielet generatora (Angular CLI) lub kopia starszego sąsiedniego kodu - co z tego zostało niedostosowane?"
         },
         {
@@ -352,7 +358,12 @@
             }
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
-          "severity": "high"
+          "answer": "repo-search",
+          "severity": "high",
+          "sameAs": [
+            "http-service#9",
+            "pipes#7"
+          ]
         },
         {
           "id": "code-quality#2",
@@ -388,7 +399,7 @@
         },
         {
           "id": "code-quality#8",
-          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported."
         }
       ]
     },

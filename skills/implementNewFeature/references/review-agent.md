@@ -131,15 +131,17 @@ cycle 2 or 3, or a cycle-1 report that was clean only because a finding sat on y
      is nothing to read; `failed` → Read that step's `errorsPath`, the failing tests alone, and never
      `logPath` — Grep `logPath` for one test name only when the excerpt leaves its cause out. The
      unit tests you just added for 🔵 Missing Unit Test findings run here too.
-   - the step-5 Playwright suite, always the `doh` plugin's own runner pinned by path:
-     `NODE_PATH="{{SKILL_DIR}}/node_modules" E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"`
+   - the step-5 Playwright suite, always the `doh` plugin's own runner pinned by path, through
+     `checks.cjs` (E2E below stands for this whole command):
+     `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=e2e --env=NODE_PATH="{{SKILL_DIR}}/node_modules" --env=E2E_TEST_DIR="{{SESSION}}/e2e" --command="node \"{{SKILL_DIR}}/node_modules/@playwright/test/cli.js\" test --config \"{{SKILL_DIR}}/playwright.config.cjs\""`
      — never `npx playwright`, never the project's copy (toolchain in the skill folder, tests in
-     the session folder).
+     the session folder). The verdict is the `e2e` step's `status`: `failed` → Read its
+     `errorsPath` only, exactly like the unit suite.
      When `{{SESSION}}/mocks/mocks.patch` exists, step 5 faked endpoints the backend does not serve
      yet, so those tests need them back. Apply, run and revert as ONE Bash command from `{{ROOT}}`,
      separated by `;` and never by `&&`, so the revert runs whether the suite passed or failed:
 
-         git apply "{{SESSION}}/mocks/mocks.patch"; NODE_PATH="{{SKILL_DIR}}/node_modules" E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"; rc=$?; git apply -R "{{SESSION}}/mocks/mocks.patch"; exit $rc
+         git apply "{{SESSION}}/mocks/mocks.patch"; <E2E>; rc=$?; git apply -R "{{SESSION}}/mocks/mocks.patch"; exit $rc
 
      After the revert, judge the tree by CONTENT, not by `git status`: on Windows (`core.autocrlf=true`)
      the round-trip rewrites the wiring file with the other line endings, so `status --porcelain` keeps

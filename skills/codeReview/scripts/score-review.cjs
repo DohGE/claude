@@ -37,6 +37,7 @@
 //
 // Usage: node score-review.cjs --report <review.md|raport.html> [--key <answer-key.json>] [--limit N] [--json]
 //        node score-review.cjs --report <review.md|raport.html> --explain <entry id>   (every pair of one entry)
+//        node score-review.cjs --report <A> --compare <B> [--json]                   (entries B lost and gained)
 //        node score-review.cjs --lint-key [--key <answer-key.json>]                    (entries hard to match, item gaps)
 
 const fs = require('node:fs');
@@ -733,6 +734,77 @@ function formatScore(result, limit) {
   return out.join('\n');
 }
 
+// Two reviews of the same target, entry by entry: what B found that A did not and the other way
+// round. A recall difference under ~3 pp is the scorer's noise; a lost entry is what an A/B run has
+// to explain (--explain <id> on both reports).
+function compareScores(a, b) {
+  const outside = (result) => new Set(result.outOfScope);
+  const inBoth = (entry) => !outside(a).has(entry.id) && !outside(b).has(entry.id);
+  const missedIds = (result) => new Set(result.misses.map((entry) => entry.id));
+  const missedA = missedIds(a);
+  const missedB = missedIds(b);
+  const violations = a.detail.entries.filter(inBoth);
+  const crossFound = (result) => new Set(result.detail.crossFile.filter((entry) => entry.support.length).map((entry) => entry.id));
+  const crossA = crossFound(a);
+  const crossB = crossFound(b);
+  const mismatches = (result) => new Map(result.severityMismatches.map(({ finding, entry }) => [entry.id, `${entry.severity}->${finding.severity}`]));
+  const sevA = mismatches(a);
+  const sevB = mismatches(b);
+  const falseOks = (result) => new Map(result.itemVerdicts.map((row) => [row.item, new Set(row.falseOk.map((entry) => entry.id))]));
+  const withChecklists = a.checklists && b.checklists;
+  const falseOkA = falseOks(a);
+  const falseOkB = falseOks(b);
+  const falseOkDelta = (from, to) => {
+    const out = {};
+    for (const [item, ids] of to) {
+      const added = [...ids].filter((id) => !(from.get(item) || new Set()).has(id));
+      if (added.length) out[item] = added;
+    }
+    return out;
+  };
+  const headline = (result) => ({
+    recall: result.violations,
+    precision: { matched: result.matched, findings: result.findings },
+    crossFile: result.crossFile,
+    severityMismatches: result.severityMismatches.length,
+    baitHits: result.baitHits.length,
+  });
+  return {
+    a: headline(a),
+    b: headline(b),
+    lost: violations.filter((entry) => !missedA.has(entry.id) && missedB.has(entry.id)),
+    gained: violations.filter((entry) => missedA.has(entry.id) && !missedB.has(entry.id)),
+    bothMissed: violations.filter((entry) => missedA.has(entry.id) && missedB.has(entry.id)),
+    crossLost: [...crossA].filter((id) => !crossB.has(id)),
+    crossGained: [...crossB].filter((id) => !crossA.has(id)),
+    severityNew: [...sevB].filter(([id]) => !sevA.has(id) && !missedA.has(id)).map(([id, change]) => `${id} ${change}`),
+    severityFixed: [...sevA].filter(([id]) => !sevB.has(id) && !missedB.has(id)).map(([id, change]) => `${id} ${change}`),
+    falseOkNew: withChecklists ? falseOkDelta(falseOkA, falseOkB) : null,
+    falseOkGone: withChecklists ? falseOkDelta(falseOkB, falseOkA) : null,
+  };
+}
+
+function formatCompare(diff, labels, limit) {
+  const line = (name, h) => `${name}: recall ${h.recall.found}/${h.recall.total} (${percent(h.recall.found, h.recall.total)}), `
+    + `precision ${h.precision.matched}/${h.precision.findings} (${percent(h.precision.matched, h.precision.findings)}), `
+    + `cross-file ${h.crossFile.found}/${h.crossFile.total}, severity mismatches ${h.severityMismatches}, bait hits ${h.baitHits}`;
+  const entries = (list) => list.slice(0, limit).map((entry) => `  ${entry.id} ${entry.files[0]} [${entry.instructions.join('+')}] ${clip(entry.text, 90)}`);
+  const out = [line(`A ${labels[0]}`, diff.a), line(`B ${labels[1]}`, diff.b)];
+  out.push(`lost in B (found in A, missed in B): ${diff.lost.length}`, ...entries(diff.lost));
+  out.push(`gained in B (missed in A, found in B): ${diff.gained.length}`, ...entries(diff.gained));
+  out.push(`missed by both: ${diff.bothMissed.length}${diff.bothMissed.length ? ` (${diff.bothMissed.map((entry) => entry.id).join(', ')})` : ''}`);
+  out.push(`cross-file lost: ${diff.crossLost.join(', ') || '-'}; gained: ${diff.crossGained.join(', ') || '-'}`);
+  out.push(`severity newly wrong in B: ${diff.severityNew.join(', ') || '-'}; right again in B: ${diff.severityFixed.join(', ') || '-'}`);
+  if (!diff.falseOkNew) {
+    out.push('false OKs: not compared - a report has no checklist blocks (review with --with-checklist)');
+  } else {
+    const items = (map) => Object.entries(map).map(([item, ids]) => `${item} ${ids.join(' ')}`).join('; ') || '-';
+    out.push(`false OKs new in B: ${items(diff.falseOkNew)}`, `false OKs gone in B: ${items(diff.falseOkGone)}`);
+  }
+  if (diff.lost.length) out.push('explain every lost entry on both reports: --report <A|B> --explain <id>');
+  return out.join('\n');
+}
+
 // Every pair one entry has, with how it counted - the evidence behind a miss or a hit.
 function formatExplain(result, id) {
   const { entries, crossFile } = result.detail;
@@ -861,13 +933,15 @@ function readReport(file) {
 }
 
 const usage = 'usage: node score-review.cjs --report <review.md|raport.html> [--key <answer-key.json>] [--limit N] [--json] [--explain <entry id>]\n'
+  + '       node score-review.cjs --report <A> --compare <B> [--key <answer-key.json>] [--limit N] [--json]\n'
   + '       node score-review.cjs --lint-key [--key <answer-key.json>]\n';
 
 function main(argv) {
-  const args = { key: defaultKey, limit: 15, json: false, report: null, explain: null, lintKey: false };
+  const args = { key: defaultKey, limit: 15, json: false, report: null, explain: null, lintKey: false, compare: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--report') args.report = argv[++i];
+    else if (arg === '--compare') args.compare = argv[++i];
     else if (arg === '--key') args.key = argv[++i];
     else if (arg === '--limit') args.limit = Number(argv[++i]);
     else if (arg === '--json') args.json = true;
@@ -891,6 +965,23 @@ function main(argv) {
     return 1;
   }
   const result = score(report, key);
+  if (args.compare) {
+    let other;
+    try {
+      other = readReport(args.compare);
+    } catch (err) {
+      process.stderr.write(`${args.compare}: ${(err && err.message) || err}\n`);
+      return 1;
+    }
+    const diff = compareScores(result, score(other, key));
+    if (args.json) {
+      const ids = (list) => list.map((entry) => entry.id);
+      process.stdout.write(`${JSON.stringify({ ...diff, lost: ids(diff.lost), gained: ids(diff.gained), bothMissed: ids(diff.bothMissed) })}\n`);
+    } else {
+      process.stdout.write(`${formatCompare(diff, [args.report, args.compare], args.limit)}\n`);
+    }
+    return 0;
+  }
   if (args.explain) {
     process.stdout.write(`${formatExplain(result, args.explain)}\n`);
   } else if (args.json) {
@@ -918,4 +1009,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { score, formatScore, formatExplain, lintKey, keyIdentifiers, wordsOf, withoutMdOnlyWarnings, reportFromHtml, readReport };
+module.exports = { score, formatScore, formatExplain, compareScores, formatCompare, lintKey, keyIdentifiers, wordsOf, withoutMdOnlyWarnings, reportFromHtml, readReport };

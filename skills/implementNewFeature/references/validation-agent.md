@@ -55,9 +55,12 @@ that no cwd, `PATH` entry or project-local install can swap it:
 
 - install deps once: `npm --prefix "{{SKILL_DIR}}" install`
 - install the browser once: `node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" install chromium`
-- run the suite:
-  `NODE_PATH="{{SKILL_DIR}}/node_modules" E2E_TEST_DIR="{{SESSION}}/e2e" node "{{SKILL_DIR}}/node_modules/@playwright/test/cli.js" test --config "{{SKILL_DIR}}/playwright.config.cjs"`
-  (the config reads `E2E_TEST_DIR`; both paths are absolute, so the command works from any cwd)
+- run the suite through `checks.cjs`, whose exit code is the verdict:
+  `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=e2e --env=NODE_PATH="{{SKILL_DIR}}/node_modules" --env=E2E_TEST_DIR="{{SESSION}}/e2e" --command="node \"{{SKILL_DIR}}/node_modules/@playwright/test/cli.js\" test --config \"{{SKILL_DIR}}/playwright.config.cjs\""`
+  (add `--env=E2E_LOGIN=… --env=E2E_PASSWORD=…` when step 7 needs them; the config reads `E2E_TEST_DIR`; every path is absolute, so the command works from any cwd).
+  The `e2e` step's `status` is the verdict: `passed` → nothing to read; `failed` → Read its
+  `errorsPath` (the failing tests alone) and never `logPath` — Grep `logPath` for one test name only
+  when the excerpt leaves its cause out. Never judge the suite by reading the runner's output yourself.
   `NODE_PATH` is not optional: your spec files live under `{{SESSION}}`, which is inside `{{PROJECT}}`,
   so a bare `require("@playwright/test")` resolves against the PROJECT — failing outright on a project
   without Playwright, or silently loading its different copy on one that has it. NODE_PATH points that

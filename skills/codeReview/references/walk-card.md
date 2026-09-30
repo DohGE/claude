@@ -1,0 +1,9 @@
+codeReview walk card (SKILL.md Step 3, condensed; the full text wins on any doubt):
+1. Batch = the files of one `target.batches` range, or one file. Read each file's bundle, content and diff with the Read tool in ONE message — never cat/head/sed/grep -n '' them through Bash.
+2. Walk each file to its end before the next: take the bundle's `## Plan` top to bottom, check the code against ONE item at a time, give it an explicit verdict. Gates first: only lines the diff touched are reviewed; a mechanical (reformat/rename) line is not; a finding never asks for a functional or visual change; Prettier and endpoint names are out of scope; the project CLAUDE.md outranks an item.
+3. Every item in `## Do odpowiedzi` answers its bundle lines: an OK cites each pointed line, a `FAKT` is contradicted only by `fakt nie dotyczy: <why>`, a `gotowy werdykt` is copied unchanged.
+4. Verdicts: `— OK (L<n>, …)` citing the lines read (never half the file; ranges only with `OK (brak wystąpień)` or `BRAMKA`), `— NARUSZENIE (<lines of its finding>)` with a finding whose `**Reguła:**` names the address, `— BRAMKA: <what the file lacks>`, `[ ] … — NIEZWERYFIKOWANE: <narzędzie: | poza recenzją: <path> | działająca aplikacja:> <what was missing>`. Never tick an item you did not check.
+5. Record only real findings, then sweep once more for defects no item names (universal points). Severity from the item's `ważność stała` or the Step 4 criteria.
+6. Write the batch's parts in ONE message, one Write per file, file order: findings, `<!-- checklist: <path>` block, `<!-- coverage: … -->` marker; with them the next batch's Reads (the last bundle's `## Dalej`).
+7. A refused part waits as a draft; each problem quotes its draft lines — fix exactly those with Edit in the next batch's message. Never write a part from the shell.
+8. After the last file: the cross-file pass (references/cross-file.md), then `target.commands.assemble` verbatim (references/assembly.md).

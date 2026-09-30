@@ -51,3 +51,23 @@ test('resolveAll turns a missing error message into something reportable', () =>
   const result = rt.resolveAll({ project: '/p', threads: ['A'] }, api, () => {});
   assert.deepStrictEqual(result.failed, [{ id: 'A', error: 'unknown failure' }]);
 });
+
+test('with a commit, only threads whose file it changes are resolved; the rest come back unverified', (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const comments = path.join(dir, 'comments.json');
+  fs.writeFileSync(comments, JSON.stringify({ threads: [
+    { id: 'A', path: 'src/a.ts' }, { id: 'B', path: 'src/b.ts' }, { id: 'C', path: 'src/new.ts' },
+  ] }));
+  const called = [];
+  const api = { resolveThread: (project, id) => { called.push(id); return { resolved: true, error: null }; } };
+  const files = new Set(['src/a.ts', 'src/old.ts', 'src/new.ts']);
+  const result = rt.resolveAll({ project: '/p', threads: ['A', 'B', 'C', 'Z'], comments, root: dir, commit: 'abc' }, api, () => {}, files);
+  assert.deepStrictEqual(called, ['A', 'C'], 'a renamed file counts under its new name');
+  assert.deepStrictEqual(result.unverified.map((u) => u.id), ['B', 'Z']);
+  assert.match(result.unverified[0].reason, /does not change src\/b\.ts/);
+  assert.throws(() => rt.parseArgs(['--threads=A', '--commit=abc']), /go together/);
+});

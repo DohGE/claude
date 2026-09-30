@@ -87,7 +87,9 @@ test('every documented script call names a real script and real flags', () => {
         continue;
       }
       const flags = flagsOf(script);
-      for (const flag of call[2].matchAll(/--([a-z-]+)/g)) {
+      // A `--command="<line>"` value is another program's command line: its flags are not this script's.
+      const own = call[2].replace(/--command="(?:\\"|[^"])*"/g, '--command');
+      for (const flag of own.matchAll(/--([a-z-]+)/g)) {
         if (!flags.has(flag[1])) problems.push(`${rel}: ${base} does not take --${flag[1]}`);
       }
     }

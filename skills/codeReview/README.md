@@ -84,7 +84,8 @@ The third group is the one to know about: a documentation-only change is never r
 ## Token cost
 
 Small files are walked in batches.
-Consecutive files of at most 60 lines and 60 checklist items each form one, up to 3 files, 150 lines and 120 items in all; any other file is a batch of its own.
+Consecutive files of at most 60 lines and 60 checklist items each form one, up to 6 files, 150 lines, 120 items and 50,000 characters of Reads (bundles, contents and diffs) in all; any other file is a batch of its own.
+The size cap matters because a small file's bundle is most of what its batch reads: on the 61-file test target, a const file of 2 lines comes with a 15 KB bundle.
 One message reads a whole batch — every file's bundle, content and diff — and one message writes its parts, together with the Reads of the next batch, which the batch's last bundle names under `## Dalej`.
 Inside a batch every file is still walked on its own, one after another, against its own checklist, and every part is checked as before.
 The context lists the batches in `target.batches`, and a bundle's `partia:` line names the files of its batch.
@@ -140,7 +141,7 @@ A kind says where its files live and carries the whole checklist such a file is 
 - `instructions` is the plan, in the order it is walked: one entry per instruction, holding the items this kind walks, every item under its address `<id>#<n>` and with its text.
   `selectedItems` (those numbers), `checklistSize` (how many items the instruction has in all) and the kind's `itemCount` are checks: a count that disagrees with the items listed is reported as a warning.
 
-An item may carry six more keys, each checked when the rulebook loads, so a typo warns instead of silently binding nothing:
+An item may carry seven more keys, each checked when the rulebook loads, so a typo warns instead of silently binding nothing:
 
 - `facts` — the repository fact kinds (`scripts/repo-facts.cjs`) that contradict an OK on this item, e.g. `["export-unused", "barrel-unused"]`.
   A fact of such a kind found in a reviewed file is printed under the item in that file's bundle as a `FAKT` line, and the part check refuses a clean verdict that does not answer it.
@@ -148,6 +149,8 @@ An item may carry six more keys, each checked when the rulebook loads, so a typo
   A hit is a `SONDA` line of the bundle: it never makes a finding by itself, it names a line the item's verdict must answer.
 - `secondQuestion` — one question an OK on the item must also answer (`drugie pytanie: <answer>`).
   It is kept for the items the scorer's false-OK list (`scripts/score-review.cjs`, see `test-environment/README.md`) shows ticked OK where the answer key has them broken and the entry went unreported, and which no `facts` or `probe` of the item would have contradicted.
+- `answer` — the script's answer to that question, computed from the whole repository: `repo-search` (every literal, condition with a value and label mapping of the file, with how many other files hold it) or `input-binding` (where `withComponentInputBinding()` is on, and where route parameters are read by hand).
+  The bundle prints it under the question as `odpowiedź skryptu:`, so the review cites it instead of running that search again; a file the literal passes do not read (a spec, a stylesheet) gets no `repo-search` answer, and facts read from part of the repository give none at all.
 - `severity` — the severity every finding naming the item is reported with (`critical`, `high`, `medium`, `low` or `missing-unit-test`), in place of its instruction's (see below); the bundle prints it under the item as `ważność stała:`.
 - `sameAs` — the items one defect breaks together with this one, each naming this one back.
   A bundle whose plan holds both prints `ta sama wada:` under the item, and such a defect is ONE finding naming both addresses.
@@ -167,6 +170,8 @@ Gates reach the reviewer as the top-level `checklistGates` map.
 An instruction may also declare `findings: "per-file"` when its items are facets of one requirement rather than separate ones.
 `test-coverage` does: a file without a spec leaves its branches, failure paths and edge cases untested at once, and that is one defect to fix.
 A file's breaches of such an instruction are one finding naming every item broken, and the part check refuses a second one.
+A test-coverage finding asks only for the tests the fixed code still needs: never for logic another finding moves out of the file or deletes as a duplicate, never for a spec an item forbids (`http-service#14`).
+Code another finding calls consumer-less keeps every other finding, missing tests included.
 Without the key every item is its own requirement, so the part check refuses a finding naming two items of one instruction.
 The ids reach the reviewer as the top-level `checklistPerFile` list; any other value warns and is ignored.
 
@@ -178,6 +183,8 @@ The assembly sets that severity on every finding, whatever the part said, and pr
 Performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, every added comment, inconsistency — always 🟡 Medium) and test coverage have instructions of their own, walked by every kind they concern.
 The reviewed project's own `CLAUDE.md` (repo root, if present) is one more rulebook: its rules decide verdicts and override conflicting checklist items, but get no `<id>#<n>` of their own.
 Every file is also reviewed against the universal points (cross-file consistency incl. architecture and naming, regressions, readability), whatever its kind.
+A regression there is behavior the change breaks — a crash, a wrong result, a flow the user cannot finish.
+A performance, security, architecture or test-coverage concern counts only through its own checklist, never as a universal point, so what none of its items names is not reported.
 
 A reviewed project can also carry its own kinds in `<project>/.claude/doh/instructions/` (every `.json` under it), layered on top of the skill's:
 
@@ -356,6 +363,7 @@ A finding no checklist item covers (the cross-file pass, a `CLAUDE.md` rule) nam
 They are written for a reviewer who never opens the report: `PR Problem` gets two sentences (what is wrong + the consequence), `PR Expected` two to three (the target state + how to reach it), and `PR Locations` lists every file and symbol the fix touches — every concrete name the Polish fields propose has to appear in them.
 
 Severity: ⚪ Low · 🟡 Medium · 🔴 High · 🟤 Critical · 🔵 Missing Unit Test.
+A missing spec is 🔵 whichever item flags it.
 Every file's part also carries its ticked checklist and coverage marker as HTML comments, and the finished report keeps them only under `--with-checklist` — see [Checklist coverage](#checklist-coverage).
 Line numbers refer to the file's real content (as the Read of the file's `contentPath` numbers it), never to diff hunk numbering.
 The context script additionally precomputes each file's changed-line ranges (`changedLines`, from `git diff -U0`) as the authoritative list of lines the diff touched, and carries the source path of a renamed file (`oldPath`, from the rename pair `git diff --raw` reports) so the rename can be checked against the naming rules.
@@ -374,7 +382,7 @@ A folder review reads the working tree, so its `contentPath` is the file itself 
 `target.commands.grep` searches the reviewed revision into a file of that folder and prints only the match count and the file's path.
 A resumed run rewrites the work folder but keeps the drafts of parts the check refused and the run never wrote, listed in `target.resume.drafts`.
 Next to the context it writes `checklists/<kind>/<id>.md` (the catalog entry's `numberedPath`), a copy of every instruction the run walks with the items its plans walk, kept for a lookup of one item, and `rulebook-notes.md` (`rulebookNotesPath`), the preambles the reviewer reads before the first file.
-`scripts/rulebook.cjs` loads the kinds and their item keys, `scripts/repo-facts.cjs` computes the facts from the whole reviewed revision (export consumers, a barrel nobody imports through, a guard no route uses, a pipe used in one template or none, i18n keys missing, unused or duplicated, relative imports that leave their area, repeated literals and conditions, one label mapping implemented twice, NgRx action trios and loading flags, spec inputs and outputs, snapshot placement) and runs the probes, and `scripts/review-bundle.cjs` binds both to plan items and renders the bundles.
+`scripts/rulebook.cjs` loads the kinds and their item keys, `scripts/repo-facts.cjs` computes the facts from the whole reviewed revision (export consumers, a barrel nobody imports through, a guard no route uses, a pipe used in one template or none, i18n keys missing, unused or duplicated, relative imports that leave their area, repeated literals and conditions, one label mapping implemented twice, NgRx action trios and loading flags, spec inputs and outputs, snapshot placement, an area routed from both `shared/routes/` and `shell/`) and the answers to second questions (`answer`), and runs the probes, and `scripts/review-bundle.cjs` binds both to plan items and renders the bundles.
 A fact binds to the first item of the file's plan whose `facts` names its kind; one no item names is listed under `## Fakty spoza planu (bez wymogu)` and requires nothing.
 When the facts could be drawn from part of the repository only (a size limit, a git failure), every fact merely points, like a probe hit.
 A write failure there drops the targets it concerns, and a run with no target left exits 1.
@@ -382,7 +390,9 @@ It runs the [duplication scan](#duplication-scan) through `scripts/duplication-s
 Branch reviews never touch the working tree: the file list comes from `git diff --raw base...branch`, and every file's content from its blob in that list, read through one `git cat-file --batch`; staged reviews first run `git add .`, then read the index blobs of `git diff --cached --raw` the same way.
 
 `scripts/check-part.cjs` (Node, zero dependencies) checks the report's part files against the context, with the grammar `render-report.cjs` parses.
-As the skill's PreToolUse hook it runs on every Write or Edit of a `<report>.partNN.md` file: a failing part is not written (exit 2), and the reviewer gets the list of problems back.
+As a PreToolUse hook registered in the plugin's `hooks/hooks.json` it runs on every Write or Edit of a `<report>.partNN.md` file: a failing part is not written (exit 2), and the reviewer gets the list of problems back.
+The plugin registers it, not the skill's frontmatter, because frontmatter hooks stop after a compaction: the parts written after one used to pass unchecked until the assembly refused them.
+Outside a run it finds no context and returns at once.
 It also sees every Bash command of the review and refuses one that writes a part — a redirect or heredoc into it, `tee`, `cp` or `mv` onto it, `sed -i` on it, a `cd` into the report's folder followed by any of these — since the check would never see that part.
 It refuses, too, a command that prints a reviewed file, its diff or its bundle (`cat`, `head`, `sed`, `awk` and 23 more readers, over the files of every run whose work folder still exists, with braces, globs and `for` loops expanded): shell output may reach the reviewer compressed and without the line numbers a part cites.
 `grep` and `wc` pass, and so does `sed -n '<N>p' <file>` for a line longer than the 2,000 characters Read shows.
@@ -395,6 +405,7 @@ An OK's evidence answers one item: lines of the file (`OK (L12, L18)`), never a 
 Only `OK (brak wystąpień)` closes a range of items, since lines that answer one item say nothing about the next.
 From `facts.json` it holds each item to what its bundle showed: `NARUSZENIE`, or an OK with `fakt nie dotyczy:` against a `FAKT` (never `NIEZWERYFIKOWANE`), every line a fact or probe points at cited by a clean verdict, no `brak wystąpień` where lines are pointed at, `drugie pytanie:` where the item asks one, and a line of its own for such an item.
 A `NIEZWERYFIKOWANE` reason starts with `narzędzie:`, `poza recenzją:` or `działająca aplikacja:`, and a `poza recenzją:` path must exist and lie outside the review.
+An OK on the lines that a finding of its `sameAs` partner breaks is refused: one defect breaks both items, so the item joins that finding with a `NARUSZENIE`.
 An item with a prepared verdict (`gotowy werdykt:`) takes that line word for word or a `NARUSZENIE`, never an OK.
 The cross-file part's `<!-- unverified:` block holds exactly the items left `[ ]` in 3 or more file parts, prepared ones aside, each once, never with `BRAMKA`, and every `NARUSZENIE` there has a finding of that part.
 A finding of the cross-file part whose lines a file part's finding already covers, under the same address or its `sameAs` partner, is refused; a part whose two findings over the same lines name the two sides of a `sameAs` pair is written with a note asking to merge them.

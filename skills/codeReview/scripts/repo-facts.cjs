@@ -27,11 +27,15 @@ const factKinds = [
   'cross-area-import', 'repeated-literal', 'repeated-condition', 'mapping-duplicate', 'mapping-duplicate-caller',
   'initial-state-gap', 'reducer-empty-instead-of-null', 'reducer-flag-without-fail', 'action-trio-incomplete',
   'output-untested', 'spec-input-not-set', 'snapshot-outside-folder', 'snapshot-missing',
+  'area-routes-twice',
 ];
 // Kinds that only point at a line: another reading of the code is as likely as the defect.
 const hintKinds = new Set(['export-single-importer', 'pipe-single-template', 'snapshot-missing']);
 // FIXED IDENTIFIERS as well: a probe's `builtin` names one of these.
 const builtinProbes = ['for-without-empty', 'signal-reads-without-let', 'markup-repeat', 'area-root-file'];
+// And an item's `answer` names one of these: a second question the script answers from
+// the whole repository (collectFacts' `answers`), printed under the item in the bundle.
+const builtinAnswers = ['repo-search', 'input-binding'];
 
 const reScript = /\.(?:[cm]?[jt]sx?)$/;
 const reTemplate = /\.html?$/;
@@ -805,7 +809,7 @@ function distinctive(value) {
 
 const normLiteral = (v) => v.trim().toLowerCase().replace(/\s+/g, ' ');
 
-function literalFacts(index, add, cross, locales) {
+function literalFacts(index, add, cross, locales, record) {
   const occurrences = new Map();
   const note = (norm, occurrence) => {
     if (!occurrences.has(norm)) occurrences.set(norm, []);
@@ -852,6 +856,10 @@ function literalFacts(index, add, cross, locales) {
   const groups = [];
   for (const [, list_] of occurrences) {
     const files = new Set(list_.map((o) => o.path));
+    for (const p of files) {
+      const own = list_.filter((o) => o.path === p);
+      record(p, 'literał', own.map((o) => o.line), own[0].shown.startsWith('[') ? own[0].shown : `"${own[0].shown}"`, files.size - 1);
+    }
     if (files.size < 2) continue;
     // Translations alone repeating each other are the i18n-duplicate-value fact's business.
     if (list_.every((o) => o.key)) continue;
@@ -871,7 +879,7 @@ function literalFacts(index, add, cross, locales) {
   }
 }
 
-function conditionFacts(index, add, cross) {
+function conditionFacts(index, add, cross, record) {
   const re = /([A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+)\s*(===|!==|==|!=)\s*(-?\d+(?:\.\d+)?|'[^'\n]*'|"[^"\n]*")/g;
   const ignored = new Set(['length', 'size', 'key', 'code', 'keyCode', 'which', 'nodeType', 'readyState', 'type']);
   const found = new Map();
@@ -886,6 +894,11 @@ function conditionFacts(index, add, cross) {
     }
   }
   for (const [key, all] of found) {
+    const files = new Set(all.map((o) => o.path));
+    for (const p of files) {
+      const own = all.filter((o) => o.path === p);
+      record(p, 'warunek', own.map((o) => o.line), `\`${own[0].shown}\``, files.size - 1);
+    }
     if (all.length < 2) continue;
     const where = (o) => `${short(o.path, index.root)}:${o.line}`;
     for (const p of new Set(all.map((o) => o.path))) {
@@ -941,7 +954,7 @@ function functionUnits(scan) {
 
 // Label mappings: units handing out two or more word-like literals (returned, assigned,
 // picked by a ternary, concatenated). Two units sharing two labels implement one mapping.
-function mappingFacts(index, add, cross) {
+function mappingFacts(index, add, cross, record) {
   const isLabel = (v) => (v.match(/\p{L}/gu) || []).length >= 3 && !/[./_#@$<>{}[\]\\|]/.test(v)
     && !(/-/.test(v) && !/\s/.test(v)) && (/\s/.test(v) || /^\s*\p{Lu}/u.test(v));
   const sites = [];
@@ -973,6 +986,10 @@ function mappingFacts(index, add, cross) {
   sites.forEach((site, i) => clusters.set(find(i), [...(clusters.get(find(i)) || []), site]));
   const label = (site) => `${site.unit.name || 'funkcja anonimowa'} (${short(site.path, index.root)}:${site.unit.line})`;
   for (const cluster of clusters.values()) {
+    for (const site of cluster) {
+      const elsewhere = new Set(cluster.map((s) => s.path).filter((p) => p !== site.path));
+      record(site.path, 'mapa etykiet', [site.unit.line], site.unit.name || 'funkcja anonimowa', elsewhere.size);
+    }
     if (cluster.length < 2) continue;
     for (const site of cluster) {
       const others = cluster.filter((s) => s !== site).map(label);
@@ -1330,6 +1347,56 @@ function runProbe(spec, p, text, facts = [], context = {}) {
   return hits.filter((h) => !seen.has(h.line) && seen.add(h.line));
 }
 
+// The canonical layout keeps an area's routes in `shared/routes/` or, for a multi-step
+// wizard, in `shell/` - never both. Every routes file of both sides gets the fact, so the
+// defect is reported on each side instead of on whichever file the review saw last.
+function layoutFacts(index, add, cross) {
+  const areas = new Map();
+  for (const p of index.sourceScripts) {
+    const m = p.match(/(?:^|\/)src\/app\/([^/]+)\/(shared\/routes|shell)\/[^/]+\.routes\.[cm]?[jt]s$/);
+    if (!m) continue;
+    if (!areas.has(m[1])) areas.set(m[1], { 'shared/routes': [], shell: [] });
+    areas.get(m[1])[m[2]].push(p);
+  }
+  for (const [area, sides] of areas) {
+    if (sides['shared/routes'].length === 0 || sides.shell.length === 0) continue;
+    const named = (paths) => paths.map((p) => short(p, index.root)).join(', ');
+    const text = `obszar \`${area}\` ma trasy i w \`shared/routes/\` (${named(sides['shared/routes'])}), i w \`shell/\` (${named(sides.shell)}) - układ obszaru ma tylko jedno z nich.`;
+    for (const p of [...sides['shared/routes'], ...sides.shell]) add(p, 'area-routes-twice', [1], text);
+    cross(`Obszar ${area} ma trasy i w shared/routes/, i w shell/: ${named([...sides['shared/routes'], ...sides.shell])}`);
+  }
+}
+
+// `repo-search`: what the literal, condition and mapping passes compared of one file with
+// the others, repeated or not - `nigdzie indziej` is the search a review need not run again.
+function repoSearchAnswer(entries) {
+  // What `distinctive` and the passes leave out: an answer read as complete would hide them.
+  const limits = 'Skrypt nie porównuje pojedynczych krótkich słów (`\'active\'`), ścieżek i adresów (`\'/api/…\'`), kluczy z kropką, literałów z `${}` ani pól, wywołań i wyrażeń bez literału - te wyszukaj sam.';
+  if (entries.length === 0) return `w pliku nie ma literału, warunku z wartością ani mapy etykiet do porównania. ${limits}`;
+  const cut = (text) => (text.length > 60 ? `${text.slice(0, 57)}...` : text);
+  const elsewhere = (n) => (n === 0 ? 'nigdzie indziej' : n === 1 ? 'w 1 innym pliku' : `w ${n} innych plikach`);
+  // A label mapping is the same as another when the two share two labels (mappingFacts).
+  const same = (e) => (e.what !== 'mapa etykiet' ? elsewhere(e.elsewhere)
+    : e.elsewhere === 0 ? 'żadna funkcja innego pliku nie ma dwóch z jej etykiet' : `dwie z jej etykiet ma też funkcja ${elsewhere(e.elsewhere)}`);
+  const shown = [...entries].sort((a, b) => a.lines[0] - b.lines[0])
+    .map((e) => `${e.what} ${cut(e.shown)} L${e.lines.join(', L')} - ${e.count > 1 ? `${e.count}× w tym pliku, ` : ''}${same(e)}`);
+  const limit = 40;
+  const listed = shown.length > limit ? `${shown.slice(0, limit).join('; ')} (+${shown.length - limit} dalszych - te wyszukaj sam)` : shown.join('; ');
+  return `porównane ze skryptami (bez testów), szablonami i bazowym plikiem tłumaczeń repozytorium: ${listed}. ${limits}`;
+}
+
+// `input-binding`: where the routing setup turns on `withComponentInputBinding()`, and
+// where code reads route parameters by hand (`ActivatedRoute`, `location.search`).
+function inputBindingAnswer(index) {
+  const hits = (re) => [...new Set(index.sourceScripts.flatMap((p) => {
+    const scan = index.scans.get(p);
+    return [...(scan.bare || scan.code).matchAll(re)].map((m) => `${short(p, index.root)}:${lineAt(scan.starts, m.index)}`);
+  }))];
+  const on = hits(/\bwithComponentInputBinding\s*\(/g);
+  const manual = hits(/\binject\s*\(\s*ActivatedRoute\b|:\s*ActivatedRoute\b|\blocation\.search\b|\bnew\s+URLSearchParams\s*\(/g);
+  return `withComponentInputBinding(): ${on.length > 0 ? list(on) : 'nie ma go w żadnym pliku repozytorium'}; parametry trasy czytane ręcznie (\`ActivatedRoute\`, \`location.search\`, \`URLSearchParams\`): ${manual.length > 0 ? list(manual) : 'nigdzie'}.`;
+}
+
 // ---------------------------------------------------------------------------------------
 // Entry point
 
@@ -1350,22 +1417,39 @@ function collectFacts({ files, reviewed, root = '' }) {
     facts.get(p).push(fact);
   };
   const cross = (text) => crossLines.push(text);
+  // Everything the literal, condition and mapping passes compared, per reviewed file.
+  const searched = new Map();
+  const record = (p, what, lines, shown, elsewhere) => {
+    if (!reviewed.has(p)) return;
+    if (!searched.has(p)) searched.set(p, []);
+    searched.get(p).push({ what, lines: [...new Set(lines)].sort((a, b) => a - b), count: lines.length, shown, elsewhere });
+  };
   const list_ = localeFiles(index);
   const locales = { list: list_, base: localeBase(index, list_) };
   const exportsByFile = exportFacts(index, add, cross);
   i18nFacts(index, add, cross, locales);
   crossAreaFacts(index, add, cross);
-  literalFacts(index, add, cross, locales);
-  conditionFacts(index, add, cross);
-  mappingFacts(index, add, cross);
+  literalFacts(index, add, cross, locales, record);
+  conditionFacts(index, add, cross, record);
+  mappingFacts(index, add, cross, record);
+  layoutFacts(index, add, cross);
   stateFacts(index, add);
   actionFacts(index, add);
   specFacts(index, add);
   snapshotFacts(index, add);
-  return { facts, exportsByFile, cross: crossLines, tsconfig: index.tsconfig };
+  // Per reviewed file, the `builtinAnswers` texts: `repo-search` only for a file the literal
+  // passes read (a script, a template, the base locale) - of any other it would claim a
+  // search that never ran.
+  const read = new Set([...index.sourceScripts, ...index.templates, locales.base].filter(Boolean));
+  const binding = inputBindingAnswer(index);
+  const answers = new Map();
+  for (const p of reviewed) {
+    answers.set(p, read.has(p) ? { 'repo-search': repoSearchAnswer(searched.get(p) || []), 'input-binding': binding } : { 'input-binding': binding });
+  }
+  return { facts, exportsByFile, cross: crossLines, tsconfig: index.tsconfig, answers };
 }
 
 module.exports = {
-  factKinds, hintKinds, builtinProbes, isFactSource, scanScript, scanTemplate, parseJsonKeys, parseModule, loadTsconfig,
+  factKinds, hintKinds, builtinProbes, builtinAnswers, isFactSource, scanScript, scanTemplate, parseJsonKeys, parseModule, loadTsconfig,
   makeResolver, functionUnits, compileProbe, runProbe, collectFacts, lineStarts, lineAt, areaOf,
 };
