@@ -172,48 +172,6 @@ need it:
 The lock is held for the whole step, including any failure-protocol retry, and released when the task
 leaves step 5 — then start the queued task whose `Queued for the E2E slot` entry is the oldest.
 
-## Setup
-
-1. `SKILL_DIR` = this skill's base directory (given in the skill header). `PROJECT` = current working directory.
-2. Pick the session root by whether the project already has a `.claude/` folder:
-   - `PROJECT/.claude/` exists → `SESSION = <PROJECT>/.claude/doh/<yyyyMMdd-HHmmss>`, and ensure
-     `<PROJECT>/.claude/doh/.gitignore` exists holding `*`, `!.gitignore`, `!instructions/` and
-     `!instructions/**`, so the run's artifacts (reports, plan, screenshots, `auth.json`,
-     `pipeline-state.json`) stay out of git and the final `git add -A` never stages them, while the
-     project's own `doh/instructions/` rulebook stays committable.
-   - otherwise → `SESSION = <SKILL_DIR>/.implementNewFeature/<yyyyMMdd-HHmmss>` (the skill's own
-     `.gitignore` already covers it).
-   Create `SESSION`. Each task's artifacts live in `<SESSION>/tasks/<taskId>/` — the server creates
-   that directory on the task's first upload, you create it before writing `requirements.md`.
-   `SESSION` always stays under `PROJECT`, never inside a worktree, so one `.gitignore` covers every
-   task. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`: the `doh`
-   plugin's own Playwright is the only runner the pipeline ever uses — never the project's copy,
-   never a fresh install in the target project.
-3. Write `<SESSION>/models.json` with the Write tool, BEFORE the server starts (it reads the file
-   once, at startup). It lists the models step 1 offers:
-   `[{"value":"opus","label":"Opus 5.5"},{"value":"sonnet","label":"Sonnet 5"}, …]`
-   - `value`: every value the Agent tool's `model` parameter accepts, copied from the tool's own
-     schema exactly as it stands there: it goes to the spawn as is, so a value the schema does not
-     list would only fail at that step's spawn.
-   - `label`: the name and version this session's environment information gives for the model
-     that value selects (e.g. `Opus 5.5`); the bare value when it names none.
-   - `value` and `label` are FIXED IDENTIFIERS — the server reads them, whatever `{{LANGUAGE}}` is.
-   A missing or unreadable file does not stop the run: the form then offers `opus`, `sonnet`,
-   `haiku` and `fable` without versions.
-4. Start the server (pick the script for the OS):
-   - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
-   - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`
-   - `PORT` is **9999**, always. stdout is `{"port":9999}` — read it to confirm the server came
-     up, not to learn a number. Tell the user the stepper is open at `http://127.0.0.1:9999/`.
-     The port is fixed because the browser remembers things per origin: the stepper's tab, the
-     agent model and effort from the last run, and the E2E credentials all hang off that one URL.
-   - The launcher exits non-zero when something else holds 9999 — usually another run the user
-     never shut down. Do NOT look for a free port and do NOT start the pipeline anyway: show the
-     launcher's message, tell the user to close the other stepper with its "Shut down server"
-     button, and stop your turn there.
-5. A run starts with one task, `t1`. POST `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}`
-   and enter the event loop.
-
 ## Spawning a sub-agent
 
 Every spawn below is the same two moves: render the agent's brief to a file, then spawn an agent
@@ -682,3 +640,48 @@ It can run any number of times ("Regenerate" is the same step over the same file
    (git-ignored, but still on disk) until they delete them by hand. The browser keeps its own copy
    when "Remember on this browser" was left ticked on the step-1 form — that one is the user's to
    clear, by unticking it, and no shutdown touches it. Say so if they ask where their password lives.
+
+<!-- one-time:start -->
+<!-- What follows runs once per run (Setup): it sits last, outside the head a compaction re-attaches. -->
+
+## Setup
+
+1. `SKILL_DIR` = this skill's base directory (given in the skill header). `PROJECT` = current working directory.
+2. Pick the session root by whether the project already has a `.claude/` folder:
+   - `PROJECT/.claude/` exists → `SESSION = <PROJECT>/.claude/doh/<yyyyMMdd-HHmmss>`, and ensure
+     `<PROJECT>/.claude/doh/.gitignore` exists holding `*`, `!.gitignore`, `!instructions/` and
+     `!instructions/**`, so the run's artifacts (reports, plan, screenshots, `auth.json`,
+     `pipeline-state.json`) stay out of git and the final `git add -A` never stages them, while the
+     project's own `doh/instructions/` rulebook stays committable.
+   - otherwise → `SESSION = <SKILL_DIR>/.implementNewFeature/<yyyyMMdd-HHmmss>` (the skill's own
+     `.gitignore` already covers it).
+   Create `SESSION`. Each task's artifacts live in `<SESSION>/tasks/<taskId>/` — the server creates
+   that directory on the task's first upload, you create it before writing `requirements.md`.
+   `SESSION` always stays under `PROJECT`, never inside a worktree, so one `.gitignore` covers every
+   task. Either way `node_modules` and the Playwright config stay inside `SKILL_DIR`: the `doh`
+   plugin's own Playwright is the only runner the pipeline ever uses — never the project's copy,
+   never a fresh install in the target project.
+3. Write `<SESSION>/models.json` with the Write tool, BEFORE the server starts (it reads the file
+   once, at startup). It lists the models step 1 offers:
+   `[{"value":"opus","label":"Opus 5.5"},{"value":"sonnet","label":"Sonnet 5"}, …]`
+   - `value`: every value the Agent tool's `model` parameter accepts, copied from the tool's own
+     schema exactly as it stands there: it goes to the spawn as is, so a value the schema does not
+     list would only fail at that step's spawn.
+   - `label`: the name and version this session's environment information gives for the model
+     that value selects (e.g. `Opus 5.5`); the bare value when it names none.
+   - `value` and `label` are FIXED IDENTIFIERS — the server reads them, whatever `{{LANGUAGE}}` is.
+   A missing or unreadable file does not stop the run: the form then offers `opus`, `sonnet`,
+   `haiku` and `fable` without versions.
+4. Start the server (pick the script for the OS):
+   - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
+   - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`
+   - `PORT` is **9999**, always. stdout is `{"port":9999}` — read it to confirm the server came
+     up, not to learn a number. Tell the user the stepper is open at `http://127.0.0.1:9999/`.
+     The port is fixed because the browser remembers things per origin: the stepper's tab, the
+     agent model and effort from the last run, and the E2E credentials all hang off that one URL.
+   - The launcher exits non-zero when something else holds 9999 — usually another run the user
+     never shut down. Do NOT look for a free port and do NOT start the pipeline anyway: show the
+     launcher's message, tell the user to close the other stepper with its "Shut down server"
+     button, and stop your turn there.
+5. A run starts with one task, `t1`. POST `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}`
+   and enter the event loop.

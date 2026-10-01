@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseReport } = require('./render-report.cjs');
-const { score, formatScore, formatExplain, lintKey, withoutMdOnlyWarnings, reportFromHtml, readReport } = require('./score-review.cjs');
+const { score, formatScore, formatExplain, compareScores, formatCompare, lintKey, withoutMdOnlyWarnings, reportFromHtml, readReport } = require('./score-review.cjs');
 const { loadRulebook } = require('./rulebook.cjs');
 
 const key = {
@@ -49,6 +49,25 @@ test('score matches findings to the key by file, instruction and quoted identifi
   assert.match(text, /^recall: 2\/3 violations \(66\.7%\), cross-file 0\/1$/m);
   assert.match(text, /v003 src\/main\.ts \[general\]/);
   assert.match(text, /layout\.actions\.ts:5 \[ngrx-actions\]/, 'paths are shown relative to the environment');
+});
+
+test('--compare lists the entries B lost and gained against A, entry by entry', () => {
+  const same = compareScores(score(parseReport(markdown), key), score(parseReport(markdown), key));
+  assert.deepStrictEqual([same.lost, same.gained].map((list) => list.length), [0, 0], 'one report against itself loses nothing');
+  assert.deepStrictEqual(same.bothMissed.map((entry) => entry.id), ['v003']);
+  const withoutSecret = markdown.split('\n');
+  const at = withoutSecret.findIndex((line) => line.includes('APP_CLIENT_SECRET'));
+  withoutSecret.splice(at - 2, 6);
+  const diff = compareScores(score(parseReport(markdown), key), score(parseReport(withoutSecret.join('\n')), key));
+  assert.deepStrictEqual(diff.lost.map((entry) => entry.id), ['v002']);
+  assert.deepStrictEqual(diff.gained, []);
+  assert.deepStrictEqual(diff.severityFixed, [], 'a lost entry is not a severity fixed');
+  const reverse = compareScores(score(parseReport(withoutSecret.join('\n')), key), score(parseReport(markdown), key));
+  assert.deepStrictEqual(reverse.gained.map((entry) => entry.id), ['v002']);
+  const text = formatCompare(diff, ['a.md', 'b.md'], 5);
+  assert.match(text, /^lost in B \(found in A, missed in B\): 1$/m);
+  assert.match(text, /^ {2}v002 src\/app\/app\.config\.ts \[security\]/m);
+  assert.match(text, /--explain <id>/);
 });
 
 test('a prose rule names its instruction by id, with or without the old .md, never by a point name', () => {

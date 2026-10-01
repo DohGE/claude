@@ -72,7 +72,10 @@
         },
         {
           "id": "component-template#8",
-          "text": "No `async` pipe — observables are converted with `toSignal()` in the component and the template reads the signal."
+          "text": "No `async` pipe — observables are converted with `toSignal()` in the component and the template reads the signal.",
+          "sameAs": [
+            "best-practices#12"
+          ]
         },
         {
           "id": "component-template#9",
@@ -229,7 +232,10 @@
       "items": [
         {
           "id": "best-practices#12",
-          "text": "Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction)."
+          "text": "Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction).",
+          "sameAs": [
+            "component-template#8"
+          ]
         },
         {
           "id": "best-practices#18",
@@ -498,7 +504,12 @@
             }
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
-          "severity": "high"
+          "answer": "repo-search",
+          "severity": "high",
+          "sameAs": [
+            "http-service#9",
+            "pipes#7"
+          ]
         },
         {
           "id": "code-quality#2",
@@ -534,7 +545,7 @@
         },
         {
           "id": "code-quality#8",
-          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported."
         }
       ]
     }

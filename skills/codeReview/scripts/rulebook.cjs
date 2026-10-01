@@ -10,7 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { factKinds, compileProbe } = require('./repo-facts.cjs');
+const { factKinds, builtinAnswers, compileProbe } = require('./repo-facts.cjs');
 
 // The address grammar every consumer shares: check-part's `reAddress`, the report's
 // `reRuleAddress` and the checklist block all read an id as this.
@@ -157,7 +157,8 @@ function rulebookFilesUnder(dir) {
 // warns instead of silently binding nothing: `facts` - repository fact kinds
 // (repo-facts.cjs) that contradict an OK on the item; `probe` - one probe or a list,
 // lines the verdict must answer; `secondQuestion` - what an OK must also answer, for
-// items reviews mark OK wrongly; `severity` - the fixed severity of its findings;
+// items reviews mark OK wrongly; `answer` - the repo-facts.cjs answer to that question
+// (`builtinAnswers`), printed per file; `severity` - the fixed severity of its findings;
 // `sameAs` - items one defect breaks together, reported as ONE finding naming both;
 // `unverified` - the prepared NIEZWERYFIKOWANE reason of an item no review can check
 // from the files (the test order, a green spec run).
@@ -186,6 +187,10 @@ function readItemExtras(item, address, where, warnings) {
   if (item.secondQuestion !== undefined) {
     if (typeof item.secondQuestion === 'string' && item.secondQuestion.trim() !== '') extras.secondQuestion = item.secondQuestion.trim();
     else warnings.push(`${where}: ${address} "secondQuestion" is not a text - ignored.`);
+  }
+  if (item.answer !== undefined) {
+    if (builtinAnswers.includes(item.answer)) extras.answer = item.answer;
+    else warnings.push(`${where}: ${address} "answer" ${JSON.stringify(item.answer)} is not one of ${builtinAnswers.join(', ')} - ignored.`);
   }
   if (item.severity !== undefined) {
     if (severityLevels.includes(item.severity)) extras.severity = item.severity;
@@ -279,7 +284,7 @@ function absorbInstruction(defs, instruction, where, warnings) {
     } else if (def.items.get(n) !== text) {
       warnings.push(`${where}: ${instruction.id}#${n} differs from ${def.from} - the one in ${def.from} is kept.`);
     } else if (JSON.stringify(def.extras.get(n) || null) !== JSON.stringify(extra)) {
-      warnings.push(`${where}: ${instruction.id}#${n} extras (facts, probe, secondQuestion, severity, sameAs, unverified) differ from ${def.from} - the ones in ${def.from} are kept.`);
+      warnings.push(`${where}: ${instruction.id}#${n} extras (facts, probe, secondQuestion, answer, severity, sameAs, unverified) differ from ${def.from} - the ones in ${def.from} are kept.`);
     }
   }
 }

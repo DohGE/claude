@@ -954,6 +954,16 @@ function attachSnippets(report, projectRoot, source) {
   return report;
 }
 
+// The line Step 5 prints: the findings per severity, counted from the parsed report - the
+// reviewer never counts them from the page (FIXED IDENTIFIER: `severity:` and the keys).
+function severityLine(report) {
+  const counts = new Map(severities.map((s) => [s.key, 0]));
+  for (const finding of report.files.flatMap((file) => file.findings)) {
+    if (counts.has(finding.severity)) counts.set(finding.severity, counts.get(finding.severity) + 1);
+  }
+  return `severity: ${[...counts].map(([key, n]) => `${key}=${n}`).join(' ')}`;
+}
+
 function buildPayload(report, reportName) {
   const allFindings = report.files.flatMap((file) => file.findings);
   const groups = new Map();
@@ -2481,7 +2491,7 @@ function main(argv) {
         return 1;
       }
     }
-    process.stdout.write(`${args.report}\n`);
+    process.stdout.write(`${args.report}\n${severityLine(parseReport(text))}\n`);
     return 0;
   }
   const report = parseReport(text);
@@ -2534,11 +2544,12 @@ function main(argv) {
       process.stderr.write(`Nie udało się usunąć checklist ze źródłowego Markdownu: ${args.report} (${(err && err.message) || err})\n`);
     }
   }
-  process.stdout.write(`${args.out}\n`);
+  process.stdout.write(`${args.out}\n${severityLine(report)}\n`);
   return 0;
 }
 
 module.exports = {
+  severityLine,
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
   projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, buildPayload, renderHtml, reportNameOf, detectPullRequest,
   changedFiles, treeEntries, stripChecklists, main,

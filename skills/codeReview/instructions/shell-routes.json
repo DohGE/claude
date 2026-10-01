@@ -25,7 +25,10 @@
         },
         {
           "id": "routes#3",
-          "text": "Wizard variant (`shell/<area>-shell.routes.ts`): one entry per step with `path` taken from the step enum, `canActivate` guards declared in this file (initialization guard factory + previous-step guard), and `loadComponent` per step; state, effects and the facade are still provided by the parent at `loadChildren`."
+          "text": "Wizard variant (`shell/<area>-shell.routes.ts`): one entry per step with `path` taken from the step enum, `canActivate` guards declared in this file (initialization guard factory + previous-step guard), and `loadComponent` per step; state, effects and the facade are still provided by the parent at `loadChildren`.",
+          "sameAs": [
+            "security#11"
+          ]
         },
         {
           "id": "routes#4",
@@ -42,7 +45,8 @@
         {
           "id": "routes#7",
           "text": "Route parameters reach the component as signal `input()`s through `withComponentInputBinding()` (path params, query params, `data` and `resolve` keys all bind by name) — a route added in the diff never introduces a new `ActivatedRoute` read for a value the binding already delivers.",
-          "secondQuestion": "W którym pliku routingu jest `withComponentInputBinding()` i które parametry trasy komponent mimo to czyta przez `ActivatedRoute`?"
+          "secondQuestion": "W którym pliku routingu jest `withComponentInputBinding()` i które parametry trasy komponent mimo to czyta przez `ActivatedRoute`?",
+          "answer": "input-binding"
         },
         {
           "id": "routes#8",
@@ -124,6 +128,9 @@
         {
           "id": "architecture#1",
           "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
+          "facts": [
+            "area-routes-twice"
+          ],
           "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
         },
         {
@@ -149,7 +156,7 @@
         },
         {
           "id": "architecture#11",
-          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit.",
+          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit. A legacy shape that another item names is reported under that item, with `architecture#11` at most as its second address; this item is a finding of its own only for a shape no other item covers.",
           "secondQuestion": "Czy plik albo jego fragment to nietknięty szkielet generatora (Angular CLI) lub kopia starszego sąsiedniego kodu - co z tego zostało niedostosowane?"
         }
       ]
@@ -262,7 +269,10 @@
         {
           "id": "security#11",
           "text": "Access control is enforced by route guards (and the backend) — hiding a button or menu entry is presentation, not authorization; every security-relevant route added in the diff has its guard.",
-          "secondQuestion": "Skąd pochodzi każda decyzja o dostępie w pliku - z guarda trasy i serwera czy z wartości po stronie klienta (`localStorage`, cookie, ukryty przycisk)?"
+          "secondQuestion": "Skąd pochodzi każda decyzja o dostępie w pliku - z guarda trasy i serwera czy z wartości po stronie klienta (`localStorage`, cookie, ukryty przycisk)?",
+          "sameAs": [
+            "routes#3"
+          ]
         },
         {
           "id": "security#13",
@@ -297,7 +307,12 @@
             }
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
-          "severity": "high"
+          "answer": "repo-search",
+          "severity": "high",
+          "sameAs": [
+            "http-service#9",
+            "pipes#7"
+          ]
         },
         {
           "id": "code-quality#2",
@@ -333,7 +348,7 @@
         },
         {
           "id": "code-quality#8",
-          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction."
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported."
         }
       ]
     }

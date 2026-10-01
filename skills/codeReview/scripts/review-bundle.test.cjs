@@ -5,7 +5,7 @@ const assert = require('node:assert');
 
 const rb = require('./review-bundle.cjs');
 
-// An instruction as rulebook.cjs loads it: `items` n -> text, `extras` n -> { facts, probes, secondQuestion }.
+// An instruction as rulebook.cjs loads it: `items` n -> text, `extras` n -> { facts, probes, secondQuestion, answer }.
 function instruction(id, texts, extras = {}, props = {}) {
   return {
     id,
@@ -66,6 +66,16 @@ test('probe hits merge per line, a pointed-at fact leaves the information list, 
   assert.deepStrictEqual(deleted.items, { 'p#2': { secondQuestion: 'Czy import jest potrzebny?' } });
 });
 
+test('an item naming a script answer carries the file\'s answer, and none when the file has no such answer', () => {
+  const instructions = new Map([['q', instruction('q', ['no copies'], { 1: { secondQuestion: 'Co wyszukano?', answer: 'repo-search' } })]]);
+  const plan = [{ id: 'q', numbers: [1] }];
+  const answered = rb.bindFile({ plan, instructions, filePath: 'src/x.ts', text: '', answers: { 'repo-search': 'literał "A b" L1 - nigdzie indziej.' } });
+  assert.deepStrictEqual(answered.items, { 'q#1': { secondQuestion: 'Co wyszukano?', answer: 'literał "A b" L1 - nigdzie indziej.' } });
+  assert.deepStrictEqual(rb.renderBinding(answered.items['q#1']), ['  - drugie pytanie: Co wyszukano?', '  - odpowiedź skryptu: literał "A b" L1 - nigdzie indziej.']);
+  const unanswered = rb.bindFile({ plan, instructions, filePath: 'src/x.ts', text: '', answers: { 'input-binding': 'nigdzie' } });
+  assert.deepStrictEqual(unanswered.items, { 'q#1': { secondQuestion: 'Co wyszukano?' } });
+});
+
 test('the bundle lists the plan with every binding under its item, then exports, candidates and unbound facts', () => {
   const instructions = new Map([
     ['a', instruction('a', ['first rule', 'second rule'], {}, { gate: 'Only for classes.' })],
@@ -103,6 +113,10 @@ test('the bundle lists the plan with every binding under its item, then exports,
   at('- diff: w/01-x.ts.diff');
   at('- ścieżki w faktach: względem `app/`');
   at('- Widgets are special.');
+  const duties = at('## Do odpowiedzi');
+  assert.deepStrictEqual(lines.slice(duties + 2, duties + 4), ['- a#2: FAKT L3; WSKAZÓWKA L9, L5; SONDA L4; drugie pytanie', ''],
+    'only the items owing an answer, each with what it owes, before the plan');
+  assert.ok(duties < at('## Plan'));
   const heading = at('### a rules (`a:2`)');
   assert.strictEqual(lines[heading + 1], 'Bramka: Only for classes.');
   assert.deepStrictEqual(lines.slice(heading + 2, heading + 7), [
@@ -168,11 +182,12 @@ test('the bundle names its part and batch, the fixed severities and item rules, 
 });
 
 test('light consecutive files share a batch up to the limits; a heavy file, a file without content or a gap ends it', () => {
-  const e = (number, lines, items) => ({ number, lines, items });
+  const e = (number, lines, items, chars) => ({ number, lines, items, chars });
   assert.deepStrictEqual(
-    rb.planBatches([e(1, 10, 20), e(2, 60, 60), e(3, 61, 5), e(4, 5, 5), e(5, null, 1), e(6, 5, 5), e(7, 5, 5), e(8, 5, 5), e(9, 5, 5), e(11, 5, 5)]),
-    [[1, 2], [3], [4], [5], [6, 7, 8], [9], [11]],
+    rb.planBatches([e(1, 10, 20), e(2, 60, 60), e(3, 61, 5), e(4, 5, 5), e(5, null, 1), ...[6, 7, 8, 9, 10, 11, 12].map((n) => e(n, 5, 5)), e(14, 5, 5)]),
+    [[1, 2], [3], [4], [5], [6, 7, 8, 9, 10, 11], [12], [14]],
   );
+  assert.deepStrictEqual(rb.planBatches([e(1, 5, 5, 30000), e(2, 5, 5, 20000), e(3, 5, 5, 1)]), [[1, 2], [3]], 'the size cap');
   assert.deepStrictEqual(rb.planBatches([e(1, 10, 50), e(2, 10, 50), e(3, 10, 50)]), [[1, 2], [3]], 'the item cap');
   assert.deepStrictEqual(rb.planBatches([e(1, 60, 1), e(2, 60, 1), e(3, 60, 1)]), [[1, 2], [3]], 'the line cap');
   assert.deepStrictEqual(rb.planBatches([e(1, 5, 61)]), [[1]]);

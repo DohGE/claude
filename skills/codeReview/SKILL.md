@@ -9,25 +9,6 @@ hooks:
           args: ["${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs", "--event=activate"]
           timeout: 10
           once: true
-    - matcher: "Write|Edit|Bash"
-      hooks:
-        - type: command
-          command: node
-          args: ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/check-part.cjs"]
-          timeout: 30
-    - matcher: "Read"
-      hooks:
-        - type: command
-          command: node
-          args: ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs", "--event=read"]
-          timeout: 30
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: node
-          args: ["${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs", "--event=draft"]
-          timeout: 30
 ---
 
 # codeReview — deterministic instruction-driven review
@@ -275,6 +256,9 @@ For each file:
    its header line `pozycji planu:` is the file's `checklistTotal` — never expand, renumber or
    shorten it yourself: that list, and nothing shorter or wider, is what point 2 walks and what
    point 4 writes down.
+   `## Do odpowiedzi` (a FIXED IDENTIFIER), above the plan, lists every item whose verdict must
+   answer a line of the bundle (`FAKT`, `WSKAZÓWKA`, `SONDA`, `drugie pytanie`, `gotowy werdykt`,
+   `ta sama wada`) — the list the check enforces, so never search the bundle for those lines.
    `Uwagi rodzaju:` under the header are the kind's `notes`; the sections after the plan
    (`## Eksporty tego pliku i ich konsumenci`, `## Kandydaci duplikacji (jscpd)`, `## Fakty spoza
    planu (bez wymogu)`) are context for the walk, and require nothing by themselves.
@@ -300,11 +284,14 @@ For each file:
       names and literals the file introduces, and the imports of a `# not parsed` file); the one cross-file pass
       (`references/cross-file.md`) reaches the verdicts. Judging it per file as well would raise the same drift once per
       file involved, in several part files, under the same instruction.
-   4. Potential regressions.
+   4. Potential regressions: behavior the change breaks — a crash, a wrong result, a flow the user
+      cannot finish.
    5. Readability problems.
    Performance, security, architecture and test coverage are enforced through their instruction
    checklists in point 1, as far as the file's plan walks them — do not invent extra criteria beyond
    the instructions.
+   A concern of those four is never a point 4 or point 5 finding, not even one with a runtime
+   consequence: what none of their items names is not reported.
    An item counts as evaluated only after you checked the file's code against it and reached an
    explicit pass/violation verdict — "nothing jumped out at a glance" is not a verdict.
    **A tick is earned, never assumed.** `[x]` goes on an item ONLY when it was checked 100%: you
@@ -335,7 +322,9 @@ For each file:
    - `FAKT [<kind>] L…: <text>` — a repo fact that contradicts a clean verdict: an export nothing
      imports, a barrel no file imports through, a guard no route uses, a pipe no template uses,
      an i18n key the translation files lack, a relative import that leaves its area, a literal or
-     a label mapping repeated in other files, an action without its outcome pair.
+     a label mapping repeated in other files, an action without its outcome pair, an area whose
+     routes sit in both `shared/routes/` and `shell/` (printed on every routes file of both sides:
+     each is a finding of its own).
      The item is `NARUSZENIE`, or `OK` that cites each line the fact names and says, after
      `fakt nie dotyczy:`, why the fact does not break THIS item — never `NIEZWERYFIKOWANE`: the fact
      settled what a reason would name.
@@ -345,6 +334,11 @@ For each file:
      A probe never makes a finding by itself: it names a line the verdict must look at.
    - `drugie pytanie: <question>` — asked only of items whose `OK` measurably went wrong often:
      an `OK` on that item carries `drugie pytanie: <answer>` in its evidence.
+   - `odpowiedź skryptu: <text>` — under a second question the script answers from the whole
+     repository: what it compared of this file with the other files (`nigdzie indziej`: no other
+     file holds it), or where the repository turns a setting on.
+     The answer after `drugie pytanie:` cites it instead of running that search again, and adds
+     only what the reviewer searched beyond it — the script names what it does not compare.
    A `WSKAZÓWKA` or a `SONDA` leaves every verdict open: the item is `NARUSZENIE` when a pointed
    line breaks it, and otherwise `OK` or `NIEZWERYFIKOWANE` whose evidence cites each pointed line
    (as `L12`, or inside a span `L10-14`) and says why its code does not break the item.
@@ -410,6 +404,17 @@ For each file:
    (`2, 8, 10-12`) — never one block per occurrence.
    An occurrence whose consequence or severity differs (one crashes, another is cosmetic) gets its
    own finding, as does a different rule broken on the same line.
+   A defect of a declaration — its name, its place, its shape — is a finding only in the file that
+   declares the symbol.
+   Its uses in other files do not repeat it: renaming, moving or reshaping the declaration fixes
+   every use with it.
+   A use is a finding of its own only when it breaks another item — a concrete-path import of the
+   symbol, a second copy of the declaration.
+   A test-coverage finding asks only for the tests the fixed code still needs: never for tests of
+   logic another finding moves out of the file or deletes as a duplicate, and never for a spec an
+   item forbids (`http-service#14`).
+   A finding that code has no consumer is not such a fix: that code keeps every other finding,
+   missing tests included.
    The SAME violation is reported ONCE: when one requirement is written into several instructions
    (a rule about what the file is and the general one it refines), one finding's `**Reguła:**` names
    every copy it breaks, `; `-joined, the most specific first — the instruction of what the file is
@@ -495,7 +500,9 @@ For each file:
    exist in `contentPath`.
    A part that fails is NOT written: the call comes back with the list of problems, and the part's
    text waits in a draft, `<stem>.part<NN>.draft.md` in `target.workDir`.
-   Read the lines of the draft the problems name and fix exactly those with Edit.
+   Each problem quotes the draft lines it is about (`[szkic L<n>: "…"]`): fix exactly those with
+   Edit, without searching or re-reading the draft, in the message that carries the next batch's
+   Reads (after the last batch, before the cross-file pass).
    After every Edit of a draft the hook checks it again: when it passes, the hook writes the part, removes the draft and says so in its context (`check-part: <part> zapisana ze szkicu.`, with every later draft that can now follow), and otherwise it names what is still wrong, for the next Edit.
    Only when no such note came back, move the draft into place with the `--promote` command the refusal prints: it runs the same check.
    The draft saves re-sending every line the check already accepted; only when a refusal names no
@@ -551,7 +558,7 @@ For each file:
      every `NIEZWERYFIKOWANE` is refused as having no allowed reason) and the cross-file part's
      `<!-- unverified:` opener (translated, the block is a plain comment and the check reports it
      missing).
-     The bundle's labels `FAKT`, `WSKAZÓWKA`, `SONDA` and `drugie pytanie:` are printed in Polish by
+     The bundle's labels `FAKT`, `WSKAZÓWKA`, `SONDA`, `drugie pytanie:` and `odpowiedź skryptu:` are printed in Polish by
      the script: look for them as written — a translated label finds no line, and the item's
      verdict then misses what the check holds it to.
      So are the bundle's `Ważność stała:` and `ważność stała:` (a fixed severity, Step 4), `ta sama wada:` (point 3), `gotowy werdykt:` (point 2) and `partia:` (point 1) lines.
@@ -660,10 +667,12 @@ The last bundle's `## Dalej` names the first, and the first names the second.
 - Severity emoji, exactly: ⚪ **Low**, 🟡 **Medium**, 🔴 **High**, 🟤 **Critical**, 🔵 **Missing Unit Test**.
 - Assign severity by these criteria, picking the highest that applies:
   - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
-  - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification), and every duplication finding (code-quality's duplicated-logic and copy-paste-with-a-tweak items), whether jscpd listed it or the review found it.
+  - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification), a spec that throws or fails as written (it dereferences an input it never sets, compares against a stale snapshot) — a broken test, not a weak one — and every duplication finding (code-quality's duplicated-logic and copy-paste-with-a-tweak items), whether jscpd listed it or the review found it.
+    A duplication filed under another item is one finding naming both: the bundle marks such pairs `ta sama wada` (an `endpoints` entry written twice is `http-service#9; code-quality#1`), and the fixed severity of `code-quality#1` then applies to it.
   - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every other code-quality finding (unnecessary, unused or boilerplate code, an added comment, inconsistency) — those stay Medium however cosmetic they look.
   - ⚪ **Low** — readability, naming-convention or style drift with no behavioral impact and not covered by the code-quality instruction.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
+    A missing spec is 🔵 whichever item flags it — `test-coverage`, `util-guard-unit-test` or an item of what the file is — never 🟡 because the item that caught it is not a test instruction.
 - A fixed severity outranks these criteria: `Ważność stała: <severity>` under an instruction's heading in the bundle, or `ważność stała: <severity>` under one of its items, is the severity of every finding under it.
   A finding that names several addresses takes the highest fixed one, and the criteria compete with it only when one of its addresses has none.
   The assembly corrects a severity that misses it and says how many it set (`check-part: ważność stała z rulebooka ustawiona w …`).
@@ -799,12 +808,16 @@ After a compaction, the hook names what of them to read again.
 4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--no-batch] [--dedup-items]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
-5. Parse the JSON from stdout — a short summary, not the context:
+5. Parse the JSON from stdout — the part of the context the review uses:
    - Report every `errors[]` entry to the user immediately, in Polish.
    - No targets / exit code 1 → stop after reporting the errors.
    - Report every top-level `warnings[]` entry, in Polish.
-   - Read the file at `contextPath` with the Read tool — never `cat` it: that file IS the context
-     every later step calls "the context JSON" (`targets`, `instructionsCatalog`, `checklistPlans`, …).
+   - The file at `contextPath` IS the context every later step calls "the context JSON"; the scripts
+     and hooks read it. Its keys you use — `rulebookNotesPath`, `claudeMd`, and per target `start`,
+     `commands`, `reportPath`, `htmlReportPath`, `workDir`, `crossBundlePath`, `resume`, `skipped`,
+     `paths` (the reviewed files in order) — are in this summary: do not Read the file, whose
+     60–75 kB would stay in your context until the first compaction. Read it (Read tool, never
+     `cat`) only for a key the summary lacks (`instructionsCatalog`, `checklistPlans`).
      `targets[].resumed` true means the target continues an interrupted run (Step 3).
 
 ## Step 2 — Load the rulebook (once per run)

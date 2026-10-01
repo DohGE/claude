@@ -669,6 +669,24 @@ test('every file gets a bundle with its bound facts and probes, read from the wh
   assert.match(fs.readFileSync(ctx.rulebookNotesPath, 'utf8'), /## q \(`q`\)\n\nApplies to every TypeScript file\.\n/);
 });
 
+test('an item naming a script answer prints the file\'s answer under its second question', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'src/app/feature/a.ts', "export const title = 'Order history page';\n", 'a');
+  commitFile(dir, 'src/app/other/b.ts', "export const t = 'Order history page';\n", 'b');
+  const answered = kind('ts', '*.ts', [instruction('q', ['no copies'])]);
+  Object.assign(answered.instructions[0].items[0], { secondQuestion: 'Co wyszukano?', answer: 'repo-search' });
+  const ctx = rc.buildContext({ mode: 'folder', path: 'src/app/feature', project: dir, skillDir: makeSkillDir(t, [answered]), now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const t0 = ctx.targets[0];
+  const bundle = fs.readFileSync(t0.files[0].bundlePath, 'utf8').split('\n');
+  const item = bundle.indexOf('- q#1: no copies');
+  assert.ok(item > 0, bundle.join('\n'));
+  assert.strictEqual(bundle[item + 1], '  - drugie pytanie: Co wyszukano?');
+  assert.match(bundle[item + 2], /^ {2}- odpowiedź skryptu: porównane ze skryptami \(bez testów\), szablonami i bazowym plikiem tłumaczeń repozytorium: literał "Order history page" L1 - w 1 innym pliku\. /);
+  const facts = JSON.parse(fs.readFileSync(t0.factsPath, 'utf8'));
+  assert.match(facts.files['src/app/feature/a.ts'].items['q#1'].answer, /literał "Order history page" L1 - w 1 innym pliku/);
+});
+
 test('light files share a batch: their bundles name the batch and the part, the last one the next Reads', (t) => {
   const dir = makeRepo(t);
   commitFile(dir, 'src/a.ts', 'export const a = 1;\n', 'a');
@@ -1652,15 +1670,11 @@ test('each target carries a search over the revision it reviews', (t) => {
   const built = rc.buildContext({ mode: 'branches', branches: 'feature/grep', project: dir, skillDir, now });
   const branch = built.targets[0];
   run(dir, ['checkout', '-q', 'main']);
-  // The assembly too is one command with every path filled in (references/assembly.md).
+  // The assembly too is one short command with every path filled in (references/assembly.md):
+  // check-part.cjs --assemble does the check, the concatenation, the clean-up and the render.
   const slash = (p) => p.replace(/\\/g, '/');
-  const stem = slash(branch.reportPath).replace(/\.md$/, '');
-  assert.strictEqual(branch.commands.assemble, [
-    `node "${slash(skillDir)}/scripts/check-part.cjs" --context="${slash(built.contextPath)}" --report="${stem}.md"`,
-    ` && { cat "${stem}".part*.md >> "${stem}.md"; rm -f "${stem}".part*.md "${slash(branch.importLedger)}"; rm -rf "${branch.workDir}";`,
-    ` node "${slash(skillDir)}/scripts/render-report.cjs" --report="${stem}.md" --project="${slash(path.resolve(dir))}" --mode="branch"`,
-    ` --branch="feature/grep"${branch.baseBranch ? ` --base="${branch.baseBranch}"` : ''}; }`,
-  ].join(''));
+  assert.strictEqual(branch.commands.assemble,
+    `node "${slash(skillDir)}/scripts/check-part.cjs" --context="${slash(built.contextPath)}" --report="${slash(branch.reportPath)}" --assemble`);
   // The template is POSIX shell (the reviewer's Bash). `sh`, not `bash`: on Windows a
   // bare `bash` can be WSL's, which cannot see these paths.
   const found = spawnSync('sh', ['-c', branch.commands.grep.replace('<pattern>', 'answer = [0-9]+')], { encoding: 'utf8' });
@@ -1680,10 +1694,8 @@ test('each target carries a search over the revision it reviews', (t) => {
   assert.match(staged.commands.grep, /grep -n -I --cached -E "<pattern>" -- > "\$f";/);
   const folder = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now }).targets[0];
   assert.match(folder.commands.grep, /grep -n -I --untracked -E "<pattern>" -- > "\$f";/);
-  assert.match(staged.commands.assemble, / --mode="staged" --branch="[^"]*"; \}$/, 'no base, no --base');
-  assert.match(folder.commands.assemble, / --mode="folder" --branch="[^"]*"; \}$/);
-  const markdown = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now, output: 'md', withChecklist: true }).targets[0];
-  assert.match(markdown.commands.assemble, /render-report\.cjs" --report="[^"]+" --only-md --with-checklist; \}$/);
+  assert.match(staged.commands.assemble, / --assemble$/);
+  assert.match(folder.commands.assemble, / --assemble$/);
 });
 
 test('a duplicate has one severity - in the instruction and in the criteria alike', () => {
@@ -1805,11 +1817,14 @@ test('writeContext puts the context in a file and prints a summary', (t) => {
     targets: [{ kind: 'branch', branch: 'b', reportPath, files: [{ path: 'a.ts', plan: 0 }] }],
   };
   const summary = rc.writeContext(context);
-  assert.deepStrictEqual(summary, {
-    contextPath: path.join(dir, 'b', '.review-context-branch.json'),
-    errors: [], warnings: ['w'],
-    targets: [{ branch: 'b', files: 1, reportPath, resumed: false }],
-  });
+  assert.strictEqual(summary.contextPath, path.join(dir, 'b', '.review-context-branch.json'));
+  assert.deepStrictEqual([summary.errors, summary.warnings, summary.outputFormat], [[], ['w'], 'md']);
+  assert.deepStrictEqual(
+    (({ branch, files, paths, reportPath: report, resumed, resume }) => ({ branch, files, paths, report, resumed, resume }))(summary.targets[0]),
+    { branch: 'b', files: 1, paths: ['a.ts'], report: reportPath, resumed: false, resume: null },
+    'the summary carries what the review uses, so the context file is never read whole',
+  );
+  assert.ok(!('checklistPlans' in summary) && !('instructionsCatalog' in summary), 'the plans stay in the file');
   const written = fs.readFileSync(summary.contextPath, 'utf8');
   assert.deepStrictEqual(JSON.parse(written), { outputFormat: 'md', targets: context.targets });
   assert.ok(written.split('\n').length > 5, 'laid out one element per line');

@@ -249,18 +249,19 @@ function instructionWith(id, texts, extras) {
   return base;
 }
 
-test('item facts, probes and second questions are read, and a bad one warns instead of binding', (t) => {
+test('item facts, probes, second questions and answers are read, and a bad one warns instead of binding', (t) => {
   const rules = rulebookOf(t, [kind('util', '<name>.util.ts', [instructionWith('code-quality', ['No duplicates.', 'No dead code.', 'Small.'], {
-    1: { facts: ['repeated-literal', 'no-such-kind'], secondQuestion: 'Which other file holds this literal?' },
+    1: { facts: ['repeated-literal', 'no-such-kind'], secondQuestion: 'Which other file holds this literal?', answer: 'repo-search' },
     2: { probe: [{ pattern: '^export\s', flags: 'm', message: 'eksport' }, { builtin: 'nope' }] },
-    3: { secondQuestion: 7 },
+    3: { secondQuestion: 7, answer: 'nope' },
   })])]);
   const extras = rules.instructions.get('code-quality').extras;
-  assert.deepStrictEqual(extras.get(1), { facts: ['repeated-literal'], secondQuestion: 'Which other file holds this literal?' });
+  assert.deepStrictEqual(extras.get(1), { facts: ['repeated-literal'], secondQuestion: 'Which other file holds this literal?', answer: 'repo-search' });
   assert.deepStrictEqual(extras.get(2), { probes: [{ pattern: '^export\s', flags: 'm', message: 'eksport' }] });
   assert.strictEqual(extras.has(3), false);
-  assert.strictEqual(rules.warnings.length, 3, rules.warnings.join('\n'));
+  assert.strictEqual(rules.warnings.length, 4, rules.warnings.join('\n'));
   assert.match(rules.warnings.join('\n'), /no-such-kind/);
+  assert.match(rules.warnings.join('\n'), /code-quality#3 "answer" "nope" is not one of repo-search, input-binding - ignored/);
   assert.match(rules.warnings.join('\n'), /unknown builtin probe "nope"/);
   assert.match(rules.warnings.join('\n'), /secondQuestion/);
 });
@@ -270,7 +271,7 @@ test('two kinds disagreeing on an item\'s extras warn, and the first copy is kep
   const two = instructionWith('code-quality', ['No dead code.'], { 1: { facts: ['barrel-unused'] } });
   const rules = rulebookOf(t, [kind('a', '<name>.a.ts', [one]), kind('b', '<name>.b.ts', [two])]);
   assert.deepStrictEqual(rules.instructions.get('code-quality').extras.get(1), { facts: ['export-unused'] });
-  assert.match(rules.warnings.join('\n'), /code-quality#1 extras \(facts, probe, secondQuestion, severity, sameAs, unverified\) differ/);
+  assert.match(rules.warnings.join('\n'), /code-quality#1 extras \(facts, probe, secondQuestion, answer, severity, sameAs, unverified\) differ/);
 });
 
 test('a project item restating a skill item replaces its extras too', (t) => {

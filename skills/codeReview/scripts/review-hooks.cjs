@@ -3,7 +3,7 @@
 
 // codeReview's hooks around reading and resuming a run, one `--event` per caller:
 //
-//   --event=read     PreToolUse on Read (SKILL.md frontmatter). Reading a run's context JSON or
+//   --event=read     PreToolUse on Read (hooks/hooks.json). Reading a run's context JSON or
 //                    one of its bundles ties this session to the run - what --event=compact
 //                    reads. Before the cross-file bundle is read, its live section is rewritten
 //                    from the parts on disk: every finding the file parts report and the items
@@ -11,7 +11,7 @@
 //                    --dedup-items (`target.dedupItems`) a file bundle is read from a copy in
 //                    which an item another bundle showed since the last compaction is a
 //                    reference to that bundle, line for line.
-//   --event=draft    PostToolUse on Write|Edit (SKILL.md frontmatter). A refused part's draft,
+//   --event=draft    PostToolUse on Write|Edit (hooks/hooks.json). A refused part's draft,
 //                    once an Edit fixed it, is checked again and moved into place
 //                    (check-part.cjs promoteDraft), and the drafts waiting behind it follow.
 //   --event=compact  SessionStart with the matcher "compact" (hooks/hooks.json: a skill's
@@ -34,10 +34,10 @@ const reDraftName = /^(.+\.part\d+)\.draft\.md$/i;
 const reSessionId = /^[0-9A-Za-z_-]{1,128}$/;
 // An item of a bundle's plan: `- general#3: <text>`.
 const reItemLine = /^- ([a-z0-9][a-z0-9-]*#\d+): /;
-// A compacted session gets SKILL.md back cut at its first 5,000 tokens - about 20,700 characters
-// of the old body (measured). The lines to read again start where the lean-mode test puts the
-// safe end of that head, since a head denser in tokens is cut sooner.
-const reattachedChars = 16000;
+// A compacted session gets exactly the first 20,000 characters of SKILL.md back (measured on
+// 10 of 10 compactions, 2026-09-28/29) - and none at all once the session was resumed in a new
+// process. The lines to read again start a little before that cut.
+const reattachedChars = 19000;
 // SKILL.md: what follows this line is read once per run, never again after a compaction.
 const oneTimeMarker = '<!-- one-time:start -->';
 const stateMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
@@ -255,9 +255,13 @@ function onDraft(input) {
   const options = { timing: false, root: input.cwd };
   const result = cp.promoteDraft(found, draft, options);
   if (result.state === 'refused') {
+    let text = '';
+    try {
+      text = fs.readFileSync(draft, 'utf8');
+    } catch {}
     return note('PostToolUse', cp.formatProblems(
       `Szkic ${path.basename(draft)} nadal nie przechodzi kontroli formatu (codeReview SKILL.md, Step 3 point 4) - popraw kolejnym Edit tylko wskazane miejsca, hook sprawdzi go znowu:`,
-      result.problems,
+      cp.withDraftLines(result.problems, text),
     ));
   }
   const lines = [result.state === 'stale'
@@ -284,6 +288,16 @@ function skillLines(file = `${skillDir}/SKILL.md`) {
   const lineAt = (offset) => text.slice(0, offset).split('\n').length;
   const from = lineAt(cut);
   return { path: file, from, limit: lineAt(end) - from };
+}
+
+// references/walk-card.md next to SKILL.md: the per-file procedure in a few lines.
+function walkCard(skillFile = `${skillDir}/SKILL.md`) {
+  try {
+    const text = fs.readFileSync(path.join(path.dirname(skillFile), 'references', 'walk-card.md'), 'utf8').trim();
+    return text ? text.split(/\r?\n/) : null;
+  } catch {
+    return null;
+  }
 }
 
 function listDrafts(workDir) {
@@ -338,8 +352,11 @@ function position(context, contextPath, skillFile) {
   if (open.length > 1) out.push(`- potem cele: ${open.slice(1).map(labelOf).join(', ')}`);
   const skill = skillLines(skillFile);
   if (skill) {
-    out.push(`- SKILL.md wrócił po kompaktowaniu tylko do około linii ${skill.from}: przeczytaj (Read) ${skill.path} z offset ${skill.from} i limit ${skill.limit} - reszta kroku 3 i format raportu.`);
+    out.push(`- SKILL.md wrócił po kompaktowaniu tylko do około linii ${skill.from} (po wznowieniu sesji - wcale): przeczytaj (Read) ${skill.path} z offset ${skill.from} i limit ${skill.limit} - reszta kroku 3 i format raportu.`);
   }
+  // The walk itself, whatever the harness re-attached: after a resumed session it re-attaches nothing.
+  const card = walkCard(skillFile);
+  if (card) out.push('', ...card);
   return out;
 }
 
@@ -390,7 +407,7 @@ async function main() {
 }
 
 module.exports = {
-  parseArgs, stateDir, statePath, readState, dedupItems, skillLines, position, onRead, onDraft, onCompact,
+  parseArgs, stateDir, statePath, readState, dedupItems, skillLines, walkCard, position, onRead, onDraft, onCompact,
   reattachedChars, oneTimeMarker,
 };
 

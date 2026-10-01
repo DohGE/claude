@@ -29,6 +29,9 @@
           "facts": [
             "snapshot-outside-folder",
             "snapshot-missing"
+          ],
+          "sameAs": [
+            "i18n#12"
           ]
         },
         {
