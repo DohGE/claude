@@ -149,6 +149,27 @@ function renderExports(rows, root) {
   });
 }
 
+// repo-facts' membersByFile rows: where each public member's name falls.
+function renderMembers(rows, root) {
+  return rows.map((row) => {
+    const where = [];
+    if (row.inFile) where.push('w tym pliku');
+    if (row.template) where.push('szablon');
+    if (row.files.length > 0) where.push(`pliki: ${capped(row.files.map((q) => short(q, root)))}`);
+    if (row.tests.length > 0) where.push(`testy: ${capped(row.tests.map((q) => short(q, root)))}`);
+    const none = row.framework ? 'nigdzie - wywołuje ją framework' : 'nigdzie poza deklaracją';
+    return `- L${row.line} \`${row.cls}.${row.name}\`: ${where.length > 0 ? where.join('; ') : none}`;
+  });
+}
+
+// repo-facts' specsByFile rows: the specs importing the file and their cases.
+function renderSpecs(specs, root) {
+  if (specs.length === 0) return ['- żaden spec nie importuje tego pliku'];
+  return specs.map((s) => `- ${short(s.path, root)}: ${s.cases.length > 0
+    ? capped(s.cases.map((c) => `${c.kind} L${c.line} "${c.title}"`), 25)
+    : 'bez przypadków describe/it'}`);
+}
+
 function renderCandidates(candidates, withPath) {
   return candidates.map((c) => `- ${withPath ? `${c.path}:` : 'L'}${c.lines} powtarza ${c.sources.join('; ')} (${c.kinds.join(', ')})`);
 }
@@ -215,13 +236,14 @@ function renderDuties({ kind, instructions, bound }) {
 }
 
 // One file's bundle. `kind` is the file's kind from the rulebook (null when none matches),
-// `bound` what bindFile returned for it, `exports` its rows of repo-facts' exportsByFile,
-// `lineCount` the lines of its content (null without one), `partPath` the part it is written
-// to, `batch` the paths walked in the same response (null for a file walked alone) and `next`
-// the `## Dalej` lines of the batch's last bundle (renderNext).
+// `bound` what bindFile returned for it, `exports`, `members` and `specs` its rows of repo-facts'
+// exportsByFile, membersByFile and specsByFile (`specs` null for a file that is no source
+// script), `lineCount` the lines of its content (null without one), `partPath` the part it is
+// written to, `batch` the paths walked in the same response (null for a file walked alone) and
+// `next` the `## Dalej` lines of the batch's last bundle (renderNext).
 function renderBundle({
-  file, kind, instructions, bound = { items: {}, info: [] }, exports = [], candidates = [], factRoot = '', partial = false,
-  lineCount = null, partPath = null, batch = null, next = null,
+  file, kind, instructions, bound = { items: {}, info: [] }, exports = [], members = [], specs = null, candidates = [], factRoot = '',
+  partial = false, lineCount = null, partPath = null, batch = null, next = null,
 }) {
   const out = [`# ${file.path}`, ''];
   out.push(kind
@@ -261,6 +283,10 @@ function renderBundle({
     out.push('');
   }
   if (exports.length > 0) out.push('## Eksporty tego pliku i ich konsumenci', '', ...renderExports(exports, factRoot), '');
+  if (members.length > 0) {
+    out.push('## Użycia składowych', '', 'Gdzie pada nazwa (całe słowo): ten plik, jego szablon, pliki importujące klasę i ich szablony.', ...renderMembers(members, factRoot), '');
+  }
+  if (specs) out.push('## Spec', '', ...renderSpecs(specs, factRoot), '');
   if (candidates.length > 0) out.push('## Kandydaci duplikacji (jscpd)', '', ...renderCandidates(candidates, false), '');
   if (bound.info.length > 0) {
     out.push('## Fakty spoza planu (bez wymogu)', '');

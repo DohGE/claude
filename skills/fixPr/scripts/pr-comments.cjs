@@ -24,7 +24,7 @@ const defaultSkillDir = path.resolve(__dirname, '..');
 const artifactsRetain = 30;
 
 function parseArgs(argv) {
-  const args = { branches: '', project: process.cwd(), skillDir: '' };
+  const args = { branches: '', project: process.cwd(), skillDir: '', replay: '' };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -32,12 +32,31 @@ function parseArgs(argv) {
     if (m[1] === 'branches') args.branches = m[2];
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'skill-dir') args.skillDir = m[2];
+    else if (m[1] === 'replay') args.replay = m[2];
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir, --replay).`);
   }
   return args;
+}
+
+// A recorded review in place of the GitHub API - the fixPr meter (test-key/README.md) runs the
+// skill on a fixture with no pull request behind it. The file holds what the API would answer
+// for one branch: `{ branch, pr, threads, conversation, reviews }`, threads in the shape
+// `reviewThreads` returns. Fields beyond that shape never reach the brief: briefThread and
+// briefNote copy only the ones the agent's contract names.
+function replaySource(file) {
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const threads = (data.threads || []).map((thread) => ({ isResolved: false, viewerCanResolve: true, ...thread, comments: thread.comments || [] }));
+  return {
+    findOpenPr: (project, branch) => ({ slug: 'replay', tokenSource: 'replay', pr: !data.branch || data.branch === branch ? data.pr : null }),
+    api: {
+      reviewThreads: () => ({ threads }),
+      issueComments: () => ({ comments: data.conversation || [] }),
+      reviewBodies: () => ({ reviews: data.reviews || [] }),
+    },
+  };
 }
 
 // `feat(TASK-1): New Feature` -> `feat(TASK-1): CR`. The rule is the pull
@@ -278,11 +297,13 @@ function collect(options) {
   const project = path.resolve(options.project || process.cwd());
   const skillDir = options.skillDir || defaultSkillDir;
   const now = options.now || new Date();
-  const api = options.api || prApi;
-  const findPr = options.findOpenPr || github.findOpenPr;
+  const replay = options.replay ? replaySource(options.replay) : null;
+  const api = options.api || (replay && replay.api) || prApi;
+  const findPr = options.findOpenPr || (replay && replay.findOpenPr) || github.findOpenPr;
   const result = {
     project, tokenSource: null, targets: [], errors: [], warnings: [],
   };
+  if (replay) result.warnings.push(`Review replayed from ${options.replay}: nothing is read from GitHub, and resolve-threads.cjs only rehearses.`);
 
   if (tryGit(project, ['rev-parse', '--git-dir']) === null) {
     result.errors.push(`Not a git repository: ${project}`);
@@ -332,7 +353,11 @@ function collect(options) {
 function main() {
   let result;
   try {
-    result = collect(parseArgs(process.argv.slice(2)));
+    const args = parseArgs(process.argv.slice(2));
+    // The meter starts the whole skill with the variable set; the orchestrator's command
+    // stays the one SKILL.md prints.
+    if (!args.replay && process.env.DOH_FIXPR_REPLAY) args.replay = process.env.DOH_FIXPR_REPLAY;
+    result = collect(args);
   } catch (err) {
     result = { targets: [], errors: [String((err && err.message) || err)], warnings: [] };
   }
@@ -340,6 +365,6 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote };
+module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource };
 
 if (require.main === module) main();

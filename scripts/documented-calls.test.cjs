@@ -64,6 +64,9 @@ test('both plugin manifests name every shipped skill', () => {
 test('every documented script call names a real script and real flags', () => {
   const scripts = new Map();
   for (const file of walk(ROOT, (n) => n.endsWith('.cjs') && !n.endsWith('.test.cjs'))) {
+    // A meter's fixture project and its reference fix hold that project's sources, not the
+    // plugin's scripts, and the same file sits in each version of it.
+    if (/[\\/]test-key[\\/](fixture|solution)[\\/]/.test(file)) continue;
     // Basenames are unique across the plugin; a duplicate would make the lookup
     // below ambiguous, which is itself worth failing on.
     assert.ok(!scripts.has(path.basename(file)),

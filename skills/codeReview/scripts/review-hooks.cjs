@@ -14,8 +14,9 @@
 //   --event=draft    PostToolUse on Write|Edit (hooks/hooks.json). A refused part's draft,
 //                    once an Edit fixed it, is checked again and moved into place
 //                    (check-part.cjs promoteDraft), and the drafts waiting behind it follow.
-//   --event=compact  SessionStart with the matcher "compact" (hooks/hooks.json: a skill's
-//                    frontmatter cannot register it). A compaction brings back only the head of
+//   --event=compact  SessionStart with the matcher "compact", called through the plugin's
+//                    shared scripts/compact-hook.cjs (hooks/hooks.json: a skill's frontmatter
+//                    cannot register it). A compaction brings back only the head of
 //                    SKILL.md; this names where the run stands, the Reads that resume it and the
 //                    lines of SKILL.md to read again.
 //

@@ -15,8 +15,10 @@ const { tempDir, run, commitFile, initRepo } = require('./test-helpers.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, batch: true, dedupItems: false },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, batch: true, dedupItems: true },
   );
+  assert.strictEqual(rc.parseArgs(['--no-dedup-items']).dedupItems, false, 'item dedup is on unless turned off');
+  assert.strictEqual(rc.parseArgs(['--dedup-items']).dedupItems, true, 'the old opt-in still parses');
   assert.strictEqual(rc.parseArgs([]).mode, 'auto');
   assert.strictEqual(rc.parseArgs(['--since-last']).sinceLast, true);
   assert.strictEqual(rc.parseArgs([]).sinceLast, false);

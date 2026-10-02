@@ -216,6 +216,31 @@ Pull request replies, commit messages and the agent's report file stay normal pr
 With the headroom proxy installed, the whole run also goes through context compression.
 [`../../shared/README.md`](../../shared/README.md) describes both.
 
+## Quality meter
+
+A change to the brief is measured, not argued: `test-key/` holds a fixture pull request whose every review item has one right verdict, and `scripts/score-fix.cjs` scores what a run left behind.
+
+The fixture is a small cart library with its own `lint`, `test` and `build` and no dependencies, so `npm ci` installs offline.
+Pull request #7 (`feat(METER-1): Shipping costs`) carries 11 review items, listed in `test-key/key.json`:
+- 4 to fix, one of them on an outdated thread and one made in the conversation;
+- 3 to reject, one per ground;
+- 4 that ask for nothing: a question, a thread its reviewer withdrew, CI noise and a review summary.
+
+Its gate starts red twice: a `var` in a file no comment touches (lint), and the unit test the free-shipping comment is about.
+
+1. Build a fresh fixture: `node skills/fixPr/test-key/make-fixture.cjs --out=<empty dir>`.
+   It prints `fixture.json`: the checkout (`<dir>/shop`, standing on `main`), a bare `origin` the agent's push lands in, and `replay.json`, the review as the GitHub API would return it.
+2. Run the skill on it with the review replayed: set `DOH_FIXPR_REPLAY=<dir>/replay.json` and run `/doh:fixPr feature/meter --project=<dir>/shop`.
+   `pr-comments.cjs` reads the recording instead of GitHub (`--replay=<file>` does the same by hand), and `resolve-threads.cjs` only rehearses.
+   Nothing reaches GitHub.
+3. Score it: `node skills/fixPr/scripts/score-fix.cjs --fixture=<dir>/fixture.json [--json]`.
+   It reads the verdicts from the report's sections, by the comment urls their lines cite.
+   It copies the branch head out of git and runs every item's check there, plus the fixture's gate.
+   It checks for one commit with the right message, pushed, and no file changed beyond the fixes.
+   A `fixed` verdict whose file the commit never changed is reported as a false fix.
+
+`test-key/solution/` is the reference fix; the scorer's own tests land it and expect 11 of 11 with no problem.
+
 ## Files
 
 | Path | Role |
@@ -227,14 +252,17 @@ With the headroom proxy installed, the whole run also goes through context compr
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
 | `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap, removal |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed |
+| `scripts/score-fix.cjs` | the quality meter's scorer: verdicts, checks on the result, landing, scope, gate |
+| `test-key/` | the meter's fixture (`fixture/`, built by `make-fixture.cjs`), its key (`key.json`) and the reference fix (`solution/`) |
 | `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled, so the orchestrator hands the agent a path instead of carrying the brief twice |
 
 `pr-api.cjs` and `pr-comments.cjs` require `../../codeReview/scripts/github.cjs` and
 `../../codeReview/scripts/review-context.cjs` — the token discovery, the pull request lookup, the HTTP
 primitive and the artifact-path conventions already live there, and the two skills ship in one plugin.
 
-Tests: `node --test skills/fixPr/scripts/pr-api.test.cjs skills/fixPr/scripts/pr-comments.test.cjs skills/fixPr/scripts/checks.test.cjs skills/fixPr/scripts/worktree.test.cjs skills/fixPr/scripts/resolve-threads.test.cjs scripts/render-agent-prompt.test.cjs`
+Tests: `node --test skills/fixPr/scripts/*.test.cjs scripts/render-agent-prompt.test.cjs`
 No test reaches the network and none installs anything: the GitHub layer is driven through an injected
 sender, the git tests run against real temporary repositories with their remote refs written by
 `git update-ref`, and `checks.cjs` takes its subprocess runner as a seam, so the command construction
-is proved without spawning a package manager.
+is proved without spawning a package manager. `score-fix.test.cjs` builds the fixture and lands
+commits in it, pushing to its local bare `origin`.

@@ -58,7 +58,7 @@ function fakeFindPr(prs) {
 test('parseArgs parses the documented flags and refuses anything else', () => {
   assert.deepStrictEqual(
     pc.parseArgs(['--branches=a;b', '--project=/tmp/x']),
-    { branches: 'a;b', project: '/tmp/x', skillDir: '' },
+    { branches: 'a;b', project: '/tmp/x', skillDir: '', replay: '' },
   );
   assert.throws(() => pc.parseArgs(['--branch=a']), /Unknown argument/);
   assert.throws(() => pc.parseArgs(['staged']), /Unknown argument/);
@@ -410,3 +410,26 @@ test('the brief holds the agent contract and nothing else', () => {
   assert.strictEqual(pc.briefNote({ author: 'bob', body: 'b', url: 'u', state: 'CHANGES_REQUESTED' }).state, 'CHANGES_REQUESTED');
 });
 
+
+test('--replay reads a recorded review instead of GitHub, for its own branch only', (t) => {
+  const dir = makeRepo(t);
+  fs.mkdirSync(path.join(dir, '.claude'));
+  const replay = path.join(dir, 'replay.json');
+  fs.writeFileSync(replay, JSON.stringify({
+    branch: 'feature/a',
+    pr: { number: 7, title: 'feat(X-1): Thing', url: 'u', base: 'main' },
+    threads: [{ ...thread({ id: 'R1' }), meterId: 'T1' }, thread({ id: 'R2', isResolved: true })],
+    conversation: [{ author: 'bot', isBot: true, body: 'green', url: 'c', meterId: 'C1' }],
+    reviews: [],
+  }));
+  const result = pc.collect({ branches: 'feature/a;feature/b', project: dir, replay });
+  assert.deepStrictEqual(result.targets.map((x) => x.branch), ['feature/a']);
+  assert.ok(result.errors.some((e) => e.startsWith('feature/b: no OPEN pull request')), 'another branch has no recording');
+  assert.match(result.warnings[0], /^Review replayed from .*replay\.json: nothing is read from GitHub/);
+  const target = result.targets[0];
+  assert.strictEqual(target.commitMessage, 'feat(X-1): CR');
+  assert.deepStrictEqual([target.counts.openThreads, target.counts.resolvedThreads, target.counts.conversation], [1, 1, 1]);
+  const brief = fs.readFileSync(target.commentsPath, 'utf8');
+  assert.ok(!brief.includes('meterId'), 'the recording\'s own fields never reach the agent');
+  assert.deepStrictEqual(pc.parseArgs(['--replay=r.json']).replay, 'r.json');
+});

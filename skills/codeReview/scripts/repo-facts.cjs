@@ -689,6 +689,114 @@ function exportFacts(index, add, cross) {
   return exportsByFile;
 }
 
+// ---------------------------------------------------------------------------------------
+// Context for the walk, not facts: what a reviewer otherwise looks up with one search each.
+// Measured on the runs of 2026-09-28..10-01, who uses a member took 9-14 requests a run and
+// which spec covers a file 4-6. Both lists are what such a search returns - a whole-word match
+// over the revision - so they are exactly as precise as the search they replace, noise included.
+
+// A member line at the top level of a class body: decorators, modifiers, `get`/`set`, the name.
+const reMember = /^[ \t]*(?:@[\w.]+(?![\w.])(?:\([^)]*\))?\s*)*((?:(?:public|private|protected|readonly|static|override|async|abstract|declare|accessor)\s+)*)(?:(get|set)\s+)?(#?[A-Za-z_$][\w$]*)\s*(?:[?!]?\s*[:=(<;]|$)/;
+
+// Members nothing in the repository names because the framework calls them: lifecycle hooks,
+// the methods of the interfaces Angular invokes, host listeners and NgRx effects. "Named
+// nowhere" would read as dead code for them.
+const frameworkMethods = new Set([
+  'transform', 'handleError', 'intercept', 'canActivate', 'canActivateChild', 'canDeactivate', 'canMatch', 'canLoad',
+  'resolve', 'validate', 'writeValue', 'registerOnChange', 'registerOnTouched', 'setDisabledState',
+]);
+const isFrameworkMember = (name, decorators, line) => /^ng[A-Z]/.test(name) || frameworkMethods.has(name)
+  || decorators.some((d) => d === 'HostListener' || d === 'HostBinding') || /=\s*createEffect\s*\(/.test(line);
+
+// The public members of every class the script exports: [{ cls, name, line, framework }].
+function exportedMembers(scan, mod) {
+  const exported = new Set(mod.exports.map((e) => e.local || e.name));
+  const src = scan.bare || scan.code;
+  const out = [];
+  for (const m of src.matchAll(/\bclass\s+([A-Za-z_$][\w$]*)[^{]*\{/g)) {
+    if (!exported.has(m[1])) continue;
+    const open = m.index + m[0].length - 1;
+    const close = matchBracket(src, open);
+    if (close < 0) continue;
+    const seen = new Set();
+    let depth = 0;
+    let offset = open + 1;
+    // Decorators standing on lines of their own, waiting for the member they decorate.
+    let pending = [];
+    for (const line of src.slice(open + 1, close).split('\n')) {
+      const d = depth === 0 ? reMember.exec(line) : null;
+      if (d && d[3] !== 'constructor' && !d[3].startsWith('#') && !/\b(?:private|protected)\b/.test(d[1]) && !seen.has(d[3])) {
+        seen.add(d[3]);
+        const decorators = [...pending, ...[...line.matchAll(/@([\w.]+)/g)].map((x) => x[1])];
+        out.push({ cls: m[1], name: d[3], line: lineAt(scan.starts, offset + d[0].lastIndexOf(d[3])), framework: isFrameworkMember(d[3], decorators, line) });
+      }
+      if (depth === 0) {
+        const decorator = d ? null : line.match(/^\s*@([\w.]+)/);
+        if (decorator) pending.push(decorator[1]);
+        else if (line.trim()) pending = [];
+      }
+      for (const ch of line) {
+        if (ch === '{' || ch === '(' || ch === '[') depth++;
+        else if (ch === '}' || ch === ')' || ch === ']') depth--;
+      }
+      offset += line.length + 1;
+    }
+  }
+  return out;
+}
+
+// Per reviewed script: each public member of its exported classes, and where its name falls
+// among the only places that can reach it - the file itself (an inline template included), its
+// template, the files importing the class and their templates (a parent binds `[input]` and
+// `(output)` there). A same-named member of another class is not counted.
+function memberFacts(index, reviewed) {
+  const templateOf = (p) => {
+    const html = p.replace(/\.[cm]?[jt]s$/, '.html');
+    return html !== p && index.scans.has(html) ? html : null;
+  };
+  const out = new Map();
+  for (const p of index.sourceScripts) {
+    if (!reviewed.has(p)) continue;
+    const scan = index.scans.get(p);
+    const members = exportedMembers(scan, index.modules.get(p));
+    if (members.length === 0) continue;
+    const own = templateOf(p);
+    const reach = new Map();
+    out.set(p, members.map((member) => {
+      if (!reach.has(member.cls)) {
+        const importers = index.consumersOf(p, member.cls);
+        reach.set(member.cls, [...new Set([...importers, ...importers.map(templateOf).filter(Boolean)])]);
+      }
+      const re = new RegExp(`(?<![\\w$])${member.name.replace(/\$/g, '\\$')}(?![\\w$])`, 'g');
+      const named = (q) => (index.scans.get(q).code.match(re) || []).length;
+      const where = reach.get(member.cls).filter((q) => named(q) > 0);
+      return {
+        ...member,
+        inFile: named(p) > 1,
+        template: own ? named(own) > 0 : null,
+        files: where.filter((q) => !reSpec.test(q)),
+        tests: where.filter((q) => reSpec.test(q)),
+      };
+    }));
+  }
+  return out;
+}
+
+// Per reviewed script: the specs that import it, each with its describe/it cases and their lines.
+function specCases(index, reviewed) {
+  const out = new Map();
+  for (const p of index.sourceScripts) {
+    if (!reviewed.has(p)) continue;
+    out.set(p, index.importersOfModule(p).filter((q) => reSpec.test(q)).map((spec) => {
+      const scan = index.scans.get(spec);
+      const cases = [...scan.code.matchAll(/\b([fx]?(?:describe|it)|test)(?:\.(?:each|only|skip)\b[^(]*)?\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g)]
+        .map((m) => ({ kind: m[1], line: lineAt(scan.starts, m.index), title: m[3] }));
+      return { path: spec, cases };
+    }));
+  }
+  return out;
+}
+
 function localeFiles(index) {
   return [...index.files.keys()].filter((p) => /\.json$/.test(p) && reLocaleDir.test(p) && !/(?:^|\/)tests?\//.test(p)).sort();
 }
@@ -1446,7 +1554,10 @@ function collectFacts({ files, reviewed, root = '' }) {
   for (const p of reviewed) {
     answers.set(p, read.has(p) ? { 'repo-search': repoSearchAnswer(searched.get(p) || []), 'input-binding': binding } : { 'input-binding': binding });
   }
-  return { facts, exportsByFile, cross: crossLines, tsconfig: index.tsconfig, answers };
+  return {
+    facts, exportsByFile, membersByFile: memberFacts(index, reviewed), specsByFile: specCases(index, reviewed),
+    cross: crossLines, tsconfig: index.tsconfig, answers,
+  };
 }
 
 module.exports = {

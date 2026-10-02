@@ -20,7 +20,7 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
 | `/codeReview [target] --with-checklist` | any of the above, but the report keeps every file's walked checklist and coverage marker (the page's **Pokrycie checklist** section) |
 | `/codeReview [target] --no-batch` | any of the above, but every file is walked in a message of its own instead of small files together (see [Token cost](#token-cost)) |
-| `/codeReview [target] --dedup-items` | any of the above, but an item an earlier bundle already showed reaches the reviewer as a reference to that bundle — opt-in until an A/B run shows it costs no finding (see [Token cost](#token-cost)) |
+| `/codeReview [target] --no-dedup-items` | any of the above, but every bundle shows every item in full, instead of an item an earlier bundle already showed arriving as a reference to that bundle (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
 
 A branch list is split on `,` and `;`. Git allows both characters inside a ref name, so a branch
@@ -28,7 +28,7 @@ literally called `feature/a,b` cannot be named in that list — it would be read
 reported as two "Branch not found" errors for names you never typed. Check that branch out and run
 `/codeReview` with no arguments instead: auto mode reviews the current branch without naming it.
 
-`--only-md`, `--with-checklist`, `--no-batch` and `--dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
+`--only-md`, `--with-checklist`, `--no-batch` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
 The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
 `--with-checklist` changes only what the finished report keeps: every file is walked, written and checked with its checklist either way, and without the flag the renderer cuts the checklists, the coverage markers and the cross-file `<!-- unverified:` block from it — from the page and from an `--only-md` Markdown alike.
 The run's summary still states the coverage, read off the line the assembly prints.
@@ -91,9 +91,9 @@ Inside a batch every file is still walked on its own, one after another, against
 The context lists the batches in `target.batches`, and a bundle's `partia:` line names the files of its batch.
 `--no-batch` makes every file a batch of its own.
 
-`--dedup-items` shortens every bundle read after the first: an item an earlier bundle of the run already showed arrives as a reference to that bundle, while the facts and probe hits under it stay this file's own.
+Item dedup shortens every bundle read after the first: an item an earlier bundle of the run already showed arrives as a reference to that bundle, while the facts and probe hits under it stay this file's own.
 A compaction resets it, so the bundles read after one show every item in full again.
-It is opt-in until an A/B run (`scripts/score-review.cjs --explain`, see `test-environment/README.md`) shows it costs no finding.
+It is on by default since the A/B run of 2026-10-01 (`scripts/score-review.cjs --compare`, see `test-environment/README.md`); `--no-dedup-items` turns it off.
 
 A compaction re-attaches only the head of `SKILL.md`, so that file is ordered by need rather than by step.
 What the walk of every file needs comes first; Steps 1–2, which run once, stand after a `<!-- one-time:start -->` marker; the cross-file pass and the assembly are `references/cross-file.md` and `references/assembly.md`, read when the run reaches them.
@@ -412,10 +412,11 @@ A finding of the cross-file part whose lines a file part's finding already cover
 
 `scripts/review-hooks.cjs` (Node, zero dependencies) holds the skill's other hooks, one `--event` each; none of them ever breaks a session, since a failure ends in no output.
 `--event=read` runs before every Read.
-Reading a run's context or one of its bundles ties the session to that run; before the cross-file bundle is read, its live section is rewritten from the parts on disk — what the file parts already report, and which addresses the `<!-- unverified:` block must answer; under `--dedup-items` a file bundle's Read is pointed at a copy in which an item an earlier bundle showed is a reference to that bundle.
+Reading a run's context or one of its bundles ties the session to that run; before the cross-file bundle is read, its live section is rewritten from the parts on disk — what the file parts already report, and which addresses the `<!-- unverified:` block must answer; with item dedup on (the default) a file bundle's Read is pointed at a copy in which an item an earlier bundle showed is a reference to that bundle.
 `--event=draft` runs after every Write or Edit and promotes a draft that now passes.
-`--event=compact` runs when a session is compacted, from the plugin's `hooks/hooks.json`, since a skill's frontmatter cannot register a SessionStart hook.
-It names the target and where it stands, the Reads that resume it (the next batch, the cross-file pass or the assembly), the drafts waiting, and the lines of `SKILL.md` between the re-attached head and the `<!-- one-time:start -->` marker to read again.
+`--event=compact` runs when a session is compacted, called by the plugin's shared `scripts/compact-hook.cjs` from `hooks/hooks.json`, since a skill's frontmatter cannot register a SessionStart hook.
+The same hook asks implementNewFeature's `scripts/pipeline-hooks.cjs`, so a session driving both skills gets both notes.
+It names the target and where it stands, the Reads that resume it (the next batch, the cross-file pass or the assembly), the drafts waiting, the lines of `SKILL.md` between the re-attached head and the `<!-- one-time:start -->` marker to read again, and the walk card (`references/walk-card.md`).
 Its state is one small JSON file per session.
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
