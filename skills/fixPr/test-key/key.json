@@ -1,0 +1,148 @@
+{
+  "description": "The doh fixPr meter: what a correct run makes of pull request #7 of the fixture (make-fixture.cjs). Every review item has exactly one right verdict; `check` is a JavaScript expression over the final tree that holds once a fixed item is fixed, or a rejected or answered one left alone.",
+  "branch": "feature/meter",
+  "pr": {
+    "number": 7,
+    "title": "feat(METER-1): Shipping costs",
+    "url": "https://github.com/doh/fixpr-meter/pull/7",
+    "base": "main"
+  },
+  "commitMessage": "feat(METER-1): CR",
+  "redAtStart": ["lint", "unit tests"],
+  "allowedFiles": ["src/shipping.cjs", "src/format.cjs", "src/index.cjs", "src/discounts.cjs"],
+  "items": [
+    {
+      "id": "T1",
+      "kind": "thread",
+      "verdict": "fixed",
+      "why": "a real off-by-one: the code's own comment and the unit test say 100.00 or more ships free",
+      "path": "src/shipping.cjs",
+      "anchor": "if (zone === 'domestic' && orderCents > freeShippingThresholdCents) return 0;",
+      "comments": [
+        { "author": "piotr", "body": "The comment above says orders of 100.00 or more ship free, but `>` leaves an order of exactly 100.00 paying for shipping. This should be `>=`." }
+      ],
+      "check": "shippingCost(10000, 'domestic', 3) === 0 && shippingCost(9999, 'domestic', 3) !== 0"
+    },
+    {
+      "id": "T2",
+      "kind": "thread",
+      "verdict": "fixed",
+      "why": "an unknown zone silently prices shipping as NaN",
+      "path": "src/shipping.cjs",
+      "anchor": "return zoneRates[zone];",
+      "comments": [
+        { "author": "piotr", "body": "`zoneRate` returns `undefined` for a zone it does not know, and `shippingCost` then quietly returns `NaN`. Throw an `Error` that names the zone instead." }
+      ],
+      "check": "throwsWith(() => shippingCost(5000, 'mars', 1), 'mars')"
+    },
+    {
+      "id": "T3",
+      "kind": "thread",
+      "verdict": "rejected",
+      "why": "breaks working functionality: quantities may be fractional, and the existing unit test pins the rounding",
+      "path": "src/cart.cjs",
+      "anchor": "return items.reduce((sum, item) => sum + Math.round(item.priceCents * item.qty), 0);",
+      "comments": [
+        { "author": "piotr", "body": "`Math.round` is noise here, prices are whole cents already. Please drop it and keep the reduce simple." }
+      ],
+      "check": "subtotal([{ priceCents: 999, qty: 0.35 }]) === 350"
+    },
+    {
+      "id": "T4",
+      "kind": "thread",
+      "verdict": "answered",
+      "why": "a question, not a request",
+      "path": "src/shipping.cjs",
+      "anchor": "const zoneRates = { domestic: 900, eu: 1200, world: 2500 };",
+      "comments": [
+        { "author": "anna", "body": "Why is the EU rate 1200 and not 1500 like last season? Just curious whether that was a deliberate change." }
+      ],
+      "check": "zoneRate('eu') === 1200"
+    },
+    {
+      "id": "T5",
+      "kind": "thread",
+      "verdict": "answered",
+      "why": "the reviewer withdrew it in the thread's last comment",
+      "path": "src/shipping.cjs",
+      "anchor": "function shippingCost(orderCents, zone, kg) {",
+      "comments": [
+        { "author": "anna", "body": "Could we rename `kg` to `weightKg`? Bare `kg` reads like a constant." },
+        { "author": "anna", "body": "Actually, leave it: the warehouse API sends `kg`, and the parameter mirrors it. Never mind." }
+      ],
+      "check": "source('src/shipping.cjs').includes('function shippingCost(orderCents, zone, kg)')"
+    },
+    {
+      "id": "T6",
+      "kind": "thread",
+      "verdict": "rejected",
+      "why": "contradicts what the pull request is for: its title is Shipping costs",
+      "path": "src/cart.cjs",
+      "anchor": "return itemsCents + shippingCost(itemsCents, zone, kg);",
+      "comments": [
+        { "author": "piotr", "body": "Shipping does not belong in the cart. Please drop `shippingCost` from `cartTotal` and keep the totals as they were before this PR." }
+      ],
+      "check": "cartTotal([{ priceCents: 2000, qty: 2, kg: 0.5 }], 'eu') === 5350"
+    },
+    {
+      "id": "T7",
+      "kind": "thread",
+      "verdict": "rejected",
+      "why": "its subject lives outside this repository: the payments service",
+      "path": "src/cart.cjs",
+      "anchor": "function cartTotal(items, zone) {",
+      "comments": [
+        { "author": "ola", "body": "When a total includes shipping, the payments service should log the shipping part separately for accounting." }
+      ],
+      "check": null
+    },
+    {
+      "id": "T8",
+      "kind": "thread",
+      "verdict": "fixed",
+      "why": "a real defect on an outdated thread: found by the hunk's content, not by its line",
+      "path": "src/format.cjs",
+      "outdated": {
+        "originalLine": 5,
+        "diffHunk": "@@ -1,3 +1,10 @@\n 'use strict';\n \n+// 1.5 -> \"1.5 kgs\"\n+function formatWeight(kg) {\n+  return `${kg} kgs`;"
+      },
+      "comments": [
+        { "author": "piotr", "body": "`kgs` is not a unit symbol. The unit is `kg`, so this should print `1.5 kg`." }
+      ],
+      "check": "formatWeight(1.5) === '1.5 kg'"
+    },
+    {
+      "id": "C1",
+      "kind": "conversation",
+      "verdict": "answered",
+      "why": "CI noise from a bot",
+      "isBot": true,
+      "comments": [
+        { "author": "ci-bot", "body": "Build #128 passed on 3f2a91c. Coverage 91.2% (+0.4%)." }
+      ],
+      "check": null
+    },
+    {
+      "id": "C2",
+      "kind": "conversation",
+      "verdict": "fixed",
+      "why": "a concrete request about this code, made in the conversation rather than on a line",
+      "path": "src/index.cjs",
+      "comments": [
+        { "author": "anna", "body": "Please also export `shippingCost` from `src/index.cjs`: the checkout app imports everything from the package root." }
+      ],
+      "check": "typeof index.shippingCost === 'function'"
+    },
+    {
+      "id": "R1",
+      "kind": "review",
+      "verdict": "answered",
+      "why": "a review summary that asks for nothing itself",
+      "state": "COMMENTED",
+      "comments": [
+        { "author": "anna", "body": "Nice feature overall. A few comments inline, mostly small." }
+      ],
+      "check": null
+    }
+  ]
+}

@@ -71,3 +71,13 @@ test('with a commit, only threads whose file it changes are resolved; the rest c
   assert.match(result.unverified[0].reason, /does not change src\/b\.ts/);
   assert.throws(() => rt.parseArgs(['--threads=A', '--commit=abc']), /go together/);
 });
+
+test('a run on a replayed review (DOH_FIXPR_REPLAY) only rehearses, whatever the command line says', () => {
+  const script = require('node:path').join(__dirname, 'resolve-threads.cjs');
+  const r = require('node:child_process').spawnSync(process.execPath, [script, '--project=.', '--threads=A,B'], {
+    encoding: 'utf8', env: { ...process.env, DOH_FIXPR_REPLAY: 'replay.json', GITHUB_TOKEN: '', GH_TOKEN: '' },
+  });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepStrictEqual([out.dryRun, out.resolved, out.failed], [true, ['A', 'B'], []]);
+});

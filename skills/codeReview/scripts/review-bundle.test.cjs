@@ -277,3 +277,34 @@ test('the rulebook notes carry only the preambles', () => {
   assert.doesNotMatch(text, /b rules/);
   assert.match(rb.renderRulebookNotes([instruction('b', ['y'])]), /Żadna z instrukcji tego przebiegu nie ma zasad ogólnych\./);
 });
+
+test('a bundle shows where each member is named and which specs cover the file, as context after the plan', () => {
+  const file = { path: 'app/src/card.ts', status: 'A', changedLines: null, checklistTotal: 0, contentPath: 'w/01-card.ts', diffPath: null };
+  const text = rb.renderBundle({
+    file,
+    kind: null,
+    instructions: new Map(),
+    factRoot: 'app',
+    members: [
+      { cls: 'Card', name: 'user', line: 4, inFile: false, template: false, files: ['app/src/list.html'], tests: [], framework: false },
+      { cls: 'Card', name: 'count', line: 8, inFile: true, template: true, files: [], tests: ['app/src/card.spec.ts'], framework: false },
+      { cls: 'Card', name: 'unused', line: 7, inFile: false, template: false, files: [], tests: [], framework: false },
+      { cls: 'Card', name: 'ngOnInit', line: 16, inFile: false, template: false, files: [], tests: [], framework: true },
+    ],
+    specs: [{ path: 'app/src/card.spec.ts', cases: [{ kind: 'describe', line: 2, title: 'Card' }, { kind: 'it', line: 3, title: 'counts' }] }],
+  });
+  const lines = text.split('\n');
+  const at = (heading) => lines.indexOf(heading);
+  assert.ok(at('## Użycia składowych') > at('## Plan') && at('## Spec') > at('## Użycia składowych'));
+  for (const line of [
+    '- L4 `Card.user`: pliki: src/list.html',
+    '- L8 `Card.count`: w tym pliku; szablon; testy: src/card.spec.ts',
+    '- L7 `Card.unused`: nigdzie poza deklaracją',
+    '- L16 `Card.ngOnInit`: nigdzie - wywołuje ją framework',
+    '- src/card.spec.ts: describe L2 "Card", it L3 "counts"',
+  ]) assert.ok(lines.includes(line), line);
+  const none = rb.renderBundle({ file, kind: null, instructions: new Map(), specs: [] });
+  assert.ok(none.split('\n').includes('- żaden spec nie importuje tego pliku'));
+  assert.ok(!none.includes('## Użycia składowych'), 'no members, no section');
+  assert.ok(!rb.renderBundle({ file, kind: null, instructions: new Map() }).includes('## Spec'), 'a file that is no source script has none');
+});

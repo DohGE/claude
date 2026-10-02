@@ -105,7 +105,10 @@ function resolveAll(options, api = prApi, wait = pause, files = null) {
 function main() {
   let result;
   try {
-    result = resolveAll(parseArgs(process.argv.slice(2)));
+    const args = parseArgs(process.argv.slice(2));
+    // A run on a replayed review (pr-comments.cjs --replay) has no pull request to write to.
+    if (process.env.DOH_FIXPR_REPLAY) args.dryRun = true;
+    result = resolveAll(args);
   } catch (err) {
     result = { resolved: [], failed: [], unverified: [], errors: [String((err && err.message) || err)] };
   }

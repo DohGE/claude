@@ -64,7 +64,7 @@ function isSkippedPath(filePath) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, batch: true, dedupItems: false };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, batch: true, dedupItems: true };
   const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
@@ -74,9 +74,10 @@ function parseArgs(argv) {
     if (arg === '--with-checklist') { args.withChecklist = true; continue; }
     // Every file walked in a response of its own, light ones included (review-bundle.cjs batches).
     if (arg === '--no-batch') { args.batch = false; continue; }
-    // A bundle re-read in one compaction window shows an item's text once (review-hooks.cjs);
-    // opt-in until an A/B run shows it costs no finding.
+    // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), by
+    // default; `--dedup-items` is the old opt-in, kept so a caller that still passes it works.
     if (arg === '--dedup-items') { args.dedupItems = true; continue; }
+    if (arg === '--no-dedup-items') { args.dedupItems = false; continue; }
     const m = arg.match(/^--([a-z]+)=(.*)$/);
     // Anything unrecognised is refused rather than skipped: the user-facing flag
     // is `--only-md` while the script takes `--output=md`, so a silently dropped
@@ -91,7 +92,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --no-batch, --dedup-items; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --no-batch, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -1372,7 +1373,7 @@ function buildContext(options) {
       if (text !== null && !text.includes('\u0000')) reviewedTexts.set(f.path, text);
     }
     let universe = { files: reviewedTexts, factRoot: '', partial: false };
-    let collected = { facts: new Map(), exportsByFile: new Map(), cross: [], answers: new Map() };
+    let collected = { facts: new Map(), exportsByFile: new Map(), membersByFile: new Map(), specsByFile: new Map(), cross: [], answers: new Map() };
     if (reviewedTexts.size > 0) {
       try {
         universe = loadFactUniverse(project, scanSources.get(target), reviewedTexts);
@@ -1462,6 +1463,8 @@ function buildContext(options) {
           instructions: rules.instructions,
           bound,
           exports: collected.exportsByFile.get(f.path) || [],
+          members: collected.membersByFile.get(f.path) || [],
+          specs: collected.specsByFile.get(f.path) || null,
           candidates: (target.duplicationCandidates || []).filter((c) => c.path === f.path),
           factRoot: universe.factRoot,
           partial: universe.partial,

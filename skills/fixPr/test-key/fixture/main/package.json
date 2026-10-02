@@ -1,0 +1,11 @@
+{
+  "name": "fixpr-meter-shop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A tiny cart library: the project the doh fixPr meter fixes a pull request of.",
+  "scripts": {
+    "lint": "node tools/lint.cjs",
+    "test": "node --test test/*.test.cjs",
+    "build": "node tools/build.cjs"
+  }
+}

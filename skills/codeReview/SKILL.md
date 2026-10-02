@@ -260,9 +260,12 @@ For each file:
    answer a line of the bundle (`FAKT`, `WSKAZÓWKA`, `SONDA`, `drugie pytanie`, `gotowy werdykt`,
    `ta sama wada`) — the list the check enforces, so never search the bundle for those lines.
    `Uwagi rodzaju:` under the header are the kind's `notes`; the sections after the plan
-   (`## Eksporty tego pliku i ich konsumenci`, `## Kandydaci duplikacji (jscpd)`, `## Fakty spoza
-   planu (bez wymogu)`) are context for the walk, and require nothing by themselves.
-   Under `--dedup-items` (`target.dedupItems`), an item an earlier bundle of the run already showed reaches you as `- <address>: treść jak w paczce <bundle>, przeczytanej wcześniej`: its text is the one under the same address in that bundle, and the lines under it are this file's own.
+   (`## Eksporty tego pliku i ich konsumenci`, `## Użycia składowych`, `## Spec`, `## Kandydaci
+   duplikacji (jscpd)`, `## Fakty spoza planu (bez wymogu)`) are context for the walk, and require
+   nothing by themselves. `## Użycia składowych` and `## Spec` are the whole-word searches a usage
+   or a test-coverage item would otherwise run: where each public member's name falls, and the
+   specs importing the file with their `describe`/`it` cases.
+   While `target.dedupItems` is true (the default; `--no-dedup-items` turns it off), an item an earlier bundle of the run already showed reaches you as `- <address>: treść jak w paczce <bundle>, przeczytanej wcześniej`: its text is the one under the same address in that bundle, and the lines under it are this file's own.
    After a compaction every bundle shows its items in full again.
 2. Evaluate the file against every point below, checklist-driven — never holistically. For points
    1 and 2, walk that ticking list top-to-bottom: read an item, check the file's code against that
@@ -779,8 +782,8 @@ After a compaction, the hook names what of them to read again.
      The finished report then keeps every file's walked checklist and coverage marker (the HTML page's "Pokrycie checklist" section); without it the report carries the findings only.
      The review itself is the same either way: every part is still written with its checklist and checked (Step 3).
    - `--no-batch` → pass it through to the context script: every file is walked alone, its part in a message of its own (`target.batches` stays empty).
-   - `--dedup-items` → pass it through to the context script (`target.dedupItems`): an item an earlier bundle of the run already showed is shown again only by reference (Step 3 point 1).
-     It is opt-in until an A/B run shows it costs no finding.
+   - `--no-dedup-items` → pass it through to the context script: every bundle shows every item in full.
+     Without it `target.dedupItems` is true, and an item an earlier bundle of the run already showed is shown again only by reference (Step 3 point 1).
    - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read
      and — in staged mode — staged, where the reports land, and which `CLAUDE.md` and
      `.claude/doh/instructions/` bind. A caller whose work lives somewhere other than the current
@@ -805,7 +808,7 @@ After a compaction, the hook names what of them to read again.
      INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
      instead, which is how you review a folder of another repository.
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--no-batch] [--dedup-items]`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--no-batch] [--no-dedup-items]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
 5. Parse the JSON from stdout — the part of the context the review uses:

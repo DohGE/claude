@@ -240,3 +240,47 @@ test('a fact probe points at the lines of the file\'s facts of its kind', () => 
   const fileFacts = [{ kind: 'export-single-importer', lines: [3], text: 't' }, { kind: 'export-unused', lines: [5], text: 'u' }];
   assert.deepStrictEqual(facts.runProbe({ fact: 'export-single-importer' }, 'a.ts', '', fileFacts), [{ line: 3, text: 't' }]);
 });
+
+test('membersByFile: where each public member of an exported class is named, among the places that can reach it', () => {
+  const result = collect({
+    'src/card.component.ts': [
+      "import { Component, HostListener, input, output } from '@angular/core';",
+      '@Component({ selector: \'app-card\', templateUrl: \'./card.component.html\' })',
+      'export class CardComponent {',
+      '  readonly user = input<string>();',
+      '  readonly picked = output<string>();',
+      '  private secret = 1;',
+      '  unused = 0;',
+      '  count = 0;',
+      '  get label(): string {',
+      '    return `${this.count}`;',
+      '  }',
+      '  @HostListener(\'mouseenter\')',
+      '  onEnter() {',
+      '    this.count++;',
+      '  }',
+      '  ngOnInit() {}',
+      '}',
+    ].join('\n'),
+    'src/card.component.html': '<p>{{ label }}</p>',
+    'src/list.component.ts': "import { CardComponent } from './card.component';\nexport class ListComponent { imports = [CardComponent]; }\n",
+    'src/list.component.html': '<app-card [user]="name" (picked)="go($event)"></app-card>',
+    'src/other.ts': 'export class Other { unused = 1; count = 2; }\n',
+    'src/card.component.spec.ts': "import { CardComponent } from './card.component';\ndescribe('CardComponent', () => {\n  it('counts', () => { new CardComponent().count; });\n  it.skip(\"waits\", () => {});\n});\n",
+  });
+  const rows = Object.fromEntries(result.membersByFile.get('src/card.component.ts').map((r) => [r.name, r]));
+  assert.deepStrictEqual(Object.keys(rows), ['user', 'picked', 'unused', 'count', 'label', 'onEnter', 'ngOnInit'], 'private members and the constructor stay out');
+  assert.deepStrictEqual([rows.user.line, rows.user.files], [4, ['src/list.component.html']], 'a parent binds the input in its template');
+  assert.deepStrictEqual(rows.picked.files, ['src/list.component.html']);
+  assert.deepStrictEqual([rows.unused.inFile, rows.unused.template, rows.unused.files, rows.unused.tests], [false, false, [], []], 'another class\'s `unused` is not this one\'s');
+  assert.deepStrictEqual([rows.count.inFile, rows.count.tests], [true, ['src/card.component.spec.ts']]);
+  assert.strictEqual(rows.label.template, true);
+  assert.deepStrictEqual([rows.onEnter.framework, rows.ngOnInit.framework, rows.unused.framework], [true, true, false]);
+  assert.ok(!result.membersByFile.has('src/other.ts') || result.membersByFile.get('src/other.ts').every((r) => r.cls === 'Other'));
+  assert.deepStrictEqual(result.specsByFile.get('src/card.component.ts'), [{
+    path: 'src/card.component.spec.ts',
+    cases: [{ kind: 'describe', line: 2, title: 'CardComponent' }, { kind: 'it', line: 3, title: 'counts' }, { kind: 'it', line: 4, title: 'waits' }],
+  }]);
+  assert.deepStrictEqual(result.specsByFile.get('src/other.ts'), [], 'no spec imports it');
+  assert.ok(!result.specsByFile.has('src/card.component.spec.ts'), 'a spec has no spec section of its own');
+});

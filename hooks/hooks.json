@@ -1,5 +1,5 @@
 {
-  "description": "doh lean mode: gives every sub-agent of a session in which a doh skill ran the caveman ultra rules (shared/caveman-ultra.md). See shared/README.md. codeReview: while a review runs, checks every report part before it is written (skills/codeReview/scripts/check-part.cjs), refreshes the cross-file bundle before its Read, moves a refused part's fixed draft into place after an Edit, and after a compaction names where the run stands and what to read again (skills/codeReview/scripts/review-hooks.cjs); silent in every other session.",
+  "description": "doh lean mode: gives every sub-agent of a session in which a doh skill ran the caveman ultra rules (shared/caveman-ultra.md). See shared/README.md. codeReview: while a review runs, checks every report part before it is written (skills/codeReview/scripts/check-part.cjs), refreshes the cross-file bundle before its Read, moves a refused part's fixed draft into place after an Edit (skills/codeReview/scripts/review-hooks.cjs); silent in every other session. After a compaction, a session driving a codeReview or implementNewFeature run is told where it stands and what to read again (scripts/compact-hook.cjs).",
   "hooks": {
     "SubagentStart": [
       {
@@ -24,7 +24,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/review-hooks.cjs",
+              "${CLAUDE_PLUGIN_ROOT}/scripts/compact-hook.cjs",
               "--event=compact"
             ],
             "timeout": 10
