@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "@ngrx/no-store-subscription": "warn",
+    "@ngrx/avoid-dispatching-multiple-actions-sequentially": "warn",
+    "@ngrx/no-dispatch-in-effects": "warn",
+    "@typescript-eslint/no-explicit-any": "off"
+  }
+}

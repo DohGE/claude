@@ -1,0 +1,33 @@
+.card {
+  display: block;
+  padding: 13px;
+  border: 1px solid var(--app-primary);
+  color: var(--app-text);
+
+  .btnPrimary {
+    background: var(--app-primary);
+    margin-top: 13px;
+  }
+
+  &__rotate-hint {
+    display: none;
+  }
+}
+
+@media (orientation: portrait) {
+  .card {
+    display: none;
+  }
+
+  .card__rotate-hint {
+    display: block;
+  }
+}
+
+::ng-deep .mat-mdc-card {
+  margin: 13px;
+}
+
+.red-text {
+  color: var(--app-error);
+}
