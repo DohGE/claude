@@ -1326,15 +1326,15 @@ test('outputFormat survives the fatal early returns', (t) => {
 
 // Every file of the test environment a review would read, as the path kinds match.
 function testEnvironmentFiles() {
-  const skill = path.join(__dirname, '..');
+  const repo = path.join(__dirname, '..', '..', '..');
   const files = [];
   (function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else files.push(path.relative(skill, full).split(path.sep).join('/'));
+      else files.push(path.relative(repo, full).split(path.sep).join('/'));
     }
-  })(path.join(skill, 'test-environment'));
+  })(path.join(repo, 'test-environment'));
   return files.filter((f) => !rc.isSkippedPath(f));
 }
 
@@ -1358,7 +1358,7 @@ test('the test environment coverage map lists every shipped instruction', () => 
   // outcome a reviewer diffs a real run against. An instruction missing from it has
   // no expected outcome at all, so whoever runs the environment cannot tell a rule
   // that found nothing from a rule nobody wrote a target for.
-  const md = fs.readFileSync(path.join(__dirname, '..', 'test-environment', 'README.md'), 'utf8');
+  const md = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'test-environment', 'README.md'), 'utf8');
   const listed = new Set(md.split(/\r?\n/)
     .map((line) => line.match(/^\|\s*`([a-z0-9-]+)`\s*\|/))
     .filter(Boolean)

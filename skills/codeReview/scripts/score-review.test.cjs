@@ -113,7 +113,7 @@ test('the shipped answer key covers only files the environment has', () => {
   const missing = [];
   for (const entry of [...shipped.findings, ...shipped.bait]) {
     for (const file of entry.files || (entry.file ? [entry.file] : [])) {
-      if (!fs.existsSync(path.join(root, 'test-environment', file))) missing.push(`${entry.id} ${file}`);
+      if (!fs.existsSync(path.join(root, '..', '..', 'test-environment', file))) missing.push(`${entry.id} ${file}`);
     }
   }
   assert.deepStrictEqual(missing, []);

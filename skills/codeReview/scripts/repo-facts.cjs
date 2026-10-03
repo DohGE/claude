@@ -1299,10 +1299,17 @@ function specFacts(index, add) {
     if (readers.size === 0) continue;
     const specBare = specScan.bare || s;
     const its = [];
-    for (const m of specBare.matchAll(/\b(?:it|test)\s*\(/g)) {
-      const open = m.index + m[0].length - 1;
+    // `it.each(rows)(title, fn)` is a test as well: its body is the second call, never setup.
+    for (const m of specBare.matchAll(/\b(?:it|test)\s*(\.\s*each\s*)?\(/g)) {
+      let open = m.index + m[0].length - 1;
+      if (m[1]) {
+        const rows = matchBracket(specBare, open);
+        const call = rows < 0 ? null : specBare.slice(rows + 1).match(/^\s*\(/);
+        if (!call) continue;
+        open = rows + call[0].length;
+      }
       const close = matchBracket(specBare, open);
-      if (close > 0) its.push({ start: m.index, end: close, line: lineAt(specScan.starts, m.index) });
+      if (close > 0) its.push({ start: m.index, open, end: close, line: lineAt(specScan.starts, m.index) });
     }
     let setup = s;
     for (const it of its.slice().reverse()) setup = setup.slice(0, it.start) + blank(setup.slice(it.start, it.end + 1)) + setup.slice(it.end + 1);
@@ -1313,7 +1320,7 @@ function specFacts(index, add) {
         const call = body.search(new RegExp(`\\.${method}\\s*\\(`));
         if (call < 0) continue;
         if (sets(setup, read.input) || sets(body.slice(0, call), read.input)) continue;
-        const title = body.match(/^\w+\s*\(\s*(['"`])(.*?)\1/);
+        const title = s.slice(it.open, it.end + 1).match(/^\(\s*(['"`])(.*?)\1/);
         add(spec, 'spec-input-not-set', [it.line, lineAt(specScan.starts, it.start + call)], `it(${title ? `'${title[2]}'` : ''}) L${it.line} woła ${method}() (L${lineAt(specScan.starts, it.start + call)}), które czyta this.${read.input}()! (komponent L${read.line}), a spec nie ustawia wejścia ${read.input} przed tym wywołaniem - ani w tym it, ani w beforeAll/beforeEach.`);
       }
     }
