@@ -52,6 +52,11 @@ test('a phrase or an array repeated across files binds; one repeated word only h
   assert.deepStrictEqual(repeated.sort((a, b) => a[0] - b[0]), [[1, false], [2, true], [3, false]]);
 });
 
+test('a locale file that is not valid JSON is a fact at the trailing comma', () => {
+  const result = collect({ 'src/assets/i18n/en.json': '{\n  "a": "A",\n}\n' });
+  assert.deepStrictEqual(factsOf(result, 'src/assets/i18n/en.json', 'i18n-invalid-json').map((f) => f.lines), [[2]]);
+});
+
 test('the locale base is English even when another locale is larger', () => {
   const result = collect({
     'src/assets/i18n/en.json': '{\n  "a": { "title": "Title" }\n}\n',
@@ -138,7 +143,7 @@ test('the input-binding answer names where the binding is on and where parameter
 // The environment the answer key describes: each target entry's fact, on the lines the key
 // places it on.
 test('collectFacts finds the answer-key targets of the test environment', () => {
-  const root = path.join(__dirname, '..', 'test-environment');
+  const root = path.join(__dirname, '..', '..', '..', 'test-environment');
   const files = new Map();
   (function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -155,28 +160,28 @@ test('collectFacts finds the answer-key targets of the test environment', () => 
   const expected = [
     ['src/app/user-panel/models/interfaces/user-table-cell.interface.ts', 'export-single-importer', [1], true],
     ['src/app/user-panel/shared/index.ts', 'barrel-unused', [1], false],
-    ['src/app/user-panel/shared/guards/user-panel-init.guard.ts', 'guard-without-route', [7], false],
-    ['src/app/user-panel/shared/pipes/user-status.pipe.ts', 'pipe-single-template', [11], true],
-    [`${feature}.html`, 'i18n-missing-key', [120], false],
+    ['src/app/user-panel/shared/guards/user-panel-init.guard.ts', 'guard-without-route', [6], false],
+    ['src/app/user-panel/shared/pipes/user-status.pipe.ts', 'pipe-single-template', [10], true],
+    [`${feature}.html`, 'i18n-missing-key', [115], false],
     ['src/assets/i18n/en.json', 'i18n-missing-key', [13], false],
-    ['src/assets/i18n/en.json', 'i18n-unused-key', [3, 6, 9, 14, 17, 18, 21], false],
-    ['src/assets/i18n/en.json', 'i18n-duplicate-value', [3, 6, 14, 21], false],
-    ['src/assets/i18n/pl.json', 'i18n-invalid-json', [12], false],
+    ['src/assets/i18n/en.json', 'i18n-unused-key', [3, 6, 9, 14, 17, 20], false],
+    ['src/assets/i18n/en.json', 'i18n-duplicate-value', [3, 6, 14, 20], false],
     ['src/assets/i18n/pl.json', 'i18n-duplicate-key', [7], false],
     ['src/assets/i18n/pl.json', 'i18n-locale-extra-key', [12], false],
     [`${feature}.ts`, 'cross-area-import', [11], false],
-    ['src/app/user-panel/data-access/+state/user-panel.effects.ts', 'cross-area-import', [10], false],
+    ['src/app/user-panel/data-access/+state/user-panel.effects.ts', 'cross-area-import', [22], false],
     ['src/app/user-panel/models/consts/user-panel-title.const.ts', 'repeated-literal', [1], false],
-    ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'repeated-literal', [33], false],
+    ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'repeated-literal', [32], false],
     ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'repeated-condition', [10], false],
-    ['src/app/user-panel/shared/utils/map-user-dto.util.ts', 'mapping-duplicate', [9], false],
-    ['src/app/user-panel/shared/pipes/user-status.pipe.ts', 'mapping-duplicate-caller', [19, 22], false],
-    ['src/app/user-panel/models/consts/user-panel-initial-state.const.ts', 'initial-state-gap', [5, 11, 12], false],
-    ['src/app/user-panel/data-access/+state/user-panel.reducer.ts', 'reducer-empty-instead-of-null', [45], false],
+    ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'mapping-duplicate', [37], false],
+    ['src/app/user-panel/shared/pipes/user-status.pipe.ts', 'mapping-duplicate-caller', [18, 21], false],
+    ['src/app/user-panel/models/consts/user-panel-initial-state.const.ts', 'initial-state-gap', [5, 11], false],
+    ['src/app/user-panel/data-access/+state/user-panel.reducer.ts', 'reducer-empty-instead-of-null', [48], false],
     ['src/app/user-panel/data-access/+state/user-panel.reducer.ts', 'reducer-flag-without-fail', [16], false],
     ['src/app/user-panel/data-access/+state/user-panel.actions.ts', 'action-trio-incomplete', [17], false],
-    [card, 'output-untested', [14], false],
-    [card, 'spec-input-not-set', [47, 48], false],
+    [card, 'output-untested', [23], false],
+    // 'opens details' sets no `user`; the `it.each` that does is a test, not setup.
+    [card, 'spec-input-not-set', [56, 57], false],
     ['src/app/user-panel/shared/utils/tests/build-user-table.util.spec.snap', 'snapshot-outside-folder', [1], false],
     ['src/app/user-panel/models/consts/user-panel-initial-state.const.ts', 'export-unused', [3], false],
     ['src/app/user-panel/shared/routes/user-panel.routes.ts', 'area-routes-twice', [1], false],
@@ -187,8 +192,7 @@ test('collectFacts finds the answer-key targets of the test environment', () => 
     assert.ok(found, `${kind} ${p}:${lines} (have: ${JSON.stringify(factsOf(result, p, kind).map((f) => f.lines))})`);
     assert.strictEqual(!!found.hint, hint, `${kind} ${p} hint`);
   }
-  // SSR is bait in this environment, and the bootstrap config is main.ts's business.
-  assert.deepStrictEqual(factsOf(result, 'src/app/app.config.server.ts', 'export-unused'), []);
+  // The bootstrap config is main.ts's business.
   assert.ok(!factsOf(result, 'src/app/app.config.ts', 'export-unused').some((f) => /appConfig/.test(f.text)));
   const header = factsOf(result, 'src/app/app.config.ts', 'repeated-literal').filter((f) => /"Authorization"/.test(f.text));
   assert.ok(header.length > 0 && header.every((f) => f.hint));

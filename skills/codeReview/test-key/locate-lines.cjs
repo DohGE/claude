@@ -14,7 +14,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const keyPath = path.join(__dirname, 'answer-key.json');
-const envDir = path.join(__dirname, '..', 'test-environment');
+// The environment lives at the repository root of the test-environment branch.
+const envDir = path.join(__dirname, '..', '..', '..', 'test-environment');
 // A quote found on more lines than this names something everywhere in the file
 // (`svc`, `users`), not the defect's place.
 const maxHitsPerQuote = 4;
