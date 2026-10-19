@@ -28,11 +28,13 @@ const factKinds = [
   'initial-state-gap', 'reducer-empty-instead-of-null', 'reducer-flag-without-fail', 'action-trio-incomplete',
   'output-untested', 'spec-input-not-set', 'snapshot-outside-folder', 'snapshot-missing',
   'area-routes-twice',
+  'spec-zone-based', 'stub-under-multiple-tokens', 'enum-variant-untested', 'snapshot-field-drift',
+  'projector-inputs', 'projector-argument-order', 'action-unconsumed', 'template-symbol-not-imported',
 ];
 // Kinds that only point at a line: another reading of the code is as likely as the defect.
-const hintKinds = new Set(['export-single-importer', 'pipe-single-template', 'snapshot-missing']);
+const hintKinds = new Set(['export-single-importer', 'pipe-single-template', 'snapshot-missing', 'projector-inputs']);
 // FIXED IDENTIFIERS as well: a probe's `builtin` names one of these.
-const builtinProbes = ['for-without-empty', 'signal-reads-without-let', 'markup-repeat', 'area-root-file'];
+const builtinProbes = ['for-without-empty', 'signal-reads-without-let', 'markup-repeat', 'area-root-file', 'hover-without-focus', 'action-label-mismatch'];
 // And an item's `answer` names one of these: a second question the script answers from
 // the whole repository (collectFacts' `answers`), printed under the item in the bundle.
 const builtinAnswers = ['repo-search', 'input-binding'];
@@ -562,6 +564,7 @@ function buildGraph(index) {
       for (const name of wanted) for (const origin of originsOf(edge.target, name)) note(origin, p);
     }
   }
+  index.originsOf = (p, name) => originsOf(p, name);
   index.consumersOf = (p, name) => [...(consumers.get(`${p}\0${name}`) || [])].sort();
   index.importersOfModule = (p) => [...(moduleImporters.get(p) || [])].sort();
 }
@@ -1349,6 +1352,362 @@ function snapshotFacts(index, add) {
     const reason = !/\/tests$/.test(dir) ? `spec nie leży w folderze tests/, więc snapshot trafi do ${short(expected, index.root)}` : `plik ${short(expected, index.root)} nie istnieje w recenzowanej wersji`;
     add(spec, 'snapshot-missing', [line], `spec porównuje ze snapshotem (L${line}), a ${reason}.`);
   }
+  // A snapshot of a function's object result whose top-level fields no longer match the
+  // fields the function returns.
+  for (const spec of [...index.modules.keys()].filter((p) => reSpec.test(p))) {
+    const scan = index.scans.get(spec);
+    const snap = [`${path.posix.dirname(spec)}/__snapshots__/${path.posix.basename(spec)}.snap`, `${spec.replace(/\.[cm]?[jt]sx?$/, '')}.snap`, `${spec}.snap`].find((q) => index.files.has(q));
+    if (!snap) continue;
+    const stored = new Set([...String(index.files.get(snap)).matchAll(/^ {2}"([\w$]+)":/gm)].map((m) => m[1]));
+    for (const m of scan.bare.matchAll(/\bexpect\s*\(\s*([\w$]+)\s*\(/g)) {
+      const close = matchBracket(scan.bare, m.index + m[0].length - 1);
+      if (close < 0 || !/^\s*\)\s*\.\s*toMatchSnapshot\s*\(/.test(scan.bare.slice(close + 1))) continue;
+      const decl = declarationOf(index, spec, m[1]);
+      const returned = decl && returnedFields(index, decl);
+      if (!returned || stored.size === 0) continue;
+      const added = returned.fields.filter((f) => !stored.has(f));
+      const gone = [...stored].filter((f) => !returned.fields.includes(f));
+      if (added.length === 0 && gone.length === 0) continue;
+      const line = lineAt(scan.starts, m.index);
+      const text = `${m[1]}() (${short(decl.path, index.root)} L${returned.line}) zwraca pola ${returned.fields.join(', ')}, a snapshot ${short(snap, index.root)} ma ${[...stored].join(', ')}${added.length > 0 ? ` - brak w nim ${added.join(', ')}` : ''}${gone.length > 0 ? ` - nadmiarowe ${gone.join(', ')}` : ''}; toMatchSnapshot (L${line}) nie przejdzie.`;
+      add(spec, 'snapshot-field-drift', [line], text);
+      add(decl.path, 'snapshot-field-drift', [returned.line], text);
+    }
+  }
+}
+
+// Where the binding `name` imported into `p` is declared: `{ path, local }`, or null.
+function declarationOf(index, p, name) {
+  const mod = index.modules.get(p);
+  for (const edge of mod ? mod.imports : []) {
+    if (!edge.target) continue;
+    const s = edge.names.find((n) => n.local === name);
+    const imported = s ? s.imported : edge.defaultName === name ? 'default' : null;
+    if (!imported) continue;
+    const origin = index.originsOf(edge.target, imported)[0] || { path: edge.target, name: imported };
+    const own = (index.modules.get(origin.path) || { exports: [] }).exports.find((e) => e.name === origin.name);
+    // `export default name;` names its binding only in the expression.
+    const scan = index.scans.get(origin.path);
+    const named = origin.name === 'default' && scan && scan.bare.match(/\bexport\s+default\s+([\w$]+)\s*;?\s*$/m);
+    return { path: origin.path, local: (own && own.local) || (named && named[1]) || origin.name };
+  }
+  return null;
+}
+
+// The `(` of a function's parameter list declared as `function name(` or `name = (`.
+function functionParamsAt(bare, name) {
+  const n = name.replace(/\$/g, '\\$');
+  const m = new RegExp(`(?:\\bfunction\\s+${n}\\s*(?:<[^>]*>)?|(?<![\\w$.])${n}\\s*(?::[^=]+)?=\\s*(?:async\\s*)?)\\(`).exec(bare);
+  return m ? m.index + m[0].length - 1 : -1;
+}
+
+// The top-level fields of the object literal a function returns, or null when unsure.
+function returnedFields(index, decl) {
+  const scan = index.scans.get(decl.path);
+  if (!scan || !scan.bare) return null;
+  const bare = scan.bare;
+  const open = functionParamsAt(bare, decl.local);
+  const close = open < 0 ? -1 : matchBracket(bare, open);
+  if (close < 0) return null;
+  const head = bare.slice(close + 1).match(/^\s*(?::[^{=]*)?(=>\s*)?(\(\s*)?\{/);
+  if (!head) return null;
+  let brace = close + head[0].length;
+  if (!head[2]) {
+    const end = matchBracket(bare, brace);
+    const ret = end < 0 ? null : /\breturn\s*\{/.exec(bare.slice(brace, end));
+    if (!ret) return null;
+    brace += ret.index + ret[0].length - 1;
+  }
+  const end = matchBracket(bare, brace);
+  if (end < 0) return null;
+  const fields = [];
+  for (const part of splitTopLevel(bare.slice(brace + 1, end), [','])) {
+    const key = part.text.trim().match(/^([\w$]+)\s*(?::|$)/);
+    if (!key) return null;
+    fields.push(key[1]);
+  }
+  return { fields, line: lineAt(scan.starts, brace) };
+}
+
+// Zoneless production, zone-based specs: a TestBed without provideZonelessChangeDetection()
+// runs change detection the way the application never does.
+function zoneFacts(index, add) {
+  const zoneless = index.sourceScripts.filter((p) => !reEntryFile.test(p) && /\bprovideZonelessChangeDetection\s*\(/.test(index.scans.get(p).bare));
+  if (zoneless.length === 0) return;
+  const setup = [...index.modules.keys()].some((p) => reEntryFile.test(p) && /\bprovideZonelessChangeDetection\s*\(/.test(index.scans.get(p).bare));
+  if (setup) return;
+  for (const spec of [...index.modules.keys()].filter((p) => reSpec.test(p))) {
+    const scan = index.scans.get(spec);
+    if (/\bprovideZonelessChangeDetection\s*\(/.test(scan.bare)) continue;
+    const beds = [...scan.bare.matchAll(/\bTestBed\s*\.\s*configureTestingModule\s*\(/g)].map((m) => lineAt(scan.starts, m.index));
+    if (beds.length === 0) continue;
+    const zoned = [...scan.bare.matchAll(/\b(?:fakeAsync|waitForAsync|tick|flush)\s*\(/g)].map((m) => lineAt(scan.starts, m.index));
+    add(spec, 'spec-zone-based', [...beds, ...zoned], `aplikacja działa bez zone.js (provideZonelessChangeDetection w ${list(zoneless.map((p) => short(p, index.root)))}), a TestBed tego specu (L${beds.join(', L')}) go nie dostaje${zoned.length > 0 ? `, za to używa narzędzi strefy (L${zoned.join(', L')})` : ''} - spec sprawdza detekcję zmian, której produkcja nie ma.`);
+  }
+}
+
+// One stub standing in for several different dependencies: each dependency's own members
+// are then missing from it or mixed together.
+function stubFacts(index, add) {
+  const strip = (t) => t.trim().replace(/^\(\s*([\s\S]*)\)$/, '$1').replace(/(?:\s+as\s+[\w$.<>[\]]+)+$/, '').trim();
+  for (const spec of [...index.modules.keys()].filter((p) => reSpec.test(p))) {
+    const scan = index.scans.get(spec);
+    for (const m of scan.bare.matchAll(/\bnew\s+([\w$]+)\s*\(/g)) {
+      const open = m.index + m[0].length - 1;
+      const close = matchBracket(scan.bare, open);
+      if (close < 0) continue;
+      const args = splitTopLevel(scan.code.slice(open + 1, close), [',']).map((a) => strip(a.text));
+      const counts = new Map();
+      for (const a of args) if (/^[\w$]+$/.test(a) && !/^(?:null|undefined|true|false|this)$/.test(a)) counts.set(a, (counts.get(a) || 0) + 1);
+      for (const [stub, n] of counts) {
+        if (n < 2) continue;
+        const line = lineAt(scan.starts, m.index);
+        add(spec, 'stub-under-multiple-tokens', [line], `new ${m[1]}(...) (L${line}) dostaje ten sam stub ${stub} za ${n} różne parametry konstruktora - każda zależność potrzebuje własnego stubu z własnymi członkami.`);
+      }
+    }
+    const byStub = new Map();
+    for (const m of scan.code.matchAll(/\bprovide\s*:\s*([\w$.]+)\s*,\s*use(?:Value|Class|Existing)\s*:\s*([\w$.]+)/g)) {
+      if (!byStub.has(m[2])) byStub.set(m[2], []);
+      byStub.get(m[2]).push({ token: m[1], line: lineAt(scan.starts, m.index) });
+    }
+    for (const [stub, uses] of byStub) {
+      const tokens = [...new Set(uses.map((u) => u.token))];
+      if (tokens.length < 2) continue;
+      add(spec, 'stub-under-multiple-tokens', uses.map((u) => u.line), `ten sam stub ${stub} podany za ${tokens.length} różne tokeny (${tokens.join(', ')}; L${uses.map((u) => u.line).join(', L')}) - każda zależność potrzebuje własnego stubu z własnymi członkami.`);
+    }
+  }
+}
+
+// An enum the code branches on whose variants the companion spec covers only in part.
+function enumFacts(index, add) {
+  const members = (decl) => {
+    const scan = index.scans.get(decl.path);
+    const m = scan && new RegExp(`\\benum\\s+${decl.local.replace(/\$/g, '\\$')}\\s*\\{`).exec(scan.bare);
+    if (!m) return null;
+    const close = matchBracket(scan.bare, m.index + m[0].length - 1);
+    if (close < 0) return null;
+    return splitTopLevel(scan.bare.slice(m.index + m[0].length, close), [',']).map((part) => part.text.trim().match(/^[\w$]+/)).filter(Boolean).map((k) => k[0]);
+  };
+  for (const p of index.sourceScripts) {
+    const scan = index.scans.get(p);
+    const stem = p.replace(/\.[cm]?[jt]sx?$/, '');
+    const spec = [`${stem}.spec.ts`, `${path.posix.dirname(p)}/tests/${path.posix.basename(stem)}.spec.ts`].find((q) => index.scans.has(q));
+    if (!spec) continue;
+    const specScan = index.scans.get(spec);
+    const cases = new Map();
+    for (const m of scan.bare.matchAll(/\bcase\s+([\w$]+)\.([\w$]+)\s*:/g)) {
+      if (!cases.has(m[1])) cases.set(m[1], lineAt(scan.starts, m.index));
+    }
+    for (const [name, line] of cases) {
+      const decl = declarationOf(index, p, name) || (new RegExp(`\\benum\\s+${name}\\b`).test(scan.bare) ? { path: p, local: name } : null);
+      const variants = decl && members(decl);
+      if (!variants || variants.length < 2) continue;
+      const specName = [...(index.modules.get(spec).imports)].flatMap((e) => e.names).find((s) => s.imported === decl.local);
+      const local = specName ? specName.local : name;
+      const used = new Map();
+      for (const m of specScan.bare.matchAll(new RegExp(`(?<![\\w$.])${local.replace(/\$/g, '\\$')}\\.([\\w$]+)`, 'g'))) {
+        if (!used.has(m[1])) used.set(m[1], lineAt(specScan.starts, m.index));
+      }
+      const missing = variants.filter((v) => !used.has(v));
+      if (used.size === 0 || missing.length === 0) continue;
+      const text = `${short(p, index.root)} rozgałęzia się po ${name} (L${line}), a ${short(spec, index.root)} sprawdza tylko ${[...used.keys()].join(', ')} - bez przypadku dla ${missing.join(', ')}.`;
+      add(spec, 'enum-variant-untested', [...used.values()].slice(0, 1), text);
+      add(p, 'enum-variant-untested', [line], text);
+    }
+  }
+}
+
+// A selector projector called in a spec: the inputs and parameter order the selector
+// declares, and a call whose argument names are those parameters in another order.
+function projectorFacts(index, add) {
+  for (const spec of [...index.modules.keys()].filter((p) => reSpec.test(p))) {
+    const scan = index.scans.get(spec);
+    for (const m of scan.bare.matchAll(/(?<![\w$.])([\w$]+)(?:\s*\.\s*([\w$]+))?\s*\.\s*projector\s*\(/g)) {
+      const called = m[2] ? `${m[1]}.${m[2]}` : m[1];
+      const open = m.index + m[0].length - 1;
+      const close = matchBracket(scan.bare, open);
+      const decl = close < 0 ? null : declarationOf(index, spec, m[1]);
+      const origin = decl && index.scans.get(decl.path);
+      if (!origin) continue;
+      // `Group.member.projector`: a member of an exported selector group, `member: local` or shorthand.
+      const alias = m[2] && origin.bare.match(new RegExp(`(?<![\\w$.])${m[2]}\\s*:\\s*([\\w$]+)`));
+      const local = m[2] ? (alias ? alias[1] : m[2]) : decl.local;
+      const sel = new RegExp(`(?<![\\w$.])${local.replace(/\$/g, '\\$')}\\s*(?::[^=]+)?=\\s*createSelector\\s*\\(`).exec(origin.bare);
+      const selClose = sel ? matchBracket(origin.bare, sel.index + sel[0].length - 1) : -1;
+      if (selClose < 0) continue;
+      const parts = splitTopLevel(origin.code.slice(sel.index + sel[0].length, selClose), [',']);
+      const fn = parts.pop();
+      const params = fn && fn.text.trim().match(/^(?:function\s*[\w$]*\s*)?\(([^)]*)\)/);
+      if (!params) continue;
+      const names = params[1].split(',').map((s) => s.trim().replace(/[?:].*$/, '').trim()).filter(Boolean);
+      const inputs = parts.map((x) => x.text.trim());
+      const args = splitTopLevel(scan.code.slice(open + 1, close), [',']).map((a) => a.text.trim());
+      const line = lineAt(scan.starts, m.index);
+      const selLine = lineAt(origin.starts, sel.index);
+      const shape = `${local} (${short(decl.path, index.root)} L${selLine}) łączy wejścia ${inputs.join(', ')} - projektor przyjmuje (${names.join(', ')}) w tej kolejności`;
+      add(spec, 'projector-inputs', [line], `${called}.projector(...) L${line}: ${shape}.`);
+      const norm = (s) => s.toLowerCase();
+      if (args.length !== names.length) {
+        add(spec, 'projector-argument-order', [line], `${called}.projector(...) L${line} dostaje ${args.length} argument(y), a ${shape}.`);
+      } else if (args.every((a) => /^[\w$]+$/.test(a)) && args.map(norm).sort().join() === names.map(norm).sort().join() && args.map(norm).join() !== names.map(norm).join()) {
+        add(spec, 'projector-argument-order', [line], `${called}.projector(${args.join(', ')}) L${line} podaje argumenty w innej kolejności, niż ${shape}.`);
+      }
+    }
+  }
+}
+
+// A createActionGroup event nothing outside its declaration refers to (comments ignored).
+function unconsumedActionFacts(index, add) {
+  const sources = index.sourceScripts.map((p) => ({ p, bare: index.scans.get(p).bare || index.scans.get(p).code }));
+  for (const p of index.sourceScripts) {
+    const scan = index.scans.get(p);
+    for (const m of scan.bare.matchAll(/\bcreateActionGroup\s*\(/g)) {
+      const open = m.index + m[0].length - 1;
+      const close = matchBracket(scan.bare, open);
+      if (close < 0) continue;
+      for (const e of scan.code.slice(open, close).matchAll(/^\s*(['"])([^'"\n]+)\1\s*:/gm)) {
+        const name = actionName(e[2]);
+        const re = new RegExp(`\\.\\s*${name}\\b`);
+        const used = sources.some((s) => (s.p === p ? re.test(s.bare.slice(0, open) + s.bare.slice(close)) : re.test(s.bare)));
+        if (used) continue;
+        const line = lineAt(scan.starts, open + e.index + e[0].search(/['"]/));
+        add(p, 'action-unconsumed', [line], `zdarzenie '${e[2]}' (L${line}) nie ma konsumenta - żaden reducer, efekt ani komponent nie odwołuje się do .${name} (komentarze się nie liczą).`);
+      }
+    }
+  }
+}
+
+// Template symbols of a standalone component whose declarable is missing from `imports`.
+const externalSymbols = {
+  pipe: {
+    translate: ['TranslatePipe', 'TranslateModule'],
+    async: ['AsyncPipe', 'CommonModule'], date: ['DatePipe', 'CommonModule'], json: ['JsonPipe', 'CommonModule'],
+    uppercase: ['UpperCasePipe', 'CommonModule'], lowercase: ['LowerCasePipe', 'CommonModule'], titlecase: ['TitleCasePipe', 'CommonModule'],
+    currency: ['CurrencyPipe', 'CommonModule'], number: ['DecimalPipe', 'CommonModule'], percent: ['PercentPipe', 'CommonModule'],
+    slice: ['SlicePipe', 'CommonModule'], keyvalue: ['KeyValuePipe', 'CommonModule'],
+  },
+  attribute: {
+    formControl: ['ReactiveFormsModule'], formControlName: ['ReactiveFormsModule'], formGroup: ['ReactiveFormsModule'],
+    formGroupName: ['ReactiveFormsModule'], formArrayName: ['ReactiveFormsModule'], ngModel: ['FormsModule'],
+    ngSrc: ['NgOptimizedImage'], ngIf: ['NgIf', 'CommonModule'], ngFor: ['NgFor', 'NgForOf', 'CommonModule'],
+    ngClass: ['NgClass', 'CommonModule'], ngStyle: ['NgStyle', 'CommonModule'], ngTemplateOutlet: ['NgTemplateOutlet', 'CommonModule'],
+    ngSwitch: ['NgSwitch', 'CommonModule'], routerLink: ['RouterLink', 'RouterModule'], routerLinkActive: ['RouterLinkActive', 'RouterModule'],
+  },
+  element: { 'router-outlet': ['RouterOutlet', 'RouterModule'] },
+};
+
+function declarables(index) {
+  const out = { pipe: new Map(), attribute: new Map(), element: new Map() };
+  for (const p of index.sourceScripts) {
+    const scan = index.scans.get(p);
+    for (const m of scan.code.matchAll(/@(Component|Directive|Pipe)\s*\(\s*\{/g)) {
+      const close = matchBracket(scan.code, m.index + m[0].length - 1);
+      const cls = close < 0 ? null : scan.bare.slice(close).match(/\bclass\s+([\w$]+)/);
+      if (!cls) continue;
+      const body = scan.code.slice(m.index, close);
+      const entry = { name: cls[1], path: p, line: lineAt(scan.starts, m.index) };
+      if (m[1] === 'Pipe') {
+        const name = body.match(/\bname\s*:\s*(['"])([^'"]+)\1/);
+        if (name) out.pipe.set(name[2], entry);
+        continue;
+      }
+      const selector = body.match(/\bselector\s*:\s*(['"])([^'"]+)\1/);
+      for (const s of selector ? selector[2].split(',').map((x) => x.trim()) : []) {
+        const attr = s.match(/^\[([\w-]+)\]$/);
+        if (attr) out.attribute.set(attr[1], entry);
+        else if (/^[a-z][\w-]*$/.test(s)) out.element.set(s, entry);
+      }
+    }
+  }
+  return out;
+}
+
+// What a template uses: pipes, bound/plain attribute names, element names, with offsets.
+function templateSymbols(code) {
+  const used = [];
+  for (const m of code.matchAll(/(?<!\|)\|(?!\|)\s*([A-Za-z_$][\w$]*)/g)) used.push({ kind: 'pipe', name: m[1], at: m.index });
+  for (const tag of code.matchAll(/<([a-zA-Z][\w-]*)([^<>]*)>/g)) {
+    used.push({ kind: 'element', name: tag[1], at: tag.index });
+    const attrs = tag[2].replace(/"[^"]*"|'[^']*'/g, '""');
+    for (const a of attrs.matchAll(/\s(?:\[\(|\[|\*)?([A-Za-z][\w-]*)/g)) used.push({ kind: 'attribute', name: a[1], at: tag.index + 1 + tag[1].length + a.index });
+  }
+  return used;
+}
+
+function importFacts(index, add) {
+  const own = declarables(index);
+  const exportsOf = new Map();
+  const moduleExports = (decl) => {
+    const key = `${decl.path}\0${decl.local}`;
+    if (exportsOf.has(key)) return exportsOf.get(key);
+    const scan = index.scans.get(decl.path);
+    const at = scan ? new RegExp(`@NgModule\\s*\\(\\s*\\{[\\s\\S]*?\\bclass\\s+${decl.local.replace(/\$/g, '\\$')}\\b`).exec(scan.code) : null;
+    const list_ = at && at[0].match(/\bexports\s*:\s*\[([^\]]*)\]/);
+    const names = new Set(list_ ? list_[1].split(',').map((s) => s.trim()).filter(Boolean) : []);
+    exportsOf.set(key, names);
+    return names;
+  };
+  for (const p of index.sourceScripts) {
+    const scan = index.scans.get(p);
+    const comp = /@Component\s*\(\s*\{/.exec(scan.code);
+    if (!comp) continue;
+    const close = matchBracket(scan.code, comp.index + comp[0].length - 1);
+    if (close < 0) continue;
+    const body = scan.code.slice(comp.index, close);
+    if (/\bstandalone\s*:\s*false\b/.test(body)) continue;
+    const importsAt = body.search(/\bimports\s*:\s*\[/);
+    if (importsAt < 0 && !/\bstandalone\s*:\s*true\b/.test(body)) continue;
+    let imported = [];
+    if (importsAt >= 0) {
+      const open = comp.index + importsAt + body.slice(importsAt).indexOf('[');
+      const end = matchBracket(scan.code, open);
+      if (end < 0) continue;
+      imported = splitTopLevel(scan.code.slice(open + 1, end), [',']).map((x) => x.text.trim());
+      if (imported.some((x) => !/^[\w$]+$/.test(x))) continue;
+    }
+    const importsLine = lineAt(scan.starts, importsAt >= 0 ? comp.index + importsAt : comp.index);
+    let template = null;
+    const url = body.match(/\btemplateUrl\s*:\s*(['"])([^'"]+)\1/);
+    if (url) {
+      const tp = path.posix.normalize(path.posix.join(path.posix.dirname(p), url[2]));
+      const tScan = index.scans.get(tp);
+      if (tScan) template = { path: tp, code: tScan.code, lineOf: (i) => lineAt(tScan.starts, i) };
+    } else {
+      const s = scan.strings.find((x) => x.start > comp.index && x.start < close && /\btemplate\s*:\s*$/.test(scan.code.slice(Math.max(0, x.start - 40), x.start)));
+      if (s) template = { path: p, code: s.value, lineOf: (i) => lineAt(scan.starts, s.start + 1 + i) };
+    }
+    if (!template) continue;
+    const satisfied = (names) => imported.some((x) => names.includes(x));
+    const viaModule = (cls) => imported.some((x) => {
+      const decl = declarationOf(index, p, x);
+      return decl && moduleExports(decl).has(cls);
+    });
+    const missing = new Map();
+    for (const u of templateSymbols(template.code)) {
+      const mine = own[u.kind].get(u.name);
+      let label = null;
+      let entry = null;
+      if (mine) {
+        if (mine.path === p || satisfied([mine.name]) || viaModule(mine.name)) continue;
+        label = mine.name;
+        entry = mine;
+      } else {
+        const ext = externalSymbols[u.kind][u.name];
+        if (!ext || satisfied(ext)) continue;
+        label = ext.join('/');
+      }
+      if (!missing.has(label)) missing.set(label, { use: `${u.kind === 'pipe' ? '| ' : ''}${u.name}`, lines: [], entry });
+      missing.get(label).lines.push(template.lineOf(u.at));
+    }
+    for (const [label, miss] of missing) {
+      const lines = [...new Set(miss.lines)];
+      const where = `${short(template.path, index.root)} L${lines.join(', L')}`;
+      const text = `szablon ${short(p, index.root)} używa ${miss.use} (${where}), a imports komponentu (L${importsLine}) nie zawiera ${label} ani modułu, który go eksportuje - kompilacja go nie rozpozna.`;
+      add(p, 'template-symbol-not-imported', [importsLine], text);
+      if (template.path !== p) add(template.path, 'template-symbol-not-imported', lines, text);
+      if (miss.entry) add(miss.entry.path, 'template-symbol-not-imported', [miss.entry.line], text);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1433,6 +1792,33 @@ function runBuiltin(name, p, scan, context) {
   } else if (name === 'area-root-file') {
     const m = p.match(/(?:^|\/)src\/app\/([^/]+)\/([^/]+)$/);
     if (m) hits.push({ line: 1, text: `plik leży bezpośrednio w katalogu obszaru ${m[1]}, poza podfolderami jego układu` });
+  } else if (name === 'hover-without-focus') {
+    if (reTemplate.test(p) || context.inlineTemplate) {
+      for (const tag of code.matchAll(/<([a-zA-Z][\w-]*)([^<>]*)>/g)) {
+        const hover = tag[2].match(/\(\s*(mouseenter|mouseover)\s*\)/);
+        if (hover && !/\(\s*(?:focus|focusin)\s*\)/.test(tag[2])) hits.push({ line: at(tag.index), text: `<${tag[1]}> reaguje na (${hover[1]}) bez (focus)/(focusin) - z klawiatury treść się nie pokaże` });
+      }
+    } else if (reScript.test(p) && !/@HostListener\s*\(\s*['"](?:focus|focusin)['"]/.test(code)) {
+      for (const m of code.matchAll(/@HostListener\s*\(\s*['"](mouseenter|mouseover)['"]/g)) hits.push({ line: at(m.index), text: `@HostListener('${m[1]}') bez słuchacza focus/focusin - z klawiatury efekt się nie pojawi` });
+    }
+  } else if (name === 'action-label-mismatch') {
+    if (!reTemplate.test(p)) return hits;
+    const groups = new Map();
+    for (const tag of code.matchAll(/<([a-zA-Z][\w-]*)([^<>]*)>/g)) {
+      const handler = tag[2].match(/\((?:click|mousedown|mouseup|keydown\.enter)\)\s*=\s*"\s*([\w$.]+)\s*\(/);
+      if (!handler) continue;
+      const attr = tag[2].match(/\b(?:aria-label|title)\s*=\s*"([^"{}]+)"/);
+      const inner = code.slice(tag.index + tag[0].length).match(/^\s*([^<>{}]*?)\s*<\//);
+      const label = attr ? attr[1].trim() : inner && inner[1].trim();
+      if (!label) continue;
+      if (!groups.has(handler[1])) groups.set(handler[1], []);
+      groups.get(handler[1]).push({ line: at(tag.index), label });
+    }
+    for (const [call, uses] of groups) {
+      const labels = [...new Set(uses.map((u) => u.label.toLowerCase()))];
+      if (labels.length < 2) continue;
+      for (const u of uses) hits.push({ line: u.line, text: `${call}() ma różne etykiety: ${uses.map((x) => `'${x.label}' L${x.line}`).join(', ')} - ta sama funkcja, ta sama nazwa dostępna` });
+    }
   }
   return hits;
 }
@@ -1552,6 +1938,12 @@ function collectFacts({ files, reviewed, root = '' }) {
   actionFacts(index, add);
   specFacts(index, add);
   snapshotFacts(index, add);
+  zoneFacts(index, add);
+  stubFacts(index, add);
+  enumFacts(index, add);
+  projectorFacts(index, add);
+  unconsumedActionFacts(index, add);
+  importFacts(index, add);
   // Per reviewed file, the `builtinAnswers` texts: `repo-search` only for a file the literal
   // passes read (a script, a template, the base locale) - of any other it would claim a
   // search that never ran.

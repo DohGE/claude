@@ -6,27 +6,19 @@
     {
       "id": "general#12",
       "text": "The diff never weakens the compiler or template contract to make new code build: `strict`, `strictTemplates`, `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch` and the ESLint rule set stay at least as strict as they were, and no file is added to an `exclude`/ignore list for that purpose — a flag turned off hides the same class of error in every other file of the repo."
-    },
-    {
-      "id": "general#13",
-      "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
     }
   ],
-  "itemCount": 3,
+  "itemCount": 2,
   "instructions": [
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "12-13",
+      "selectedItems": "12",
       "checklistSize": 13,
       "items": [
         {
           "id": "general#12",
           "text": "The diff never weakens the compiler or template contract to make new code build: `strict`, `strictTemplates`, `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch` and the ESLint rule set stay at least as strict as they were, and no file is added to an `exclude`/ignore list for that purpose — a flag turned off hides the same class of error in every other file of the repo."
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },

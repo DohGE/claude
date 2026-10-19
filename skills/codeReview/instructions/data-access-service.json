@@ -16,7 +16,7 @@
     "By the http-service gate only a service that executes requests is an HTTP layer: a service here that performs no request is an architecture finding (architecture#1, #12), never a set of http-service findings.",
     "A pure HTTP wrapper gets no spec (http-service#14), so test-coverage binds only a service that does more than wrap requests."
   ],
-  "itemCount": 65,
+  "itemCount": 55,
   "instructions": [
     {
       "id": "http-service",
@@ -85,37 +85,15 @@
         },
         {
           "id": "http-service#14",
-          "text": "No unit tests for a service that only wraps HTTP calls (it is covered through the effects spec); a dedicated spec exists only when the service transforms data — which itself signals the service does too much."
-        }
-      ]
-    },
-    {
-      "id": "models",
-      "name": "Models folder",
-      "selectedItems": "1,7,10",
-      "checklistSize": 24,
-      "items": [
-        {
-          "id": "models#1",
-          "text": "`models/` is the only source of the area's types, enums and constants, split into `consts/`, `enums/`, `interfaces/`, `types/` (optional thematic subfolders for large areas); file suffixes match: `.const.ts`, `.enum.ts`, `.interface.ts`, `.type.ts`."
-        },
-        {
-          "id": "models#7",
-          "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel."
-        },
-        {
-          "id": "models#10",
-          "text": "The word `Dto`/`DTO` is not part of the vocabulary: no `UserDto`, no `user-dto.interface.ts`, no `dto/` folder, no `dto` field, variable or generic parameter — in nothing the diff adds or renames. A type is named after what it carries plus its role (`User`, `UserResponse`, `UsersListResponse`, `CreateUserRequest`, `UserSearchPayload`) and its file after the type (`user-response.interface.ts`).",
-          "sameAs": [
-            "general#2"
-          ]
+          "text": "No unit tests for a service that only wraps HTTP calls (it is covered through the effects spec); a dedicated spec exists only when the service transforms data — which itself signals the service does too much.",
+          "noSpec": true
         }
       ]
     },
     {
       "id": "architecture",
       "name": "Feature architecture",
-      "selectedItems": "1,4,6,8-9,11-12",
+      "selectedItems": "1,4,6,9,12",
       "checklistSize": 12,
       "items": [
         {
@@ -140,20 +118,11 @@
           ]
         },
         {
-          "id": "architecture#8",
-          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
-        },
-        {
           "id": "architecture#9",
           "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
           "sameAs": [
             "component-template#16"
           ]
-        },
-        {
-          "id": "architecture#11",
-          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit. A legacy shape that another item names is reported under that item, with `architecture#11` at most as its second address; this item is a finding of its own only for a shape no other item covers.",
-          "secondQuestion": "Czy plik albo jego fragment to nietknięty szkielet generatora (Angular CLI) lub kopia starszego sąsiedniego kodu - co z tego zostało niedostosowane?"
         },
         {
           "id": "architecture#12",
@@ -164,7 +133,7 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "1-6,8,11,13",
+      "selectedItems": "1-2,8,11",
       "checklistSize": 13,
       "items": [
         {
@@ -186,25 +155,6 @@
           ]
         },
         {
-          "id": "general#3",
-          "text": "No unnecessary type assertions (`as`), especially `as never` and assertions on primitive types; use a single `as Type` only when the compiler requires it; `as unknown as Type` only when the compiler/ESLint rejects a single assertion because of an incompatible shape."
-        },
-        {
-          "id": "general#4",
-          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
-        },
-        {
-          "id": "general#5",
-          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
-        },
-        {
-          "id": "general#6",
-          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.",
-          "facts": [
-            "cross-area-import"
-          ]
-        },
-        {
           "id": "general#8",
           "text": "No `console.log` or other leftover debug statements."
         },
@@ -214,10 +164,6 @@
           "sameAs": [
             "interceptors#6"
           ]
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },
@@ -445,7 +391,10 @@
         },
         {
           "id": "test-coverage#7",
-          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding."
+          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding.",
+          "facts": [
+            "enum-variant-untested"
+          ]
         },
         {
           "id": "test-coverage#8",

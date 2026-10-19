@@ -3,7 +3,7 @@
   {
    "id": "b01",
    "file": "src/app/layout/data-access/+state/layout.actions.ts",
-   "text": "`layout/data-access/+state/layout.actions.ts` is a **fully compliant** actions file (single export, `source: 'Layout Navigation'`, `'Verb subject'` event keys, `emptyProps()` where there is no payload). It must produce **zero** findings under `ngrx-actions`. Only the *relative cross-area import* of it is a finding, and it is anchored in the importing files (`user-panel.effects.ts`, `feature-user-panel.component.ts`), never here."
+   "text": "`layout/data-access/+state/layout.actions.ts` is a **fully compliant** actions file (single export, `source: 'Layout Navigation'`, `'Verb subject'` event keys, `emptyProps()` where there is no payload). It must produce **zero** findings under `ngrx-actions`. Its *relative cross-area import* in the importing files (`user-panel.effects.ts`, `feature-user-panel.component.ts`) is no finding either, as no checklist item asks for a path alias; only what those files do with the actions (the unfiltered `ofType` in the effects, the component's own `store.dispatch`) is a finding, anchored there, never here."
   },
   {
    "id": "b02",
@@ -88,7 +88,7 @@
   {
    "id": "b19",
    "file": null,
-   "text": "**Nothing under `models/` is walked against `accessibility`, `performance` or `test-coverage`, and against `security` only for `security#7` (no secrets in the diff)** — that is all the `models/` file kinds in `instructions/` hand out of those four. A folder of consts, interfaces, enums and types has no behaviour to test, no render cost and no UI, and the only attack surface it can carry is a secret written into it — none of this environment's `models/` files holds one. So a finding from one of those four instructions anchored in `models/` is a rule the reviewer invented. `models/` files still walk `architecture`, `best-practices`, `code-quality`, `general` and `models` (plus what their kind adds, like `state-interface` or `unit-tests`) — and break plenty there."
+   "text": "**No `models/` declaration is walked against `accessibility`, `performance` or `test-coverage`, and against `security` only for `security#7` (no secrets in the diff)** — that is all the `models/` file kinds in `instructions/` hand out of those four. A folder of consts, interfaces, enums and types has no behaviour to test, no render cost and no UI, and the only attack surface it can carry is a secret written into it — none of this environment's `models/` files holds one. So a finding from one of those four instructions anchored in a `models/` declaration is a rule the reviewer invented. The enum spec in `models/tests/` is no declaration: no models kind claims it any more, so it walks the plain spec rules, `test-coverage` included. `models/` declarations still walk `architecture`, `code-quality`, `general` and `models` (plus what their kind adds, like `state-interface`) — and break plenty there."
   },
   {
    "id": "b20",
@@ -129,20 +129,6 @@
    }
   },
   {
-   "id": "v003",
-   "files": [
-    "src/main.ts"
-   ],
-   "instructions": [
-    "architecture"
-   ],
-   "items": [
-    "architecture#11"
-   ],
-   "severity": null,
-   "text": "this is untouched Angular-CLI generator output (together with `user-panel.module.ts` and its `CommonModule` import) — scaffolding is conformed to these instructions before commit, not shipped as generated."
-  },
-  {
    "id": "v004",
    "files": [
     "src/polyfills.ts"
@@ -157,23 +143,6 @@
    "text": "`zone.js` is still imported although `app.config.ts` provides `provideZonelessChangeDetection()` — the provider together with a live polyfill is the finding.",
    "lines": {
     "src/polyfills.ts": "1"
-   }
-  },
-  {
-   "id": "v005",
-   "files": [
-    "src/app/app.config.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#22"
-   ],
-   "severity": null,
-   "text": "file-level `/* eslint-disable */` — widest possible scope, no justification, no rule named.",
-   "lines": {
-    "src/app/app.config.ts": "1"
    }
   },
   {
@@ -220,12 +189,10 @@
     "src/app/app.config.ts"
    ],
    "instructions": [
-    "app-config",
-    "interceptors"
+    "app-config"
    ],
    "items": [
-    "app-config#2",
-    "interceptors#1"
+    "app-config#2"
    ],
    "severity": null,
    "text": "the interceptor is registered as a class through the `HTTP_INTERCEPTORS` multi-provider instead of `withInterceptors([userPanelAuthInterceptor])`.",
@@ -368,8 +335,7 @@
     "general"
    ],
    "items": [
-    "general#12",
-    "general#13"
+    "general#12"
    ],
    "severity": null,
    "text": "state-management lint rules must be errors — `@ngrx/no-store-subscription`, `@ngrx/avoid-dispatching-multiple-actions-sequentially` and `@ngrx/no-dispatch-in-effects` are downgraded to `warn` (each of them has a live violation in this diff), and `@typescript-eslint/no-explicit-any` is turned off.",
@@ -451,23 +417,6 @@
    }
   },
   {
-   "id": "v031",
-   "files": [
-    "src/app/user-panel/models/interfaces/user-panel-state.interface.ts"
-   ],
-   "instructions": [
-    "ngrx-actions"
-   ],
-   "items": [
-    "ngrx-actions#8"
-   ],
-   "severity": null,
-   "text": "`dialogResult` parked in state only to pass a dialog result along.",
-   "lines": {
-    "src/app/user-panel/models/interfaces/user-panel-state.interface.ts": "10"
-   }
-  },
-  {
    "id": "v032",
    "files": [
     "src/app/user-panel/models/consts/user-panel-initial-state.const.ts"
@@ -504,12 +453,10 @@
     "src/app/user-panel/models/consts/user-panel-initial-state.const.ts"
    ],
    "instructions": [
-    "state-interface",
-    "best-practices"
+    "state-interface"
    ],
    "items": [
-    "state-interface#8",
-    "best-practices#2"
+    "state-interface#8"
    ],
    "severity": null,
    "text": "`userPanelInitialState = {` is typed via the `} as UserPanelState` cast instead of an explicit `: UserPanelState` annotation (compiler no longer enforces completeness).",
@@ -554,23 +501,6 @@
    }
   },
   {
-   "id": "v038",
-   "files": [
-    "src/app/user-panel/models/consts/user-panel-initial-state.const.ts"
-   ],
-   "instructions": [
-    "models"
-   ],
-   "items": [
-    "models#5"
-   ],
-   "severity": null,
-   "text": "logic inside a const (IIFE computing `createdAt`); the nested `filters` object initialized as `{}`.",
-   "lines": {
-    "src/app/user-panel/models/consts/user-panel-initial-state.const.ts": "11-12"
-   }
-  },
-  {
    "id": "v040",
    "files": [
     "src/app/user-panel/models/consts/user-panel-title.const.ts"
@@ -590,13 +520,11 @@
     "src/app/user-panel/models/consts/user-panel-title.const.ts"
    ],
    "instructions": [
-    "general",
     "i18n",
     "code-quality",
     "architecture"
    ],
    "items": [
-    "general#7",
     "i18n#11",
     "code-quality#1",
     "architecture#9"
@@ -714,7 +642,10 @@
     "models#9"
    ],
    "severity": null,
-   "text": "exported although used within one file only."
+   "text": "exported although used within one file only (`export interface UserTableCell`).",
+   "lines": {
+    "src/app/user-panel/models/interfaces/user-table-cell.interface.ts": "1"
+   }
   },
   {
    "id": "v053",
@@ -757,13 +688,11 @@
    ],
    "instructions": [
     "models",
-    "i18n",
-    "general"
+    "i18n"
    ],
    "items": [
     "models#18",
-    "i18n#11",
-    "general#7"
+    "i18n#11"
    ],
    "severity": null,
    "text": "`UserTableDisplayedColumnsLabels` enum values are texts (`'Full name'`, `'Status!'`), not i18n keys, and values ≠ keys.",
@@ -833,13 +762,11 @@
    ],
    "instructions": [
     "models",
-    "i18n",
-    "general"
+    "i18n"
    ],
    "items": [
     "models#22",
-    "i18n#11",
-    "general#7"
+    "i18n#11"
    ],
    "severity": null,
    "text": "option `label` values are raw texts, not i18n keys.",
@@ -898,33 +825,17 @@
    "text": "an enum plus a function — two main exports in one file."
   },
   {
-   "id": "v068",
-   "files": [
-    "src/app/user-panel/models/tests/user-status.enum.spec.ts"
-   ],
-   "instructions": [
-    "models"
-   ],
-   "items": [
-    "models#24"
-   ],
-   "severity": null,
-   "text": "model files have no unit tests — they are verified by the compiler and by the reducer/selector specs."
-  },
-  {
    "id": "v070",
    "files": [
     "src/app/user-panel/data-access/+state/user-panel.actions.ts"
    ],
    "instructions": [
     "ngrx-actions",
-    "models",
     "architecture",
     "code-quality"
    ],
    "items": [
     "ngrx-actions#1",
-    "models#1",
     "architecture#6",
     "code-quality#3"
    ],
@@ -1115,12 +1026,10 @@
    ],
    "instructions": [
     "ngrx-reducer",
-    "models",
     "architecture"
    ],
    "items": [
     "ngrx-reducer#1",
-    "models#1",
     "architecture#6"
    ],
    "severity": null,
@@ -1128,21 +1037,6 @@
    "lines": {
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts": "7, 14-15, 61"
    }
-  },
-  {
-   "id": "v085",
-   "files": [
-    "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
-   ],
-   "instructions": [
-    "ngrx-reducer",
-    "general"
-   ],
-   "items": [
-    "general#3"
-   ],
-   "severity": null,
-   "text": "initial state incomplete and typed via `as` cast."
   },
   {
    "id": "v086",
@@ -1340,15 +1234,11 @@
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
    ],
    "instructions": [
-    "ngrx-reducer",
-    "utils",
-    "models"
+    "ngrx-reducer"
    ],
    "items": [
     "ngrx-reducer#13",
-    "ngrx-reducer#16",
-    "utils#8",
-    "models#21"
+    "ngrx-reducer#16"
    ],
    "severity": null,
    "text": "inline `for` loop mapping + inline id concatenation (`firstName + '-' + last_name`) + `switch` mapping inside the reducer — belongs in utils/mappers.",
@@ -1362,11 +1252,9 @@
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
    ],
    "instructions": [
-    "general",
     "i18n"
    ],
    "items": [
-    "general#7",
     "i18n#11"
    ],
    "severity": null,
@@ -1607,23 +1495,6 @@
    "text": "wizard gate misnamed (`selectNextStepAllowed`, not `selectCanGoToNextStep<Step>`), composed from raw state instead of flag selectors.",
    "lines": {
     "src/app/user-panel/data-access/+state/users.selectors.ts": "31, 58"
-   }
-  },
-  {
-   "id": "v115",
-   "files": [
-    "src/app/user-panel/data-access/+state/users.selectors.ts"
-   ],
-   "instructions": [
-    "ngrx-selectors"
-   ],
-   "items": [
-    "ngrx-selectors#11"
-   ],
-   "severity": null,
-   "text": "parameterized selector for a value obtainable by composition (`selectUserById`).",
-   "lines": {
-    "src/app/user-panel/data-access/+state/users.selectors.ts": "44"
    }
   },
   {
@@ -1938,23 +1809,6 @@
    }
   },
   {
-   "id": "v137",
-   "files": [
-    "src/app/user-panel/data-access/+state/user-panel.effects.ts"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#6"
-   ],
-   "severity": null,
-   "text": "cross-area code imported through a relative path (`../../../layout/data-access/+state/layout.actions`) instead of a tsconfig path alias.",
-   "lines": {
-    "src/app/user-panel/data-access/+state/user-panel.effects.ts": "22"
-   }
-  },
-  {
    "id": "v138",
    "files": [
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
@@ -2078,23 +1932,6 @@
    }
   },
   {
-   "id": "v145",
-   "files": [
-    "src/app/user-panel/data-access/+state/user-panel.effects.ts"
-   ],
-   "instructions": [
-    "architecture"
-   ],
-   "items": [
-    "architecture#8"
-   ],
-   "severity": null,
-   "text": "component imported into the data-access layer via the forbidden `ui` barrel (`UserCardComponent` as dialog target).",
-   "lines": {
-    "src/app/user-panel/data-access/+state/user-panel.effects.ts": "24, 127"
-   }
-  },
-  {
    "id": "v146",
    "files": [
     "src/app/user-panel/data-access/+state/user-panel.facade.ts"
@@ -2209,12 +2046,10 @@
    ],
    "instructions": [
     "ngrx-facade",
-    "http-service",
     "architecture"
    ],
    "items": [
     "ngrx-facade#2",
-    "http-service#1",
     "architecture#4"
    ],
    "severity": null,
@@ -2756,20 +2591,6 @@
    }
   },
   {
-   "id": "v198",
-   "files": [
-    "src/app/user-panel/data-access/+state/tests/users.selectors.spec.ts"
-   ],
-   "instructions": [
-    "ngrx-selectors-unit-test"
-   ],
-   "items": [
-    "ngrx-selectors-unit-test#3"
-   ],
-   "severity": null,
-   "text": "derived selector fed a full state object instead of its input selectors' outputs (`selectNextStepAllowed.projector({...state})`)."
-  },
-  {
    "id": "v199",
    "files": [
     "src/app/user-panel/data-access/+state/tests/users.selectors.spec.ts"
@@ -3153,12 +2974,10 @@
     "src/app/user-panel/shared/guards/user-panel.guard.ts"
    ],
    "instructions": [
-    "guards",
-    "best-practices"
+    "guards"
    ],
    "items": [
-    "guards#7",
-    "best-practices#2"
+    "guards#7"
    ],
    "severity": null,
    "text": "`userPanelStepGuardFactory` returns a bare untyped arrow, not a `CanActivateFn`, and the routes file passes the factory itself (uninvoked) into `canActivate`.",
@@ -3572,12 +3391,10 @@
     "src/app/user-panel/shared/pipes/user-status.pipe.ts"
    ],
    "instructions": [
-    "pipes",
-    "best-practices"
+    "pipes"
    ],
    "items": [
-    "pipes#3",
-    "best-practices#1"
+    "pipes#3"
    ],
    "severity": null,
    "text": "`transform(value: any, mode?: any): any` — no explicit parameter/return types, `any` everywhere.",
@@ -3656,7 +3473,10 @@
     "pipes#6"
    ],
    "severity": null,
-   "text": "used by exactly one template for something that is not a formatting concern — it belongs in a `computed()` or a selector."
+   "text": "used by exactly one template for something that is not a formatting concern (`UserStatusPipeClass` maps a status to a label) — it belongs in a `computed()` or a selector.",
+   "lines": {
+    "src/app/user-panel/shared/pipes/user-status.pipe.ts": "10"
+   }
   },
   {
    "id": "v264",
@@ -3664,11 +3484,9 @@
     "src/app/user-panel/shared/pipes/user-status.pipe.ts"
    ],
    "instructions": [
-    "component",
     "pipes"
    ],
    "items": [
-    "component#3",
     "pipes#8"
    ],
    "severity": "high",
@@ -3917,11 +3735,9 @@
     "src/app/user-panel/shared/utils/build-user-summary.util.ts"
    ],
    "instructions": [
-    "models",
     "utils"
    ],
    "items": [
-    "models#21",
     "utils#9"
    ],
    "severity": null,
@@ -4106,20 +3922,6 @@
    "text": "a barrel `index.ts` in `shared/` is forbidden outright — `models/` is the only folder allowed to have one; every export here (both guards, the pipe and all three utils) must be imported from its concrete file."
   },
   {
-   "id": "v295",
-   "files": [
-    "src/app/user-panel/shared/index.ts"
-   ],
-   "instructions": [
-    "utils"
-   ],
-   "items": [
-    "utils#10"
-   ],
-   "severity": null,
-   "text": "the three util re-exports additionally break the utils rule that utils are never reached through a barrel."
-  },
-  {
    "id": "v296",
    "files": [
     "src/app/user-panel/shared/index.ts"
@@ -4225,34 +4027,15 @@
     "src/app/user-panel/shared/routes/user-panel.routes.ts"
    ],
    "instructions": [
-    "routes",
-    "general"
+    "routes"
    ],
    "items": [
-    "routes#8",
-    "general#3"
+    "routes#8"
    ],
    "severity": null,
    "text": "`data` carries an untyped `Record<string, any>` bag (and it is `as`-cast into that type).",
    "lines": {
     "src/app/user-panel/shared/routes/user-panel.routes.ts": "6-8, 20"
-   }
-  },
-  {
-   "id": "v304",
-   "files": [
-    "src/app/user-panel/shared/routes/user-panel.routes.ts"
-   ],
-   "instructions": [
-    "guards"
-   ],
-   "items": [
-    "guards#7"
-   ],
-   "severity": null,
-   "text": "`userPanelStepGuardFactory` is passed into `canActivate` uninvoked — a guard factory is invoked inside the array.",
-   "lines": {
-    "src/app/user-panel/shared/routes/user-panel.routes.ts": "9, 19"
    }
   },
   {
@@ -4339,20 +4122,6 @@
    ],
    "severity": null,
    "text": "the two step routes are added with no guard at all — access control is enforced by route guards."
-  },
-  {
-   "id": "v312",
-   "files": [
-    "src/app/user-panel/shell/user-panel-shell.routes.ts"
-   ],
-   "instructions": [
-    "code-quality"
-   ],
-   "items": [
-    "code-quality#2"
-   ],
-   "severity": "high",
-   "text": "both steps load the exact same component with the same dynamic import — a copy-pasted route entry."
   },
   {
    "id": "v313",
@@ -4445,59 +4214,6 @@
    ],
    "severity": null,
    "text": "inline `styles: [...]` — no own `.scss` file."
-  },
-  {
-   "id": "v319",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#5"
-   ],
-   "severity": null,
-   "text": "import order scrambled (relative first, framework last); `@angular/common` imported twice.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "33-34, 37"
-   }
-  },
-  {
-   "id": "v320",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#6"
-   ],
-   "severity": null,
-   "text": "cross-area code imported through a relative path (`../../../../layout/data-access/+state/layout.actions`).",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "11"
-   }
-  },
-  {
-   "id": "v321",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "architecture",
-    "models"
-   ],
-   "items": [
-    "architecture#8",
-    "models#7"
-   ],
-   "severity": null,
-   "text": "models imported by concrete paths from outside `models/` (`../../../models/enums/user-status.enum`, `../../../models/consts/user-panel-title.const`) instead of through the models barrel.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "7-8"
-   }
   },
   {
    "id": "v322",
@@ -4810,23 +4526,6 @@
    }
   },
   {
-   "id": "v341",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#4"
-   ],
-   "severity": null,
-   "text": "string-index type access (`UserPanelState['users']`).",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "83"
-   }
-  },
-  {
    "id": "v342",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4973,7 +4672,6 @@
    ],
    "items": [
     "component#12",
-    "component#13",
     "component#17"
    ],
    "severity": null,
@@ -5494,7 +5192,7 @@
     "accessibility"
    ],
    "items": [
-    "accessibility#8"
+    "accessibility#17"
    ],
    "wcag": [
     "2.5.8"
@@ -5840,12 +5538,10 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "component-template",
-    "code-quality"
+    "component-template"
    ],
    "items": [
-    "component-template#15",
-    "code-quality#2"
+    "component-template#15"
    ],
    "severity": null,
    "text": "duplicated branch markup: the `Found {{ resultCount }} users` and `Found 0 users` blocks each repeat the paragraph and the Export button, instead of one ng-template + ngTemplateOutlet.",
@@ -6081,7 +5777,7 @@
     "accessibility"
    ],
    "items": [
-    "accessibility#17"
+    "accessibility#22"
    ],
    "wcag": [
     "3.2.4"
@@ -6390,15 +6086,11 @@
    ],
    "instructions": [
     "architecture",
-    "models",
-    "components-folder",
-    "utils"
+    "components-folder"
    ],
    "items": [
     "architecture#6",
-    "models#1",
-    "components-folder#2",
-    "utils#9"
+    "components-folder#2"
    ],
    "severity": null,
    "text": "interface (`HelperUser`) belongs in `models/`, const in `models/consts`; `buildGreeting` has one consumer and a one-line body, so it is inlined at its call site (`feature-user-panel.component.ts:263`) rather than moved to `shared/utils/`.",
@@ -6412,12 +6104,10 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
    ],
    "instructions": [
-    "general",
     "i18n",
     "code-quality"
    ],
    "items": [
-    "general#7",
     "i18n#8",
     "code-quality#1"
    ],
@@ -6550,23 +6240,6 @@
    }
   },
   {
-   "id": "v451",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts"
-   ],
-   "instructions": [
-    "directives"
-   ],
-   "items": [
-    "directives#5"
-   ],
-   "severity": null,
-   "text": "two copy-pasted host bindings (`style.outline`, `style.background`) instead of composition through `hostDirectives`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts": "27-28, 34"
-   }
-  },
-  {
    "id": "v452",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts"
@@ -6597,7 +6270,10 @@
     "directives#7"
    ],
    "severity": null,
-   "text": "not listed in the `imports` array of the component whose template uses it."
+   "text": "not listed in the `imports` array of the component whose template uses it (`selector: 'highlight'`).",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts": "17"
+   }
   },
   {
    "id": "v454",
@@ -6980,12 +6656,10 @@
    ],
    "instructions": [
     "ui-component",
-    "models",
     "code-quality"
    ],
    "items": [
     "ui-component#7",
-    "models#1",
     "code-quality#1"
    ],
    "severity": null,
@@ -7066,23 +6740,6 @@
    "text": "`valueChanges` subscription in the constructor without `takeUntilDestroyed`, `debounceTime` (central config) or `distinctUntilChanged` — emits on every keystroke and leaks; the constructor is also supposed to hold `effect()` calls only.",
    "lines": {
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "81"
-   }
-  },
-  {
-   "id": "v483",
-   "files": [
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#3"
-   ],
-   "severity": null,
-   "text": "`as never` cast on the emitted value (also emits the form value typed as `CardUser` — wrong contract).",
-   "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "24, 46, 72-73, 82"
    }
   },
   {
@@ -8101,23 +7758,6 @@
    }
   },
   {
-   "id": "v582",
-   "files": [
-    "src/app/user-panel/shared/guards/user-panel.guard.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#1"
-   ],
-   "severity": null,
-   "text": "`userPanelStepGuardFactory(step: string)` types the step as a free string and compares it with the magic string `'step-1'` instead of a step enum.",
-   "lines": {
-    "src/app/user-panel/shared/guards/user-panel.guard.ts": "35-36"
-   }
-  },
-  {
    "id": "v583",
    "files": [
     "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts"
@@ -8132,23 +7772,6 @@
    "text": "`refreshAttempts > 0` is always true right after the increment, so `intercept()` calls itself for the refresh request with no exit — unbounded recursion that overflows the stack on the first request.",
    "lines": {
     "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts": "27"
-   }
-  },
-  {
-   "id": "v585",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
-   ],
-   "instructions": [
-    "code-quality"
-   ],
-   "items": [
-    "code-quality#2"
-   ],
-   "severity": null,
-   "text": "the two `<div class=\"tab\" role=\"tab\"` divs are the same construct copy-pasted with a different value and label.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "46-47"
    }
   },
   {
@@ -8408,6 +8031,76 @@
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "57"
    }
+  },
+  {
+   "id": "v601",
+   "files": [
+    "src/app/app.config.ts"
+   ],
+   "instructions": [
+    "general"
+   ],
+   "items": [
+    "general#8"
+   ],
+   "severity": null,
+   "text": "`handleError` sends every error to `console.log` — a debug statement standing in for real error reporting.",
+   "lines": {
+    "src/app/app.config.ts": "33-34"
+   }
+  },
+  {
+   "id": "v602",
+   "files": [
+    "src/app/app.config.ts"
+   ],
+   "instructions": [
+    "test-coverage"
+   ],
+   "items": [
+    "test-coverage#1"
+   ],
+   "severity": "missing-unit-test",
+   "text": "`export class LoggingErrorHandler` ships without a spec — nothing calls `handleError` or checks what it logs (🔵).",
+   "lines": {
+    "src/app/app.config.ts": "32-33"
+   }
+  },
+  {
+   "id": "v603",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#8"
+   ],
+   "severity": null,
+   "text": "one signal, two guard styles: `user()!.avatarUrl` and `selected.emit(user()!)` assert non-null, while `user()?.firstName` and the other reads use optional chaining.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "2, 4, 17"
+   }
+  },
+  {
+   "id": "v604",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
+   ],
+   "instructions": [
+    "component",
+    "best-practices"
+   ],
+   "items": [
+    "component#14",
+    "best-practices#18"
+   ],
+   "severity": null,
+   "text": "`nonNullable.group({ note: '' })` — the control has no explicit generic type; it is only inferred from the empty-string seed.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "78"
+   }
   }
  ],
  "crossFile": [
@@ -8425,7 +8118,7 @@
   },
   {
    "id": "x04",
-   "text": "Layer inversion loop: effects → ui barrel → component → facade → service, while the guard, the directive and the feature component also reach the service directly, and the interceptor dispatches back into the store."
+   "text": "Layer inversion: ui component → facade → service, while the guard, the directive and the feature component also reach the service directly, and the interceptor dispatches back into the store."
   },
   {
    "id": "x05",
@@ -8449,7 +8142,7 @@
   },
   {
    "id": "x10",
-   "text": "Specs that must not exist at all: the HTTP-wrapper service spec, the routes spec, the models enum spec and the i18n snapshot spec."
+   "text": "Specs that must not exist at all: the HTTP-wrapper service spec, the routes spec and the i18n snapshot spec."
   },
   {
    "id": "x12",

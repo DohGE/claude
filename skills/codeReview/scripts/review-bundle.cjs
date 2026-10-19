@@ -415,15 +415,17 @@ function withReported(text, state) {
 }
 
 // What the rulebook fixes beyond the item texts, for check-part.cjs: fixed severities by
-// instruction id or item address, the addresses stating one requirement, the prepared verdicts.
+// instruction id or item address, the addresses stating one requirement, the prepared verdicts,
+// the addresses saying a file has no spec.
 function rulesOf(instructions) {
-  const out = { severity: {}, sameAs: {}, prepared: {} };
+  const out = { severity: {}, sameAs: {}, prepared: {}, noSpec: [] };
   for (const [id, instruction] of instructions) {
     if (instruction.severity) out.severity[id] = instruction.severity;
     for (const [n, extra] of instruction.extras) {
       if (extra.severity) out.severity[`${id}#${n}`] = extra.severity;
       if (extra.sameAs && extra.sameAs.length > 0) out.sameAs[`${id}#${n}`] = extra.sameAs;
       if (extra.unverified) out.prepared[`${id}#${n}`] = extra.unverified;
+      if (extra.noSpec) out.noSpec.push(`${id}#${n}`);
     }
   }
   return out;

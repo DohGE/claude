@@ -94,23 +94,6 @@
       "checklistSize": 12,
       "items": [
         {
-          "id": "architecture#1",
-          "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
-          "facts": [
-            "area-routes-twice"
-          ],
-          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
-        },
-        {
-          "id": "architecture#6",
-          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, HTTP in `data-access/services/`, state files in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed.",
-          "probe": [
-            {
-              "builtin": "area-root-file"
-            }
-          ]
-        },
-        {
           "id": "architecture#8",
           "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
         },
@@ -177,10 +160,6 @@
           "sameAs": [
             "i18n#11"
           ]
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },

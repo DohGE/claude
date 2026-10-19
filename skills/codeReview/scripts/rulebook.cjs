@@ -161,7 +161,8 @@ function rulebookFilesUnder(dir) {
 // (`builtinAnswers`), printed per file; `severity` - the fixed severity of its findings;
 // `sameAs` - items one defect breaks together, reported as ONE finding naming both;
 // `unverified` - the prepared NIEZWERYFIKOWANE reason of an item no review can check
-// from the files (the test order, a green spec run).
+// from the files (the test order, a green spec run); `noSpec` - the item says its file has
+// no spec at all, so its finding contradicts test-coverage findings on that file.
 function readItemExtras(item, address, where, warnings) {
   const extras = {};
   if (item.facts !== undefined) {
@@ -209,6 +210,10 @@ function readItemExtras(item, address, where, warnings) {
     const reason = typeof item.unverified === 'string' ? item.unverified.trim() : '';
     if (unverifiedReasons.some((prefix) => reason.startsWith(prefix) && reason.length > prefix.length + 1)) extras.unverified = reason;
     else warnings.push(`${where}: ${address} "unverified" ${JSON.stringify(item.unverified)} is not "${unverifiedReasons.join('" / "')}" with a reason - ignored.`);
+  }
+  if (item.noSpec !== undefined) {
+    if (item.noSpec === true) extras.noSpec = true;
+    else warnings.push(`${where}: ${address} "noSpec" ${JSON.stringify(item.noSpec)} is not true - ignored.`);
   }
   return Object.keys(extras).length > 0 ? extras : null;
 }
@@ -284,7 +289,7 @@ function absorbInstruction(defs, instruction, where, warnings) {
     } else if (def.items.get(n) !== text) {
       warnings.push(`${where}: ${instruction.id}#${n} differs from ${def.from} - the one in ${def.from} is kept.`);
     } else if (JSON.stringify(def.extras.get(n) || null) !== JSON.stringify(extra)) {
-      warnings.push(`${where}: ${instruction.id}#${n} extras (facts, probe, secondQuestion, answer, severity, sameAs, unverified) differ from ${def.from} - the ones in ${def.from} are kept.`);
+      warnings.push(`${where}: ${instruction.id}#${n} extras (facts, probe, secondQuestion, answer, severity, sameAs, unverified, noSpec) differ from ${def.from} - the ones in ${def.from} are kept.`);
     }
   }
 }

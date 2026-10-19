@@ -8,18 +8,14 @@
       "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel."
     }
   ],
-  "itemCount": 10,
+  "itemCount": 7,
   "instructions": [
     {
       "id": "models",
       "name": "Models folder",
-      "selectedItems": "5,7",
+      "selectedItems": "7",
       "checklistSize": 24,
       "items": [
-        {
-          "id": "models#5",
-          "text": "Files are purely declarative — only `export interface/type/enum/const`; no functions (→ `shared/utils/`), classes, components, providers, or logic inside constants (a const is a literal or a `Record`, never an IIFE or function result)."
-        },
         {
           "id": "models#7",
           "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel."
@@ -29,28 +25,12 @@
     {
       "id": "architecture",
       "name": "Feature architecture",
-      "selectedItems": "7-8",
+      "selectedItems": "7",
       "checklistSize": 12,
       "items": [
         {
           "id": "architecture#7",
           "text": "An `index.ts` barrel is allowed ONLY in `models/`. Everywhere else — `shared/` included, whatever it re-exports — a barrel `index.ts` is forbidden: it bundles guards, utils, routes and directives into one import surface, so every consumer drags the whole folder into its bundle, the import path stops naming the layer it depends on, and a `@defer`-loaded target reached through it lands in the eager bundle anyway. Consumers import the concrete file (`shared/utils/build-user-table.util`, `shared/guards/users-loaded.guard`)."
-        },
-        {
-          "id": "architecture#8",
-          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
-        }
-      ]
-    },
-    {
-      "id": "general",
-      "name": "General code rules",
-      "selectedItems": "13",
-      "checklistSize": 13,
-      "items": [
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },

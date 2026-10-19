@@ -271,7 +271,7 @@ test('two kinds disagreeing on an item\'s extras warn, and the first copy is kep
   const two = instructionWith('code-quality', ['No dead code.'], { 1: { facts: ['barrel-unused'] } });
   const rules = rulebookOf(t, [kind('a', '<name>.a.ts', [one]), kind('b', '<name>.b.ts', [two])]);
   assert.deepStrictEqual(rules.instructions.get('code-quality').extras.get(1), { facts: ['export-unused'] });
-  assert.match(rules.warnings.join('\n'), /code-quality#1 extras \(facts, probe, secondQuestion, answer, severity, sameAs, unverified\) differ/);
+  assert.match(rules.warnings.join('\n'), /code-quality#1 extras \(facts, probe, secondQuestion, answer, severity, sameAs, unverified, noSpec\) differ/);
 });
 
 test('a project item restating a skill item replaces its extras too', (t) => {

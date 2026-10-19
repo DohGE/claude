@@ -12,7 +12,7 @@
       "text": "Configuration values (API base paths, intervals, debounce times, feature flags) come from the central app config token — no inline URLs, no `process.env` reads, no secrets (security instruction)."
     }
   ],
-  "itemCount": 12,
+  "itemCount": 9,
   "instructions": [
     {
       "id": "security",
@@ -36,21 +36,9 @@
       ]
     },
     {
-      "id": "app-config",
-      "name": "Application configuration & bootstrap",
-      "selectedItems": "10",
-      "checklistSize": 10,
-      "items": [
-        {
-          "id": "app-config#10",
-          "text": "Configuration values (API base paths, intervals, debounce times, feature flags) come from the central app config token — no inline URLs, no `process.env` reads, no secrets (security instruction)."
-        }
-      ]
-    },
-    {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "1-2,13",
+      "selectedItems": "1-2",
       "checklistSize": 13,
       "items": [
         {
@@ -70,10 +58,6 @@
           "sameAs": [
             "models#10"
           ]
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },
@@ -86,7 +70,7 @@
         "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1-3,6-8",
+      "selectedItems": "1,3,6-8",
       "checklistSize": 8,
       "items": [
         {
@@ -110,11 +94,6 @@
             "http-service#9",
             "pipes#7"
           ]
-        },
-        {
-          "id": "code-quality#2",
-          "text": "No copy-paste-with-a-tweak: two near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset).",
-          "severity": "high"
         },
         {
           "id": "code-quality#3",
