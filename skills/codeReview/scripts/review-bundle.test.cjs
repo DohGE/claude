@@ -225,7 +225,7 @@ test('rulesOf hands check-part the fixed severities, the sameAs pairs and the pr
     ['u', instruction('u', ['c', 'd'], { 1: { sameAs: ['q#1'] }, 2: { unverified: 'narzędzie: x' } })],
   ]);
   const rules = rb.rulesOf(instructions);
-  assert.deepStrictEqual(rules, { severity: { q: 'medium', 'q#1': 'high' }, sameAs: { 'q#1': ['u#1'], 'u#1': ['q#1'] }, prepared: { 'u#2': 'narzędzie: x' } });
+  assert.deepStrictEqual(rules, { severity: { q: 'medium', 'q#1': 'high' }, sameAs: { 'q#1': ['u#1'], 'u#1': ['q#1'] }, prepared: { 'u#2': 'narzędzie: x' }, noSpec: [] });
   assert.deepStrictEqual(rb.factsDocument({ files: {}, rules }).rules, rules);
   assert.ok(!('rules' in rb.factsDocument({ files: {} })));
 });

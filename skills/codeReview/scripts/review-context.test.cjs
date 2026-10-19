@@ -714,7 +714,7 @@ test('light files share a batch: their bundles name the batch and the part, the 
   const cross = fs.readFileSync(t0.crossBundlePath, 'utf8');
   assert.ok(cross.includes(`- część: ${report}.part04.md\n`) && cross.includes(`${report}.part05.md`));
   assert.ok(cross.includes('PR Problem'), 'an HTML run writes the PR fields');
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(t0.factsPath, 'utf8')).rules, { severity: {}, sameAs: {}, prepared: {} });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(t0.factsPath, 'utf8')).rules, { severity: {}, sameAs: {}, prepared: {}, noSpec: [] });
 
   const alone = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 13), batch: false });
   assert.deepStrictEqual(alone.targets[0].batches, []);

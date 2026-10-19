@@ -12,7 +12,7 @@
       "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area."
     }
   ],
-  "itemCount": 54,
+  "itemCount": 51,
   "instructions": [
     {
       "id": "directives",
@@ -75,7 +75,10 @@
         },
         {
           "id": "unit-tests#7",
-          "text": "A dependency mock/stub is checked against the real contract instead of cast into it: `satisfies SomeService` for a full stub, `satisfies Partial<SomeService>` or an annotated `Partial<SomeService>` for the deliberate subsets the facade, component and guard test instructions prescribe — never `as SomeService`, which silences every drift between the mock and the contract it stands for."
+          "text": "A dependency mock/stub is checked against the real contract instead of cast into it: `satisfies SomeService` for a full stub, `satisfies Partial<SomeService>` or an annotated `Partial<SomeService>` for the deliberate subsets the facade, component and guard test instructions prescribe — never `as SomeService`, which silences every drift between the mock and the contract it stands for.",
+          "facts": [
+            "stub-under-multiple-tokens"
+          ]
         },
         {
           "id": "unit-tests#8",
@@ -125,7 +128,10 @@
         },
         {
           "id": "unit-tests#18",
-          "text": "The spec runs the change-detection mode the application runs: when `app.config.ts` provides `provideZonelessChangeDetection()`, the TestBed setup provides it too — a spec left zone-based passes on zone.js' automatic ticks and hides exactly the missing signal write that leaves the real app stale. Without the polyfill `fakeAsync`/`tick()` no longer exist; flush with `TestBed.tick()` (v20+) or `fixture.detectChanges()`."
+          "text": "The spec runs the change-detection mode the application runs: when `app.config.ts` provides `provideZonelessChangeDetection()`, the TestBed setup provides it too — a spec left zone-based passes on zone.js' automatic ticks and hides exactly the missing signal write that leaves the real app stale. Without the polyfill `fakeAsync`/`tick()` no longer exist; flush with `TestBed.tick()` (v20+) or `fixture.detectChanges()`.",
+          "facts": [
+            "spec-zone-based"
+          ]
         },
         {
           "id": "unit-tests#19",
@@ -157,7 +163,7 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "1-6,8-9,13",
+      "selectedItems": "1-4,8-9",
       "checklistSize": 13,
       "items": [
         {
@@ -187,17 +193,6 @@
           "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
         },
         {
-          "id": "general#5",
-          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
-        },
-        {
-          "id": "general#6",
-          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.",
-          "facts": [
-            "cross-area-import"
-          ]
-        },
-        {
           "id": "general#8",
           "text": "No `console.log` or other leftover debug statements."
         },
@@ -208,10 +203,6 @@
           "sameAs": [
             "unit-tests#21"
           ]
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },
@@ -365,7 +356,10 @@
         },
         {
           "id": "test-coverage#7",
-          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding."
+          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding.",
+          "facts": [
+            "enum-variant-untested"
+          ]
         },
         {
           "id": "test-coverage#8",

@@ -8,7 +8,7 @@
       "text": "File lives in `<area>/data-access/+state/<area>.facade.ts`; class `<PascalCaseArea>Facade` with `@Injectable()` **without** `providedIn: 'root'`; provided in the route `providers`, never globally and never in `@Component.providers`."
     }
   ],
-  "itemCount": 60,
+  "itemCount": 48,
   "instructions": [
     {
       "id": "ngrx-facade",
@@ -60,42 +60,6 @@
       ]
     },
     {
-      "id": "http-service",
-      "name": "HTTP service",
-      "gate": "the file is an HTTP layer - it injects an HTTP client (`HttpClient`) or its methods execute REST requests - or it is the spec of such a service. A service in this folder that performs no request is an architecture finding (wrong location), never a set of HTTP-service findings",
-      "selectedItems": "1",
-      "checklistSize": 14,
-      "items": [
-        {
-          "id": "http-service#1",
-          "text": "The service is a thin HTTP layer — the only place in the area executing REST requests — injected **exclusively by effects**; never used by components, facades, reducers or selectors."
-        }
-      ]
-    },
-    {
-      "id": "models",
-      "name": "Models folder",
-      "selectedItems": "1,7,10",
-      "checklistSize": 24,
-      "items": [
-        {
-          "id": "models#1",
-          "text": "`models/` is the only source of the area's types, enums and constants, split into `consts/`, `enums/`, `interfaces/`, `types/` (optional thematic subfolders for large areas); file suffixes match: `.const.ts`, `.enum.ts`, `.interface.ts`, `.type.ts`."
-        },
-        {
-          "id": "models#7",
-          "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel."
-        },
-        {
-          "id": "models#10",
-          "text": "The word `Dto`/`DTO` is not part of the vocabulary: no `UserDto`, no `user-dto.interface.ts`, no `dto/` folder, no `dto` field, variable or generic parameter — in nothing the diff adds or renames. A type is named after what it carries plus its role (`User`, `UserResponse`, `UsersListResponse`, `CreateUserRequest`, `UserSearchPayload`) and its file after the type (`user-response.interface.ts`).",
-          "sameAs": [
-            "general#2"
-          ]
-        }
-      ]
-    },
-    {
       "id": "i18n",
       "name": "Translations",
       "selectedItems": "2,8,11",
@@ -126,7 +90,7 @@
     {
       "id": "architecture",
       "name": "Feature architecture",
-      "selectedItems": "1,3-4,6,8-9,11",
+      "selectedItems": "1,3-4,6,9",
       "checklistSize": 12,
       "items": [
         {
@@ -155,27 +119,18 @@
           ]
         },
         {
-          "id": "architecture#8",
-          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
-        },
-        {
           "id": "architecture#9",
           "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
           "sameAs": [
             "component-template#16"
           ]
-        },
-        {
-          "id": "architecture#11",
-          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit. A legacy shape that another item names is reported under that item, with `architecture#11` at most as its second address; this item is a finding of its own only for a shape no other item covers.",
-          "secondQuestion": "Czy plik albo jego fragment to nietknięty szkielet generatora (Angular CLI) lub kopia starszego sąsiedniego kodu - co z tego zostało niedostosowane?"
         }
       ]
     },
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "1-8,13",
+      "selectedItems": "1-2,8",
       "checklistSize": 13,
       "items": [
         {
@@ -197,38 +152,8 @@
           ]
         },
         {
-          "id": "general#3",
-          "text": "No unnecessary type assertions (`as`), especially `as never` and assertions on primitive types; use a single `as Type` only when the compiler requires it; `as unknown as Type` only when the compiler/ESLint rejects a single assertion because of an incompatible shape."
-        },
-        {
-          "id": "general#4",
-          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
-        },
-        {
-          "id": "general#5",
-          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
-        },
-        {
-          "id": "general#6",
-          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.",
-          "facts": [
-            "cross-area-import"
-          ]
-        },
-        {
-          "id": "general#7",
-          "text": "Every user-facing string is an i18n key resolved through the translation pipe/service — never a hard-coded text, in TS or in templates.",
-          "sameAs": [
-            "i18n#11"
-          ]
-        },
-        {
           "id": "general#8",
           "text": "No `console.log` or other leftover debug statements."
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },
@@ -420,7 +345,10 @@
         },
         {
           "id": "test-coverage#7",
-          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding."
+          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding.",
+          "facts": [
+            "enum-variant-untested"
+          ]
         },
         {
           "id": "test-coverage#8",

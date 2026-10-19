@@ -157,10 +157,6 @@
         {
           "id": "general#6",
           "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area."
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },

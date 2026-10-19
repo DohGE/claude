@@ -138,10 +138,6 @@
         {
           "id": "general#9",
           "text": "No focused or skipped tests in the diff: `fdescribe`, `fit`, `describe.only`, `it.only`, `xdescribe`, `xit`, `test.skip` — a committed `.only` silently reduces CI to one suite while staying green (report as 🔴 High)."
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },

@@ -863,3 +863,17 @@ test('promote: the command moves the drafts of one batch in together, and drops 
   assert.ok(!fs.existsSync(draft(1)));
   assert.strictEqual(fs.readFileSync(f.part(1), 'utf8'), partA());
 });
+
+test('noSpecConflicts: a no-spec finding against test-coverage findings on the spec or its source', () => {
+  const tagged = (id, n) => ({ tags: [{ address: { id, n } }] });
+  const rules = { noSpec: ['routes#10'] };
+  const sections = [
+    { path: 'src/app.routes.spec.ts', findings: [tagged('routes', 10), tagged('unit-tests', 3)] },
+    { path: 'src/app.routes.ts', findings: [tagged('test-coverage', 2)] },
+  ];
+  const problems = cp.noSpecConflicts(sections, rules);
+  assert.strictEqual(problems.length, 1);
+  assert.match(problems[0], /routes#10.*src\/app\.routes\.ts/);
+  assert.deepStrictEqual(cp.noSpecConflicts([sections[0]], rules), [], 'other instructions on the same spec are no conflict');
+  assert.deepStrictEqual(cp.noSpecConflicts(sections, {}), []);
+});

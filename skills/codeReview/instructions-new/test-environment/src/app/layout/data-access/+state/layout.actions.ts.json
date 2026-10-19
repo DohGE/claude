@@ -148,10 +148,6 @@
         {
           "id": "general#8",
           "text": "No `console.log` or other leftover debug statements."
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },

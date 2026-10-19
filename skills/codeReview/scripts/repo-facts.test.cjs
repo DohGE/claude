@@ -288,3 +288,59 @@ test('membersByFile: where each public member of an exported class is named, amo
   assert.deepStrictEqual(result.specsByFile.get('src/other.ts'), [], 'no spec imports it');
   assert.ok(!result.specsByFile.has('src/card.component.spec.ts'), 'a spec has no spec section of its own');
 });
+
+test('collectFacts reports zone-based specs, shared stubs, untested enum variants, snapshot drift, projectors, unconsumed actions and missing imports', () => {
+  const result = collect({
+    'src/app/app.config.ts': 'export const appConfig = { providers: [provideZonelessChangeDetection()] };\n',
+    'src/status.enum.ts': 'export enum Status { On, Off, Idle }\n',
+    'src/card.component.ts': [
+      "import { Status } from './status.enum';",
+      "@Component({ selector: 'card', standalone: true, imports: [CommonModule], templateUrl: './card.component.html' })",
+      'export class CardComponent {',
+      '  mod(s: Status) {',
+      '    switch (s) {',
+      '      case Status.On: return 1;',
+      '      default: return 0;',
+      '    }',
+      '  }',
+      '}',
+    ].join('\n'),
+    'src/card.component.html': '<div *ngIf="x">{{ a | translate }}</div>\n<tip></tip>\n',
+    'src/tip.directive.ts': "@Directive({ selector: 'tip' })\nexport class Tip {}\n",
+    'src/tests/card.component.spec.ts': [
+      "import { Status } from '../status.enum';",
+      'TestBed.configureTestingModule({});',
+      'it.each([[Status.On], [Status.Off]])("x", () => {});',
+    ].join('\n'),
+    'src/guard.ts': 'export class Guard { constructor(a: A, b: B) {} }\n',
+    'src/tests/guard.spec.ts': "import { Guard } from '../guard';\nconst S = {} as never;\nnew Guard(S as never, S as never);\n",
+    'src/table.util.ts': 'const build = (x: number[]) => {\n  return {\n    id: 1,\n    rows: x,\n  };\n};\nexport default build;\n',
+    'src/tests/table.util.spec.ts': "import build from '../table.util';\nit('b', () => expect(build([])).toMatchSnapshot());\n",
+    'src/tests/__snapshots__/table.util.spec.ts.snap': 'exports[`b 1`] = `\nObject {\n  "id": 1,\n}\n`;\n',
+    'src/sel.ts': 'const selA = createSelector(getA, getB, (a, b) => a + b);\nexport const Sel = { selA };\n',
+    'src/tests/sel.spec.ts': "import { Sel } from '../sel';\nit('p', () => Sel.selA.projector(b, a));\n",
+    'src/actions.ts': "export const Act = createActionGroup({ source: 'x', events: {\n  'Load': emptyProps(),\n  'Toggle panel': emptyProps(),\n} });\n",
+    'src/reducer.ts': "import { Act } from './actions';\n// Act.togglePanel\nexport const r = createReducer(0, on(Act.load, (s) => s));\n",
+  });
+  const kinds = (p) => (result.facts.get(p) || []).map((f) => f.kind);
+  assert.ok(kinds('src/tests/card.component.spec.ts').includes('spec-zone-based'));
+  assert.ok(kinds('src/tests/card.component.spec.ts').includes('enum-variant-untested'));
+  assert.match(result.facts.get('src/card.component.ts').find((f) => f.kind === 'enum-variant-untested').text, /Idle/);
+  assert.ok(kinds('src/tests/guard.spec.ts').includes('stub-under-multiple-tokens'));
+  assert.ok(kinds('src/tests/table.util.spec.ts').includes('snapshot-field-drift'));
+  assert.ok(kinds('src/table.util.ts').includes('snapshot-field-drift'));
+  assert.deepStrictEqual(kinds('src/tests/sel.spec.ts').sort(), ['projector-argument-order', 'projector-inputs']);
+  assert.ok(result.facts.get('src/tests/sel.spec.ts').find((f) => f.kind === 'projector-inputs').hint);
+  assert.deepStrictEqual(result.facts.get('src/actions.ts').filter((f) => f.kind === 'action-unconsumed').map((f) => f.lines), [[3]]);
+  const missing = result.facts.get('src/card.component.ts').filter((f) => f.kind === 'template-symbol-not-imported').map((f) => f.text);
+  assert.strictEqual(missing.length, 2, 'translate and tip - ngIf comes with CommonModule');
+  assert.ok(kinds('src/tip.directive.ts').includes('template-symbol-not-imported'));
+});
+
+test('hover-without-focus and action-label-mismatch probes', () => {
+  const html = '<span (mouseenter)="a()"></span>\n<span (mouseenter)="a()" (focus)="a()"></span>\n<button aria-label="Erase" (click)="remove(u)"></button>\n<span (mousedown)="remove(u)">Remove</span>\n';
+  assert.deepStrictEqual(facts.runProbe({ builtin: 'hover-without-focus' }, 'a.html', html).map((h) => h.line), [1]);
+  assert.deepStrictEqual(facts.runProbe({ builtin: 'action-label-mismatch' }, 'a.html', html).map((h) => h.line), [3, 4]);
+  assert.deepStrictEqual(facts.runProbe({ builtin: 'hover-without-focus' }, 'd.ts', "@HostListener('mouseenter') on() {}\n").map((h) => h.line), [1]);
+  assert.deepStrictEqual(facts.runProbe({ builtin: 'hover-without-focus' }, 'd.ts', "@HostListener('mouseenter') on() {}\n@HostListener('focus') f() {}\n"), []);
+});

@@ -66,7 +66,7 @@ const wholeFileMinLines = 20;
 const maxListed = 40;
 // Parts written closer together than this came from one response - allowed within one batch.
 const partGapMs = 2000;
-const noRules = { severity: {}, sameAs: {}, prepared: {} };
+const noRules = { severity: {}, sameAs: {}, prepared: {}, noSpec: [] };
 const timingRefusal = 'jedna część na odpowiedź';
 // Read cuts a line longer than this; `sed -n '<N>p'` is how the rest of it is seen.
 const readLineLimit = 2000;
@@ -110,6 +110,28 @@ function lineSet(value) {
 
 function addressesOf(finding) {
   return (finding.tags || []).filter((tag) => tag.address).map((tag) => `${tag.address.id}#${tag.address.n}`);
+}
+
+// A finding saying a spec must not exist and test-coverage findings asking that spec, or its
+// source, for more tests cannot both stand: across all sections of the assembled report.
+function noSpecConflicts(sections, rules) {
+  const noSpec = new Set((rules && rules.noSpec) || []);
+  if (noSpec.size === 0) return [];
+  const sourceOf = (p) => p.replace(/\.spec(\.[cm]?[jt]sx?)$/, '$1').replace(/\/tests?\/([^/]+)$/, '/$1');
+  const coverage = new Map();
+  for (const section of sections) {
+    if (!section.findings.some((finding) => addressesOf(finding).some((a) => a.startsWith('test-coverage#')))) continue;
+    for (const p of [section.path, sourceOf(section.path)]) coverage.set(p, [...(coverage.get(p) || []), section.path]);
+  }
+  const problems = [];
+  for (const section of sections) {
+    if (!/\.spec\.[cm]?[jt]sx?$/.test(section.path)) continue;
+    const said = [...new Set(section.findings.flatMap(addressesOf).filter((a) => noSpec.has(a)))];
+    const against = [...new Set([...(coverage.get(section.path) || []), ...(coverage.get(sourceOf(section.path)) || [])])];
+    if (said.length === 0 || against.length === 0) continue;
+    problems.push(`${section.path}: ${compact(said)} mówi, że ten spec nie powinien istnieć, a znaleziska test-coverage w ${against.join(', ')} żądają od niego (lub jego źródła) kolejnych testów - zostaw jedno z nich albo uzasadnij oba.`);
+  }
+  return problems;
 }
 
 // A part as the renderer reads it, under a header it lacks.
@@ -941,6 +963,8 @@ function checkAssembly(context, target) {
       problems.push(`${part.name}: ${problem}`);
     }
   }
+  const sections = [...byNumber.keys()].map(textOf).filter((text) => text !== null).flatMap((text) => partReport(text).files);
+  problems.push(...noSpecConflicts(sections, rulesOf(facts)));
   const width = Math.max(2, String(n + 2).length);
   if (n === 0) {
     if (!byNumber.has(1)) problems.push(`brak części part${pad(1, width)} z linią "${render.emptyBodies[1]}".`);
@@ -1912,7 +1936,7 @@ module.exports = {
   renderArgsOf, withDraftLines,
   checkPart, checkAssembly, findContextFor, hookResult, scanPart, planItems, compact,
   rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellWrites, expandWord,
-  promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName,
+  promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName, noSpecConflicts,
 };
 
 if (require.main === module) {

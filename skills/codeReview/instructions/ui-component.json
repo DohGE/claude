@@ -11,7 +11,7 @@
   "notes": [
     "Inline `styles` are walked as CSS (component-styles gate), so component-styles and the style-related accessibility items apply to this TS file too."
   ],
-  "itemCount": 144,
+  "itemCount": 132,
   "instructions": [
     {
       "id": "ui-component",
@@ -67,7 +67,7 @@
       "preamble": [
         "This instruction OWNS the component TS file: file separation, the `@Component` metadata, DI fields, visibility, form wiring and subscription teardown. The signals/DI/host APIs themselves are owned by the global best-practices instruction, rendering cost by the performance instruction, and everything inside the template by the component-template instruction."
       ],
-      "selectedItems": "1-26",
+      "selectedItems": "1-12,14-26",
       "checklistSize": 26,
       "items": [
         {
@@ -80,7 +80,10 @@
         },
         {
           "id": "component#3",
-          "text": "The `imports` array matches the template exactly, verified in BOTH directions: every imported entry is used by the template (nothing speculative), AND every external symbol the template uses has its entry — component/directive selectors, pipe names, `[formControl]`/`formGroup` → `ReactiveFormsModule`, `[(ngModel)]` → `FormsModule`, `ngSrc` → `NgOptimizedImage`. A missing entry breaks the template at runtime — report from this consequence. For a pipe or directive the diff adds or renames, walk that second direction from the symbol: every template using it has its entry in its component's `imports`, and a missing one is reported at the symbol's file."
+          "text": "The `imports` array matches the template exactly, verified in BOTH directions: every imported entry is used by the template (nothing speculative), AND every external symbol the template uses has its entry — component/directive selectors, pipe names, `[formControl]`/`formGroup` → `ReactiveFormsModule`, `[(ngModel)]` → `FormsModule`, `ngSrc` → `NgOptimizedImage`. A missing entry breaks the template at runtime — report from this consequence. For a pipe or directive the diff adds or renames, walk that second direction from the symbol: every template using it has its entry in its component's `imports`, and a missing one is reported at the symbol's file.",
+          "facts": [
+            "template-symbol-not-imported"
+          ]
         },
         {
           "id": "component#4",
@@ -117,10 +120,6 @@
         {
           "id": "component#12",
           "text": "The constructor contains only `effect()` calls; loads, dispatches and subscriptions belong to `ngOnInit`."
-        },
-        {
-          "id": "component#13",
-          "text": "`effect()` is used only for: propagating state to a layout/parent, state→form `patchValue(..., { emitEvent: false })`, enabling/disabling the form from a lock signal (also with `{ emitEvent: false }`), or reacting to a signal change by calling a facade method; never for writing other signals, logging, or replicating `computed()`."
         },
         {
           "id": "component#14",
@@ -177,39 +176,12 @@
       ]
     },
     {
-      "id": "models",
-      "name": "Models folder",
-      "selectedItems": "1,7,10",
-      "checklistSize": 24,
-      "items": [
-        {
-          "id": "models#1",
-          "text": "`models/` is the only source of the area's types, enums and constants, split into `consts/`, `enums/`, `interfaces/`, `types/` (optional thematic subfolders for large areas); file suffixes match: `.const.ts`, `.enum.ts`, `.interface.ts`, `.type.ts`."
-        },
-        {
-          "id": "models#7",
-          "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel."
-        },
-        {
-          "id": "models#10",
-          "text": "The word `Dto`/`DTO` is not part of the vocabulary: no `UserDto`, no `user-dto.interface.ts`, no `dto/` folder, no `dto` field, variable or generic parameter — in nothing the diff adds or renames. A type is named after what it carries plus its role (`User`, `UserResponse`, `UsersListResponse`, `CreateUserRequest`, `UserSearchPayload`) and its file after the type (`user-response.interface.ts`).",
-          "sameAs": [
-            "general#2"
-          ]
-        }
-      ]
-    },
-    {
       "id": "component-styles",
       "name": "Component styles",
       "gate": "the file declares CSS - a stylesheet, or a component TS whose decorator carries an inline `styles: [...]` array",
-      "selectedItems": "1-7",
+      "selectedItems": "2-7",
       "checklistSize": 7,
       "items": [
-        {
-          "id": "component-styles#1",
-          "text": "(Inline `styles: [...]` in a component decorator is CSS and is walked against every item below; that those styles belong in a `.scss` file at all is the component instruction's rule, reported there.)"
-        },
         {
           "id": "component-styles#2",
           "text": "(The existence of the `.scss` file and its `styleUrl` reference are owned by the component instruction — report a missing file there, not here.)"
@@ -274,7 +246,7 @@
     {
       "id": "architecture",
       "name": "Feature architecture",
-      "selectedItems": "1,4-6,8-9,11-12",
+      "selectedItems": "1,4-6,9,12",
       "checklistSize": 12,
       "items": [
         {
@@ -306,20 +278,11 @@
           ]
         },
         {
-          "id": "architecture#8",
-          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in."
-        },
-        {
           "id": "architecture#9",
           "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
           "sameAs": [
             "component-template#16"
           ]
-        },
-        {
-          "id": "architecture#11",
-          "text": "New code follows these instructions, not the shape of neighbouring legacy code; scaffolding/generator output is conformed to these rules before commit. A legacy shape that another item names is reported under that item, with `architecture#11` at most as its second address; this item is a finding of its own only for a shape no other item covers.",
-          "secondQuestion": "Czy plik albo jego fragment to nietknięty szkielet generatora (Angular CLI) lub kopia starszego sąsiedniego kodu - co z tego zostało niedostosowane?"
         },
         {
           "id": "architecture#12",
@@ -330,7 +293,7 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "1-8,10-11,13",
+      "selectedItems": "1-2,7-8,10-11",
       "checklistSize": 13,
       "items": [
         {
@@ -349,25 +312,6 @@
           "text": "Names are full and descriptive — no abbreviations and no one-letter identifiers; shortening is allowed only for well-established abbreviations or when the full name would exceed ~25–30 characters or 4–5 words.",
           "sameAs": [
             "models#10"
-          ]
-        },
-        {
-          "id": "general#3",
-          "text": "No unnecessary type assertions (`as`), especially `as never` and assertions on primitive types; use a single `as Type` only when the compiler requires it; `as unknown as Type` only when the compiler/ESLint rejects a single assertion because of an incompatible shape."
-        },
-        {
-          "id": "general#4",
-          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly."
-        },
-        {
-          "id": "general#5",
-          "text": "Imports are sorted by the repository Prettier import-order: framework → third-party → shared-library aliases → application aliases → relative paths."
-        },
-        {
-          "id": "general#6",
-          "text": "Cross-area code is imported through tsconfig path aliases; relative paths are used only within the same feature area.",
-          "facts": [
-            "cross-area-import"
           ]
         },
         {
@@ -391,10 +335,6 @@
           "sameAs": [
             "interceptors#6"
           ]
-        },
-        {
-          "id": "general#13",
-          "text": "Linter rules are clean before commit; state-management lint rules (`@ngrx/*`) are errors, not warnings. Prettier-owned formatting (indentation, wrapping, quotes, semicolons, trailing commas, spacing, blank lines) is NEVER a finding — the formatter fixes it mechanically."
         }
       ]
     },
@@ -542,7 +482,7 @@
         },
         {
           "id": "security#12",
-          "text": "User-provided content (file names, rich text, uploaded HTML/SVG) is treated as untrusted: never rendered through `innerHTML`/`srcdoc` and never used to build selectors, URLs or templates.",
+          "text": "Data from outside the code — user input, file names, rich text, uploaded HTML/SVG and API responses, ids included — is untrusted: never rendered through `innerHTML`/`srcdoc` and never used to build selectors, URLs or templates.",
           "probe": [
             {
               "pattern": "\\.(?<at>querySelector(?:All)?)\\s*(?:<[^>]*>)?\\(\\s*(?!['\"][^'\"]*['\"]\\s*\\)|`[^`$]*`\\s*\\))",
@@ -634,7 +574,10 @@
         },
         {
           "id": "accessibility#11",
-          "text": "Every interactive element is reachable and operable by keyboard: interaction sits on native `<button type=\"…\">` / `<a href>`; a `(click)` on a `div`/`span`/icon is a finding unless the element also declares `role`, `tabindex=\"0\"` and Enter/Space handling, and every hover-only behavior has a focus equivalent (2.1.1)."
+          "text": "Every interactive element is reachable and operable by keyboard: interaction sits on native `<button type=\"…\">` / `<a href>`; a `(click)` on a `div`/`span`/icon is a finding unless the element also declares `role`, `tabindex=\"0\"` and Enter/Space handling, and every hover-only behavior has a focus equivalent (2.1.1).",
+          "probe": {
+            "builtin": "hover-without-focus"
+          }
         },
         {
           "id": "accessibility#12",
@@ -825,7 +768,10 @@
         },
         {
           "id": "test-coverage#7",
-          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding."
+          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding.",
+          "facts": [
+            "enum-variant-untested"
+          ]
         },
         {
           "id": "test-coverage#8",
