@@ -589,9 +589,24 @@ function buildIndex(files, root) {
   return index;
 }
 
+// An area may sit any number of folders deep (`src/app/admin/orders/...`): it is every
+// folder above the first one of the canonical layout, or the whole folder path of a file
+// outside that layout. `rest` is what is left below the area - empty for a file lying
+// directly in it.
+const reLayoutSegment = /^(?:data-access|models|shared|shell|components-.+)$/;
+function areaSplit(p) {
+  const m = p.match(/(?:^|\/)src\/app\/(.+)$/);
+  if (!m) return null;
+  const dirs = m[1].split('/').slice(0, -1);
+  if (dirs.length === 0) return null;
+  const layout = dirs.findIndex((d) => reLayoutSegment.test(d));
+  const cut = layout === -1 ? dirs.length : Math.max(layout, 1);
+  return { area: dirs.slice(0, cut).join('/'), rest: dirs.slice(cut) };
+}
+
 const areaOf = (p) => {
-  const m = p.match(/(?:^|\/)src\/app\/([^/]+)\/./);
-  return m ? m[1] : null;
+  const split = areaSplit(p);
+  return split ? split.area : null;
 };
 
 const short = (p, root) => (root && p.startsWith(`${root}/`) ? p.slice(root.length + 1) : p);
@@ -1790,8 +1805,8 @@ function runBuiltin(name, p, scan, context) {
       for (const line of lines) hits.push({ line, text: `ten sam fragment znaczników w L${lines.join(', L')} - różnią się tylko wartościami atrybutów i tekstem` });
     }
   } else if (name === 'area-root-file') {
-    const m = p.match(/(?:^|\/)src\/app\/([^/]+)\/([^/]+)$/);
-    if (m) hits.push({ line: 1, text: `plik leży bezpośrednio w katalogu obszaru ${m[1]}, poza podfolderami jego układu` });
+    const split = areaSplit(p);
+    if (split && split.rest.length === 0 && !reLayoutSegment.test(split.area)) hits.push({ line: 1, text: `plik leży bezpośrednio w katalogu obszaru ${split.area}, poza podfolderami jego układu` });
   } else if (name === 'hover-without-focus') {
     if (reTemplate.test(p) || context.inlineTemplate) {
       for (const tag of code.matchAll(/<([a-zA-Z][\w-]*)([^<>]*)>/g)) {
@@ -1854,7 +1869,7 @@ function runProbe(spec, p, text, facts = [], context = {}) {
 function layoutFacts(index, add, cross) {
   const areas = new Map();
   for (const p of index.sourceScripts) {
-    const m = p.match(/(?:^|\/)src\/app\/([^/]+)\/(shared\/routes|shell)\/[^/]+\.routes\.[cm]?[jt]s$/);
+    const m = p.match(/(?:^|\/)src\/app\/(.+?)\/(shared\/routes|shell)\/[^/]+\.routes\.[cm]?[jt]s$/);
     if (!m) continue;
     if (!areas.has(m[1])) areas.set(m[1], { 'shared/routes': [], shell: [] });
     areas.get(m[1])[m[2]].push(p);

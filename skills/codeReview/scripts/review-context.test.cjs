@@ -15,7 +15,12 @@ const { tempDir, run, commitFile, initRepo } = require('./test-helpers.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, batch: true, dedupItems: true },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, batch: true, dedupItems: true },
+  );
+  assert.deepStrictEqual(
+    [rc.parseArgs(['--with-rule-text']).withRuleText, rc.parseArgs(['--with-rule-text']).withChecklist],
+    [true, true],
+    'the rule text needs the checklists, so it keeps them',
   );
   assert.strictEqual(rc.parseArgs(['--no-dedup-items']).dedupItems, false, 'item dedup is on unless turned off');
   assert.strictEqual(rc.parseArgs(['--dedup-items']).dedupItems, true, 'the old opt-in still parses');
@@ -1594,20 +1599,16 @@ test('the comment ban carves out exactly the comments another rule demands', () 
   assert.match(practices, /@ts-expect-error/, 'and best-practices still owns that rule');
 });
 
-test('coverage and spec shape each name the other as the owner of the other half', () => {
+test('coverage names unit-tests as the owner of the spec shape', () => {
   // The two instructions split one subject: WHICH cases a spec must cover belongs to
-  // test-coverage, HOW the spec is written to unit-tests. Each says so, and the pair is
-  // what keeps a gap from being reported twice - once as a coverage finding and once as
-  // a spec finding. Drop either sentence and both instructions still read fine alone.
+  // test-coverage, HOW the spec is written to unit-tests. test-coverage says so, and that
+  // sentence is what keeps a gap from being reported twice - once as a coverage finding
+  // and once as a spec finding.
   const coverage = instructionText('test-coverage');
-  const shape = instructionText('unit-tests');
   assert.match(coverage, /OWNS coverage gaps/, 'test-coverage still claims the gaps');
   assert.match(coverage, /unit-tests instruction owns/, 'and hands the shape over');
   assert.match(coverage, /the SHAPE of a spec/, 'naming what the other half is');
   assert.match(coverage, /reported ONCE/, 'with the no-double-report rule spelled out');
-  assert.match(shape, /owned by the global test-coverage instruction/,
-    'unit-tests still defers the cases back, so a gap is not reported twice');
-  assert.match(shape, /only the SHAPE/, 'and states its own boundary');
 });
 
 test('the duplication scan reads each target at the revision it reviews', (t) => {

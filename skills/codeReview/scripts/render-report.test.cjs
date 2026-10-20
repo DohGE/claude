@@ -146,8 +146,10 @@ const REPORT = [
 test('parseArgs requires a report and derives the html path', () => {
   assert.deepStrictEqual(
     rr.parseArgs(['--report=reports/a-b.md']),
-    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false },
+    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false },
   );
+  const withRuleText = rr.parseArgs(['--report=a.md', '--with-rule-text']);
+  assert.deepStrictEqual([withRuleText.withRuleText, withRuleText.withChecklist], [true, true], 'the rule text keeps the checklists');
   assert.strictEqual(rr.parseArgs(['--report=a.MD']).out, 'a.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--out=/tmp/x.html']).out, '/tmp/x.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--keep-source']).keepSource, true);
@@ -580,6 +582,26 @@ test('main writes the html next to the report and removes the source', (t) => {
   const page = fs.readFileSync(html, 'utf8');
   assert.ok(page.startsWith('<!doctype html>'));
   assert.match(page, /id="coverage"/, '--with-checklist keeps the Pokrycie section');
+});
+
+test('main --with-rule-text shows each checklist item with its rule text', (t) => {
+  const dir = tempDir(t, 'cr-render-rules-');
+  const md = path.join(dir, 'raport.md');
+  const proof = [...checklistOf('src/app/user.service.ts', ['[x] general#1-2 — OK (brak wystąpień)']), '<!-- coverage: src/app/user.service.ts 2/2 -->'];
+  const source = `${REPORT}\n${proof.join('\n')}\n`;
+  fs.writeFileSync(md, source, 'utf8');
+
+  const result = runMain([`--report=${md}`, '--with-rule-text']);
+  assert.strictEqual(result.code, 0);
+  const items = embeddedPayload(fs.readFileSync(path.join(dir, 'raport.html'), 'utf8')).coverage[0].items;
+  assert.deepStrictEqual(items.map((item) => item.id), ['general#1', 'general#2']);
+  assert.ok(items.every((item) => item.rule && item.rule.length > 20), 'every item of the range gets its own rule');
+  assert.notStrictEqual(items[0].rule, items[1].rule);
+
+  fs.writeFileSync(md, source, 'utf8');
+  assert.strictEqual(runMain([`--report=${md}`, '--only-md', '--with-rule-text']).code, 0);
+  const line = fs.readFileSync(md, 'utf8').split('\n').find((text) => text.startsWith('[x] general#1-2'));
+  assert.match(line, / — Reguła: general#1: .+ \| general#2: .+/, 'the Markdown carries the rules on the item line');
 });
 
 test('main leaves the checklists out of the page unless --with-checklist is given', (t) => {
@@ -1735,7 +1757,7 @@ test('an instruction id from a project rulebook is known, not reported as invent
   // renderer that only knew the skill's rulebook would call every tick under them uncovered.
   writeProjectKind(dir, { 'house-rules': ['own rule'] });
   const report = { checklists: [{ path: 'src/a.ts', items: [
-    { id: 'house-rules#1' }, { id: 'security#1' }, { id: 'nieistniejaca#1' },
+    { id: 'house-rules#1' }, { id: 'security#3' }, { id: 'nieistniejaca#1' },
   ] }], warnings: [] };
   rr.warnUnknownChecklistIds(report, dir);
   assert.strictEqual(report.warnings.length, 1, 'only the invented id is reported');
@@ -1760,7 +1782,7 @@ test('resolveRuleAddresses expands an address into the item text and flags an un
     '🟡 **Średni**',
     '- **Linia:** 1',
     '- **Problem:** p',
-    '- **Reguła:** own-rules#2; own-rules#9; security#1',
+    '- **Reguła:** own-rules#2; own-rules#9; security#3',
     '- **Expected Result:** e',
     '- **PR Problem:** p',
     '- **PR Expected:** e',
@@ -1768,15 +1790,15 @@ test('resolveRuleAddresses expands an address into the item text and flags an un
   ));
   rr.resolveRuleAddresses(report, dir);
   const finding = report.files[0].findings[0];
-  const security1 = shipped.get('security').items.get(1);
+  const security3 = shipped.get('security').items.get(3);
   assert.deepStrictEqual(finding.tags, [
     { file: 'own-rules', rule: 'second rule' },
     { file: 'own-rules', rule: 'own-rules#9' },
-    { file: 'security', rule: security1 },
+    { file: 'security', rule: security3 },
   ], 'the project layer and the skill rulebook answer alike');
-  assert.strictEqual(finding.rule, `own-rules → second rule; own-rules → own-rules#9; security → ${security1}`);
+  assert.strictEqual(finding.rule, `own-rules → second rule; own-rules → own-rules#9; security → ${security3}`);
   assert.ok(report.warnings.some((w) => /own-rules#9/.test(w)), 'an address past the checklist is reported');
-  assert.ok(!report.warnings.some((w) => /security#1/.test(w)), 'a shipped item resolves without a warning');
+  assert.ok(!report.warnings.some((w) => /security#3/.test(w)), 'a shipped item resolves without a warning');
 });
 
 test('the page script the renderer emits actually parses', () => {

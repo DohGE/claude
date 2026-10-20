@@ -8,7 +8,7 @@
       "text": "Only the base-language file (`en.json`) is edited; the other locale files are never touched — no new keys, no English placeholders, no reformatting (the translation team owns them)."
     }
   ],
-  "itemCount": 6,
+  "itemCount": 5,
   "instructions": [
     {
       "id": "i18n",
@@ -34,20 +34,6 @@
             "i18n-invalid-json",
             "i18n-duplicate-key"
           ]
-        }
-      ]
-    },
-    {
-      "id": "security",
-      "name": "Security",
-      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
-      "selectedItems": "7",
-      "checklistSize": 13,
-      "items": [
-        {
-          "id": "security#7",
-          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
-          "severity": "critical"
         }
       ]
     },

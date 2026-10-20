@@ -99,13 +99,17 @@ test('an area routed from both shared/routes/ and shell/ is a fact on each side'
     'src/app/orders/shared/routes/orders.routes.ts': 'export const ORDERS_ROUTES = [];\n',
     'src/app/orders/shell/orders-shell.routes.ts': 'export const ORDERS_SHELL_ROUTES = [];\n',
     'src/app/users/shared/routes/users.routes.ts': 'export const USERS_ROUTES = [];\n',
+    'src/app/admin/roles/shared/routes/roles.routes.ts': 'export const ROLES_ROUTES = [];\n',
+    'src/app/admin/roles/shell/roles-shell.routes.ts': 'export const ROLES_SHELL_ROUTES = [];\n',
   });
   const twice = (p) => factsOf(result, p, 'area-routes-twice').map((f) => f.lines);
   assert.deepStrictEqual(twice('src/app/orders/shared/routes/orders.routes.ts'), [[1]]);
   assert.deepStrictEqual(twice('src/app/orders/shell/orders-shell.routes.ts'), [[1]]);
   assert.deepStrictEqual(twice('src/app/users/shared/routes/users.routes.ts'), []);
+  assert.deepStrictEqual(twice('src/app/admin/roles/shell/roles-shell.routes.ts'), [[1]], 'a nested area is one area');
   assert.deepStrictEqual(result.cross.filter((line) => /^Obszar /.test(line)), [
     'Obszar orders ma trasy i w shared/routes/, i w shell/: src/app/orders/shared/routes/orders.routes.ts, src/app/orders/shell/orders-shell.routes.ts',
+    'Obszar admin/roles ma trasy i w shared/routes/, i w shell/: src/app/admin/roles/shared/routes/roles.routes.ts, src/app/admin/roles/shell/roles-shell.routes.ts',
   ]);
 });
 
@@ -238,6 +242,11 @@ test('builtin probes: @for without @empty, repeated signal reads, repeated marku
   assert.deepStrictEqual(run('markup-repeat', 'index.html', '<div class="nav" onclick="go(1)">Users</div>\n<div class="nav" onclick="go(2)">Reports</div>\n<p>x</p>\n'), [1, 2]);
   assert.deepStrictEqual(run('area-root-file', 'src/app/orders/orders.module.ts', 'x'), [1]);
   assert.deepStrictEqual(run('area-root-file', 'src/app/orders/shared/x.ts', 'x'), []);
+  assert.deepStrictEqual(run('area-root-file', 'src/app/admin/orders/orders.module.ts', 'x'), [1], 'a nested area has a root too');
+  assert.deepStrictEqual(run('area-root-file', 'src/app/admin/orders/data-access/services/x.ts', 'x'), []);
+  assert.deepStrictEqual(run('area-root-file', 'src/app/shared/x.ts', 'x'), [], 'app-wide shared/ is no area');
+  assert.strictEqual(facts.areaOf('src/app/admin/orders/components-orders/ui/ui-x/ui-x.component.ts'), 'admin/orders');
+  assert.strictEqual(facts.areaOf('src/app/app.config.ts'), null);
 });
 
 test('a fact probe points at the lines of the file\'s facts of its kind', () => {
