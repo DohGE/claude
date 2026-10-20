@@ -2,4 +2,6 @@ docs/
 .idea/
 skills/codeReview/reports/
 .claude/agents/
+.claude/.headroom_wrap_owners.json
+.claude/.headroom_wrap_marker.json
 skills/fixPr/reports/

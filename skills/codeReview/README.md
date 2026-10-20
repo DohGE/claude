@@ -19,6 +19,7 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview folder src/app/user-panel` | every file currently in that folder of the working tree — no diff needed, so every line counts as changed |
 | `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
 | `/codeReview [target] --with-checklist` | any of the above, but the report keeps every file's walked checklist and coverage marker (the page's **Pokrycie checklist** section) |
+| `/codeReview [target] --with-rule-text` | `--with-checklist`, plus the full text of its rule under every checklist item (on the page) or after ` — Reguła: ` on the item's line (in an `--only-md` Markdown) |
 | `/codeReview [target] --no-batch` | any of the above, but every file is walked in a message of its own instead of small files together (see [Token cost](#token-cost)) |
 | `/codeReview [target] --no-dedup-items` | any of the above, but every bundle shows every item in full, instead of an item an earlier bundle already showed arriving as a reference to that bundle (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
@@ -28,7 +29,7 @@ literally called `feature/a,b` cannot be named in that list — it would be read
 reported as two "Branch not found" errors for names you never typed. Check that branch out and run
 `/codeReview` with no arguments instead: auto mode reviews the current branch without naming it.
 
-`--only-md`, `--with-checklist`, `--no-batch` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
+`--only-md`, `--with-checklist`, `--with-rule-text`, `--no-batch` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
 The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
 `--with-checklist` changes only what the finished report keeps: every file is walked, written and checked with its checklist either way, and without the flag the renderer cuts the checklists, the coverage markers and the cross-file `<!-- unverified:` block from it — from the page and from an `--only-md` Markdown alike.
 The run's summary still states the coverage, read off the line the assembly prints.
@@ -420,7 +421,8 @@ It names the target and where it stands, the Reads that resume it (the next batc
 Its state is one small JSON file per session.
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
-Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source] [--only-md] [--with-checklist]`.
+Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source] [--only-md] [--with-checklist] [--with-rule-text]`.
+`--with-rule-text` implies `--with-checklist` and adds each item's rule text from the rulebook, after the verdicts are parsed, so a rule's own wording never reads as a verdict.
 Without `--with-checklist` it first cuts the checklist blocks, coverage markers and the `<!-- unverified:` block, so the page has no **Pokrycie checklist** section and a Markdown it leaves behind (a drift, `--keep-source`) carries none either; `--only-md` does only that cut, in place, and renders nothing.
 Under `--with-checklist` it reads the per-file checklist blocks and coverage markers too, and reconciles them: the ticks are recounted, and a short walk, a missing or malformed block or a marker the ticks contradict warns (and keeps the Markdown), while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions. Any other multi-line HTML comment in the report is swallowed whole instead of being read as findings.
 Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.

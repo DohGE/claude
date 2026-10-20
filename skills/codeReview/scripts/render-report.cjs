@@ -99,7 +99,7 @@ function expandItemSpec(spec) {
 }
 
 function parseArgs(argv) {
-  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false };
+  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--keep-source') {
@@ -112,6 +112,13 @@ function parseArgs(argv) {
     }
     if (arg === '--with-checklist') {
       args.withChecklist = true;
+      continue;
+    }
+    // The rule's words under every checklist item; without the checklists there is
+    // nothing to put them under, so the flag keeps them.
+    if (arg === '--with-rule-text') {
+      args.withChecklist = true;
+      args.withRuleText = true;
       continue;
     }
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -127,7 +134,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist, --with-rule-text).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.md").');
   if (!args.out) args.out = args.report.replace(/\.md$/i, '') + '.html';
@@ -918,6 +925,50 @@ function resolveRuleAddresses(report, projectRoot) {
   return report;
 }
 
+// `--with-rule-text`: a checklist line carries only the address and its verdict; the
+// item gets the rule's words from the same rulebook a finding's `**Reguła:**` reads.
+// An unknown id is already a warning (warnUnknownChecklistIds), so it just stays bare.
+function ruleTextOf(instructions, itemId) {
+  const [id, n] = String(itemId).split('#');
+  const instruction = instructions.get(id.toLowerCase());
+  return instruction ? instruction.items.get(Number(n)) || '' : '';
+}
+
+function attachChecklistRules(report, projectRoot) {
+  const instructions = rulebookInstructions(projectRoot);
+  for (const entry of report.coverage) {
+    for (const item of entry.items || []) item.rule = ruleTextOf(instructions, item.id);
+  }
+  return report;
+}
+
+// The same words for an `--only-md` report: appended to each checklist line after
+// ` — Reguła: `, one per item a range line collapses, after the parse has read the
+// verdicts, so a rule's own wording ("…a layering violation…") never reads as one.
+function appendRuleTexts(markdown, projectRoot) {
+  const instructions = rulebookInstructions(projectRoot);
+  let inBlock = false;
+  return String(markdown).split('\n').map((raw) => {
+    const line = raw.trim();
+    if (!inBlock) {
+      inBlock = reChecklistOpen.test(line) || reUnverifiedOpen.test(line);
+      return raw;
+    }
+    if (line.startsWith('-->')) {
+      inBlock = false;
+      return raw;
+    }
+    const item = line.match(reChecklistItem);
+    const numbers = item ? expandItemSpec(item[3]) : null;
+    if (!numbers) return raw;
+    const texts = numbers
+      .map((n) => [`${item[2]}#${n}`, ruleTextOf(instructions, `${item[2]}#${n}`)])
+      .filter(([, text]) => text)
+      .map(([id, text]) => `${id}: ${text.replace(/-->/g, '—>')}`);
+    return texts.length ? `${raw.replace(/\s+$/, '')} — Reguła: ${texts.join(' | ')}` : raw;
+  }).join('\n');
+}
+
 function warnUnknownChecklistIds(report, projectRoot) {
   const known = knownChecklistIds(projectRoot);
   // No rulebook readable at all (a report rendered away from its skill) would turn
@@ -1014,7 +1065,7 @@ function buildPayload(report, reportName) {
       mechanical: !!entry.mechanical,
       total: entry.total,
       checked: entry.mechanical ? null : (entry.items || []).filter((item) => item.ok).length,
-      items: (entry.items || []).map((item) => ({ id: item.id, state: item.state, text: item.text })),
+      items: (entry.items || []).map((item) => ({ id: item.id, state: item.state, text: item.text, ...(item.rule ? { rule: item.rule } : {}) })),
     })),
     files: report.files.map((file) => ({
       path: file.path,
@@ -1318,6 +1369,7 @@ button{font:inherit;color:inherit}
 .cov-item.open{color:var(--sev-medium)}
 .cov-id{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
   color:var(--muted)}
+.cov-rule{display:block;color:var(--muted);font-size:12px}
 `;
 
 const pageJs = `
@@ -1438,6 +1490,11 @@ const pageJs = `
           id.textContent = item.id;
           var text = el('span');
           text.appendChild(rich(item.text));
+          if (item.rule) {
+            var rule = el('span', 'cov-rule');
+            rule.appendChild(rich(item.rule));
+            text.appendChild(rule);
+          }
           row.appendChild(id);
           row.appendChild(text);
           list.appendChild(row);
@@ -2482,10 +2539,12 @@ function main(argv) {
   // left behind all read the same text.
   const text = args.withChecklist ? markdown : stripChecklists(markdown);
   if (args.onlyMd) {
-    // The Markdown is the report: nothing to render, only the checklists to leave out.
-    if (text !== markdown) {
+    // The Markdown is the report: nothing to render, only the checklists to leave out
+    // or, under --with-rule-text, the rules' words to add.
+    const written = args.withRuleText ? appendRuleTexts(text, projectRootFor(args.report, args.project)) : text;
+    if (written !== markdown) {
       try {
-        fs.writeFileSync(args.report, text, 'utf8');
+        fs.writeFileSync(args.report, written, 'utf8');
       } catch (err) {
         process.stderr.write(`Nie można zapisać raportu: ${args.report} (${(err && err.message) || err})\n`);
         return 1;
@@ -2498,6 +2557,7 @@ function main(argv) {
   const projectRoot = projectRootFor(args.report, args.project);
   warnUnknownChecklistIds(report, projectRoot);
   resolveRuleAddresses(report, projectRoot);
+  if (args.withRuleText) attachChecklistRules(report, projectRoot);
   const source = { mode: args.mode, base: args.base, branch: args.branch };
   attachSnippets(report, projectRoot, source);
   report.changed = changedFiles(projectRoot, source);
@@ -2551,7 +2611,7 @@ function main(argv) {
 module.exports = {
   severityLine,
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
-  projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, buildPayload, renderHtml, reportNameOf, detectPullRequest,
+  projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, attachChecklistRules, appendRuleTexts, buildPayload, renderHtml, reportNameOf, detectPullRequest,
   changedFiles, treeEntries, stripChecklists, main,
   // check-part.cjs validates each part file against the same grammar this parser reads.
   emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reUnverifiedOpen, reViolationVerdict, expandItemSpec,

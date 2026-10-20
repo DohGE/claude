@@ -11,7 +11,7 @@
       "text": "Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one."
     }
   ],
-  "itemCount": 81,
+  "itemCount": 74,
   "instructions": [
     {
       "id": "component-template",
@@ -19,7 +19,7 @@
       "preamble": [
         "This instruction OWNS everything inside the template except accessibility, which is owned by the global accessibility instruction (WCAG 2.2 AA — alternative texts, labels, ARIA, keyboard, focus, target size): a template violation of those rules is reported there, once, never twice. `@defer` trigger and bundling rules are owned by the performance instruction."
       ],
-      "selectedItems": "1-21",
+      "selectedItems": "1-4,7-21",
       "checklistSize": 21,
       "items": [
         {
@@ -191,24 +191,12 @@
       ]
     },
     {
-      "id": "general",
-      "name": "General code rules",
-      "selectedItems": "10",
-      "checklistSize": 13,
-      "items": [
-        {
-          "id": "general#10",
-          "text": "In-app navigation goes through `Router` (`navigate`/`navigateByUrl`/`routerLink`) — `window.location.href`/`assign`/`replace` discards router state, guards and the SPA boundary; a deliberate full page load carries a justification in the PR description or it is a finding."
-        }
-      ]
-    },
-    {
       "id": "best-practices",
       "name": "Angular & TypeScript best practices",
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "12,18-19",
+      "selectedItems": "12,19",
       "checklistSize": 23,
       "items": [
         {
@@ -217,10 +205,6 @@
           "sameAs": [
             "component-template#8"
           ]
-        },
-        {
-          "id": "best-practices#18",
-          "text": "Forms follow the project's typed reactive-forms pattern (`_fb.nonNullable.group`, explicit control generics) — no template-driven forms, no `UntypedFormControl`/`UntypedFormGroup` or `any`-typed controls."
         },
         {
           "id": "best-practices#19",
@@ -232,7 +216,7 @@
       "id": "security",
       "name": "Security",
       "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
-      "selectedItems": "2-3,5-7,12",
+      "selectedItems": "2-3,6,12",
       "checklistSize": 13,
       "items": [
         {
@@ -247,17 +231,8 @@
           "text": "No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings."
         },
         {
-          "id": "security#5",
-          "text": "URLs bound to `[href]`/`[src]` or passed to `window.open`/`Router.navigateByUrl` never come unvalidated from user input or query params; `javascript:` URLs are forbidden; redirect targets (`returnUrl`-style params) are validated against an allowlist of internal routes (open-redirect)."
-        },
-        {
           "id": "security#6",
           "text": "External links with `target=\"_blank\"` carry `rel=\"noopener noreferrer\"`."
-        },
-        {
-          "id": "security#7",
-          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
-          "severity": "critical"
         },
         {
           "id": "security#12",
@@ -469,7 +444,7 @@
         "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1,3-8",
+      "selectedItems": "1,3-6,8",
       "checklistSize": 8,
       "items": [
         {
@@ -516,10 +491,6 @@
         {
           "id": "code-quality#6",
           "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
-        },
-        {
-          "id": "code-quality#7",
-          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
         },
         {
           "id": "code-quality#8",

@@ -1,6 +1,6 @@
 {
   "kind": "ui-component",
-  "pattern": "src/app/<area>/components-<area>/ui/<name>/<name>.component.ts",
+  "pattern": "src/app/**/components-<area>/ui/<name>/<name>.component.ts",
   "role": "Presentational (dumb) UI component: inputs, outputs and view logic.",
   "describedBy": [
     {
@@ -11,7 +11,7 @@
   "notes": [
     "Inline `styles` are walked as CSS (component-styles gate), so component-styles and the style-related accessibility items apply to this TS file too."
   ],
-  "itemCount": 132,
+  "itemCount": 106,
   "instructions": [
     {
       "id": "ui-component",
@@ -67,7 +67,7 @@
       "preamble": [
         "This instruction OWNS the component TS file: file separation, the `@Component` metadata, DI fields, visibility, form wiring and subscription teardown. The signals/DI/host APIs themselves are owned by the global best-practices instruction, rendering cost by the performance instruction, and everything inside the template by the component-template instruction."
       ],
-      "selectedItems": "1-12,14-26",
+      "selectedItems": "1-2,4-5,7-12,14-25",
       "checklistSize": 26,
       "items": [
         {
@@ -79,23 +79,12 @@
           "text": "Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one."
         },
         {
-          "id": "component#3",
-          "text": "The `imports` array matches the template exactly, verified in BOTH directions: every imported entry is used by the template (nothing speculative), AND every external symbol the template uses has its entry — component/directive selectors, pipe names, `[formControl]`/`formGroup` → `ReactiveFormsModule`, `[(ngModel)]` → `FormsModule`, `ngSrc` → `NgOptimizedImage`. A missing entry breaks the template at runtime — report from this consequence. For a pipe or directive the diff adds or renames, walk that second direction from the symbol: every template using it has its entry in its component's `imports`, and a missing one is reported at the symbol's file.",
-          "facts": [
-            "template-symbol-not-imported"
-          ]
-        },
-        {
           "id": "component#4",
           "text": "The `imports` array never contains `CommonModule` (nor `NgIf`/`NgForOf`/`NgSwitch`/`NgClass`/`NgStyle`, which the native control flow and `[class.x]`/`[style.x]` bindings replace) — only the concrete components, directives and pipes the template uses."
         },
         {
           "id": "component#5",
           "text": "Injected fields are `private readonly _camelCase`; the field name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name. (`inject()`-only DI, the signal input/output API and `host: {}` bindings are governed by the global best-practices instruction.)"
-        },
-        {
-          "id": "component#6",
-          "text": "An input the component cannot render without is `input.required<T>()` — no `!` definite-assignment tricks and no fake defaults that mask a missing binding."
         },
         {
           "id": "component#7",
@@ -168,10 +157,6 @@
         {
           "id": "component#25",
           "text": "Single `as Type` casts only where required; no double casting where a single cast suffices."
-        },
-        {
-          "id": "component#26",
-          "text": "When an edit touches ≥30% of a component or the component is small (≤150 lines), the whole component is refactored to these rules. It widens the other items to the whole component and is never a finding of its own — each rule the untouched code breaks is reported under that rule."
         }
       ]
     },
@@ -211,7 +196,7 @@
     {
       "id": "i18n",
       "name": "Translations",
-      "selectedItems": "2,8-9,11",
+      "selectedItems": "2,9,11",
       "checklistSize": 12,
       "items": [
         {
@@ -220,10 +205,6 @@
           "facts": [
             "i18n-duplicate-value"
           ]
-        },
-        {
-          "id": "i18n#8",
-          "text": "Interpolated translations needed in TS are resolved through the translation service's instant lookup with a params object — never assembled by string concatenation."
         },
         {
           "id": "i18n#9",
@@ -293,7 +274,7 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "1-2,7-8,10-11",
+      "selectedItems": "1-2,7",
       "checklistSize": 13,
       "items": [
         {
@@ -320,21 +301,6 @@
           "sameAs": [
             "i18n#11"
           ]
-        },
-        {
-          "id": "general#8",
-          "text": "No `console.log` or other leftover debug statements."
-        },
-        {
-          "id": "general#10",
-          "text": "In-app navigation goes through `Router` (`navigate`/`navigateByUrl`/`routerLink`) — `window.location.href`/`assign`/`replace` discards router state, guards and the SPA boundary; a deliberate full page load carries a justification in the PR description or it is a finding."
-        },
-        {
-          "id": "general#11",
-          "text": "Errors are never swallowed: no empty `catch` blocks, no `.catch(() => {})`, no `catchError` that drops the failure without mapping it to a fail action/error state — every failure path either surfaces to state/UI or carries an explicit justification in the PR description. In an effect a `catchError` returning `EMPTY` is always a finding (NgRx effects instruction); elsewhere — legacy components/services — `EMPTY` alone is not reported under this rule.",
-          "sameAs": [
-            "interceptors#6"
-          ]
         }
       ]
     },
@@ -344,7 +310,7 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "1-15,18,20-23",
+      "selectedItems": "1-4,9-10,12,14-15,21-23",
       "checklistSize": 23,
       "items": [
         {
@@ -367,22 +333,6 @@
           "text": "Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators or `@Input() set` accessors; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array."
         },
         {
-          "id": "best-practices#5",
-          "text": "View and content queries use the signal functions `viewChild()`/`viewChild.required()`/`viewChildren()`/`contentChild()`/`contentChildren()` — never the `@ViewChild`/`@ViewChildren`/`@ContentChild`/`@ContentChildren` decorators, and never `{ static: true }` (signal queries resolve without it)."
-        },
-        {
-          "id": "best-practices#6",
-          "text": "`ngOnChanges` does not exist in a component with signal inputs: reacting to an input is `computed()` (derived), `linkedSignal()` (derived but locally resettable) or `effect()` (side effect) — `ngOnChanges` re-introduces the string-keyed `SimpleChanges` bag the signal API replaced."
-        },
-        {
-          "id": "best-practices#7",
-          "text": "`effect()` takes no `allowSignalWrites` option — it stopped doing anything in v19 and left the options type in v20, so an `{ allowSignalWrites: true }` in the diff is dead config carried over from older code (whether the effect should write a signal at all is the performance instruction's rule)."
-        },
-        {
-          "id": "best-practices#8",
-          "text": "`model()` is only for state the parent genuinely binds two-way with `[(x)]` — a value the child edits and the parent owns; one-way data plus a notification stays `input()` + `output()`, and a `model()` nobody binds with the banana box is just a writable signal published on the public surface."
-        },
-        {
           "id": "best-practices#9",
           "text": "A writable signal is never exposed on a public surface: components, stores and services expose `signal.asReadonly()` or a `computed()`, keeping `.set()`/`.update()` with the owner.",
           "probe": [
@@ -398,19 +348,11 @@
           "text": "`output()` names are past-tense events without an `on` prefix (`saved`, not `onSave`) and never reuse a native DOM event name (`click`, `change`, `input`, `focus`, `select`) — a colliding name makes the native bubbling event and the output indistinguishable at the call site."
         },
         {
-          "id": "best-practices#11",
-          "text": "Input coercion uses `transform: booleanAttribute` / `numberAttribute` / a pure function in `input(..., { transform })` — never a setter and never coercion inside the consuming `computed()`."
-        },
-        {
           "id": "best-practices#12",
           "text": "Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction).",
           "sameAs": [
             "component-template#8"
           ]
-        },
-        {
-          "id": "best-practices#13",
-          "text": "`toSignal()` declares `initialValue` or `requireSync: true`; without either the signal type is `T | undefined` and every template read silently widens — an unhandled `undefined` frame is a finding."
         },
         {
           "id": "best-practices#14",
@@ -422,14 +364,6 @@
           "sameAs": [
             "directives#2"
           ]
-        },
-        {
-          "id": "best-practices#18",
-          "text": "Forms follow the project's typed reactive-forms pattern (`_fb.nonNullable.group`, explicit control generics) — no template-driven forms, no `UntypedFormControl`/`UntypedFormGroup` or `any`-typed controls."
-        },
-        {
-          "id": "best-practices#20",
-          "text": "RxJS operators are imported from `rxjs`, never from `rxjs/operators` (deprecated since 7.2); `toPromise()` is never used (`firstValueFrom`/`lastValueFrom` where a promise is genuinely required, and neither belongs in an HTTP service)."
         },
         {
           "id": "best-practices#21",
@@ -449,36 +383,12 @@
       "id": "security",
       "name": "Security",
       "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
-      "selectedItems": "1,3-5,7-8,12-13",
+      "selectedItems": "3,12",
       "checklistSize": 13,
       "items": [
         {
-          "id": "security#1",
-          "text": "No `DomSanitizer.bypassSecurityTrust*` calls without a justification in the PR description and a provably static, developer-controlled value — never on user-, API- or URL-derived data."
-        },
-        {
           "id": "security#3",
           "text": "No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings."
-        },
-        {
-          "id": "security#4",
-          "text": "No `eval`, `new Function(...)`, or string arguments to `setTimeout`/`setInterval`."
-        },
-        {
-          "id": "security#5",
-          "text": "URLs bound to `[href]`/`[src]` or passed to `window.open`/`Router.navigateByUrl` never come unvalidated from user input or query params; `javascript:` URLs are forbidden; redirect targets (`returnUrl`-style params) are validated against an allowlist of internal routes (open-redirect)."
-        },
-        {
-          "id": "security#7",
-          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
-          "severity": "critical"
-        },
-        {
-          "id": "security#8",
-          "text": "Sensitive data (tokens, credentials, PII) never appears in log/console statements, URL query params, `localStorage`/`sessionStorage`, or error messages shown to users.",
-          "sameAs": [
-            "app-config#8"
-          ]
         },
         {
           "id": "security#12",
@@ -489,10 +399,6 @@
               "message": "`querySelector` z argumentem budowanym w kodzie"
             }
           ]
-        },
-        {
-          "id": "security#13",
-          "text": "A new third-party dependency introduced in the diff is reported for verification (maintenance status, license, known vulnerabilities) — never silently accepted."
         }
       ]
     },
@@ -500,7 +406,7 @@
       "id": "performance",
       "name": "Performance & change detection",
       "gate": "the file holds Angular runtime code or a template - a component, directive, pipe, service, effect, store, config or bindings, not only type/const declarations or re-exports",
-      "selectedItems": "1,3-8,17",
+      "selectedItems": "1,4-5,7-8,17",
       "checklistSize": 17,
       "items": [
         {
@@ -509,20 +415,12 @@
           "secondQuestion": "Które pola klasy czyta szablon i czy każde z nich to sygnał, `computed()` albo `input()`?"
         },
         {
-          "id": "performance#3",
-          "text": "`toSignal()`/`toObservable()` are called once, as field initializers — never inside methods, getters, `computed()` or `effect()` (every call creates a new subscription)."
-        },
-        {
           "id": "performance#4",
           "text": "No `ngDoCheck`, `ngAfterContentChecked` or `ngAfterViewChecked` hooks (they run on every change-detection cycle); no state mutation inside `ngAfterViewInit`/`ngAfterContentInit` (ExpressionChangedAfterItHasBeenChecked)."
         },
         {
           "id": "performance#5",
           "text": "`effect()` never writes signals to emulate derivation — derived state is `computed()`; dependent-but-locally-resettable state is `linkedSignal()`."
-        },
-        {
-          "id": "performance#6",
-          "text": "No change-detection escape hatches: `ChangeDetectorRef.detectChanges()`/`markForCheck()`, `ApplicationRef.tick()`, `NgZone.run()`/`runOutsideAngular()`, or a `setTimeout`/`Promise.resolve()` whose only purpose is making the view update. Under OnPush + signals the notification IS the signal write — an escape hatch means state lives somewhere that is not a signal, and that is the finding to report."
         },
         {
           "id": "performance#7",
@@ -663,7 +561,7 @@
         "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1-8",
+      "selectedItems": "1-6,8",
       "checklistSize": 8,
       "items": [
         {
@@ -717,10 +615,6 @@
           "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
         },
         {
-          "id": "code-quality#7",
-          "text": "No commented-out code — removed code is recovered from git history, never parked in a comment or behind an `if (false)`."
-        },
-        {
           "id": "code-quality#8",
           "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported."
         }
@@ -735,7 +629,7 @@
       "preamble": [
         "This instruction OWNS coverage gaps — which behavioral cases, branches, edge cases and state permutations the diff leaves untested; every finding here is 🔵 **Missing Unit Test**. The unit-tests instruction owns the SHAPE of a spec (location, setup, naming, assertion style). A gap is reported ONCE, here — never also as a unit-tests finding. The items below are facets of one requirement — the file's behaviour is tested — so everything a file breaks here is ONE finding: its Problem lists each untested case with its line, and its Reguła names every item it breaks. A file with no spec at all leaves its branches, failure paths and edge cases untested too: those items are broken, not passed, and that one finding names them."
       ],
-      "selectedItems": "1-9",
+      "selectedItems": "1-6,8",
       "checklistSize": 9,
       "items": [
         {
@@ -767,22 +661,11 @@
           "text": "State permutations are covered: every boolean/loading/error flag the changed code reads is exercised in its non-default state as well as its default, and each flag is asserted independently so a single flag flipping the result is caught."
         },
         {
-          "id": "test-coverage#7",
-          "text": "Parameterized behavior (`switch` over an enum, lookup maps, config-driven logic) has a test per variant — ideally an `it.each` dataset covering all variants; a variant added by the diff without a matching dataset row is a finding.",
-          "facts": [
-            "enum-variant-untested"
-          ]
-        },
-        {
           "id": "test-coverage#8",
           "text": "Public API surface changed by the diff (new method, new input/output, new selector/action handling) has at least one test exercising it through that public surface, not only through internals.",
           "sameAs": [
             "directives#8"
           ]
-        },
-        {
-          "id": "test-coverage#9",
-          "text": "Each finding names the concrete untested case — the input, state or branch that lacks a test, with the source line it lives on; a generic \"add more tests\" is not a valid finding."
         }
       ]
     }

@@ -64,7 +64,7 @@ function isSkippedPath(filePath) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, batch: true, dedupItems: true };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, batch: true, dedupItems: true };
   const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
@@ -72,6 +72,8 @@ function parseArgs(argv) {
     if (arg === '--since-last') { args.sinceLast = true; continue; }
     // The finished report keeps the walked checklists (render-report.cjs cuts them otherwise).
     if (arg === '--with-checklist') { args.withChecklist = true; continue; }
+    // Each checklist item also shows its rule's words; it needs the checklists, so it keeps them.
+    if (arg === '--with-rule-text') { args.withChecklist = true; args.withRuleText = true; continue; }
     // Every file walked in a response of its own, light ones included (review-bundle.cjs batches).
     if (arg === '--no-batch') { args.batch = false; continue; }
     // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), by
@@ -92,7 +94,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --no-batch, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --no-batch, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -1018,6 +1020,7 @@ function buildContext(options) {
       reportPath,
       htmlReportPath: wantsHtml ? reportPath.replace(/\.md$/, '.html') : null,
       withChecklist: !!options.withChecklist,
+      ...(options.withRuleText ? { withRuleText: true } : {}),
       ...(options.dedupItems ? { dedupItems: true } : {}),
     };
   };
@@ -1727,6 +1730,7 @@ function writeContext(context) {
       crossBundlePath: t.crossBundlePath,
       batches: (t.batches || []).length,
       withChecklist: t.withChecklist,
+      withRuleText: t.withRuleText,
       dedupItems: t.dedupItems,
       skipped: t.skipped,
       unchangedSinceLastReview: t.unchangedSinceLastReview,

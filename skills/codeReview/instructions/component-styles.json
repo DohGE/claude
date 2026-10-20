@@ -8,7 +8,7 @@
       "text": "Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one."
     }
   ],
-  "itemCount": 22,
+  "itemCount": 16,
   "instructions": [
     {
       "id": "component-styles",
@@ -51,20 +51,6 @@
           "sameAs": [
             "i18n#11"
           ]
-        }
-      ]
-    },
-    {
-      "id": "security",
-      "name": "Security",
-      "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
-      "selectedItems": "7",
-      "checklistSize": 13,
-      "items": [
-        {
-          "id": "security#7",
-          "text": "No secrets in the diff: API keys, tokens, passwords, connection strings or private endpoints — not in code, configs, environment files, tests or comments, not even \"temporarily\".",
-          "severity": "critical"
         }
       ]
     },

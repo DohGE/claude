@@ -1,6 +1,6 @@
 {
   "kind": "shared-barrel",
-  "pattern": "src/app/<area>/shared/**/index.ts",
+  "pattern": "src/app/**/shared/**/index.ts",
   "role": "Barrel inside the `shared/` folder of an area (forbidden there).",
   "describedBy": [
     {
@@ -8,7 +8,7 @@
       "text": "An `index.ts` barrel is allowed ONLY in `models/`. Everywhere else — `shared/` included, whatever it re-exports — a barrel `index.ts` is forbidden: it bundles guards, utils, routes and directives into one import surface, so every consumer drags the whole folder into its bundle, the import path stops naming the layer it depends on, and a `@defer`-loaded target reached through it lands in the eager bundle anyway. Consumers import the concrete file (`shared/utils/build-user-table.util`, `shared/guards/users-loaded.guard`)."
     }
   ],
-  "itemCount": 6,
+  "itemCount": 1,
   "instructions": [
     {
       "id": "utils",

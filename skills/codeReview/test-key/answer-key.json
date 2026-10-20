@@ -3,7 +3,7 @@
   {
    "id": "b01",
    "file": "src/app/layout/data-access/+state/layout.actions.ts",
-   "text": "`layout/data-access/+state/layout.actions.ts` is a **fully compliant** actions file (single export, `source: 'Layout Navigation'`, `'Verb subject'` event keys, `emptyProps()` where there is no payload). It must produce **zero** findings under `ngrx-actions`. Its *relative cross-area import* in the importing files (`user-panel.effects.ts`, `feature-user-panel.component.ts`) is no finding either, as no checklist item asks for a path alias; only what those files do with the actions (the unfiltered `ofType` in the effects, the component's own `store.dispatch`) is a finding, anchored there, never here."
+   "text": "`layout/data-access/+state/layout.actions.ts` is a **fully compliant** actions file (single export, `source: 'Layout Navigation'`, `'Verb subject'` event keys, `emptyProps()` where there is no payload). It must produce **zero** findings under `ngrx-actions`. Its *relative cross-area import* in the importing files (`user-panel.effects.ts`, `feature-user-panel.component.ts`) is no finding either, as no checklist item asks for a path alias; only what those files do with the actions (the unfiltered `ofType` in the effects, the component's own `store.dispatch`) is a finding, anchored there, never here. That includes the `step` payload nothing reads yet: it is what the missing `filter(...)` in `reloadOnStepChange$` must read, not unused code."
   },
   {
    "id": "b02",
@@ -88,7 +88,7 @@
   {
    "id": "b19",
    "file": null,
-   "text": "**No `models/` declaration is walked against `accessibility`, `performance` or `test-coverage`, and against `security` only for `security#7` (no secrets in the diff)** — that is all the `models/` file kinds in `instructions/` hand out of those four. A folder of consts, interfaces, enums and types has no behaviour to test, no render cost and no UI, and the only attack surface it can carry is a secret written into it — none of this environment's `models/` files holds one. So a finding from one of those four instructions anchored in a `models/` declaration is a rule the reviewer invented. The enum spec in `models/tests/` is no declaration: no models kind claims it any more, so it walks the plain spec rules, `test-coverage` included. `models/` declarations still walk `architecture`, `code-quality`, `general` and `models` (plus what their kind adds, like `state-interface`) — and break plenty there."
+   "text": "**No `models/` declaration is walked against `accessibility`, `performance`, `security` or `test-coverage`** — the `models/` file kinds in `instructions/` hand out none of those four. A folder of consts, interfaces, enums and types has no behaviour to test, no render cost and no UI, and the only attack surface it can carry is a secret written into it — none of this environment's `models/` files holds one. So a finding from one of those four instructions anchored in a `models/` declaration is a rule the reviewer invented. The enum spec in `models/tests/` is no declaration: no models kind claims it any more, so it walks the plain spec rules, `test-coverage` included. `models/` declarations still walk `architecture`, `code-quality`, `general` and `models` (plus what their kind adds, like `state-interface`) — and break plenty there."
   },
   {
    "id": "b20",
@@ -295,12 +295,10 @@
     "src/app/app.config.ts"
    ],
    "instructions": [
-    "app-config",
-    "security"
+    "app-config"
    ],
    "items": [
-    "app-config#8",
-    "security#8"
+    "app-config#8"
    ],
    "severity": null,
    "text": "no `provideBrowserGlobalErrorListeners()`; the custom `LoggingErrorHandler` logs the error together with the `authToken` read from `localStorage`.",
@@ -403,12 +401,10 @@
     "src/app/user-panel/models/interfaces/user-panel-state.interface.ts"
    ],
    "instructions": [
-    "state-interface",
-    "models"
+    "state-interface"
    ],
    "items": [
-    "state-interface#4",
-    "models#8"
+    "state-interface#4"
    ],
    "severity": null,
    "text": "field types imported through the area's own barrel (`from '../index'`) — cycle risk.",
@@ -1080,8 +1076,7 @@
     "code-quality"
    ],
    "items": [
-    "code-quality#6",
-    "code-quality#7"
+    "code-quality#6"
    ],
    "severity": null,
    "text": "narrating comment (`// set the loading flag to true`); commented-out handler code.",
@@ -1399,12 +1394,10 @@
     "src/app/user-panel/data-access/+state/users.selectors.ts"
    ],
    "instructions": [
-    "ngrx-selectors",
-    "general"
+    "ngrx-selectors"
    ],
    "items": [
-    "ngrx-selectors#6",
-    "general#8"
+    "ngrx-selectors#6"
    ],
    "severity": null,
    "text": "impure selector — `console.log` + `Date.now()` (`selectSelectedUserName`); `selectUserTable` delegates to `buildUserTable`, which sorts the store array in place and stamps `Math.random()`/`Date.now()` into the result.",
@@ -1673,12 +1666,10 @@
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
    ],
    "instructions": [
-    "ngrx-effects",
-    "general"
+    "ngrx-effects"
    ],
    "items": [
-    "ngrx-effects#5",
-    "general#8"
+    "ngrx-effects#5"
    ],
    "severity": "high",
    "text": "`refreshUsers$` uses `mapResponse` whose `error` branch returns nothing (just a `console.log`) — the reducer never receives a fail action, `isLoading` stays `true` and the user is told nothing (🔴 High); the `console.log` is also leftover debug output (general).",
@@ -1826,23 +1817,6 @@
    }
   },
   {
-   "id": "v139",
-   "files": [
-    "src/app/user-panel/data-access/+state/user-panel.effects.ts"
-   ],
-   "instructions": [
-    "security"
-   ],
-   "items": [
-    "security#8"
-   ],
-   "severity": null,
-   "text": "token read from `localStorage` and logged (`console.log`); response data persisted to `localStorage` (PII in storage + leftover debug logging).",
-   "lines": {
-    "src/app/user-panel/data-access/+state/user-panel.effects.ts": "82, 110-111"
-   }
-  },
-  {
    "id": "v140",
    "files": [
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
@@ -1901,12 +1875,10 @@
     "src/app/user-panel/data-access/+state/user-panel.effects.ts"
    ],
    "instructions": [
-    "ngrx-effects",
-    "performance"
+    "ngrx-effects"
    ],
    "items": [
-    "ngrx-effects#16",
-    "performance#10"
+    "ngrx-effects#16"
    ],
    "severity": null,
    "text": "`forkJoin` composing two identical requests instead of returning an action array (also a duplicate backend request — performance).",
@@ -2096,11 +2068,9 @@
     "src/app/user-panel/data-access/services/user-panel.service.ts"
    ],
    "instructions": [
-    "security",
     "general"
    ],
    "items": [
-    "security#7",
     "general#1"
    ],
    "severity": null,
@@ -2243,13 +2213,10 @@
     "src/app/user-panel/data-access/services/user-panel.service.ts"
    ],
    "instructions": [
-    "http-service",
-    "general"
+    "http-service"
    ],
    "items": [
-    "http-service#7",
-    "general#8",
-    "general#11"
+    "http-service#7"
    ],
    "severity": null,
    "text": "`.pipe(map, catchError, tap)` inside the service — mapping/error handling belong to reducer/effects; `catchError(() => of([]))` swallows failures (general); `tap` + `console.log` logging.",
@@ -2280,11 +2247,9 @@
     "src/app/user-panel/data-access/services/user-panel.service.ts"
    ],
    "instructions": [
-    "best-practices",
     "http-service"
    ],
    "items": [
-    "best-practices#20",
     "http-service#12"
    ],
    "severity": null,
@@ -2305,7 +2270,10 @@
     "http-service#14"
    ],
    "severity": null,
-   "text": "a spec exists for a pure HTTP wrapper (see below) — forbidden."
+   "text": "the service transforms data — `map((response) => response.data)` in both request methods — which marks a service doing too much and is the only thing a dedicated spec could exist for; with the mapping moved out it is a pure HTTP wrapper and its spec goes (see below).",
+   "lines": {
+    "src/app/user-panel/data-access/services/user-panel.service.ts": "32, 45"
+   }
   },
   {
    "id": "v175",
@@ -2332,13 +2300,16 @@
     "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts"
    ],
    "instructions": [
-    "http-service"
+    "architecture"
    ],
    "items": [
-    "http-service#12"
+    "architecture#1"
    ],
    "severity": null,
-   "text": "a file matching `data-access/services/*.service.ts` that executes no request and keeps state — the folder is HTTP-only and \"keeping state\" is explicitly forbidden there."
+   "text": "`UserPanelUiStateService` sits in `data-access/services/`, which the canonical layout reserves for HTTP services, although it executes no request and only keeps UI state — the file is in the wrong folder.",
+   "lines": {
+    "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts": "5"
+   }
   },
   {
    "id": "v179",
@@ -2417,7 +2388,7 @@
     "http-service#14"
    ],
    "severity": null,
-   "text": "pure HTTP wrapper must have no spec at all."
+   "text": "the spec exists only because the service still transforms data (see above); once the mapping moves out the service is a pure HTTP wrapper, which has no spec at all — the effects spec covers it."
   },
   {
    "id": "v185",
@@ -2437,22 +2408,6 @@
    "lines": {
     "src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts": "2, 10"
    }
-  },
-  {
-   "id": "v189",
-   "files": [
-    "src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts"
-   ],
-   "instructions": [
-    "general",
-    "unit-tests"
-   ],
-   "items": [
-    "general#9",
-    "unit-tests#21"
-   ],
-   "severity": "high",
-   "text": "`xit('should clear the users')` — a skipped test committed to the diff (🔴 High)."
   },
   {
    "id": "v190",
@@ -2521,23 +2476,6 @@
    "absences": true,
    "severity": null,
    "text": "no anti-duplication upsert test, no null-guard no-op test, no reset-lists-fields test, no edit-mode seeding tests, no default-selection fallback tests."
-  },
-  {
-   "id": "v194",
-   "files": [
-    "src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts"
-   ],
-   "instructions": [
-    "unit-tests"
-   ],
-   "items": [
-    "unit-tests#18"
-   ],
-   "severity": null,
-   "text": "the spec is zone-based (`TestBed.configureTestingModule` without `provideZonelessChangeDetection()`) although `app.config.ts` provides it.",
-   "lines": {
-    "src/app/user-panel/data-access/+state/tests/user-panel.reducer.spec.ts": "10"
-   }
   },
   {
    "id": "v195",
@@ -2775,23 +2713,6 @@
    "text": "no `afterEach` (`jest.clearAllMocks`, `resetSelectors`); no `ngMocks.faster()`; setup in `beforeEach` not `beforeAll`; no `store: MockStore` field.",
    "lines": {
     "src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts": "20"
-   }
-  },
-  {
-   "id": "v214",
-   "files": [
-    "src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts"
-   ],
-   "instructions": [
-    "unit-tests"
-   ],
-   "items": [
-    "unit-tests#18"
-   ],
-   "severity": null,
-   "text": "`fakeAsync`/`tick` do not exist without the zone.js polyfill the app no longer needs — the spec must run the app's zoneless mode.",
-   "lines": {
-    "src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts": "1, 32, 36"
    }
   },
   {
@@ -3109,7 +3030,6 @@
     "unit-tests"
    ],
    "items": [
-    "unit-tests#5",
     "unit-tests#7",
     "unit-tests#22"
    ],
@@ -3305,12 +3225,10 @@
     "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts"
    ],
    "instructions": [
-    "interceptors",
-    "general"
+    "interceptors"
    ],
    "items": [
-    "interceptors#6",
-    "general#11"
+    "interceptors#6"
    ],
    "severity": null,
    "text": "`catchError` swallows the failure into `EMPTY`, opens a snackbar (renders UI) and dispatches a store action for a domain error.",
@@ -3409,13 +3327,11 @@
    ],
    "instructions": [
     "pipes",
-    "architecture",
-    "general"
+    "architecture"
    ],
    "items": [
     "pipes#4",
-    "architecture#4",
-    "general#8"
+    "architecture#4"
    ],
    "severity": null,
    "text": "injects the `Store`; `console.log`; DOM access (`document.title`).",
@@ -3583,23 +3499,6 @@
    "text": "`displayedColumns` hard-coded instead of `Object.values(<ColumnsEnum>)`; labels are texts, not i18n keys; rows lack an explicit row type (`rows: users.map`); id not from the shared ID-generator util (`'tbl-' + Math.random()`).",
    "lines": {
     "src/app/user-panel/shared/utils/build-user-table.util.ts": "7, 9, 11-13"
-   }
-  },
-  {
-   "id": "v270",
-   "files": [
-    "src/app/user-panel/shared/utils/build-user-table.util.ts"
-   ],
-   "instructions": [
-    "security"
-   ],
-   "items": [
-    "security#13"
-   ],
-   "severity": null,
-   "text": "new third-party dependency (`tiny-clone-x`) introduced silently.",
-   "lines": {
-    "src/app/user-panel/shared/utils/build-user-table.util.ts": "1"
    }
   },
   {
@@ -3779,7 +3678,6 @@
     "best-practices"
    ],
    "items": [
-    "unit-tests#5",
     "unit-tests#10",
     "unit-tests#11",
     "unit-tests#13",
@@ -4216,23 +4114,6 @@
    "text": "inline `styles: [...]` — no own `.scss` file."
   },
   {
-   "id": "v322",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "component"
-   ],
-   "items": [
-    "component#3"
-   ],
-   "severity": "high",
-   "text": "`imports` array not matching the template in BOTH directions — `NgOptimizedImage` unused; `ReactiveFormsModule` missing though `[formControl]` is used; the `translate` pipe, the `UserStatusLabel` pipe and the `highlight` directive used by the template have no entry (🔴 — the template breaks at runtime).",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "37, 45"
-   }
-  },
-  {
    "id": "v323",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4289,36 +4170,17 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "best-practices",
-    "component"
+    "best-practices"
    ],
    "items": [
     "best-practices#1",
     "best-practices#3",
-    "best-practices#4",
-    "component#6"
+    "best-practices#4"
    ],
    "severity": null,
    "text": "explicit `standalone: true`; `@Input()`/`@Output()` decorators with `!` definite assignment and `EventEmitter<any>` instead of `input.required`/`output()`.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "44, 58-59"
-   }
-  },
-  {
-   "id": "v327",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#5"
-   ],
-   "severity": null,
-   "text": "`@ViewChild('panelRoot', { static: true })` — view queries are the signal function `viewChild.required()`, and `{ static: true }` never appears.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "61"
    }
   },
   {
@@ -4433,20 +4295,6 @@
    }
   },
   {
-   "id": "v335",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "performance"
-   ],
-   "items": [
-    "performance#6"
-   ],
-   "severity": null,
-   "text": "change-detection escape hatches — `NgZone.run()` wrapping `ChangeDetectorRef.detectChanges()`."
-  },
-  {
    "id": "v336",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4459,20 +4307,6 @@
    ],
    "severity": null,
    "text": "`effect()` writing signals to emulate derivation (`selectedTab.set(...)` from `users()`) — that is a `computed()`."
-  },
-  {
-   "id": "v337",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#7"
-   ],
-   "severity": null,
-   "text": "`effect(..., { allowSignalWrites: true })` — the option stopped doing anything in v19 and is dead config."
   },
   {
    "id": "v338",
@@ -4629,20 +4463,6 @@
    }
   },
   {
-   "id": "v348",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "performance"
-   ],
-   "items": [
-    "performance#3"
-   ],
-   "severity": null,
-   "text": "`toSignal()` inside a getter — new subscription per read."
-  },
-  {
    "id": "v349",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4717,23 +4537,6 @@
    }
   },
   {
-   "id": "v355",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#13"
-   ],
-   "severity": null,
-   "text": "`toSignal()` called without `initialValue`/`requireSync`, so the signal type silently widens with `undefined`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "178"
-   }
-  },
-  {
    "id": "v357",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4756,14 +4559,12 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "component",
-    "best-practices"
+    "component"
    ],
    "items": [
     "component#14",
     "component#15",
-    "component#16",
-    "best-practices#18"
+    "component#16"
    ],
    "severity": null,
    "text": "untyped form (`UntypedFormGroup`/`UntypedFormControl`) instead of `_fb.nonNullable.group` with explicit generics; `addValidators` without `updateValueAndValidity()`; `valueChanges` without `distinctUntilChanged(isEqual)`.",
@@ -4857,24 +4658,6 @@
    }
   },
   {
-   "id": "v364",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "security"
-   ],
-   "items": [
-    "security#1",
-    "security#4"
-   ],
-   "severity": null,
-   "text": "`setTimeout('this.refresh()', 500)` — string argument; `new Function('users', expression)` built from a caller-supplied string; `bypassSecurityTrustHtml(user.bio)` on API-derived data (Critical).",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "182, 245"
-   }
-  },
-  {
    "id": "v365",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4946,42 +4729,6 @@
    "text": "`@HostListener` instead of `host: {}`.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "266, 271"
-   }
-  },
-  {
-   "id": "v369",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "i18n"
-   ],
-   "items": [
-    "i18n#8"
-   ],
-   "severity": null,
-   "text": "greeting built by string concatenation (`buildGreeting(user) + ', ' + this.title`) instead of a translation with params.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "263"
-   }
-  },
-  {
-   "id": "v370",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "general",
-    "code-quality"
-   ],
-   "items": [
-    "general#8",
-    "code-quality#7"
-   ],
-   "severity": null,
-   "text": "`console.log` calls; commented-out `refresh()` code block.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "127, 182, 246, 276"
    }
   },
   {
@@ -5295,15 +5042,13 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "component-template",
     "performance"
    ],
    "items": [
-    "component-template#6",
     "performance#14"
    ],
    "severity": null,
-   "text": "all three `@defer` blocks lack a `@placeholder` — the viewport trigger has no element to observe — and none declares `@loading`/`@error` although the wait and the failure are user-visible.",
+   "text": "all three `@defer` blocks lack a `@placeholder` — the viewport trigger has no element to observe.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "13, 16, 161"
    }
@@ -5348,12 +5093,10 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "component-template",
-    "best-practices"
+    "component-template"
    ],
    "items": [
-    "component-template#9",
-    "best-practices#18"
+    "component-template#9"
    ],
    "severity": null,
    "text": "`[(ngModel)]` template-driven binding (best-practices) mixed with reactive `[formControl]`; hard-coded placeholders.",
@@ -5463,23 +5206,6 @@
    }
   },
   {
-   "id": "v400",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#10"
-   ],
-   "severity": null,
-   "text": "in-app navigation as raw `<a href=\"/users\">`/`/reports`/`/help`/`/docs/...` links instead of `routerLink` — every one of them reloads the app and discards router state.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "3-4, 147"
-   }
-  },
-  {
    "id": "v401",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
@@ -5523,7 +5249,6 @@
    ],
    "items": [
     "security#2",
-    "security#5",
     "security#6"
    ],
    "severity": null,
@@ -6104,11 +5829,9 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
    ],
    "instructions": [
-    "i18n",
     "code-quality"
    ],
    "items": [
-    "i18n#8",
     "code-quality#1"
    ],
    "severity": null,
@@ -6582,23 +6305,6 @@
    }
   },
   {
-   "id": "v473",
-   "files": [
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#8"
-   ],
-   "severity": null,
-   "text": "`expandedRows = model<number>(0)` — no parent binds it with `[(expandedRows)]`, so it is just a writable signal on the public API; one-way data plus a notification stays `input()` + `output()`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "49"
-   }
-  },
-  {
    "id": "v474",
    "files": [
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
@@ -6613,23 +6319,6 @@
    "text": "`onSelect = output<CardUser>()` carries the forbidden `on` prefix and is not past tense; `change = output<void>()` reuses a native DOM event name, making the native bubbling event and the output indistinguishable at the call site.",
    "lines": {
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "73-74"
-   }
-  },
-  {
-   "id": "v475",
-   "files": [
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#6"
-   ],
-   "severity": null,
-   "text": "`ngOnChanges` in a component with signal inputs — reacting to an input is `computed()`/`linkedSignal()`/`effect()`, never the string-keyed `SimpleChanges` bag.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "14, 92"
    }
   },
   {
@@ -6669,23 +6358,6 @@
    }
   },
   {
-   "id": "v478",
-   "files": [
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
-   ],
-   "instructions": [
-    "component"
-   ],
-   "items": [
-    "component#6"
-   ],
-   "severity": null,
-   "text": "input the template cannot render without is plain `input<CardUser>()` (with `!` assertions later) instead of `input.required`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "46"
-   }
-  },
-  {
    "id": "v479",
    "files": [
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
@@ -6696,8 +6368,7 @@
    ],
    "items": [
     "best-practices#4",
-    "ui-component#8",
-    "best-practices#11"
+    "ui-component#8"
    ],
    "severity": null,
    "text": "`@Input() set` accessor (`highlight`) with a hand-written coercion (`value === '' || value === true || value === 'true'`) instead of `input(..., { transform: booleanAttribute })`; output as a bare `EventEmitter` field instead of `output()`.",
@@ -7188,7 +6859,6 @@
     "code-quality"
    ],
    "items": [
-    "unit-tests#5",
     "unit-tests#6",
     "unit-tests#10",
     "unit-tests#13",
@@ -7255,20 +6925,6 @@
    "lines": {
     "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts": "56-57"
    }
-  },
-  {
-   "id": "v526",
-   "files": [
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts"
-   ],
-   "instructions": [
-    "unit-tests"
-   ],
-   "items": [
-    "unit-tests#18"
-   ],
-   "severity": null,
-   "text": "the spec is zone-based although `app.config.ts` provides `provideZonelessChangeDetection()`."
   },
   {
    "id": "v527",
@@ -7997,25 +7653,6 @@
    }
   },
   {
-   "id": "v599",
-   "files": [
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts",
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts"
-   ],
-   "instructions": [
-    "test-coverage"
-   ],
-   "items": [
-    "test-coverage#7"
-   ],
-   "severity": null,
-   "text": "`statusModifier` switches over the status enum, but the parameterized dataset covers only `UserStatus.Active` and `UserStatus.Blocked` — the `Pending`/default variant has no row.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "56, 58, 60",
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/tests/ui-user-card.component.spec.ts": "72-73, 77"
-   }
-  },
-  {
    "id": "v600",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -8030,23 +7667,6 @@
    "text": "`export class UserPanelComponent` is neither small nor single-responsibility: it loads and polls users, runs the sign-up form with a captcha, the table, the list, the overlays, the banner rotation and ad-hoc reports in one class.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "57"
-   }
-  },
-  {
-   "id": "v601",
-   "files": [
-    "src/app/app.config.ts"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#8"
-   ],
-   "severity": null,
-   "text": "`handleError` sends every error to `console.log` — a debug statement standing in for real error reporting.",
-   "lines": {
-    "src/app/app.config.ts": "33-34"
    }
   },
   {
@@ -8089,17 +7709,66 @@
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
    ],
    "instructions": [
-    "component",
-    "best-practices"
+    "component"
    ],
    "items": [
-    "component#14",
-    "best-practices#18"
+    "component#14"
    ],
    "severity": null,
    "text": "`nonNullable.group({ note: '' })` — the control has no explicit generic type; it is only inferred from the empty-string seed.",
    "lines": {
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "78"
+   }
+  },
+  {
+   "id": "v605",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
+   ],
+   "instructions": [
+    "best-practices"
+   ],
+   "items": [
+    "best-practices#14"
+   ],
+   "severity": null,
+   "text": "`toSignal(this.facade.users$)` inside the `get usersSignal()` getter — toSignal injects DestroyRef, so reading the getter anywhere outside an injection context throws NG0203.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "117-118"
+   }
+  },
+  {
+   "id": "v606",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#6"
+   ],
+   "severity": null,
+   "text": "commented-out `// refresh(): void {` block left in the class — comment lines the change adds.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "276"
+   }
+  },
+  {
+   "id": "v607",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts"
+   ],
+   "instructions": [
+    "unit-tests"
+   ],
+   "items": [
+    "unit-tests#2"
+   ],
+   "severity": null,
+   "text": "the `TestBed.configureTestingModule({` setup runs in `beforeEach(() => {` before every test — no `ngMocks.faster()`, no shared setup in `beforeAll`.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts": "18-19"
    }
   }
  ],
@@ -8142,7 +7811,7 @@
   },
   {
    "id": "x10",
-   "text": "Specs that must not exist at all: the HTTP-wrapper service spec, the routes spec and the i18n snapshot spec."
+   "text": "Specs that must not exist at all: the HTTP-wrapper service spec (the service is one once its data mapping moves out), the routes spec and the i18n snapshot spec."
   },
   {
    "id": "x12",

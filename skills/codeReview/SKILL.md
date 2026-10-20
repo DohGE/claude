@@ -782,6 +782,8 @@ After a compaction, the hook names what of them to read again.
    - `--with-checklist` → pass it through to the context script (`target.withChecklist`).
      The finished report then keeps every file's walked checklist and coverage marker (the HTML page's "Pokrycie checklist" section); without it the report carries the findings only.
      The review itself is the same either way: every part is still written with its checklist and checked (Step 3).
+   - `--with-rule-text` → pass it through to the context script (`target.withRuleText`); it implies `--with-checklist`.
+     The renderer adds the full text of its rule to every checklist item of the finished report; the parts are written exactly as without it.
    - `--no-batch` → pass it through to the context script: every file is walked alone, its part in a message of its own (`target.batches` stays empty).
    - `--no-dedup-items` → pass it through to the context script: every bundle shows every item in full.
      Without it `target.dedupItems` is true, and an item an earlier bundle of the run already showed is shown again only by reference (Step 3 point 1).
@@ -809,7 +811,7 @@ After a compaction, the hook names what of them to read again.
      INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
      instead, which is how you review a folder of another repository.
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--no-batch] [--no-dedup-items]`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--with-rule-text] [--no-batch] [--no-dedup-items]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
 5. Parse the JSON from stdout — the part of the context the review uses:
