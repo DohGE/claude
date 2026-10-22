@@ -1,0 +1,13 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`buildUserTable builds table 1`] = `
+Object {
+  "displayedColumns": Array [
+    "name",
+    "email",
+    "status",
+  ],
+  "generatedAt": 1770000000000,
+  "id": "tbl-x7f2k9",
+}
+`;
