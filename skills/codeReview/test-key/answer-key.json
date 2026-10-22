@@ -1,11 +1,6 @@
 {
  "bait": [
   {
-   "id": "b01",
-   "file": "src/app/layout/data-access/+state/layout.actions.ts",
-   "text": "`layout/data-access/+state/layout.actions.ts` is a **fully compliant** actions file (single export, `source: 'Layout Navigation'`, `'Verb subject'` event keys, `emptyProps()` where there is no payload). It must produce **zero** findings under `ngrx-actions`. Its *relative cross-area import* in the importing files (`user-panel.effects.ts`, `feature-user-panel.component.ts`) is no finding either, as no checklist item asks for a path alias; only what those files do with the actions (the unfiltered `ofType` in the effects, the component's own `store.dispatch`) is a finding, anchored there, never here. That includes the `step` payload nothing reads yet: it is what the missing `filter(...)` in `reloadOnStepChange$` must read, not unused code."
-  },
-  {
    "id": "b02",
    "file": "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts",
    "text": "`ui-user-card.component.ts` sets `ChangeDetectionStrategy.OnPush` and has separate `.html`/`.scss` files."
@@ -53,12 +48,12 @@
   {
    "id": "b11",
    "file": null,
-   "text": "The `should be created` / `should be defined` / `should create` / `should return the Active label` / `should match the stored snapshot` descriptions comply with the `should`-prefix naming rule — those tests are flagged as existence-only or as specs that must not exist, never for their names."
+   "text": "The `should be created` / `should be defined` / `should create` / `should return the Active label` descriptions comply with the `should`-prefix naming rule — those tests are flagged as existence-only or as specs that must not exist, never for their names."
   },
   {
    "id": "b12",
    "file": "src/app/user-panel/models/index.ts",
-   "text": "`models/index.ts`'s `// types` line is one of the four barrel section headers the models instruction prescribes — a barrel header is never a \"comment added by the diff\" finding. All four headers are present and in order, and the barrel lists every model file: it is compliant."
+   "text": "`models/index.ts`'s `// types` line is one of the four barrel section headers the models instruction prescribes. All four headers are present and in order, and the barrel lists every model file: its own content is compliant — only the consumers that import model files around it are a finding."
   },
   {
    "id": "b13",
@@ -107,44 +102,6 @@
   }
  ],
  "findings": [
-  {
-   "id": "v001",
-   "files": [
-    "src/main.ts",
-    "src/app/app.config.ts"
-   ],
-   "instructions": [
-    "app-config",
-    "code-quality"
-   ],
-   "items": [
-    "app-config#1",
-    "code-quality#3"
-   ],
-   "severity": null,
-   "text": "`platformBrowserDynamic().bootstrapModule(UserPanelModule)` — bootstrap must be `bootstrapApplication(App, appConfig)` with a flat providers array; no root `NgModule`, no `platformBrowserDynamic()` — so `appConfig` (`app.config.ts:38`) has no consumer.",
-   "lines": {
-    "src/main.ts": "5",
-    "src/app/app.config.ts": "38"
-   }
-  },
-  {
-   "id": "v004",
-   "files": [
-    "src/polyfills.ts"
-   ],
-   "instructions": [
-    "app-config"
-   ],
-   "items": [
-    "app-config#7"
-   ],
-   "severity": null,
-   "text": "`zone.js` is still imported although `app.config.ts` provides `provideZonelessChangeDetection()` — the provider together with a live polyfill is the finding.",
-   "lines": {
-    "src/polyfills.ts": "1"
-   }
-  },
   {
    "id": "v008",
    "files": [
@@ -322,23 +279,6 @@
    "text": "`LoggingErrorHandler` is a class declared inside the configuration file.",
    "lines": {
     "src/app/app.config.ts": "32, 57"
-   }
-  },
-  {
-   "id": "v024",
-   "files": [
-    ".eslintrc.json"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#12"
-   ],
-   "severity": null,
-   "text": "state-management lint rules must be errors — `@ngrx/no-store-subscription`, `@ngrx/avoid-dispatching-multiple-actions-sequentially` and `@ngrx/no-dispatch-in-effects` are downgraded to `warn` (each of them has a live violation in this diff), and `@typescript-eslint/no-explicit-any` is turned off.",
-   "lines": {
-    ".eslintrc.json": "3-6"
    }
   },
   {
@@ -724,6 +664,7 @@
     "models"
    ],
    "items": [
+    "models#1",
     "models#6"
    ],
    "severity": null,
@@ -1065,23 +1006,6 @@
    "text": "state mutation (`(state as any).isLoading = true; return state;`) + `as any`.",
    "lines": {
     "src/app/user-panel/data-access/+state/user-panel.reducer.ts": "18"
-   }
-  },
-  {
-   "id": "v089",
-   "files": [
-    "src/app/user-panel/data-access/+state/user-panel.reducer.ts"
-   ],
-   "instructions": [
-    "code-quality"
-   ],
-   "items": [
-    "code-quality#6"
-   ],
-   "severity": null,
-   "text": "narrating comment (`// set the loading flag to true`); commented-out handler code.",
-   "lines": {
-    "src/app/user-panel/data-access/+state/user-panel.reducer.ts": "17"
    }
   },
   {
@@ -1547,12 +1471,11 @@
     "src/app/user-panel/data-access/+state/users.selectors.ts"
    ],
    "instructions": [
-    "ngrx-selectors",
-    "general"
+    "ngrx-selectors"
    ],
    "items": [
-    "ngrx-selectors#15",
-    "general#1"
+    "ngrx-selectors#2",
+    "ngrx-selectors#15"
    ],
    "severity": null,
    "text": "query object misnamed and PascalCase (`UserPanelSelectors` instead of `userPanelQuery`; `UserPanelTableQuery` instead of `userPanelTableQuery`), and its export order is alphabetical instead of thematic.",
@@ -1794,9 +1717,9 @@
     "code-quality#2"
    ],
    "severity": "high",
-   "text": "`reloadOnStepChange$` and `reloadOnNavigationReset$` are byte-identical bodies for two triggers — one `ofType(a, b)` effect.",
+   "text": "`reloadOnStepChange$` and `reloadOnNavigationReset$` are byte-identical bodies for two triggers — one `ofType(a, b)` effect; `poll$` repeats the same getUsers → loadUsersSuccess tail, the third copy.",
    "lines": {
-    "src/app/user-panel/data-access/+state/user-panel.effects.ts": "90, 98"
+    "src/app/user-panel/data-access/+state/user-panel.effects.ts": "90, 98, 116"
    }
   },
   {
@@ -1964,12 +1887,10 @@
     "src/app/user-panel/data-access/+state/user-panel.facade.ts"
    ],
    "instructions": [
-    "ngrx-facade",
-    "code-quality"
+    "ngrx-facade"
    ],
    "items": [
-    "ngrx-facade#7",
-    "code-quality#1"
+    "ngrx-facade#7"
    ],
    "severity": null,
    "text": "raw `select()` observable in the public API (`users$`).",
@@ -2063,23 +1984,6 @@
    }
   },
   {
-   "id": "v159",
-   "files": [
-    "src/app/user-panel/data-access/services/user-panel.service.ts"
-   ],
-   "instructions": [
-    "general"
-   ],
-   "items": [
-    "general#1"
-   ],
-   "severity": null,
-   "text": "hardcoded API key (`API_KEY = 'sk_live_…'`) — secret in the diff; also SCREAMING_SNAKE (general).",
-   "lines": {
-    "src/app/user-panel/data-access/services/user-panel.service.ts": "8"
-   }
-  },
-  {
    "id": "v160",
    "files": [
     "src/app/user-panel/data-access/services/user-panel.service.ts"
@@ -2122,14 +2026,12 @@
     "src/app/user-panel/data-access/services/user-panel.service.ts"
    ],
    "instructions": [
-    "http-service",
-    "code-quality"
+    "http-service"
    ],
    "items": [
-    "http-service#9",
-    "code-quality#1"
+    "http-service#9"
    ],
-   "severity": "high",
+   "severity": null,
    "text": "`endpoints.users` and `endpoints.usersList` hold the SAME URL (`'https://api.internal.example.com/v1/users'`) — one entry serves several verbs, the entry is never duplicated.",
    "lines": {
     "src/app/user-panel/data-access/services/user-panel.service.ts": "11-12, 21, 30, 49, 53"
@@ -2178,12 +2080,10 @@
    ],
    "instructions": [
     "http-service",
-    "best-practices",
     "architecture"
    ],
    "items": [
     "http-service#5",
-    "best-practices#14",
     "architecture#4"
    ],
    "severity": null,
@@ -2324,23 +2224,6 @@
    ],
    "severity": null,
    "text": "injected directly by the feature component (components reach state only through the facade)."
-  },
-  {
-   "id": "v180",
-   "files": [
-    "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts"
-   ],
-   "instructions": [
-    "code-quality"
-   ],
-   "items": [
-    "code-quality#1"
-   ],
-   "severity": "high",
-   "text": "`isOverlayOpen$` duplicates the component's own `isOverlayOpen` field.",
-   "lines": {
-    "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts": "6, 8, 11"
-   }
   },
   {
    "id": "v181",
@@ -2918,7 +2801,7 @@
    "items": [
     "guards#1"
    ],
-   "severity": "medium",
+   "severity": "low",
    "text": "two exports in a guard file the name promises holds one predicate."
   },
   {
@@ -2944,11 +2827,9 @@
     "src/app/user-panel/shared/guards/user-panel.guard.ts"
    ],
    "instructions": [
-    "best-practices",
     "guards"
    ],
    "items": [
-    "best-practices#14",
     "guards#4"
    ],
    "severity": null,
@@ -3126,12 +3007,10 @@
     "src/app/user-panel/shared/interceptors/user-panel-auth.interceptor.ts"
    ],
    "instructions": [
-    "interceptors",
-    "best-practices"
+    "interceptors"
    ],
    "items": [
-    "interceptors#3",
-    "best-practices#14"
+    "interceptors#3"
    ],
    "severity": null,
    "text": "constructor DI instead of `inject()` inside the interceptor body."
@@ -3594,17 +3473,15 @@
    ],
    "instructions": [
     "utils",
-    "code-quality",
     "architecture"
    ],
    "items": [
     "utils#4",
     "utils#5",
     "utils#8",
-    "code-quality#1",
     "architecture#9"
    ],
-   "severity": "high",
+   "severity": null,
    "text": "the `Math.random()` id and the hard-coded `displayedColumns` array re-implement what `build-user-table.util.ts` already does — impure, and both must come from the shared ID generator / the columns enum.",
    "lines": {
     "src/app/user-panel/shared/utils/build-user-summary.util.ts": "31-32"
@@ -3811,27 +3688,16 @@
     "src/app/user-panel/shared/index.ts"
    ],
    "instructions": [
-    "architecture"
+    "utils"
    ],
    "items": [
-    "architecture#7"
+    "utils#10"
    ],
    "severity": null,
-   "text": "a barrel `index.ts` in `shared/` is forbidden outright — `models/` is the only folder allowed to have one; every export here (both guards, the pipe and all three utils) must be imported from its concrete file."
-  },
-  {
-   "id": "v296",
-   "files": [
-    "src/app/user-panel/shared/index.ts"
-   ],
-   "instructions": [
-    "code-quality"
-   ],
-   "items": [
-    "code-quality#3"
-   ],
-   "severity": "medium",
-   "text": "nothing in the repo imports through it — dead on arrival."
+   "text": "the `shared/` barrel re-exports the three utils (`./utils/build-user-summary.util`, `./utils/build-user-table.util`, `./utils/format-user-name.utils`) — a util is imported from its concrete `*.util.ts` file, never through a barrel; nothing in the repo imports through this one either, and a barrel in `shared/` is forbidden outright, guards and pipe included.",
+   "lines": {
+    "src/app/user-panel/shared/index.ts": "4-6"
+   }
   },
   {
    "id": "v298",
@@ -4038,37 +3904,6 @@
    "text": "duplicate routing variant for the area (see above)."
   },
   {
-   "id": "v314",
-   "files": [
-    "src/app/user-panel/user-panel.module.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#3"
-   ],
-   "severity": null,
-   "text": "new `NgModule` (standalone only) — and it exists only to re-export a standalone pipe and directive.",
-   "lines": {
-    "src/app/user-panel/user-panel.module.ts": "2, 7"
-   }
-  },
-  {
-   "id": "v315",
-   "files": [
-    "src/app/user-panel/user-panel.module.ts"
-   ],
-   "instructions": [
-    "architecture"
-   ],
-   "items": [
-    "architecture#6"
-   ],
-   "severity": null,
-   "text": "file outside every dedicated location (area root)."
-  },
-  {
    "id": "v316",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4082,7 +3917,7 @@
    "severity": null,
    "text": "class `UserPanelComponent` (should be `FeatureUserPanelComponent`), selector `user-panel` (missing app prefix + `feature-` segment).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "46, 57"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "45, 56"
    }
   },
   {
@@ -4100,20 +3935,6 @@
    "text": "no `changeDetection: ChangeDetectionStrategy.OnPush`."
   },
   {
-   "id": "v318",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "component"
-   ],
-   "items": [
-    "component#2"
-   ],
-   "severity": null,
-   "text": "inline `styles: [...]` — no own `.scss` file."
-  },
-  {
    "id": "v323",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -4127,24 +3948,7 @@
    "severity": null,
    "text": "`CommonModule` in `imports` — the native control flow and `[class.x]`/`[style.x]` bindings replace it.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "33, 45"
-   }
-  },
-  {
-   "id": "v324",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "component"
-   ],
-   "items": [
-    "component#8"
-   ],
-   "severity": null,
-   "text": "every member is public — template-only members must be `protected`, internals (`destroy$`, `sub`, `usersBackup`, `childFormsValid`) `private`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "83, 87, 93, 106-107, 166, 172-173, 218-219, 281"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "32, 44"
    }
   },
   {
@@ -4161,7 +3965,7 @@
    "severity": null,
    "text": "a writable signal published on the public surface (`selectedTab`, `isLocked`, `formSnapshot`) — expose `asReadonly()`/`computed()`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "89-91, 136, 142, 144, 149"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "88-90, 135, 141, 143, 148"
    }
   },
   {
@@ -4180,7 +3984,7 @@
    "severity": null,
    "text": "explicit `standalone: true`; `@Input()`/`@Output()` decorators with `!` definite assignment and `EventEmitter<any>` instead of `input.required`/`output()`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "44, 58-59"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "43, 57-58"
    }
   },
   {
@@ -4200,7 +4004,7 @@
    "severity": null,
    "text": "store injected + `store.dispatch`, actions/selectors imported, HTTP service injected and called, plus the hand-rolled `UserPanelUiStateService` injected — components may talk only to the facade.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "6, 70, 161, 201, 212"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "5, 69, 160, 200, 211"
    }
   },
   {
@@ -4219,7 +4023,7 @@
    "severity": null,
    "text": "injected fields public and unprefixed (`facade = inject(UserPanelFacade)`, `store = inject(Store)`, `svc = inject(UserPanelService)` — generic name, `cdr = inject(ChangeDetectorRef)`, `zone = inject(NgZone)`, `uiState = inject(UserPanelUiStateService)`), not `private readonly _...`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "63-65, 67-68, 70"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "62-64, 66-67, 69"
    }
   },
   {
@@ -4236,7 +4040,7 @@
    "severity": null,
    "text": "`dataTestPrefix` equals the selector (must be a stable descriptive name).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "72"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "71"
    }
   },
   {
@@ -4253,9 +4057,9 @@
     "i18n#11"
    ],
    "severity": null,
-   "text": "hard-coded user-facing strings (`toastMessage` values, `banners`, template texts).",
+   "text": "hard-coded user-facing strings (`toastMessage` values, `banners`, template texts, the `'Welcome '` greeting).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "79, 81, 169, 213, 236"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "78, 80, 168, 212, 235, 262"
    }
   },
   {
@@ -4273,8 +4077,8 @@
    "severity": null,
    "text": "mutable class fields bound in the template (`title`, `resultCount`, `showTooltip`, `isOverlayOpen`, `activeTab`, `toastMessage`, `bannerIndex`, `banners`, `rowCounter`, `isBrowser`); `resultCount` mutated in `ngDoCheck` every CD cycle; `ngDoCheck` itself forbidden.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "76-81, 85-86, 149, 169, 185, 211, 213, 227, 236",
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "11, 32, 34, 46-47, 50, 59, 74, 78, 98-99, 102, 139, 156, 158, 165-166"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "75-80, 84-85, 148, 168, 184, 210, 212, 226, 235",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "11, 32, 34, 46-47, 50, 59, 74, 78, 98-99, 102, 139, 156, 159, 166-167"
    }
   },
   {
@@ -4291,7 +4095,7 @@
    "severity": null,
    "text": "state mutated inside `ngAfterViewInit` (`resultCount` from the DOM) — ExpressionChangedAfterItHasBeenChecked.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "189"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "188"
    }
   },
   {
@@ -4322,7 +4126,7 @@
    "severity": null,
    "text": "an `effect()` starting a `setInterval` without registering teardown through the `onCleanup` callback — every re-run stacks another timer.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "149, 166, 168"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "148, 165, 167"
    }
   },
   {
@@ -4339,7 +4143,7 @@
    "severity": null,
    "text": "an `effect()` reading signals it only samples (`users()`, `selectedTab()`) while reacting to `isLocked()` without wrapping them in `untracked()` — the accidental dependency turns the effect into a loop.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "142, 144"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "141, 143"
    }
   },
   {
@@ -4356,7 +4160,7 @@
    "severity": null,
    "text": "an `effect()` reading the DOM (`getBoundingClientRect()`) — render-phase work that must re-run on a signal change is `afterRenderEffect()`, and a plain `effect()` measures the previous frame.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "153"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "152"
    }
   },
   {
@@ -4373,7 +4177,7 @@
    "severity": null,
    "text": "`location.search`/`window`/`document` read in field initializers, the constructor and `ngOnInit` — browser-only work belongs in `afterNextRender`/`afterEveryRender`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "84, 127, 158-159, 231, 266, 268"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "83, 126, 157-158, 230, 265, 267"
    }
   },
   {
@@ -4393,7 +4197,7 @@
    "severity": null,
    "text": "`computed()` wrapping a facade signal (`filtered`) and `pipe(map(...))` on a facade stream (`userNames$`) — derived state belongs in a selector (historically under-reported rule).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "101-102, 203"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "100-101, 202"
    }
   },
   {
@@ -4424,7 +4228,7 @@
    "severity": null,
    "text": "`httpResource` read via `.value()` without `hasValue()` guard (in `onSave` and `ngOnInit`); resource params read a non-signal `@Input`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "34, 58, 104, 158, 178, 196, 199"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "33, 57, 103, 157, 177, 195, 198"
    }
   },
   {
@@ -4442,7 +4246,7 @@
    "severity": null,
    "text": "manual `Subject`/`Subscription` cleanup pattern + `ngOnDestroy` (must be `takeUntilDestroyed`/`DestroyRef`); `destroy$` never `.complete()`d; inner subscription in `valueChanges` never cleaned (leak).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "40, 106-107, 172, 280-281"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "39, 105-106, 171, 279-280"
    }
   },
   {
@@ -4459,7 +4263,7 @@
    "severity": null,
    "text": "the on-exit flush (`facade.clearUsers()`) lives in `ngOnDestroy` instead of `inject(DestroyRef).onDestroy(...)`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "280, 282"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "279, 281"
    }
   },
   {
@@ -4479,7 +4283,7 @@
    "severity": null,
    "text": "local state behind a setter (`set pageSize`) instead of a `signal()`; `get currentPageSize()` is a getter that only returns a field (code-quality: boilerplate) and nothing reads it; `ngAfterContentInit()` is an empty lifecycle hook (code-quality).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "95, 121, 194"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "94, 120, 193"
    }
   },
   {
@@ -4497,7 +4301,7 @@
    "severity": null,
    "text": "constructor does loads/dispatches and logging (only `effect()` allowed); `effect()` writes state (`resultCount`) and patches the form without `{ emitEvent: false }` (feedback loop with the `valueChanges` subscription).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "172"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "171"
    }
   },
   {
@@ -4516,7 +4320,7 @@
    "severity": null,
    "text": "route/query params read by hand via `URLSearchParams(location.search)` instead of arriving as signal `input()`s bound by `withComponentInputBinding()`; edit-mode has only the id-present branch (no else), and it is a `ngOnInit` branch rather than a signal read.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "84, 158-159"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "83, 157-158"
    }
   },
   {
@@ -4533,7 +4337,7 @@
    "severity": null,
    "text": "`subscribe()` nested inside `subscribe()` (the inner stream escapes the outer `takeUntil`).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "40, 166, 172-173"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "39, 165, 171-172"
    }
   },
   {
@@ -4550,7 +4354,7 @@
    "severity": null,
    "text": "hard-coded `setInterval` polling, never cleared, resubscribing a cold HTTP observable each tick.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "149, 166, 168"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "148, 165, 167"
    }
   },
   {
@@ -4569,7 +4373,7 @@
    "severity": null,
    "text": "untyped form (`UntypedFormGroup`/`UntypedFormControl`) instead of `_fb.nonNullable.group` with explicit generics; `addValidators` without `updateValueAndValidity()`; `valueChanges` without `distinctUntilChanged(isEqual)`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "36, 109, 172, 176"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "35, 108, 171, 175"
    }
   },
   {
@@ -4586,7 +4390,7 @@
    "severity": "high",
    "text": "the lock effect calls `form.disable()`, so `onSave` reading `this.form.value` silently drops every disabled control from the payload — it must be `getRawValue()` (🔴 High).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "143, 172, 196, 198"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "142, 171, 195, 197"
    }
   },
   {
@@ -4603,7 +4407,7 @@
    "severity": null,
    "text": "aggregate child-form validity hand-rolled (`childFormsValid` array + `registerChildForm`) instead of the shared forms-validity service pattern (components-reference token, `debounceTime` from the central config, `distinctUntilChanged()`, `takeUntilDestroyed(...)`).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "87, 217-219"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "86, 216-218"
    }
   },
   {
@@ -4620,7 +4424,7 @@
    "severity": null,
    "text": "`goToNextStep()` re-implements the wizard gate inline instead of combining the facade's gate selector with local form validity, and its label (`'You can continue to the next step'`) is a hard-coded text, not an i18n key.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "210, 213"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "209, 212"
    }
   },
   {
@@ -4637,7 +4441,7 @@
    "severity": null,
    "text": "`registerChildForm`/`goToNextStep`/`onSave` are handlers with business logic, not thin proxies to facade methods.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "196, 210, 217"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "195, 209, 216"
    }
   },
   {
@@ -4654,7 +4458,7 @@
    "severity": null,
    "text": "`compareWithId` is a method, not a `readonly` arrow field, and it is not null-safe (`?.`) although the template binds it to `[compareWith]`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "222"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "221"
    }
   },
   {
@@ -4671,7 +4475,7 @@
    "severity": null,
    "text": "`document.querySelector('#' + user.id)` — API-derived content used to build a selector.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "237"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "236"
    }
   },
   {
@@ -4690,7 +4494,7 @@
    "severity": null,
    "text": "handler with business logic (`onSave` dispatches, calls HTTP `deleteUser` with a floating promise); `saved.emit` of a double-cast payload (`as unknown as`).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "196, 198, 200, 206, 235, 241"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "195, 197, 199, 205, 234, 240"
    }
   },
   {
@@ -4711,7 +4515,7 @@
    "text": "`formatDate`/`greet` methods called from template bindings.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "91",
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "258, 262"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "257, 261"
    }
   },
   {
@@ -4728,7 +4532,7 @@
    "severity": null,
    "text": "`@HostListener` instead of `host: {}`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "266, 271"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "265, 270"
    }
   },
   {
@@ -4746,7 +4550,7 @@
    "severity": null,
    "text": "enum alias renamed (`statuses = UserStatus` — must keep the enum name, `userStatus`); signals/aliases not `readonly`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "75"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "74"
    }
   },
   {
@@ -4766,7 +4570,7 @@
    "severity": "medium",
    "text": "`@HostListener('document:keydown.s')` — a single-character shortcut bound to the whole document, always active, with no way to turn it off or remap it (it also steals `s` from every text field).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "271"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "270"
    }
   },
   {
@@ -4786,7 +4590,7 @@
    "severity": "medium",
    "text": "`document.getElementById('panel-root')?.focus()` targets a `<div>` that has no `tabindex`, so the focus move silently does nothing and the user is left at the top of the document.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "164"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "163"
    }
   },
   {
@@ -4806,7 +4610,7 @@
    "severity": "medium",
    "text": "the second `setInterval` rotates the promo banner every 4 s with no pause/stop/hide control (and, like the polling one, is never cleared).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "149, 166, 168"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "148, 165, 167"
    }
   },
   {
@@ -4826,7 +4630,7 @@
    "severity": "medium",
    "text": "`onRoleChange` navigates (`window.location.href = ...`) from the `change` event of a `<select>` — changing a setting must not change context by itself.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "230"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "229"
    }
   },
   {
@@ -4847,7 +4651,7 @@
    "severity": "medium",
    "text": "`deleteAccount()` and `removeUser()` call `deleteUser(...)` immediately — no confirmation, no undo for an irreversible operation; the feature template's `Delete account` button calls `deleteAccount()` straight from the click.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "240",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "239",
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "151"
    }
   },
@@ -4869,7 +4673,7 @@
    "severity": "medium",
    "text": "`onPinchZoom` implements zooming as a multipoint `touchmove` gesture with no single-pointer alternative — the feature template binds it as the table's `(touchmove)`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "249",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "248",
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "65"
    }
   },
@@ -4890,7 +4694,7 @@
    "severity": "medium",
    "text": "inline `styles` set `.promo { color: #cccccc; background: #ffffff; }` — about 1.6:1 against white, far under 4.5:1.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "47, 50"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "46, 49"
    }
   },
   {
@@ -4910,7 +4714,7 @@
    "severity": "medium",
    "text": "inline `styles` kill the focus ring for every button, link and the toolbar (`button:focus, a:focus, .toolbar:focus { outline: none; }`) with no `:focus-visible` replacement.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "47, 54"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "46, 53"
    }
   },
   {
@@ -4947,7 +4751,7 @@
    "severity": "medium",
    "text": "`.icon-btn { width: 16px; height: 16px; }` and `.remove { width: 14px; height: 14px; }` — both under the 24×24 CSS px minimum, with no spacing exception.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "51-52"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "50-51"
    }
   },
   {
@@ -4978,7 +4782,7 @@
    "severity": null,
    "text": "`*ngIf`/`*ngFor` instead of @if/@for; `[ngClass]`/`[ngStyle]` instead of [class.x]/[style.x]; hard-coded color in `ngStyle`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "86-88, 90, 163"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "86-88, 90, 164"
    }
   },
   {
@@ -4996,7 +4800,7 @@
    "severity": null,
    "text": "`*ngFor` without any stable `track`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "72, 86, 163"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "72, 86, 164"
    }
   },
   {
@@ -5016,7 +4820,7 @@
    "severity": null,
    "text": "LCP hero image inside `@defer (on viewport)` (layout shift + deferred LCP); `<img>` without `ngSrc`, without `height`, no `priority`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "13, 16, 161"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "13, 16, 162"
    }
   },
   {
@@ -5033,7 +4837,7 @@
    "severity": null,
    "text": "the inner `@defer (on viewport)` nested in the hero `@defer (on viewport)` repeats the outer trigger — identical triggers cascade into one simultaneous load and defeat the split.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "13, 16, 161"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "13, 16, 162"
    }
   },
   {
@@ -5050,7 +4854,7 @@
    "severity": null,
    "text": "all three `@defer` blocks lack a `@placeholder` — the viewport trigger has no element to observe.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "13, 16, 161"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "13, 16, 162"
    }
   },
   {
@@ -5084,7 +4888,7 @@
    "severity": null,
    "text": "no `@let` at the top of the template although `users()` is read four times.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "1, 72, 86, 163"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "1, 72, 86, 164"
    }
   },
   {
@@ -5118,7 +4922,7 @@
    "severity": null,
    "text": "no `data-test` on any interactive native element despite `dataTestPrefix` — the only `data-test` in the template sits on the `<user-card>` component host tag, where it is forbidden (the selector already targets hosts).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "168"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "169"
    }
   },
   {
@@ -5135,7 +4939,7 @@
    "severity": null,
    "text": "logic and state writes inline in the template — `facade.loadUsers({ pageSize: 25 })`, `showTooltip = true/false`, `activeTab = 'all'`, `isOverlayOpen = false`, and `(click)=\"removeUser(user); rowCounter = rowCounter + 1\"` (two statements after a `;`).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "30, 46, 78, 158"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "30, 46, 78, 159"
    }
   },
   {
@@ -5152,7 +4956,7 @@
    "severity": null,
    "text": "`rowCounter` is a counter signal/field maintained next to the loop and rendered as the row number — loop metadata comes from `$index`/`$count` of the `@for` block itself, and the same counter is threaded down into `<user-card [index]=\"rowCounter\">`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "72, 74, 78, 165-166"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "72, 74, 78, 166-167"
    }
   },
   {
@@ -5202,7 +5006,7 @@
    "severity": null,
    "text": "`<user-card …></user-card>` projects no content and must be self-closing.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "162"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "163"
    }
   },
   {
@@ -5236,7 +5040,7 @@
    "severity": null,
    "text": "`title=\"User details\"` as a plain attribute on the `<user-card>` host — the `title` input collides with the native HTML attribute, so the binding form (`[title]=\"'User details'\"`) is required; the plain attribute lands in the DOM and adds an unwanted browser tooltip (the value is also yet another hard-coded text — i18n).",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "167"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "168"
    }
   },
   {
@@ -5369,7 +5173,7 @@
    "severity": "medium",
    "text": "no landmarks and no skip link — `<div class=\"nav\">`, `<div class=\"footer\">` and no `<main>` anywhere in the view.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "2, 173"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "2, 174"
    }
   },
   {
@@ -5777,84 +5581,15 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
    ],
    "instructions": [
-    "i18n",
-    "code-quality"
+    "i18n"
    ],
    "items": [
-    "i18n#11",
-    "code-quality#1"
+    "i18n#11"
    ],
    "severity": null,
    "text": "every user-facing text hard-coded; `page.userPanel.labels.requiredEmail` exists but `Email is required` (L119) is hard-coded.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "119"
-   }
-  },
-  {
-   "id": "v439",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
-   ],
-   "instructions": [
-    "architecture"
-   ],
-   "items": [
-    "architecture#6"
-   ],
-   "severity": null,
-   "text": "non-`*.component.*` file next to a component (only component files + `tests/` allowed)."
-  },
-  {
-   "id": "v440",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
-   ],
-   "instructions": [
-    "architecture",
-    "components-folder"
-   ],
-   "items": [
-    "architecture#6",
-    "components-folder#2"
-   ],
-   "severity": null,
-   "text": "interface (`HelperUser`) belongs in `models/`, const in `models/consts`; `buildGreeting` has one consumer and a one-line body, so it is inlined at its call site (`feature-user-panel.component.ts:263`) rather than moved to `shared/utils/`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts": "3, 8"
-   }
-  },
-  {
-   "id": "v441",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
-   ],
-   "instructions": [
-    "code-quality"
-   ],
-   "items": [
-    "code-quality#1"
-   ],
-   "severity": null,
-   "text": "SCREAMING_SNAKE const (`MAX_USERS`); hard-coded user-facing text built by concatenation (`'Welcome ' + user.name`) — i18n.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts": "1, 9"
-   }
-  },
-  {
-   "id": "v442",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
-   ],
-   "instructions": [
-    "code-quality"
-   ],
-   "items": [
-    "code-quality#3"
-   ],
-   "severity": "medium",
-   "text": "`MAX_USERS` has no consumer left in the repo.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts": "1"
    }
   },
   {
@@ -5869,6 +5604,7 @@
    ],
    "items": [
     "components-folder#1",
+    "components-folder#2",
     "architecture#6",
     "directives#7"
    ],
@@ -6062,7 +5798,7 @@
     "component#1"
    ],
    "severity": null,
-   "text": "no `changeDetection: ChangeDetectionStrategy.OnPush`; no `.scss` file and no `styleUrl`."
+   "text": "no `changeDetection: ChangeDetectionStrategy.OnPush`."
   },
   {
    "id": "v458",
@@ -6131,7 +5867,8 @@
     "component#10",
     "best-practices#4",
     "code-quality#3",
-    "code-quality#4"
+    "code-quality#4",
+    "code-quality#9"
    ],
    "severity": null,
    "text": "dialog-local UI state in plain mutable fields (`isConfirmed`, `result`) instead of `signal()`s — and neither needs to exist: `isConfirmed` is written (L19 and the template's `No` button) but never read, and `result` only relays `'confirmed'` into the dispatch; the fix deletes both rather than wrapping them in signals.",
@@ -6150,12 +5887,12 @@
     "component"
    ],
    "items": [
+    "component#5",
     "component#7",
-    "component#8",
     "component#23"
    ],
    "severity": null,
-   "text": "members are public and unprefixed; no `dataTestPrefix`; no `readonly`."
+   "text": "the injected store is public and unprefixed, not `private readonly _store`; no `dataTestPrefix`; no `readonly`."
   },
   {
    "id": "v463",
@@ -6285,23 +6022,6 @@
    "text": "class `UserCardComponent` (should be `UiUserCardComponent`), selector `user-card` (missing app prefix + `ui-` segment).",
    "lines": {
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "35, 38-39, 41"
-   }
-  },
-  {
-   "id": "v471",
-   "files": [
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts"
-   ],
-   "instructions": [
-    "component"
-   ],
-   "items": [
-    "component#8"
-   ],
-   "severity": null,
-   "text": "template-read members (`highlighted`, `form`, `isExpanded`, `index`) are public instead of `protected`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.ts": "48, 53-54, 67, 69, 94"
    }
   },
   {
@@ -6615,7 +6335,7 @@
    "severity": null,
    "text": "`[disabled]` bound on a reactive control instead of `effect(() => form.disable({ emitEvent: false }))`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "19"
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "20"
    }
   },
   {
@@ -6690,7 +6410,7 @@
    "severity": null,
    "text": "hard-coded `Rotate your device to see the card` text (the orientation lock it belongs to is a styles finding, see below).",
    "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "20"
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "21"
    }
   },
   {
@@ -6707,7 +6427,7 @@
    "severity": null,
    "text": "class names not BEM with the component root block (`.card`, `.btnPrimary`, `.red-text`).",
    "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "1, 7, 18, 22, 31"
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "1, 7, 31, 35, 44"
    }
   },
   {
@@ -6724,7 +6444,7 @@
    "severity": null,
    "text": "bare `::ng-deep` not wrapped in `:host`.",
    "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "27"
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "40"
    }
   },
   {
@@ -6741,7 +6461,7 @@
    "severity": null,
    "text": "repeated magic number `13px` (no SCSS variable, no theme `@use`).",
    "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "3, 9, 28"
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "3, 9, 41"
    }
   },
   {
@@ -6758,7 +6478,7 @@
    "severity": null,
    "text": "redundant `display: block` on an already-block element; `.red-text` duplicates a utility class.",
    "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "2, 23, 31"
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "2, 36, 44"
    }
   },
   {
@@ -6767,15 +6487,17 @@
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss"
    ],
    "instructions": [
+    "component-styles",
     "code-quality"
    ],
    "items": [
-    "code-quality#3"
+    "component-styles#7",
+    "code-quality#10"
    ],
-   "severity": "medium",
+   "severity": null,
    "text": "`.btnPrimary` and `.red-text` are selectors the card template does not contain — dead rules.",
    "lines": {
-    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "7, 31"
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "7, 44"
    }
   },
   {
@@ -7019,7 +6741,7 @@
    ],
    "items": [
     "i18n#9",
-    "code-quality#3"
+    "code-quality#11"
    ],
    "severity": "medium",
    "text": "the feature template asks for `page.userPanel.labels.userNameLabel`, which does not exist here — the key was renamed without checking its consumers."
@@ -7033,7 +6755,7 @@
     "code-quality"
    ],
    "items": [
-    "code-quality#3"
+    "code-quality#11"
    ],
    "severity": "medium",
    "text": "`actions.save`, `userCard.selectBtn`, `labels.userName`, `page.userPanel.labels.requiredEmail` and `page.userPanel.actions.saveUser` are resolved by nothing in the repo — dead i18n keys."
@@ -7065,43 +6787,14 @@
     "code-quality"
    ],
    "items": [
-    "i18n#10",
     "i18n#1",
-    "code-quality#3"
+    "code-quality#11"
    ],
    "severity": null,
    "text": "duplicate key (`labels.userName` twice); key existing only in Polish (`newKeyOnlyInPolish`).",
    "lines": {
     "src/assets/i18n/pl.json": "12"
    }
-  },
-  {
-   "id": "v549",
-   "files": [
-    "src/assets/i18n/tests/en.json.spec.ts"
-   ],
-   "instructions": [
-    "i18n"
-   ],
-   "items": [
-    "i18n#12"
-   ],
-   "severity": null,
-   "text": "i18n entries have no unit tests."
-  },
-  {
-   "id": "v550",
-   "files": [
-    "src/assets/i18n/tests/en.json.spec.ts"
-   ],
-   "instructions": [
-    "unit-tests"
-   ],
-   "items": [
-    "unit-tests#1"
-   ],
-   "severity": null,
-   "text": "the snapshot has no `tests/__snapshots__/` counterpart; the test asserts the whole translation file, so every new key breaks it."
   },
   {
    "id": "v555",
@@ -7118,23 +6811,6 @@
    "text": "behaviour triggered by `mouseenter` only (`onEnter`) — no focus equivalent, keyboard users never trigger it.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts": "43-44"
-   }
-  },
-  {
-   "id": "v556",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts"
-   ],
-   "instructions": [
-    "test-coverage"
-   ],
-   "items": [
-    "test-coverage#1"
-   ],
-   "severity": "missing-unit-test",
-   "text": "`buildGreeting` has no spec (🔵).",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/user-panel.helpers.ts": "8"
    }
   },
   {
@@ -7272,7 +6948,7 @@
    "severity": null,
    "text": "the inline-style class names (`.panel-title`, `.section-title`, `.promo`, `.icon-btn`, `.remove {`, `.panel-actions`) are not BEM with the component root block.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "48-53"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "47-52"
    }
   },
   {
@@ -7289,7 +6965,7 @@
    "severity": null,
    "text": "hard-coded colors in the inline styles (`#333333`, `#cccccc`, `#ffffff`) instead of theme custom properties; no dark-mode counterparts.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "48, 50, 53"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "47, 49, 52"
    }
   },
   {
@@ -7371,7 +7047,7 @@
    "items": [
     "unit-tests#7"
    ],
-   "severity": "high",
+   "severity": "low",
    "text": "the `FACADE` stub holds only `list` but is provided as `Store`, `UserPanelService` and `Router`; `canActivate()` calls `this.store.select` (`user-panel.guard.ts:18`), so the test throws a `TypeError` and cannot pass.",
    "lines": {
     "src/app/user-panel/shared/guards/tests/user-panel.guard.spec.ts": "4, 8, 10"
@@ -7409,8 +7085,8 @@
    "severity": null,
    "text": "the deferred `<user-card` element's `UserCardComponent` is imported through the `ui` barrel `index.ts` — the barrel import keeps it in the main bundle, so the defer block around it defers nothing.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "10, 45",
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "162"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "9, 44",
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "163"
    }
   },
   {
@@ -7487,6 +7163,7 @@
     "ngrx-selectors-unit-test"
    ],
    "items": [
+    "ngrx-selectors-unit-test#3",
     "ngrx-selectors-unit-test#9"
    ],
    "severity": null,
@@ -7666,7 +7343,7 @@
    "severity": null,
    "text": "`export class UserPanelComponent` is neither small nor single-responsibility: it loads and polls users, runs the sign-up form with a captcha, the table, the list, the overlays, the banner rotation and ad-hoc reports in one class.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "57"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "56"
    }
   },
   {
@@ -7726,32 +7403,15 @@
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
    ],
    "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#14"
-   ],
-   "severity": null,
-   "text": "`toSignal(this.facade.users$)` inside the `get usersSignal()` getter — toSignal injects DestroyRef, so reading the getter anywhere outside an injection context throws NG0203.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "117-118"
-   }
-  },
-  {
-   "id": "v606",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
     "code-quality"
    ],
    "items": [
-    "code-quality#6"
+    "code-quality#3"
    ],
    "severity": null,
-   "text": "commented-out `// refresh(): void {` block left in the class — comment lines the change adds.",
+   "text": "`get usersSignal()`, which returns `toSignal(this.facade.users$)`, is read nowhere — not by the template, the class or a spec.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "276"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "116-117"
    }
   },
   {
@@ -7770,6 +7430,160 @@
    "lines": {
     "src/app/user-panel/data-access/+state/tests/user-panel.facade.spec.ts": "18-19"
    }
+  },
+  {
+   "id": "v608",
+   "files": [
+    "src/app/user-panel/data-access/services/user-panel.service.ts"
+   ],
+   "instructions": [
+    "http-service"
+   ],
+   "items": [
+    "http-service#1"
+   ],
+   "severity": null,
+   "text": "`UserPanelService` is injected outside the effects: the feature component (`svc = inject(UserPanelService)`, used for `this.svc.deleteUser('draft')`), the `Highlight` directive, `UserPanelFacade` and `UserPanelGuard` all inject it, and `user-panel.actions.ts` imports it — only effects may use the HTTP service.",
+   "lines": {
+    "src/app/user-panel/data-access/services/user-panel.service.ts": "20"
+   }
+  },
+  {
+   "id": "v609",
+   "files": [
+    "src/app/user-panel/data-access/services/user-panel.service.ts"
+   ],
+   "instructions": [
+    "http-service"
+   ],
+   "items": [
+    "http-service#11"
+   ],
+   "severity": null,
+   "text": "one endpoint, two guessed contracts: `usersResource = httpResource<UserDto[]>(() => endpoints.users)` types the users endpoint as a bare array, while `getUsers` reads the same URL with `.get<any>(endpoints.users + …` and unwraps it with `map((response) => response.data),` — at most one of the two shapes is the real response, and neither was checked against the API contract.",
+   "lines": {
+    "src/app/user-panel/data-access/services/user-panel.service.ts": "21, 28, 30, 32"
+   }
+  },
+  {
+   "id": "v610",
+   "files": [
+    "src/app/user-panel/models/index.ts"
+   ],
+   "instructions": [
+    "models"
+   ],
+   "items": [
+    "models#7"
+   ],
+   "severity": null,
+   "text": "consumers bypass the barrel: `feature-user-panel.component.ts` imports `UserStatus` from `'../../../models/enums/user-status.enum'` and `userPanelTitle` from `'../../../models/consts/user-panel-title.const'`, right next to its `from '../../../models'` import — outside `models/` a model is imported only through the barrel."
+  },
+  {
+   "id": "v611",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
+   ],
+   "instructions": [
+    "accessibility"
+   ],
+   "items": [
+    "accessibility#8"
+   ],
+   "wcag": [
+    "1.4.4",
+    "1.4.10"
+   ],
+   "severity": "medium",
+   "text": "the inline styles size text in px (`font-size: 22px`, `font-size: 20px`) instead of relative units, and `.panel-actions` is a fixed bar with a fixed `height: 72px` — at 200% text zoom and at 320 CSS px width (400% zoom) it covers the content under it instead of reflowing.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "47-48, 52"
+   }
+  },
+  {
+   "id": "v612",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#12"
+   ],
+   "severity": "medium",
+   "text": "`title() ?? ''` — `title` is `input<string>('')`, so it is never null or undefined and the `??` fallback guards a value the types already guarantee.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "5"
+   }
+  },
+  {
+   "id": "v613",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#13"
+   ],
+   "severity": "medium",
+   "text": "an empty `card__footer` div holding only `<!-- TODO: add footer -->` — a TODO stub no ticket tracks, placeholder markup that renders nothing.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html": "19"
+   }
+  },
+  {
+   "id": "v614",
+   "files": [
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html"
+   ],
+   "instructions": [
+    "performance"
+   ],
+   "items": [
+    "performance#18"
+   ],
+   "severity": null,
+   "text": "the overlay reads `userDetails.value()?.email` with no `hasValue()` guard — once the `httpResource` errors, `.value()` throws on read and takes the template down with it.",
+   "lines": {
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.html": "158"
+   }
+  },
+  {
+   "id": "v615",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss"
+   ],
+   "instructions": [
+    "accessibility"
+   ],
+   "items": [
+    "accessibility#36"
+   ],
+   "severity": "medium",
+   "text": "the bio is hidden with `visibility: hidden` and revealed only by `&:hover &__bio` — keyboard users never see it (no `:focus-within` reveal) and nothing dismisses it with Escape (1.4.13).",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "17, 20"
+   }
+  },
+  {
+   "id": "v616",
+   "files": [
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss"
+   ],
+   "instructions": [
+    "accessibility"
+   ],
+   "items": [
+    "accessibility#37"
+   ],
+   "severity": "medium",
+   "text": "`flex-direction: row-reverse` on `&__actions` shows `Select` before `Details` while focus follows the DOM — the tab order runs right-to-left across the card's actions (1.3.2, 2.4.3).",
+   "lines": {
+    "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "24, 26"
+   }
   }
  ],
  "crossFile": [
@@ -7779,7 +7593,7 @@
   },
   {
    "id": "x02",
-   "text": "One concept, five types: `UserDto` and `UserVm` (models), `CardUser` (`ui-user-card.component.ts`), `HelperUser` (`user-panel.helpers.ts`) and `UserTableDragSourceData` (`user-table.type.ts`) all describe a user with different fields and different casing conventions — the area should carry exactly two (`UserDto` for the API contract, one domain model)."
+   "text": "One concept, four types: `UserDto` and `UserVm` (models), `CardUser` (`ui-user-card.component.ts`) and `UserTableDragSourceData` (`user-table.type.ts`) all describe a user with different fields and different casing conventions — the area should carry exactly two (`UserDto` for the API contract, one domain model)."
   },
   {
    "id": "x03",
@@ -7790,16 +7604,12 @@
    "text": "Layer inversion: ui component → facade → service, while the guard, the directive and the feature component also reach the service directly, and the interceptor dispatches back into the store."
   },
   {
-   "id": "x05",
-   "text": "Two parallel state mechanisms for the same data: the `UserPanelUiStateService` `BehaviorSubject` (`isOverlayOpen$`) and the component's own `isOverlayOpen` field."
-  },
-  {
    "id": "x06",
    "text": "`filteredUsers` flows action → reducer → state although it is derivable — action, state field and dispatching component should all be findings under their own instructions."
   },
   {
    "id": "x07",
-   "text": "The area registers state in `shared/routes` providers and ALSO in the root `provideStore` of `app.config.ts`, has a parallel `shell` routing variant, an NgModule, and two forbidden barrels (`shared/index.ts`, `components-user-panel/ui/index.ts`) — canonical layout broken at area and app level."
+   "text": "The area registers state in `shared/routes` providers and ALSO in the root `provideStore` of `app.config.ts`, has a parallel `shell` routing variant and two forbidden barrels (`shared/index.ts`, `components-user-panel/ui/index.ts`) — canonical layout broken at area and app level."
   },
   {
    "id": "x08",
@@ -7811,7 +7621,7 @@
   },
   {
    "id": "x10",
-   "text": "Specs that must not exist at all: the HTTP-wrapper service spec (the service is one once its data mapping moves out), the routes spec and the i18n snapshot spec."
+   "text": "Specs that must not exist at all: the HTTP-wrapper service spec (the service is one once its data mapping moves out) and the routes spec."
   },
   {
    "id": "x12",

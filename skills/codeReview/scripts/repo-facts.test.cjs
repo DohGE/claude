@@ -43,18 +43,38 @@ test('a consumer through a barrel counts, and the barrel is then in use', () => 
   assert.deepStrictEqual(factsOf(result, 'src/app/a/index.ts', 'barrel-unused'), []);
 });
 
-test('a phrase or an array repeated across files binds; one repeated word only hints', () => {
+test('a phrase or an array written three times across files binds; one repeated word only hints', () => {
   const result = collect({
-    'src/app/a/one.ts': "export const title = 'Order history page';\nexport const header = 'Authorization';\nexport const cols = ['name', 'email'];\n",
-    'src/app/a/two.ts': "export const t = 'Order history page';\nexport const h = 'Authorization';\nexport const c = ['name', 'email'];\n",
+    'src/app/a/one.ts': "export const title = 'Order history page';\nexport const header = 'Authorization';\nexport const cols = ['name', 'email'];\nexport const pair = 'Shipping address form';\nexport const b = 'Billing address form';\n",
+    'src/app/a/two.ts': "export const t = 'Order history page';\nexport const h = 'Authorization';\nexport const c = ['name', 'email'];\nexport const p = 'Shipping address form';\nexport const b = 'Billing address form';\nexport const again = 'Billing address form';\n",
+    'src/app/a/three.ts': "export const t = 'Order history page';\nexport const h = 'Authorization';\nexport const c = ['name', 'email'];\n",
   });
   const repeated = factsOf(result, 'src/app/a/one.ts', 'repeated-literal').map((f) => [f.lines[0], !!f.hint]);
-  assert.deepStrictEqual(repeated.sort((a, b) => a[0] - b[0]), [[1, false], [2, true], [3, false]]);
+  // L4 has one copy elsewhere: two copies are no fact; L5's third copy sits in the same file as the second.
+  assert.deepStrictEqual(repeated.sort((a, b) => a[0] - b[0]), [[1, false], [2, true], [3, false], [5, false]]);
 });
 
-test('a locale file that is not valid JSON is a fact at the trailing comma', () => {
-  const result = collect({ 'src/assets/i18n/en.json': '{\n  "a": "A",\n}\n' });
-  assert.deepStrictEqual(factsOf(result, 'src/assets/i18n/en.json', 'i18n-invalid-json').map((f) => f.lines), [[2]]);
+test('a condition is a fact from its third copy, a label mapping from its second only as a hint', () => {
+  const result = collect({
+    'src/app/a/one.ts': "export const a = user.status === 'blocked';\nexport const b = order.state === 'paid';\nexport function label(s: number): string {\n  return s === 1 ? 'Active user' : 'Blocked user';\n}\n",
+    'src/app/a/two.ts': "export const a = user.status === 'blocked';\nexport const b = order.state === 'paid';\nexport function text(s: number): string {\n  return s === 1 ? 'Active user' : 'Blocked user';\n}\n",
+    'src/app/a/three.ts': "export const a = user.status === 'blocked';\n",
+    'src/app/a/shared/pipes/status.pipe.ts': "export class StatusPipe {\n  transform(s: number): string {\n    return s === 2 ? 'Paid order' : 'Open order';\n  }\n}\n",
+    'src/app/a/four.ts': "export function orderLabel(s: number): string {\n  return s === 2 ? 'Paid order' : 'Open order';\n}\n",
+  });
+  assert.deepStrictEqual(factsOf(result, 'src/app/a/one.ts', 'repeated-condition').map((f) => f.lines), [[1]]);
+  const mapping = (p) => factsOf(result, p, 'mapping-duplicate').map((f) => [f.lines[0], !!f.hint]);
+  assert.deepStrictEqual(mapping('src/app/a/one.ts'), [[3, true]]);
+  // A pipe re-implementing a mapping duplicates it from the second copy.
+  assert.deepStrictEqual(mapping('src/app/a/shared/pipes/status.pipe.ts'), [[2, false]]);
+  assert.deepStrictEqual(mapping('src/app/a/four.ts'), [[1, true]]);
+});
+
+test('a locale file keeps its keys past a trailing comma and up to any other syntax error', () => {
+  const lenient = facts.parseJsonKeys('{\n  "a": { "x": "X", },\n  "l": ["p", "q",],\n  "b": "B"\n}\n');
+  assert.deepStrictEqual(lenient.entries.map((e) => [e.key, e.line]), [['a.x', 2], ['b', 4]]);
+  const broken = facts.parseJsonKeys('{\n  "a": "A"\n  "b": "B"\n}\n');
+  assert.deepStrictEqual(broken.entries.map((e) => [e.key, e.line]), [['a', 2]]);
 });
 
 test('the locale base is English even when another locale is larger', () => {
@@ -170,14 +190,11 @@ test('collectFacts finds the answer-key targets of the test environment', () => 
     ['src/assets/i18n/en.json', 'i18n-missing-key', [13], false],
     ['src/assets/i18n/en.json', 'i18n-unused-key', [3, 6, 9, 14, 17, 20], false],
     ['src/assets/i18n/en.json', 'i18n-duplicate-value', [3, 6, 14, 20], false],
-    ['src/assets/i18n/pl.json', 'i18n-duplicate-key', [7], false],
     ['src/assets/i18n/pl.json', 'i18n-locale-extra-key', [12], false],
-    [`${feature}.ts`, 'cross-area-import', [11], false],
-    ['src/app/user-panel/data-access/+state/user-panel.effects.ts', 'cross-area-import', [22], false],
     ['src/app/user-panel/models/consts/user-panel-title.const.ts', 'repeated-literal', [1], false],
-    ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'repeated-literal', [32], false],
     ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'repeated-condition', [10], false],
-    ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'mapping-duplicate', [37], false],
+    // The scan sees two of the status mapping's copies; the pipe wrapping it is the third.
+    ['src/app/user-panel/shared/utils/build-user-summary.util.ts', 'mapping-duplicate', [37], true],
     ['src/app/user-panel/shared/pipes/user-status.pipe.ts', 'mapping-duplicate-caller', [18, 21], false],
     ['src/app/user-panel/models/consts/user-panel-initial-state.const.ts', 'initial-state-gap', [5, 11], false],
     ['src/app/user-panel/data-access/+state/user-panel.reducer.ts', 'reducer-empty-instead-of-null', [48], false],
@@ -198,8 +215,10 @@ test('collectFacts finds the answer-key targets of the test environment', () => 
   }
   // The bootstrap config is main.ts's business.
   assert.ok(!factsOf(result, 'src/app/app.config.ts', 'export-unused').some((f) => /appConfig/.test(f.text)));
-  const header = factsOf(result, 'src/app/app.config.ts', 'repeated-literal').filter((f) => /"Authorization"/.test(f.text));
-  assert.ok(header.length > 0 && header.every((f) => f.hint));
+  const token = factsOf(result, 'src/app/app.config.ts', 'repeated-literal').filter((f) => /"authToken"/.test(f.text));
+  assert.ok(token.length > 0 && token.every((f) => f.hint));
+  // The header name is written twice: no fact before its third copy.
+  assert.ok(!factsOf(result, 'src/app/app.config.ts', 'repeated-literal').some((f) => /"Authorization"/.test(f.text)));
 });
 
 test('compileProbe accepts one form and names what is wrong', () => {
@@ -239,7 +258,8 @@ test('builtin probes: @for without @empty, repeated signal reads, repeated marku
   const component = 'class A {\n  user = input<User>();\n  open() {}\n}\n';
   assert.deepStrictEqual(run('signal-reads-without-let', 'a.html', '<p>{{ user().name }}</p>\n<p>{{ user().email }}</p>\n<button (click)="open()">x</button>\n', { companionText: component }), [1]);
   assert.deepStrictEqual(run('signal-reads-without-let', 'a.html', '@let u = user();\n<p>{{ user().name }}</p>\n<p>{{ user().email }}</p>\n', { companionText: component }), []);
-  assert.deepStrictEqual(run('markup-repeat', 'index.html', '<div class="nav" onclick="go(1)">Users</div>\n<div class="nav" onclick="go(2)">Reports</div>\n<p>x</p>\n'), [1, 2]);
+  assert.deepStrictEqual(run('markup-repeat', 'index.html', '<div class="nav" onclick="go(1)">Users</div>\n<div class="nav" onclick="go(2)">Reports</div>\n<p>x</p>\n<div class="nav" onclick="go(3)">Roles</div>\n'), [1, 2, 4]);
+  assert.deepStrictEqual(run('markup-repeat', 'index.html', '<div class="nav" onclick="go(1)">Users</div>\n<div class="nav" onclick="go(2)">Reports</div>\n'), [], 'two copies are no finding yet');
   assert.deepStrictEqual(run('area-root-file', 'src/app/orders/orders.module.ts', 'x'), [1]);
   assert.deepStrictEqual(run('area-root-file', 'src/app/orders/shared/x.ts', 'x'), []);
   assert.deepStrictEqual(run('area-root-file', 'src/app/admin/orders/orders.module.ts', 'x'), [1], 'a nested area has a root too');

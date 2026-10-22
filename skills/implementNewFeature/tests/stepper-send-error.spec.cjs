@@ -21,7 +21,6 @@ test.beforeEach(async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#branch');
   await page.fill('#task', 'Opis zadania');
-  await page.fill('#biz', 'Wymagania biznesowe');
 });
 
 

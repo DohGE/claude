@@ -26,7 +26,6 @@ test.beforeEach(async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#hints');
   await page.fill('#task', 'Opis zadania');
-  await page.fill('#biz', 'Wymagania biznesowe');
   await page.fill('#branch', 'feature/test');
 });
 
@@ -38,9 +37,9 @@ test.afterEach(async () => {
 const submit = async page => { await page.click('#next'); await page.click('#confirmOk'); };
 const takeAnswer = async () => (await (await fetch(`${base}/api/answer?wait=10`)).json()).answer;
 
-test('sekcja materiałów leży między wymaganiami biznesowymi a makietami', async ({ page }) => {
+test('sekcja materiałów leży między opisem zadania a makietami', async ({ page }) => {
   const y = async sel => (await page.locator(sel).boundingBox()).y;
-  expect(await y('#biz')).toBeLessThan(await y('#hints'));
+  expect(await y('#task')).toBeLessThan(await y('#hints'));
   expect(await y('#hints')).toBeLessThan(await y('#mockups'));
 });
 

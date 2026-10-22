@@ -33,7 +33,6 @@ async function openStep1(page) {
   await page.goto(base);
   await page.waitForSelector('#genMockups');
   await page.fill('#task', 'Opis zadania');
-  await page.fill('#biz', 'Wymagania biznesowe');
   await page.fill('#branch', 'feature/test');
 }
 
@@ -72,6 +71,26 @@ test('stepper ukrywa krok Mockups, dopóki toggle go nie włączy', async ({ pag
   const rows = await page.locator('.step').evaluateAll(els =>
     [...new Set(els.map(el => Math.round(el.getBoundingClientRect().top)))]);
   expect(rows).toHaveLength(1);
+});
+
+test('kafelek Story Description stoi przed Implementation, choć ma id 8', async ({ page }) => {
+  await page.goto(base);
+  await postState({ step: 3, enabled: true });
+  await postState({ step: 8, enabled: true });
+  await expect(page.locator('.step')).toHaveCount(8);
+  await expect(page.locator('.step .name')).toHaveText(
+    ['Requirements', 'Feature Refinement', 'Mockups', 'Story Description', 'Implementation',
+      'Validation & E2E', 'Code Review', 'Mockoon Mocks']);
+  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6', '7', '8']);
+  // osiem kafelków nadal w jednym rzędzie
+  const rows = await page.locator('.step').evaluateAll(els =>
+    [...new Set(els.map(el => Math.round(el.getBoundingClientRect().top)))]);
+  expect(rows).toHaveLength(1);
+  // bez refinementu jego kafelek znika, a numeracja zostaje ciągła
+  await postState({ step: 2, enabled: false });
+  await expect(page.locator('.step .name')).toHaveText(
+    ['Requirements', 'Mockups', 'Story Description', 'Implementation',
+      'Validation & E2E', 'Code Review', 'Mockoon Mocks']);
 });
 
 test('toggle Generate mockups jest domyślnie wyłączony', async ({ page }) => {

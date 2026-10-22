@@ -35,7 +35,6 @@ test.afterEach(async () => {
 
 const fillRequired = async page => {
   await page.fill('#task', 'Zaproszenia dla zespołu');
-  await page.fill('#biz', 'Admin zaprasza użytkownika mailem');
   await page.fill('#branch', 'feature/zaproszenia');
 };
 
@@ -90,7 +89,7 @@ test('wybór przeżywa przerysowanie panelu', async ({ page }) => {
 
 test('sama zmiana modelu otwiera ponowne zgłoszenie wymagań', async ({ page }) => {
   await post('/api/answer', { taskId: 't1', kind: 'step1',
-    taskDescription: 'Zaproszenia', businessRequirements: 'Admin zaprasza',
+    taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
     mockups: [], contracts: [], hints: [], authProvided: false, generateMockups: false,
     agents: { model: '', effort: '', steps: {} } });
@@ -113,7 +112,7 @@ test('sama zmiana modelu otwiera ponowne zgłoszenie wymagań', async ({ page })
 
 test('po starcie implementacji ustawienia agenta są zamrożone', async ({ page }) => {
   await post('/api/answer', { taskId: 't1', kind: 'step1',
-    taskDescription: 'Zaproszenia', businessRequirements: 'Admin zaprasza',
+    taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
     mockups: [], contracts: [], hints: [], authProvided: false, generateMockups: false,
     agents: { model: 'opus', effort: 'high', steps: {} } });
@@ -132,7 +131,7 @@ test('po starcie implementacji ustawienia agenta są zamrożone', async ({ page 
 // Zgłoszony formularz trzyma ustawienia zagnieżdżone (agents), a szkic — płasko.
 // Oba miejsca poniżej czytają je z jednego zgłoszenia, bez otwartego formularza.
 const submitted = extra => post('/api/answer', { taskId: 't1', kind: 'step1',
-  taskDescription: 'Zaproszenia', businessRequirements: 'Admin zaprasza',
+  taskDescription: 'Zaproszenia',
   branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
   mockups: [], contracts: [], hints: [], authProvided: false, generateMockups: false,
   agents: { model: 'opus', effort: 'high', steps: { 6: { model: 'haiku', effort: '' } } },

@@ -15,10 +15,16 @@ write there, and never assume the two are the same path.
 
 ## Mission
 
-Prove the implementation meets `{{SESSION}}/spec.md`: the project's own unit suite stays green,
+Prove the implementation meets the requirement: the project's own unit suite stays green,
 Playwright E2E tests cover the checklist (always Playwright, regardless of existing setup), the
 screens match the visual baseline when one exists, and a hands-on UX pass in the user's Chrome
 judges what an assertion cannot.
+Feature Refinement, Mockups and Story Description each ran only when the user switched it on, so
+"the requirement" below means `{{SESSION}}/spec.md` when refinement ran, else the
+`## Task description` section of `{{SESSION}}/requirements.md` — and, either way, the acceptance
+criteria of `{{SESSION}}/story.md` when that file exists. The `## Pipeline steps`,
+`## Code review` and `## Agent settings` sections of requirements.md record how the pipeline
+runs — never a requirement.
 
 The backend is usually behind the frontend, so some of the feature's endpoints answer 404 or nothing
 at all. You fake exactly those routes in the app's own code for the length of this step and take
@@ -136,7 +142,7 @@ Playwright-only, never skip the UX pass, never work around it:
 ## Visual baseline (pick ONE source)
 
 - `{{SESSION}}/generated-mockups/manifest.json` exists → those screens are the baseline, and the
-  ONLY one. They were designed from the plan and approved by the user in step 3, so the files the
+  ONLY one. They were designed from the requirement and approved by the user in step 3, so the files the
   user uploaded in step 1 were merely input for that step — do not compare against them and do not
   treat a difference from them as a defect.
 - No manifest → the images in `{{SESSION}}/mockups/` are the baseline (read them directly).
@@ -196,7 +202,7 @@ step exists to catch. Nothing missing → no module, no cleanup, `apiMockSummary
   paging/envelope fields the code unwraps, labels from the app's own i18n or fixtures. A mock whose
   field names differ from what the screen reads is worse than no mock.
 - Scenarios: the happy 2xx is the default; expose `window.__dohMock.scenario = 'ok' | 'empty' |
-  'error'` so the empty and error states the spec and checklist ask for are reachable both from
+  'error'` so the empty and error states the requirement and checklist ask for are reachable both from
   Playwright (`addInitScript` / `evaluate`) and by hand in your Chrome tab — never build a second
   mechanism for them.
 - Touch nothing else. If a call site genuinely cannot be intercepted from the module, that change is
@@ -245,7 +251,19 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
 
 ## Process
 
-1. Read `spec.md` and `checklist.md`. Every checklist line must carry a `verify: e2e|visual|manual`
+1. Read the requirement (see Mission) and `checklist.md`. That file exists only when refinement
+   ran. Without it, write it yourself first — from the requirement, never from what step 4 built:
+   compliance divides ticks by its lines, so it needs a line per requirement whatever the app does
+   today. Same shape step 2 gives it, `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`:
+   the `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS in English verbatim, the
+   requirement between them in {{LANGUAGE}}. One line per verifiable point of the task description,
+   plus one `verify: visual` line per screen and state the `## UI design` section of
+   `{{SESSION}}/ui-design.md` names — or, without that file, per image in `{{SESSION}}/mockups/`
+   that shows a screen of this feature. It goes out in ONE write: the Write tool, or a single Bash
+   heredoc if your harness refuses a `.md` write from a sub-agent.
+   Either way, when `story.md` exists, each of its acceptance criteria needs a line that covers it:
+   add one for every criterion no line covers yet, before any test work.
+   Every checklist line must carry a `verify: e2e|visual|manual`
    tag — that tag is what routes the item to the suite, to the screenshot comparison or to the UX
    walk. If the file has items but NONE of them are tagged, stop and end with the `error` JSON saying
    the checklist is not in the `- [ ] R<n> | <requirement> | verify: …` shape step 2 must produce.
@@ -277,10 +295,10 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    Never install a test framework or any dependency into the project, and never substitute the
    plugin's Playwright for the project's unit runner.
    - A failure caused by the pipeline's changes is yours: fix the application code. Never delete,
-     skip or weaken a test to make it pass — a test that is genuinely wrong against `spec.md` may be
+     skip or weaken a test to make it pass — a test that is genuinely wrong against the requirement may be
      corrected, and you say so in the report.
    - A failure that clearly predates the feature (in code the pipeline never touched, unrelated to
-     anything spec.md defines) is recorded in the report as pre-existing and left alone.
+     anything the requirement defines) is recorded in the report as pre-existing and left alone.
    - No unit suite in the project → `unitSummary` is `n/a`; never invent one (missing unit tests are
      step 6's business).
    Progress 15.
@@ -298,7 +316,7 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    env vars when launching Playwright and read `process.env` inside the tests. Progress 40.
 8. Cycle (max 3 full cycles):
    a. Run the suite. Fix application bugs the failures reveal — fix the app, never weaken a test
-      to make it pass (unless the test itself is wrong against spec.md).
+      to make it pass (unless the test itself is wrong against the requirement).
       When a failure's cause is not obvious from the assertion, first read what the run already
       captured for it under `{{SESSION}}/test-results/<test>/`: `error-context.md` (the page snapshot
       at the moment of failure) and the failure screenshot. Only when that is still not enough,
@@ -325,10 +343,10 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
       missing loading / empty / error states, focus order and keyboard reachability, controls that
       give no feedback when clicked, actions that dead-end. Sign in with `form_input` using the
       `auth.json` values when the app demands it.
-      Only when spec.md asks for responsive or mobile behavior, repeat the flow at 390×780 via
+      Only when the requirement asks for responsive or mobile behavior, repeat the flow at 390×780 via
       `resize_window` and restore the window to its previous size afterwards.
       This pass owns every `verify: manual` checklist item — tick the ones it confirms. A finding
-      that contradicts spec.md is a defect: fix the app and re-walk that screen. A finding that is
+      that contradicts the requirement is a defect: fix the app and re-walk that screen. A finding that is
       merely an improvement goes in the report, unfixed. Optionally record ONE `gif_creator` clip
       of the happy path, named after the feature. In cycles 2-3 re-walk ONLY the screens touched by
       fixes.

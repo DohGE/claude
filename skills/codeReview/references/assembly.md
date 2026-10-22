@@ -11,13 +11,14 @@ A target with an unanalyzed file is not done, regardless of diff size or session
 ## Assembly
 
 Run `target.commands.assemble` (a FIXED IDENTIFIER, like every key of the context JSON) verbatim, in ONE Bash call — the same line every time, never a variant of your own.
-It is `node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --report="<reportPath>" --assemble` (`<contextPath>` is the path Step 1 printed): it checks the parts against the context and only when they pass appends them to `target.reportPath` (which already holds the header), removes the parts, the import ledger and the work folder, and finishes the report with the renderer — the HTML page from the assembled Markdown, or, when `target.htmlReportPath` is null, the Markdown itself — with a code snippet under every finding, read from the revision the review read.
+It is `node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --report="<reportPath>" --assemble` (`<contextPath>` is the path Step 1 printed): it checks the parts against the context and only when they pass appends them to `target.reportPath` (which already holds the header), removes the parts, the import ledger and the work folder, and finishes the report with the renderer — the HTML page from the assembled Markdown, or, when `target.htmlReportPath` is null, the Markdown itself — with a code snippet under every finding, read from the revision the review read, except under `target.light`.
 When a part is missing or breaks the format, it exits 1, lists every problem by part file and leaves the parts, the ledger and the work folder on disk.
 Fix each part it names with Edit — the hook checks an Edit of a part as the file it would leave behind, and a refused one waits in a draft as in Step 3 point 4 — and run the same command again.
 Once the check passes, it rewrites the numbers of every coverage marker from the block above it and every severity a fixed one overrides (Step 4), before anything is concatenated.
 Run again after it finished, it says the report is already assembled and changes nothing.
 
 When `htmlReportPath` is null (`--only-md` was passed) the Markdown is the report: the renderer renders nothing and, without `--with-checklist`, cuts the checklists out of the Markdown.
+Under `target.light` it also cuts every ⚪ **Low** finding — from the Markdown and the page alike, after the fixed severities are set — so its `severity:` line prints `low=0`.
 Otherwise the renderer replaces the Markdown with `target.htmlReportPath`; if it prints warnings it keeps the Markdown too — but a kept Markdown has two very different causes, and only one of them is yours to fix.
 `nierozpoznana…`/`nieczytelny…` warnings mean the report really did drift from the Step 4 format: a line the parser could not read, which costs the HTML that finding or that tick.
 A `sprawdzono <checked>/<total>` warning (a `--with-checklist` run only) means the opposite — the block parsed perfectly and simply carries an item you left `[ ] NIEZWERYFIKOWANE`.
@@ -36,5 +37,6 @@ Also state the checklist coverage of the target: how many files walked their who
 Read both off the `check-part: pliki z pełnym przejściem checklisty` line the assembly printed, not off the report: without `--with-checklist` the report no longer holds them.
 For a `--since-last` run also say how many files were skipped as unchanged and where the previous report is (`target.unchangedSinceLastReview`, `target.previousReportPath`) — the reader must know the report covers only what moved.
 For a resumed target (`target.resume`) say that it continued the run from `resume.from` and how many files it took over from it.
+For a `--light` run (`target.light`) say that the checklists left out the items of severity low and the report leaves out every Low finding (and the HTML page every code snippet) — the reader must not take a short report for a clean one.
 For a branch target also name the base it was reviewed against — `target.baseBranch` plus where that base came from, read off `target.baseSource`: `pr` = the target branch of PR #`target.prNumber`, `fork` = the branch it was created from, `candidate` = the default `main`/`master`/`develop`/`dev` detection. Staged and folder targets have no base (`baseSource` is null): a staged review covers the uncommitted changes themselves.
 Nothing else.

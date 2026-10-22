@@ -425,6 +425,25 @@ function fixedSeverity(instruction, n) {
   return (extra && extra.severity) || instruction.severity || null;
 }
 
+// The rulebook a --light run walks: every plan keeps only the items whose fixed
+// severity is not low, and a step left with no item goes. A kind that loses nothing
+// stays the same object; `dropped` lists the addresses left out, each once.
+function lightRulebook(rules) {
+  const dropped = new Set();
+  const kinds = rules.kinds.map((kind) => {
+    const plan = [];
+    for (const step of kind.plan) {
+      const instruction = rules.instructions.get(step.id);
+      const numbers = step.numbers.filter((n) => fixedSeverity(instruction, n) !== 'low');
+      for (const n of step.numbers) if (!numbers.includes(n)) dropped.add(`${step.id}#${n}`);
+      if (numbers.length > 0) plan.push(numbers.length === step.numbers.length ? step : { ...step, numbers });
+    }
+    const itemCount = plan.reduce((n, step) => n + step.numbers.length, 0);
+    return itemCount === kind.itemCount ? kind : { ...kind, plan, itemCount };
+  });
+  return { rules: { ...rules, kinds }, dropped: [...dropped] };
+}
+
 function compareScores(a, b) {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
   return 0;
@@ -484,5 +503,5 @@ function renderNumbered(instruction, numbers) {
 
 module.exports = {
   reInstructionId, formatItemSpec, expandAlternations, compilePattern, loadRulebook, matchKind, renderNumbered,
-  severityLevels, severityRank, unverifiedReasons, fixedSeverity,
+  severityLevels, severityRank, unverifiedReasons, fixedSeverity, lightRulebook,
 };

@@ -5,7 +5,7 @@
   "notes": [
     "No component owns it: the component-styles instruction does not apply."
   ],
-  "itemCount": 14,
+  "itemCount": 13,
   "instructions": [
     {
       "id": "accessibility",
@@ -18,8 +18,8 @@
         "This instruction OWNS accessibility across the whole diff — template semantics, ARIA, keyboard operability, focus management, contrast, motion and target size. When the component template, the component styles or any other instruction touches the same occurrence, it is reported ONCE — here, with this severity.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. Markup, styles or handlers the diff ADDS are reviewed even when they extend an already inaccessible structure; a barrier living entirely in untouched lines is not a finding. Judge only what the diff itself makes checkable — a hard-coded color pair, a declared size, a missing name, a handler bound to one input modality. Never guess at a value that would need the running app (a themed color resolved at runtime, a screen-reader announcement) and never report a criterion as passing or failing on a hunch."
       ],
-      "selectedItems": "6-10,12-14,17,20",
-      "checklistSize": 35,
+      "selectedItems": "6-9,13-14,17,20,36-37",
+      "checklistSize": 37,
       "items": [
         {
           "id": "accessibility#6",
@@ -38,14 +38,6 @@
           "text": "Orientation is not locked to portrait or landscape by CSS or by a \"rotate your device\" screen (1.3.4)."
         },
         {
-          "id": "accessibility#10",
-          "text": "Tooltips, popovers and hover cards are dismissible with Escape, stay visible while the pointer moves onto them, and open on `focus` as well as `mouseenter` — a hover-only tooltip is a defect (1.4.13)."
-        },
-        {
-          "id": "accessibility#12",
-          "text": "`tabindex` is only `0` or `-1` — a positive value rewrites the focus order; DOM order matches visual order (no `order`, `row-reverse` or absolute positioning that reorders focusable content); a programmatic `.focus()` targets an element that can actually receive focus (a native control, or a container the diff also gives `tabindex=\"-1\"`) — moving focus to a plain `div` silently does nothing (1.3.2, 2.4.3)."
-        },
-        {
           "id": "accessibility#13",
           "text": "Focus is visible: no `outline: none` / `outline: 0` without an equally visible `:focus-visible` replacement of at least 3:1 contrast against its surroundings (2.4.7, 1.4.11)."
         },
@@ -60,6 +52,14 @@
         {
           "id": "accessibility#20",
           "text": "Moving, auto-updating and time-limited content can be controlled: carousels, tickers, auto-advancing steps and polling counters have pause/stop, time limits can be extended, nothing flashes more than three times per second, and non-essential animation respects `prefers-reduced-motion` (2.2.1, 2.2.2, 2.3.1)."
+        },
+        {
+          "id": "accessibility#36",
+          "text": "A tooltip, popover or hover card revealed by a style rule appears on keyboard focus (`:focus-visible`/`:focus-within`) as well as on `:hover`, stays visible while the pointer moves onto it, and can be dismissed with Escape — a `:hover`-only reveal, or one that no Escape handler can hide, is a defect (1.4.13)."
+        },
+        {
+          "id": "accessibility#37",
+          "text": "Style rules do not reorder focusable content away from its DOM order — no `order`, `row-reverse` or absolute positioning that moves focusable elements out of reading order (1.3.2, 2.4.3)."
         }
       ]
     },
@@ -69,15 +69,15 @@
       "severity": "medium",
       "preamble": [
         "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
-        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
-        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1,3,6,8",
-      "checklistSize": 8,
+      "selectedItems": "1,8,10",
+      "checklistSize": 13,
       "items": [
         {
           "id": "code-quality#1",
-          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates.",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Two occurrences are not a finding under this item. Report every copy at the place that should reuse instead of repeat, and name the other copies.",
           "facts": [
             "repeated-literal",
             "repeated-condition",
@@ -91,30 +91,16 @@
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
           "answer": "repo-search",
-          "severity": "high",
-          "sameAs": [
-            "http-service#9",
-            "pipes#7"
-          ]
-        },
-        {
-          "id": "code-quality#3",
-          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change.",
-          "facts": [
-            "export-unused",
-            "barrel-unused",
-            "guard-without-route",
-            "pipe-unused",
-            "i18n-unused-key"
-          ]
-        },
-        {
-          "id": "code-quality#6",
-          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+          "severity": "high"
         },
         {
           "id": "code-quality#8",
-          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported."
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it is a finding only under the instruction that sets that convention. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported.",
+          "severity": "low"
+        },
+        {
+          "id": "code-quality#10",
+          "text": "No unused style code: rules whose selector matches nothing in the templates they style (the component's own template for component styles, any template for a global stylesheet), unused `@use`/`@import`s, variables, mixins and placeholder selectors, and rules left over from an earlier iteration of this very change."
         }
       ]
     }

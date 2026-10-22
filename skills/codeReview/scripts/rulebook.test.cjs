@@ -305,6 +305,25 @@ test('a fixed severity is read on an instruction or an item, and the item wins',
   assert.match(rules.warnings.join('\n'), /"naming" declares severity "loud"/);
 });
 
+test('lightRulebook leaves every item of severity low out of the plans', (t) => {
+  const quality = instructionWith('code-quality', ['No duplicates.', 'No dead code.', 'Small.'], { 1: { severity: 'low' }, 3: { severity: 'high' } });
+  const naming = { ...instruction('naming', ['Named.', 'Cased.']), severity: 'low' };
+  naming.items[1].severity = 'medium';
+  const style = { ...instruction('style', ['Spaced.']), severity: 'low' };
+  const plain = kind('plain', '<name>.plain.ts', [instruction('general', ['One.'])]);
+  const rules = rulebookOf(t, [kind('util', '<name>.util.ts', [quality, naming, style]), plain]);
+  const { rules: light, dropped } = rulebook.lightRulebook(rules);
+  const util = light.kinds.find((k) => k.name === 'util');
+  assert.deepStrictEqual(util.plan, [{ id: 'code-quality', numbers: [2, 3] }, { id: 'naming', numbers: [2] }],
+    'an item\'s own severity beats its instruction\'s, and a step left empty goes');
+  assert.strictEqual(util.itemCount, 3);
+  assert.deepStrictEqual(dropped, ['code-quality#1', 'naming#1', 'style#1']);
+  assert.strictEqual(light.kinds.find((k) => k.name === 'plain'), rules.kinds.find((k) => k.name === 'plain'), 'a kind losing nothing is the same object');
+  assert.strictEqual(rules.kinds.find((k) => k.name === 'util').itemCount, 6, 'the loaded rulebook is left as it was');
+  assert.strictEqual(light.instructions, rules.instructions);
+  assert.strictEqual(rulebook.matchKind(light, 'src/a.util.ts').kind, util);
+});
+
 test('sameAs pairs name each other, and a one-sided, dangling or self pair warns', (t) => {
   const utils = instructionWith('utils', ['Typed.', 'Pure.', 'Small.'], { 1: { sameAs: ['best-practices#1'] }, 2: { sameAs: ['best-practices#2'] }, 3: { sameAs: ['utils#3', 'nope'] } });
   const practices = instructionWith('best-practices', ['Explicit types.', 'Short.'], { 1: { sameAs: ['utils#1'] } });

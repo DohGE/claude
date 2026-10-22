@@ -31,7 +31,6 @@ test.afterEach(async () => {
 
 const fillRequired = async page => {
   await page.fill('#task', 'Zaproszenia dla zespołu');
-  await page.fill('#biz', 'Admin zaprasza użytkownika mailem');
   await page.fill('#branch', 'feature/zaproszenia');
 };
 

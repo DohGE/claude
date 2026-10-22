@@ -33,7 +33,7 @@ const reSessionStamp = /(?:\.claude(?:\\\\|\/)+doh|\.implementNewFeature)(?:\\\\
 const reCwd = /"cwd":"((?:[^"\\]|\\.)*)"/g;
 // wait-answer.cjs: a lock older than its 50-minute window plus a minute is stale.
 const waiterWindowMs = 51 * 60 * 1000;
-const stepNames = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation', 'Validation & E2E', 'Code Review', 'Mockoon Mocks'];
+const stepNames = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation', 'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description'];
 
 function readJson(file) {
   try {
@@ -158,7 +158,9 @@ function sectionsFor(tasks, skill) {
   for (const task of tasks) {
     const n = Number(task.activeStep) || 1;
     steps.add(n);
-    if (n === 1 && task.step1Submitted) picked.push(wanted('Revising step 1'));
+    // The form stays editable until implementation starts, so a revision can arrive at any
+    // step of the route before it: 2, 3 and 8 (the story's id, though its tile sits before 4).
+    if (task.step1Submitted && [1, 2, 3, 8].includes(n)) picked.push(wanted('Revising step 1'));
     if (task.summary) steps.add(7);
   }
   for (const n of [...steps].sort()) picked.push(wanted(`Step ${n} `));

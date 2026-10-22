@@ -21,6 +21,9 @@ You change nothing in `{{ROOT}}`.
 ## Inputs (in this order)
 
 1. `{{SESSION}}/spec.md` and `{{SESSION}}/plan.md` — what the feature does and which endpoints it needs.
+   Feature Refinement runs only when the user switched it on: without those two files, read the
+   `## Task description` section of `{{SESSION}}/requirements.md` and, when it exists,
+   `{{SESSION}}/story.md` — its acceptance criteria name the data the screens need.
 2. `{{SESSION}}/requirements.md` (section "Contracts (pasted)") and every file in `{{SESSION}}/contracts/`
    — OpenAPI/Swagger, Postman, plain text. When a contract covers an endpoint it is the source of
    truth: path, method, status codes and response shape come from it, never from your imagination.

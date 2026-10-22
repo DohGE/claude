@@ -22,8 +22,7 @@ const path = require('node:path');
 const factKinds = [
   'export-unused', 'export-single-importer', 'barrel-unused', 'guard-without-route',
   'pipe-unused', 'pipe-single-template',
-  'i18n-missing-key', 'i18n-unused-key', 'i18n-invalid-json', 'i18n-duplicate-key',
-  'i18n-duplicate-value', 'i18n-locale-extra-key',
+  'i18n-missing-key', 'i18n-unused-key', 'i18n-duplicate-value', 'i18n-locale-extra-key',
   'cross-area-import', 'repeated-literal', 'repeated-condition', 'mapping-duplicate', 'mapping-duplicate-caller',
   'initial-state-gap', 'reducer-empty-instead-of-null', 'reducer-flag-without-fail', 'action-trio-incomplete',
   'output-untested', 'spec-input-not-set', 'snapshot-outside-folder', 'snapshot-missing',
@@ -38,11 +37,14 @@ const builtinProbes = ['for-without-empty', 'signal-reads-without-let', 'markup-
 // And an item's `answer` names one of these: a second question the script answers from
 // the whole repository (collectFacts' `answers`), printed under the item in the bundle.
 const builtinAnswers = ['repo-search', 'input-binding'];
+// A duplication is a finding from its third copy: two may still diverge, three are a pattern.
+const minCopies = 3;
 
 const reScript = /\.(?:[cm]?[jt]sx?)$/;
 const reTemplate = /\.html?$/;
 const reSpec = /\.(?:spec|test)\.[cm]?[jt]sx?$/;
 const reDeclaration = /\.d\.ts$/;
+const rePipeFile = /\.pipe\.[cm]?[jt]s$/;
 const reKeyShaped = /^[A-Za-z][\w-]*(?:\.[\w-]+)+$/;
 const reLocaleDir = /(?:^|\/)(?:i18n|locales?|translations?|lang)\//;
 // Files nothing imports by design: the bundler, the test runner or the server starts them.
@@ -221,24 +223,21 @@ function splitTopLevel(text, separators) {
 }
 
 // ---------------------------------------------------------------------------------------
-// JSON with positions: translation files are read for their keys, their duplicates and
-// their syntax errors, each with the line the reviewer sees. Parsing goes on past a
-// trailing comma (reported), so one stray comma does not hide every key after it.
+// JSON with positions: translation files are read for their keys, each with the line the
+// reviewer sees. Parsing goes on past a trailing comma, so one stray comma does not hide
+// every key after it; any other syntax error ends it with the keys read so far.
 function parseJsonKeys(text) {
   const src = String(text);
   const starts = lineStarts(src);
   const entries = [];
   const objects = [];
-  const duplicates = [];
-  const errors = [];
   const stop = {};
   let i = 0;
   const line = (at) => lineAt(starts, at);
   const ws = () => {
     while (i < src.length && /\s/.test(src[i])) i++;
   };
-  const fail = (message, at = i) => {
-    errors.push({ line: line(Math.min(at, Math.max(0, src.length - 1))), message });
+  const fail = () => {
     throw stop;
   };
   const str = () => {
@@ -253,7 +252,7 @@ function parseJsonKeys(text) {
         out += src[j++];
       }
     }
-    if (src[j] !== '"') fail('niezamknięty napis', begin);
+    if (src[j] !== '"') fail();
     i = j + 1;
     return { value: out, at: begin };
   };
@@ -264,7 +263,7 @@ function parseJsonKeys(text) {
     if (c === '[') return array(prefix);
     if (c === '"') return { kind: 'string', value: str().value };
     const m = /^(?:-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(src.slice(i, i + 64));
-    if (!m) fail('niepoprawna wartość');
+    if (!m) fail();
     i += m[0].length;
     return { kind: 'scalar' };
   };
@@ -279,26 +278,20 @@ function parseJsonKeys(text) {
       value(`${prefix}[${index}]`);
       ws();
       if (src[i] === ',') {
-        const comma = i++;
+        i++;
         ws();
-        if (src[i] === ']') {
-          errors.push({ line: line(comma), message: 'przecinek po ostatnim elemencie' });
-          i++;
-          return { kind: 'array' };
-        }
-        continue;
+        if (src[i] !== ']') continue;
       }
       if (src[i] === ']') {
         i++;
         return { kind: 'array' };
       }
-      fail('oczekiwano "," albo "]"');
+      fail();
     }
   };
   const object = (prefix) => {
     const open = i++;
     if (prefix) objects.push({ key: prefix, line: line(open) });
-    const seen = new Map();
     ws();
     if (src[i] === '}') {
       i++;
@@ -306,52 +299,34 @@ function parseJsonKeys(text) {
     }
     for (;;) {
       ws();
-      if (src[i] !== '"') fail('oczekiwano klucza w cudzysłowie');
+      if (src[i] !== '"') fail();
       const k = str();
       const key = prefix ? `${prefix}.${k.value}` : k.value;
       const at = line(k.at);
-      if (seen.has(k.value)) duplicates.push({ key, line: at, firstLine: seen.get(k.value) });
-      else seen.set(k.value, at);
       ws();
-      if (src[i] !== ':') fail('oczekiwano ":"');
+      if (src[i] !== ':') fail();
       i++;
       const v = value(key);
       if (v.kind === 'string') entries.push({ key, value: v.value, line: at });
       ws();
       if (src[i] === ',') {
-        const comma = i++;
+        i++;
         ws();
-        if (src[i] === '}') {
-          errors.push({ line: line(comma), message: 'przecinek po ostatnim kluczu' });
-          i++;
-          return { kind: 'object' };
-        }
-        continue;
+        if (src[i] !== '}') continue;
       }
       if (src[i] === '}') {
         i++;
         return { kind: 'object' };
       }
-      fail('oczekiwano "," albo "}"');
+      fail();
     }
   };
   try {
     value('');
-    ws();
-    if (i < src.length) fail('treść po zamknięciu dokumentu');
   } catch (err) {
     if (err !== stop) throw err;
   }
-  let valid = errors.length === 0;
-  if (valid) {
-    try {
-      JSON.parse(src);
-    } catch {
-      valid = false;
-      errors.push({ line: 1, message: 'JSON.parse odrzuca plik' });
-    }
-  }
-  return { entries, objects, duplicates, errors, valid };
+  return { entries, objects };
 }
 
 // tsconfig is JSON with comments and trailing commas.
@@ -829,14 +804,6 @@ function localeBase(index, locales) {
 function i18nFacts(index, add, cross, { list: locales, base }) {
   if (!base) return;
   const parsed = new Map(locales.map((p) => [p, parseJsonKeys(index.files.get(p))]));
-  for (const [p, result] of parsed) {
-    if (result.errors.length > 0) {
-      add(p, 'i18n-invalid-json', result.errors.map((e) => e.line), `plik nie jest poprawnym JSON-em: ${result.errors.map((e) => `L${e.line} ${e.message}`).join('; ')}.`);
-    }
-    if (result.duplicates.length > 0) {
-      add(p, 'i18n-duplicate-key', result.duplicates.map((d) => d.line), `powtórzone klucze: ${result.duplicates.map((d) => `${d.key} (L${d.firstLine} i L${d.line})`).join(', ')} - JSON.parse zachowuje tylko ostatnią wartość.`);
-    }
-  }
   const baseKeys = new Map(parsed.get(base).entries.map((e) => [e.key, e]));
   const requested = [];
   const literals = new Set();
@@ -986,7 +953,7 @@ function literalFacts(index, add, cross, locales, record) {
       const own = list_.filter((o) => o.path === p);
       record(p, 'literał', own.map((o) => o.line), own[0].shown.startsWith('[') ? own[0].shown : `"${own[0].shown}"`, files.size - 1);
     }
-    if (files.size < 2) continue;
+    if (files.size < 2 || list_.length < minCopies) continue;
     // Translations alone repeating each other are the i18n-duplicate-value fact's business.
     if (list_.every((o) => o.key)) continue;
     groups.push(list_);
@@ -1025,7 +992,7 @@ function conditionFacts(index, add, cross, record) {
       const own = all.filter((o) => o.path === p);
       record(p, 'warunek', own.map((o) => o.line), `\`${own[0].shown}\``, files.size - 1);
     }
-    if (all.length < 2) continue;
+    if (all.length < minCopies) continue;
     const where = (o) => `${short(o.path, index.root)}:${o.line}`;
     for (const p of new Set(all.map((o) => o.path))) {
       const own = all.filter((o) => o.path === p);
@@ -1117,9 +1084,13 @@ function mappingFacts(index, add, cross, record) {
       record(site.path, 'mapa etykiet', [site.unit.line], site.unit.name || 'funkcja anonimowa', elsewhere.size);
     }
     if (cluster.length < 2) continue;
+    // A mapping also hides where this scan does not look (a record, a template `@switch`, a pipe
+    // around it), so two copies found only point at a third - except in a pipe, which duplicates
+    // a mapping written elsewhere from the second copy.
+    const hint = (p) => cluster.length < minCopies && !rePipeFile.test(p);
     for (const site of cluster) {
       const others = cluster.filter((s) => s !== site).map(label);
-      add(site.path, 'mapping-duplicate', [site.unit.line], `${site.unit.name || 'funkcja anonimowa'} (L${site.unit.line}) mapuje na etykiety ${[...site.labels.values()].map((v) => `"${v}"`).join(', ')}; te same etykiety zwraca też: ${others.join(', ')}.`);
+      add(site.path, 'mapping-duplicate', [site.unit.line], `${site.unit.name || 'funkcja anonimowa'} (L${site.unit.line}) mapuje na etykiety ${[...site.labels.values()].map((v) => `"${v}"`).join(', ')}; te same etykiety zwraca też: ${others.join(', ')}.`, { hint: hint(site.path) });
     }
     cross(`Jedna mapa etykiet zaimplementowana ${cluster.length} razy: ${cluster.map(label).join(', ')}`);
     const named = cluster.filter((s) => s.unit.name);
@@ -1134,7 +1105,7 @@ function mappingFacts(index, add, cross, record) {
         }
         if (lines.length === 0 || cluster.some((s) => s.path === p && s.unit === site.unit)) continue;
         const others = cluster.filter((s) => s !== site).map(label);
-        add(p, 'mapping-duplicate-caller', lines, `woła ${site.unit.name} (L${lines.join(', L')}), a tę samą mapę etykiet implementuje też: ${others.join(', ')}.`);
+        add(p, 'mapping-duplicate-caller', lines, `woła ${site.unit.name} (L${lines.join(', L')}), a tę samą mapę etykiet implementuje też: ${others.join(', ')}.`, { hint: hint(p) });
       }
     }
   }
@@ -1801,7 +1772,7 @@ function runBuiltin(name, p, scan, context) {
       shapes.set(shape, [...(shapes.get(shape) || []), i + 1]);
     });
     for (const lines of shapes.values()) {
-      if (lines.length < 2) continue;
+      if (lines.length < minCopies) continue;
       for (const line of lines) hits.push({ line, text: `ten sam fragment znaczników w L${lines.join(', L')} - różnią się tylko wartościami atrybutów i tekstem` });
     }
   } else if (name === 'area-root-file') {

@@ -67,9 +67,10 @@
   .tabs-bar .close:hover:not(:disabled) { color:var(--failed); background:var(--card-2);
           transform:none; filter:none; }
   .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
-  /* 120px basis keeps all seven tiles (Mockups enabled) on a single row at 940px. */
-  .step { flex:1 1 120px; background:var(--card); border:1px solid var(--border); border-radius:14px;
-          padding:14px 10px; text-align:center; transition:border-color .25s, box-shadow .25s;
+  /* 100px basis keeps all eight tiles (every optional step on) on a single row at
+     940px; a name longer than its tile wraps inside it. */
+  .step { flex:1 1 100px; background:var(--card); border:1px solid var(--border); border-radius:14px;
+          padding:14px 6px; text-align:center; transition:border-color .25s, box-shadow .25s;
           box-shadow:0 12px 28px -18px rgba(0,0,0,.9); }
   .step.in_progress { border-color:var(--accent);
           box-shadow:0 0 0 1px rgba(124,140,248,.35), 0 8px 24px -12px rgba(124,140,248,.45); }
@@ -173,6 +174,22 @@
   .switch input:checked::after { transform:translateX(18px); background:var(--accent); }
   .switch input:disabled { opacity:.5; cursor:not-allowed; }
   .switch label { margin:0; color:var(--text); cursor:pointer; }
+  /* The optional steps are one decision about the pipeline's shape, so they sit side by side. */
+  .switch-row { display:flex; gap:0 18px; flex-wrap:wrap; }
+  .switch-row > div { flex:1 1 180px; }
+  /* One /doh:codeReview run per card, its flags as checkboxes. */
+  .run { margin-top:10px; padding:8px 12px 10px; background:var(--card-2);
+          border:1px solid var(--border); border-radius:10px; }
+  .run-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+          font-size:13px; font-weight:600; }
+  button.run-rm { margin:0; padding:2px 8px; background:transparent; color:var(--muted);
+          font-size:15px; line-height:1; border-radius:6px; }
+  button.run-rm:hover:not(:disabled) { color:var(--failed); background:var(--card);
+          transform:none; filter:none; }
+  .flags { display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:6px; }
+  .flags label { display:flex; align-items:center; gap:6px; margin:0; font-weight:500;
+          color:var(--text); cursor:pointer; }
+  .flags input { margin:0; accent-color:var(--accent); cursor:pointer; }
   .hint { font-size:12.5px; color:var(--muted); margin:6px 0 0; }
   .hint.error { color:var(--failed); }
   /* Files already uploaded: a file input cannot be pre-filled, so they are listed. */
@@ -292,13 +309,17 @@
 <script>
 'use strict';
 const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-  'Validation & E2E', 'Code Review', 'Mockoon Mocks'];
+  'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description'];
 const MOCKOON_STEP = 7;
+const STORY_STEP = 8;
+// Ids are fixed, so Story Description - added last - is 8 although it runs before
+// Implementation. The stepper and the per-step overrides list the steps in this order.
+const STEP_ORDER = [1, 2, 3, 8, 4, 5, 6, 7];
 const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
   completed: 'Completed', failed: 'Failed' };
 const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
 // Step 1 has no agent of its own - the form IS step 1 - so the overrides start at 2.
-const AGENT_STEPS = [2, 3, 4, 5, 6, 7];
+const AGENT_STEPS = STEP_ORDER.slice(1);
 // '' is "inherit": no model override on the spawn, no thinking directive in the prompt.
 // The models are the server's - what this session's Agent tool can spawn - so they
 // are read off the state document, never listed here.
@@ -339,6 +360,14 @@ let lastState = null;
 // this form re-check without re-rendering it (which would wipe what is typed).
 let refreshGate = null;
 let takenBranches = '';
+// The flags /doh:codeReview takes, [{ name, description }], as the server read them from
+// that skill's SKILL.md. Asked once, when the page opens (see the end of this script);
+// until the answer lands, a review run still shows the flags it holds, by name.
+let reviewFlags = null;
+let reviewRunsMax = 3;
+let reviewRunsDefault = [{ flags: [] }, { flags: ['--since-last'] }];
+// The open step-1 form's review runs, redrawn when the flag list lands after the form.
+let refreshRuns = null;
 
 // The step-1 file inputs, in the order the form shows them.
 const STEP1_FILES = ['hints', 'mockups', 'contracts'];
@@ -346,8 +375,9 @@ const STEP1_FILES = ['hints', 'mockups', 'contracts'];
 // that seeds a new task both carry exactly these, so neither can quietly drift from
 // the form. Credentials are among them — which is why the copy is a page-side affair.
 const STEP1_INPUTS = {
-  taskDescription: '#task', businessRequirements: '#biz', branch: '#branch',
-  contractsText: '#contractsText', hintsNote: '#hintsNote', generateMockups: '#genMockups',
+  taskDescription: '#task', branch: '#branch',
+  contractsText: '#contractsText', hintsNote: '#hintsNote',
+  refinement: '#refinement', generateMockups: '#genMockups', storyDescription: '#storyDesc',
   authLogin: '#authLogin', authPassword: '#authPassword', rememberAuth: '#rememberAuth',
   agentModel: '#agentModel', agentEffort: '#agentEffort',
   // One draft key per override, so the whole form still travels as one flat record:
@@ -385,6 +415,30 @@ const agentsOnScreen = () => ({
     { model: $(`#agentModel-${n}`).value, effort: $(`#agentEffort-${n}`).value }]))
 });
 
+// The review runs as the server stores them, [{ flags: [...] }], read off the form.
+const runsOnScreen = () => [...document.querySelectorAll('#reviewRuns .run')].map(card => ({
+  flags: [...card.querySelectorAll('input[data-flag]:checked')].map(el => el.dataset.flag) }));
+
+// One card per run, every flag the skill takes as a checkbox, its description as the
+// tooltip. A flag the list does not have - it has not arrived yet - still gets one, so
+// reading the form back never drops what the run holds.
+function runsHtml(runs) {
+  const known = reviewFlags || [];
+  return runs.map((run, i) => {
+    const extra = run.flags.filter(f => !known.some(k => k.name === f))
+      .map(name => ({ name, description: '' }));
+    return `<div class="run" data-run="${i}">
+      <div class="run-head"><span>Run ${i + 1}</span>${runs.length > 1
+    ? `<button type="button" class="run-rm" data-run="${i}" aria-label="Remove run ${i + 1}"
+          title="Remove run">×</button>` : ''}</div>
+      <div class="flags">${[...known, ...extra].map(f => `<label${
+    f.description ? ` title="${esc(f.description)}"` : ''}><input type="checkbox"
+          data-flag="${esc(f.name)}"${run.flags.includes(f.name) ? ' checked' : ''}><code>${
+    esc(f.name)}</code></label>`).join('')}</div>
+    </div>`;
+  }).join('');
+}
+
 // What this browser remembers between runs. The server is on ONE fixed port, so the
 // origin is the same for every run and every project on the machine - which is what
 // makes remembering work at all, and also why the credentials are filed under the
@@ -415,7 +469,7 @@ const isInherit = a => !a.model && !a.effort
 // carries settings of its own (a copy), shows those; a blank form falls back to
 // what was picked last time. The submitted case matters most: filling a submitted
 // form from storage would make it differ from what was sent, and the panel would
-// offer to re-run refinement over a change the user never made.
+// offer to resubmit over a change the user never made.
 function agentsForForm(task, d) {
   const own = agentsOf(d);
   if (task.step1Submitted || !isInherit(own)) return own;
@@ -439,6 +493,7 @@ function snapshotStep1() {
     const el = $(sel);
     v.draft[key] = el.type === 'checkbox' ? el.checked : el.value;
   }
+  v.draft.codeReview = runsOnScreen();
   // Files are picked long before they are uploaded — that happens on submit — and a
   // FileList cannot be rebuilt from markup, so the File objects themselves are kept.
   v.picked = {};
@@ -453,6 +508,7 @@ function step1Of(task) {
   const d = { ...(task.step1 || {}), ...(viewOf(task.id).draft || {}) };
   const out = {};
   for (const key of Object.keys(STEP1_INPUTS)) out[key] = d[key];
+  out.codeReview = d.codeReview;
   // The submitted form holds the agent settings nested and only a draft holds them
   // flat, so a task copied from another step - where there is no draft - would lose
   // them. agentValue reads whichever of the two actually has them.
@@ -767,18 +823,22 @@ function syncTabLabel() {
   box.dataset.sig = tabsSig(lastState);
 }
 
-// Step ids are fixed, but disabled steps (Mockups when the toggle stayed off)
-// are hidden and the visible ones are numbered 1..n so the badges stay contiguous.
+// Step ids are fixed, but the tiles follow the order the steps run in (STEP_ORDER),
+// a disabled step (one whose switch on the form is off) is hidden, and the visible
+// ones are numbered 1..n so the badges stay contiguous.
+const rankOf = id => (STEP_ORDER.includes(id) ? STEP_ORDER.indexOf(id) : STEP_ORDER.length + id);
+const shownSteps = task => task.steps.filter(s => s.enabled !== false)
+  .sort((a, b) => rankOf(a.id) - rankOf(b.id));
 function renderStepper(task) {
   // Rebuilding innerHTML every second would drop focus and restart the pulse
   // animation, so the tiles are redrawn only when something about them changed.
   const viewed = viewedStep(task);
-  const sigNow = [task.id, viewed.id, task.steps.filter(s => s.enabled !== false)
+  const sigNow = [task.id, viewed.id, shownSteps(task)
     .map(s => `${s.id}:${s.status}`).join(',')].join('|');
   const box = $('#stepper');
   if (box.dataset.sig === sigNow) return;
   box.dataset.sig = sigNow;
-  box.innerHTML = task.steps.filter(s => s.enabled !== false).map((s, i) => {
+  box.innerHTML = shownSteps(task).map((s, i) => {
     const name = esc(s.name || STEP_NAMES[s.id - 1]);
     const nav = visitable(s);
     return `
@@ -804,7 +864,7 @@ const activeStepOf = task =>
   task.steps.find(s => s.id === task.activeStep) || task.steps[0];
 
 // A step the pipeline has already opened can be revisited; one it never reached
-// has no panel to show. Mockups stay unreachable while the toggle is off.
+// has no panel to show. A step whose switch is off stays unreachable.
 const visitable = step => step.enabled !== false && step.status !== 'waiting';
 
 // The step whose panel is on screen: the user's own pick while it still holds,
@@ -916,6 +976,7 @@ function renderPanel(state, task) {
 
 function renderActive(task, step) {
   refreshGate = null;
+  refreshRuns = null;
   const v = viewOf(task.id);
   // A gate only answers while the orchestrator is actually waiting at it, so a
   // step revisited after the fact shows its panel without its buttons. Step 7 is
@@ -935,6 +996,7 @@ function renderActive(task, step) {
   if (step.id === 1) return renderStep1(task);
   if (step.id === 2 && task.reviewSummary) return renderReview(task.reviewSummary);
   if (step.id === 3 && task.mockupReview) return renderMockupReview(task.mockupReview, step);
+  if (step.id === STORY_STEP && step.status === 'completed') return renderStory(task, step);
   renderProgress(task, step);
 }
 
@@ -956,8 +1018,8 @@ function renderStep1(task) {
   const ag = agentsForForm(task, d);
   const stored = readStore(authKey(), null);
   // The fields are only ever filled on a form that was never submitted: doing it on a
-  // revisit would make the form differ from what was sent and offer to re-run
-  // refinement over a change the user never made.
+  // revisit would make the form differ from what was sent and offer to resubmit
+  // over a change the user never made.
   const savedAuth = revisit ? null : stored;
   // The switch says what is actually kept - unless the user has just moved it, which
   // the draft holds. Without that, unticking would spring back on the next redraw and
@@ -976,16 +1038,43 @@ function renderStep1(task) {
         data-name="${esc(n)}" aria-label="Remove ${esc(n)}" title="Remove">×</button></li>`)
       .join('')}</ul>` : '';
   };
+  // A draft's runs, else the last submission's, else the two passes the step always ran.
+  const runs = d.codeReview && d.codeReview.length ? d.codeReview : reviewRunsDefault;
+  const toggle = (id, on, label, hint) => `<div>
+      <div class="switch">
+        <input type="checkbox" id="${id}"${on ? ' checked' : ''}>
+        <label for="${id}">${label}</label>
+      </div>
+      <p class="hint">${hint}</p>
+    </div>`;
   $('#panel').innerHTML = `
     <h2>Requirements</h2>
     <label>Task description <span class="req">*</span></label>
-    <textarea id="task">${esc(d.taskDescription || '')}</textarea>
-    <label>Business requirements <span class="req">*</span></label>
-    <textarea id="biz">${esc(d.businessRequirements || '')}</textarea>
+    <textarea id="task" placeholder="What to build and why: the feature, the business requirements behind it, any constraints">${
+  esc(d.taskDescription || '')}</textarea>
     <label>Branch <span class="req">*</span></label>
     <input type="text" id="branch" placeholder="feature/my-feature" autocomplete="off"
       value="${esc(d.branch || '')}">
     <p class="hint error" id="branchHint" hidden></p>
+    <h3>Steps before implementation</h3>
+    <div class="switch-row">
+      ${toggle('refinement', d.refinement !== false, 'Feature refinement',
+    'An agent asks you questions, then writes the spec, the plan and the checklist you approve'
+    + ' before anything is built.')}
+      ${toggle('genMockups', !!d.generateMockups, 'Generate mockups',
+    'An agent designs the screens from the refined plan (else from the task description) and'
+    + ' the files below, and you refine them in a chat. The approved design drives the'
+    + ' implementation and the visual E2E comparison.')}
+      ${toggle('storyDesc', !!d.storyDescription, 'Story description',
+    'An agent writes a Jira-style story, a short description with acceptance criteria, from'
+    + ' what the steps before it produced, else from this form.')}
+    </div>
+    <h3>Code review</h3>
+    <p class="muted">How many times the review step runs <code>/doh:codeReview</code> on the
+      task's changes, and with which flags; hover a flag to see what it does. A run that finds
+      nothing ends the review, and the runs after it are skipped.</p>
+    <div id="reviewRuns">${runsHtml(runs)}</div>
+    <button type="button" id="addRun" class="secondary">Add run</button>
     <h3>Agent</h3>
     <p class="muted">Which model this task's sub-agents run on, and how much thinking they
       are asked for. Both bind when a step's agent is spawned, so a change here reaches
@@ -1019,13 +1108,6 @@ function renderStep1(task) {
     <label>Mockups (optional)</label>
     ${fileList('mockups')}
     <input type="file" id="mockups" multiple accept="image/*,.pdf">
-    <div class="switch">
-      <input type="checkbox" id="genMockups"${d.generateMockups ? ' checked' : ''}>
-      <label for="genMockups">Generate mockups</label>
-    </div>
-    <p class="hint">Adds a Mockups step after planning: an agent designs the screens from the plan
-      (and from the files above, if any), you refine them in a chat, and the approved design drives
-      both the implementation and the visual E2E comparison.</p>
     <label>API contracts / specs (optional — files or pasted text)</label>
     ${fileList('contracts')}
     <input type="file" id="contracts" multiple>
@@ -1052,10 +1134,9 @@ function renderStep1(task) {
       run's own copy still dies with the pipeline.</p>
     ${frozen ? '<p class="hint">Implementation has started — the requirements are frozen for'
       + ' this task. Copy it from the sidebar to take the feature in another direction.</p>'
-      : `<button id="next" disabled>${
-        revisit ? 'Resubmit and re-run refinement' : 'Next'}</button>
+      : `<button id="next" disabled>${revisit ? 'Resubmit' : 'Next'}</button>
     <p class="hint" id="changeHint" hidden>Nothing changed yet — edit a field, add or remove a
-      file, or fill in credentials to re-run refinement.</p>`}`;
+      file, or fill in credentials to resubmit.</p>`}`;
   // What the markup above cannot carry: credentials are deliberately absent from the
   // state document, and a FileList cannot be written as an attribute. Both are what a
   // redraw used to drop, so both are put back by hand.
@@ -1100,11 +1181,44 @@ function renderStep1(task) {
       lastSig = null;
       tick();
     }));
+  // The flag list can land after the form, and a run can be added or removed: each one
+  // redraws the cards from what is on screen, so no tick is lost on the way.
+  const drawRuns = list => {
+    $('#reviewRuns').innerHTML = runsHtml(list);
+    wireRuns();
+  };
+  const wireRuns = () => {
+    $('#addRun').disabled = frozen || runsOnScreen().length >= reviewRunsMax;
+    if (frozen) {
+      document.querySelectorAll('#reviewRuns input, #reviewRuns button')
+        .forEach(el => { el.disabled = true; });
+      return;
+    }
+    document.querySelectorAll('#reviewRuns input')
+      .forEach(el => el.addEventListener('change', () => onEdit()));
+    document.querySelectorAll('#reviewRuns .run-rm').forEach(btn =>
+      btn.addEventListener('click', () => {
+        const list = runsOnScreen();
+        list.splice(Number(btn.dataset.run), 1);
+        drawRuns(list);
+        onEdit();
+      }));
+  };
+  wireRuns();
+  refreshRuns = () => drawRuns(runsOnScreen());
   if (frozen) {
     document.querySelectorAll('#panel textarea, #panel input, #panel select, #panel .rm')
       .forEach(el => { el.disabled = true; });
     return;
   }
+  $('#addRun').addEventListener('click', () => {
+    const list = runsOnScreen();
+    // A run after the first re-reviews what the one before it fixed.
+    const since = !reviewFlags || reviewFlags.some(f => f.name === '--since-last');
+    list.push({ flags: since ? ['--since-last'] : [] });
+    drawRuns(list);
+    onEdit();
+  });
   const auth = () => {
     const login = $('#authLogin').value.trim();
     const password = $('#authPassword').value;
@@ -1120,10 +1234,13 @@ function renderStep1(task) {
     const prev = task.step1 || {};
     const same = (sel, key) => $(sel).value.trim() === String(prev[key] || '').trim();
     const agentsNow = JSON.stringify(agentsOnScreen());
-    return !(same('#task', 'taskDescription') && same('#biz', 'businessRequirements')
+    return !(same('#task', 'taskDescription')
       && same('#branch', 'branch') && same('#contractsText', 'contractsText')
       && same('#hintsNote', 'hintsNote')
+      && $('#refinement').checked === (prev.refinement !== false)
       && $('#genMockups').checked === !!prev.generateMockups
+      && $('#storyDesc').checked === !!prev.storyDescription
+      && JSON.stringify(runsOnScreen()) === JSON.stringify(prev.codeReview || reviewRunsDefault)
       && agentsNow === JSON.stringify(agentsOf({ agents: prev.agents })));
   };
   const gate = () => {
@@ -1139,7 +1256,7 @@ function renderStep1(task) {
     $('#branchHint').textContent = problem;
     $('#branchHint').hidden = !problem;
     // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
-    const valid = !!($('#task').value.trim() && $('#biz').value.trim()
+    const valid = !!($('#task').value.trim()
       && branchOk(branch) && !taken
       && (a.complete || (!a.login && !a.password.trim())));
     const dirty = !revisit || changed();
@@ -1150,9 +1267,9 @@ function renderStep1(task) {
   // about: a removed file, a failing step, a question arriving — any of them replaces
   // the panel, and only what was put away survives it.
   const onEdit = () => { snapshotStep1(); gate(); };
-  ['#task', '#biz', '#branch', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
+  ['#task', '#branch', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
     .forEach(sel => $(sel).addEventListener('input', onEdit));
-  ['#genMockups', '#mockups', '#contracts', '#hints']
+  ['#refinement', '#genMockups', '#storyDesc', '#mockups', '#contracts', '#hints']
     .forEach(sel => $(sel).addEventListener('change', onEdit));
   document.querySelectorAll('#panel select').forEach(el => el.addEventListener('change', () => {
     onEdit();
@@ -1175,13 +1292,19 @@ function renderStep1(task) {
   // the draft the label reads — so it can follow along without the bar re-rendering.
   $('#branch').addEventListener('input', syncTabLabel);
   $('#next').addEventListener('click', async () => {
+    // What runs next depends on the switches, and with all three off the next step is
+    // implementation itself - the one after which this form can no longer be resubmitted.
+    const next = $('#refinement').checked
+      ? 'Refinement starts: its agent reads this form and begins asking questions.'
+      : $('#genMockups').checked ? 'Mockups start: an agent designs the screens from this form.'
+        : $('#storyDesc').checked ? 'The story starts: an agent writes it from this form.' : '';
     const ok = await askConfirm({
       title: revisit ? 'Resubmit the requirements?' : 'Submit requirements?',
-      text: revisit
-        ? 'Refinement re-runs on what you changed — and the mockups too, when they are enabled. '
-          + 'You can come back here again until implementation starts.'
-        : 'Step 2 starts: the refinement agent reads this form and begins asking questions. '
-          + 'You can come back and edit it until implementation starts.',
+      text: !next ? 'Implementation starts right away, and the requirements are frozen from then on.'
+        : revisit
+          ? 'The steps before implementation that are on re-run on what you changed. '
+            + 'You can come back here again until implementation starts.'
+          : `${next} You can come back and edit it until implementation starts.`,
       confirmLabel: revisit ? 'Resubmit and continue' : 'Submit and continue' });
     if (!ok) return;
     lockPanel('Uploading and submitting…');
@@ -1216,13 +1339,15 @@ function renderStep1(task) {
     }
     await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
-      businessRequirements: $('#biz').value.trim(),
       branch: $('#branch').value.trim(),
       contractsText: $('#contractsText').value.trim(),
       hintsNote: $('#hintsNote').value.trim(),
       mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
       authProvided: a.complete || task.authSaved,
+      refinement: $('#refinement').checked,
       generateMockups: $('#genMockups').checked,
+      storyDescription: $('#storyDesc').checked,
+      codeReview: runsOnScreen(),
       agents: agentsOnScreen() });
     // The form is the server's now, credentials included — nothing of it stays on
     // the page, or the next redraw would hand back files that were already uploaded.
@@ -1236,7 +1361,8 @@ function renderStep1(task) {
 
 // A shortcut to the stepper's own first tile, offered on the three interactive
 // gates. It only changes what is on screen: the gate stays open, the agents hear
-// nothing, and refinement re-runs only if the form comes back actually changed.
+// nothing, and the switched-on steps before implementation re-run only if the form
+// comes back actually changed.
 const backButton = () => '<button id="backToStep1" class="secondary">Back to requirements</button>';
 
 function wireBackButton() {
@@ -1651,10 +1777,42 @@ function renderMockoon(task, step) {
     });
 }
 
+// The story is read straight from the task dir, like the Mockoon environment, and
+// shown as plain text: it is meant to be pasted into a tracker exactly as written.
+function loadStory() {
+  const copy = $('#copyStory');
+  fetch(`/api/story?taskId=${encodeURIComponent(activeTask)}`)
+    .then(r => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+    .then(text => {
+      $('#storyText').textContent = text;
+      copy.disabled = false;
+      copy.addEventListener('click', async () => {
+        await copyText(text);
+        copy.textContent = 'Copied';
+        setTimeout(() => { copy.textContent = 'Copy story'; }, 2000);
+      });
+    })
+    .catch(() => {
+      $('#storyText').textContent = 'story.md is missing — resubmit the requirements to write it again.';
+    });
+}
+
+function renderStory(task, step) {
+  $('#panel').innerHTML = `
+    <h2>${esc(step.name)}</h2>
+    <pre class="report" id="storyText">Loading…</pre>
+    <button id="copyStory" disabled>Copy story</button>
+    ${chatBlock(step, liveOf(task, step))}`;
+  wireChat(step);
+  loadStory();
+}
+
 function renderSummary(task) {
   const sum = task.summary;
   const mockoon = task.steps.find(s => s.id === MOCKOON_STEP) || {};
   const hasMocks = mockoon.status === 'completed';
+  const story = task.steps.find(s => s.id === STORY_STEP) || {};
+  const hasStory = story.enabled !== false && story.status === 'completed';
   const list = items => `<ul>${(items || []).map(i => `<li>${esc(i)}</li>`).join('')}</ul>`;
   const block = text => `<pre class="summary-text">${esc(text || '—')}</pre>`;
   $('#panel').innerHTML = `<div class="summary">
@@ -1668,6 +1826,9 @@ function renderSummary(task) {
     <section><h3>Mockup comparison</h3>${block(sum.mockupComparison)}</section>
     <section><h3>UX review</h3>${block(sum.uxReview)}</section>
     <section><h3>Code review</h3>${block(sum.codeReview)}</section>
+    ${hasStory ? `<section id="story-section"><h3>Story</h3>
+      <pre class="summary-text" id="storyText">Loading…</pre>
+      <button id="copyStory" disabled>Copy story</button></section>` : ''}
     <section id="mockoon-section"><h3>Mockoon mocks</h3>
       <p class="muted">A ready-to-import Mockoon environment for the feature's API,
         listening on <code>http://localhost:3000</code>.</p>
@@ -1679,6 +1840,7 @@ function renderSummary(task) {
       <button id="shutdown" class="secondary">Shut down server</button>
     </section>
   </div>`;
+  if (hasStory) loadStory();
   // Already generated: the JSON is one local switch away, no agent needed.
   if (hasMocks) {
     $('#showMockoon').addEventListener('click', () => {
@@ -1718,9 +1880,11 @@ async function newTask(copy, btn) {
   // state document. The server copies the source task's auth.json instead, and what
   // was typed but not submitted rides across in the draft below.
   const { id } = await postJson('/api/tasks', copy ? { copyFrom: task.id, values: {
-    taskDescription: from.taskDescription, businessRequirements: from.businessRequirements,
+    taskDescription: from.taskDescription,
     contractsText: from.contractsText, hintsNote: from.hintsNote,
-    generateMockups: from.generateMockups, agents: agentsOf(from) } } : {});
+    refinement: from.refinement, generateMockups: from.generateMockups,
+    storyDescription: from.storyDescription, codeReview: from.codeReview,
+    agents: agentsOf(from) } } : {});
   if (id) {
     // The server copies what it holds — the form and the uploaded files. What only the
     // page holds, typed credentials and files picked but not uploaded yet, is carried
@@ -1760,6 +1924,17 @@ $('#sidebarToggle').addEventListener('click', () =>
 let sidebarCollapsed = false;
 try { sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === '1'; } catch (_e) { /* blocked */ }
 setSidebar(sidebarCollapsed);
+
+// The flag list changes only with the plugin, so one request per page is enough.
+fetch('/api/review-flags')
+  .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+  .then(j => {
+    reviewFlags = Array.isArray(j.flags) ? j.flags : [];
+    reviewRunsMax = j.maxRuns || reviewRunsMax;
+    reviewRunsDefault = j.defaultRuns || reviewRunsDefault;
+    if (refreshRuns) refreshRuns();
+  })
+  .catch(() => { /* the runs keep showing the flags they hold, by name */ });
 
 setInterval(tick, 1000);
 tick();

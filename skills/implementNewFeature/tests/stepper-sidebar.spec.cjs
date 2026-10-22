@@ -66,8 +66,9 @@ test('zwinięcie sidebara przeżywa przeładowanie strony', async ({ page }) => 
 test('kopia bierze krok 1 otwartego taska, choć ten jest już przy implementacji',
   async ({ page }) => {
     await post('/api/answer', { kind: 'step1', taskDescription: 'Zaproszenia',
-      businessRequirements: 'Admin zaprasza', branch: 'feature/zaproszenia',
-      contractsText: 'POST /invites', hintsNote: 'Układ z ekranu A', generateMockups: true });
+      branch: 'feature/zaproszenia',
+      contractsText: 'POST /invites', hintsNote: 'Układ z ekranu A', generateMockups: true,
+      refinement: false, storyDescription: true });
     await post('/api/state', { step: 1, status: 'completed', activeStep: 4 });
     await post('/api/state', { step: 4, status: 'in_progress', progress: 40 });
     await page.goto(base);
@@ -77,17 +78,18 @@ test('kopia bierze krok 1 otwartego taska, choć ten jest już przy implementacj
     await page.click('#createTask');
     await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
     await expect(page.locator('#task')).toHaveValue('Zaproszenia');
-    await expect(page.locator('#biz')).toHaveValue('Admin zaprasza');
     await expect(page.locator('#contractsText')).toHaveValue('POST /invites');
     await expect(page.locator('#hintsNote')).toHaveValue('Układ z ekranu A');
     await expect(page.locator('#genMockups')).toBeChecked();
+    await expect(page.locator('#refinement')).not.toBeChecked();
+    await expect(page.locator('#storyDesc')).toBeChecked();
     // Dwa taski nie mogą dzielić brancha, więc nowy startuje bez niego.
     await expect(page.locator('#branch')).toHaveValue('');
   });
 
 test('pusty task założony z innego kroku nie bierze nic', async ({ page }) => {
   await post('/api/answer', { kind: 'step1', taskDescription: 'Zaproszenia',
-    businessRequirements: 'Admin zaprasza', branch: 'feature/zaproszenia' });
+    branch: 'feature/zaproszenia' });
   await post('/api/state', { step: 1, status: 'completed', activeStep: 4 });
   await post('/api/state', { step: 4, status: 'in_progress', progress: 40 });
   await page.goto(base);
@@ -95,7 +97,6 @@ test('pusty task założony z innego kroku nie bierze nic', async ({ page }) => 
   await page.click('#createEmptyTask');
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
   await expect(page.locator('#task')).toHaveValue('');
-  await expect(page.locator('#biz')).toHaveValue('');
 });
 
 test('kopia bierze krok 1 taska z otwartej zakładki, nie sąsiada', async ({ page }) => {

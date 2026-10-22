@@ -94,6 +94,22 @@ test('compact: a failed step adds the failure protocol; a shown summary the fina
   assert.ok(note.includes('- waiter: none is listening - start one (loop card point 1) before you end this turn'), note);
 });
 
+test('compact: a task before implementation can still be revised; the story step has its own section', (t) => {
+  const f = fixture(t, {
+    tasks: [
+      task('t1', 8, { 8: { status: 'in_progress', currentOperation: 'Writing the story' } }, { step1Submitted: true }),
+      task('t2', 4, { 4: { status: 'in_progress' } }, { step1Submitted: true }),
+    ],
+  });
+  const note = noteOf(hooks.onCompact(f.input, f.env));
+  assert.ok(note.includes('- t1 on no branch yet: step 8 Story Description - in_progress, "Writing the story"'), note);
+  for (const title of ['Step 8 ', 'Revising step 1']) {
+    assert.ok(note.includes(`${sectionOf(title)} (${title.trim()}`), `${title}: ${note}`);
+  }
+  const alone = fixture(t, { tasks: [task('t2', 4, { 4: { status: 'in_progress' } }, { step1Submitted: true })] });
+  assert.ok(!noteOf(hooks.onCompact(alone.input, alone.env)).includes('(Revising step 1'), 'implementation closed the form');
+});
+
 test('compact: a run with no task state yet still names the run and its sections', (t) => {
   const f = fixture(t);
   const note = noteOf(hooks.onCompact(f.input, f.env));

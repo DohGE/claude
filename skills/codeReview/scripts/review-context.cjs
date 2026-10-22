@@ -64,7 +64,7 @@ function isSkippedPath(filePath) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, batch: true, dedupItems: true };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, dedupItems: true };
   const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
@@ -74,6 +74,8 @@ function parseArgs(argv) {
     if (arg === '--with-checklist') { args.withChecklist = true; continue; }
     // Each checklist item also shows its rule's words; it needs the checklists, so it keeps them.
     if (arg === '--with-rule-text') { args.withChecklist = true; args.withRuleText = true; continue; }
+    // No item of severity low is walked, and the report keeps no Low finding and no code snippet.
+    if (arg === '--light') { args.light = true; continue; }
     // Every file walked in a response of its own, light ones included (review-bundle.cjs batches).
     if (arg === '--no-batch') { args.batch = false; continue; }
     // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), by
@@ -94,7 +96,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --no-batch, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --light, --no-batch, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -989,9 +991,13 @@ function buildContext(options) {
   // carries its conventions next to its code instead of in the shared skill.
   const projectInstructionsDir = path.join(project, '.claude', 'doh', 'instructions');
   const hasProjectInstructions = isDirectory(projectInstructionsDir);
-  const rules = rulebook.loadRulebook(
+  const loaded = rulebook.loadRulebook(
     [path.join(skillDir, 'instructions'), hasProjectInstructions ? projectInstructionsDir : null],
   );
+  // --light walks the plans without their items of severity low. What it leaves out is
+  // known on every run: a resume across the two settings is safe only while it is none.
+  const light = rulebook.lightRulebook(loaded);
+  const rules = options.light ? light.rules : loaded;
   const ts = formatTimestamp(now);
   // When the reviewed project already has a `.claude/` folder, write into
   // `<project>/.claude/doh/codeReview/` (created on demand) instead of the skill's
@@ -1013,7 +1019,8 @@ function buildContext(options) {
   // the run and removes it, so the analysis steps never see the format choice.
   // `withChecklist` is the other output choice, read only by the assembly: every
   // part still carries its checklist, and the renderer cuts them from the finished
-  // report unless it is true.
+  // report unless it is true. `light` reaches the renderer the same way: it cuts every
+  // Low finding and leaves the page without code snippets.
   const reportPaths = (branchName) => {
     const reportPath = path.join(runsDir, `${ts.date}-${ts.time}-${ts.seconds}`, sanitizeBranchName(branchName), `${reportStem}.md`);
     return {
@@ -1021,6 +1028,7 @@ function buildContext(options) {
       htmlReportPath: wantsHtml ? reportPath.replace(/\.md$/, '.html') : null,
       withChecklist: !!options.withChecklist,
       ...(options.withRuleText ? { withRuleText: true } : {}),
+      ...(options.light ? { light: true } : {}),
       ...(options.dedupItems ? { dedupItems: true } : {}),
     };
   };
@@ -1030,6 +1038,13 @@ function buildContext(options) {
   result.warnings = [...rules.warnings];
   if (rules.kinds.length === 0) {
     result.warnings.push('instructions/ holds no file kind - review uses only the project CLAUDE.md and the universal points (cross-file consistency, regressions, readability).');
+  }
+  if (options.light) {
+    const shown = light.dropped.slice(0, 10).join(', ') + (light.dropped.length > 10 ? `, (+${light.dropped.length - 10} more)` : '');
+    const cut = `every Low finding${wantsHtml ? ' and every code snippet' : ''}`;
+    result.warnings.push(light.dropped.length > 0
+      ? `--light: ${light.dropped.length} item(s) of severity low are left out of every checklist: ${shown}. The report also leaves out ${cut}.`
+      : `--light: no item of the rulebook has severity low, so every checklist is walked whole - the report still leaves out ${cut}.`);
   }
 
   // The kind of a path is decided once per run: a file listed on two targets is
@@ -1076,6 +1091,12 @@ function buildContext(options) {
     const run = previous && typeof previous.reportPath === 'string' ? findInterruptedRun(previous.reportPath) : null;
     if (!run || !samePath(run.root, root) || run.branchDir !== sanitizeBranchName(target.branch)) return false;
     const runDir = run.dir.replace(/\\/g, '/');
+    // Its parts were walked against the other checklists: only the report output differs
+    // while --light leaves out no item, and the assembly follows this run's setting.
+    if (!!previous.light !== !!options.light && light.dropped.length > 0) {
+      result.warnings.push(`[${target.branch}] The interrupted review from ${run.stamp} ran ${previous.light ? 'with' : 'without'} --light, whose checklists differ from this run's, so it is not resumed - this run starts from scratch. Its run folder: rm -rf "${runDir}".`);
+      return false;
+    }
     if (currentBlobs) {
       const same = previous.files
         && Object.keys(previous.files).length === currentBlobs.size
@@ -1131,6 +1152,9 @@ function buildContext(options) {
         if (unchanged.length > 0) {
           const shown = unchanged.slice(0, 10).join(', ');
           result.warnings.push(`[${target.branch}] --since-last: ${unchanged.length} file(s) unchanged since the previous review and skipped: ${shown}${unchanged.length > 10 ? `, (+${unchanged.length - 10} more)` : ''}. The snapshot is written when the context is built, so a previous review that did not finish still marked these as reviewed - re-run without --since-last if that run was interrupted.`);
+          if (previous.light && !options.light) {
+            result.warnings.push(`[${target.branch}] --since-last: the previous review ran with --light, so the skipped file(s) were never checked against the items of severity low and its report shows no Low finding - re-run this target without --since-last for a full review.`);
+          }
           target.unchangedSinceLastReview = unchanged;
           target.previousReportPath = previous.reportPath || null;
           // Skipping a file is only honest while the report that DID review it is still
@@ -1670,6 +1694,9 @@ function buildContext(options) {
           ...(target.unchangedSinceLastReview
             ? { sinceLast: { unchanged: target.unchangedSinceLastReview, previousReportPath: target.previousReportPath || null } }
             : {}),
+          // A --light run walked shorter checklists and reported no Low finding: what a
+          // resume and the next --since-last run check before trusting this one.
+          ...(options.light ? { light: true } : {}),
         }));
       } catch {}
     }
@@ -1731,6 +1758,7 @@ function writeContext(context) {
       batches: (t.batches || []).length,
       withChecklist: t.withChecklist,
       withRuleText: t.withRuleText,
+      light: t.light,
       dedupItems: t.dedupItems,
       skipped: t.skipped,
       unchangedSinceLastReview: t.unchangedSinceLastReview,

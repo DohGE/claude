@@ -340,7 +340,10 @@ test('what the implementer is given is what the review walks, on the shipped rul
   write('src/assets/i18n/en.json', '{"a":"b"}');
   write('tools/build.sh', 'echo hi');
 
-  const skillDir = path.join(__dirname, '..', '..', 'codeReview');
+  // A project without `.claude/` gets its run written into `<skillDir>/reports/`, so the
+  // review side reads a copy of the shipped rulebook from a skill folder of its own.
+  const skillDir = tempDir(t, 'mi-skill-');
+  fs.cpSync(path.join(__dirname, '..', '..', 'codeReview', 'instructions'), path.join(skillDir, 'instructions'), { recursive: true });
   const ctx = rc.buildContext({ mode: 'staged', project: dir, skillDir });
   const target = ctx.targets[0];
   assert.ok(target && target.files.length > 0, 'the fixture produced something to review');

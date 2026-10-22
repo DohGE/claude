@@ -10,7 +10,7 @@ That part is written on every target with files — empty when the pass found no
 assembly refuses a report without it.
 The pass works from `target.crossBundlePath` (a FIXED IDENTIFIER, like every key of the context
 JSON), read with the Read tool: the facts that span files (`## Fakty międzyplikowe` — repeated
-literals and conditions, label mappings implemented twice, relative imports that leave their area),
+literals and conditions, label mappings implemented more than once, relative imports that leave their area),
 the items the pass reports under with their text (`## Pozycje, pod którymi przejście raportuje`),
 the jscpd candidates and the part's template (`## Zapis części`).
 The hook fills in two lists as the bundle is read: `## Już zgłoszone w częściach plików` (what the file parts already report, by address and lines) and `## Otwarte w 3+ plikach (blok unverified)` (the addresses this part's block answers).
@@ -18,12 +18,16 @@ When it did not, the bundle says so, and you read both off the file parts yourse
 A cross-file fact is a lead, like a per-file `WSKAZÓWKA`: open the places it names, and report what
 the questions below find there.
 Answer each of these five questions explicitly, against the diff as a whole:
-1. Duplication drift — is the same logic, formatting or literal implemented in two or more places
-   of this diff, or re-implemented next to an existing shared util? Answer it from three sources:
+1. Duplication drift — is the same logic, formatting or literal implemented in three or more places
+   of the reviewed revision, at least one of them written by this diff?
+   An existing shared util, component, model or i18n key the diff re-implements counts as one of
+   the places.
+   Answer it from three sources:
    - `target.duplicationCandidates` — jscpd's scan of the whole reviewed revision, kept only where
-     the diff wrote at least half of the copy: `path` and `lines` are the copy, `sources` what it
-     repeats, `kinds` how it matched (`exact`, `renamed` identifiers, `similar` with a gap).
-     Open both sides of every candidate.
+     the diff wrote at least half of the copy and the block exists at least three times: `path` and
+     `lines` are the copy, `sources` its other copies, `kinds` how it matched (`exact`, `renamed`
+     identifiers, `similar` with a gap).
+     Open every copy of every candidate.
      Dismiss one only when the two blocks share no logic: a shape the framework or a generator
      dictates (a TestBed skeleton, a module or route declaration, a generated `project.json` or
      `tsconfig`), parallel data (translation files), or — for a `renamed` or `similar` candidate —
@@ -41,7 +45,9 @@ Answer each of these five questions explicitly, against the diff as a whole:
    - What the per-file walk already noticed.
 
    Report every copy the diff adds under the code-quality instruction as 🔴 High, anchored on a
-   line of the copy that the diff changed, and name the source it repeats (`path:lines`).
+   line of the copy that the diff changed, and name the other copies (`path:lines`).
+   Two places are no code-quality finding: when one of them is an existing equivalent the diff
+   re-implements, report it under `architecture#9` (reuse before creating), naming that symbol.
 2. Layering — Read `target.importLedger` and walk it edge by edge, together with the edges you
    noted for its `# not parsed` files. Each line is `<importing file>:<line> → <specifier>`, plus
    `(<resolved path>)` for a relative one; `<line>` is the import's line in that file's
@@ -56,7 +62,7 @@ Answer each of these five questions explicitly, against the diff as a whole:
    the dispatching component), each under its own instruction.
 4. Naming consistency — the same concept named differently across the diff's files, or one name
    reused for different concepts; reported under the code-quality instruction (🟡 Medium), while a
-   plain naming-convention breach stays a general-instruction finding.
+   plain naming-convention breach is a finding only under the instruction that sets that convention.
 5. View consistency (`accessibility#22`: WCAG 3.2.3, 3.2.4, 3.2.6) — when the diff renders
    navigation, a repeated control or a help mechanism in more than one view (a template, `index.html`,
    a layout component), compare them: the same navigation in the same relative order, the same
