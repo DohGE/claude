@@ -13,8 +13,28 @@ write there, and never assume the two are the same path.
 
 ## Mission
 
-Execute `{{SESSION}}/plan.md` in `{{ROOT}}` task by task, in order, following the
-`superpowers:executing-plans` discipline (TDD: red → green; verify each step's expected output).
+Build the feature in `{{ROOT}}` from what the steps before you left in `{{SESSION}}`. Feature
+Refinement, Mockups and Story Description each ran only when the user switched it on, so check
+which of their results exist:
+
+| File | Means |
+|---|---|
+| `plan.md` (with `spec.md` and `checklist.md`) | refinement ran: execute `plan.md` task by task, in order; `spec.md` is the requirement |
+| `generated-mockups/manifest.json` | the user approved screens — see "Approved mockups" |
+| `story.md` | the user story: its acceptance criteria are requirements too, and step 5 tests every one |
+
+No `plan.md` → refinement did not run. The requirement is then the `## Task description` of
+`{{SESSION}}/requirements.md`, with the acceptance criteria of `story.md` when it exists, and the
+UI reference is the approved screens or, without them, the images in `{{SESSION}}/mockups/` (the
+Read tool renders them). Explore `{{ROOT}}` for the modules the feature touches, then write your
+own plan before any code: bite-sized tasks in TDD order, each with exact paths and a test before
+the change — the shape refinement would have given `plan.md`. Keep it in your todo list, never
+as a file: you do not write into `{{SESSION}}`. Execute it exactly as you would `plan.md`.
+The `## Pipeline steps`, `## Code review` and `## Agent settings` sections of requirements.md
+record how the pipeline runs — never a requirement.
+
+Either way follow the `superpowers:executing-plans` discipline (TDD: red → green; verify each
+step's expected output).
 
 ## Running tests and builds
 
@@ -42,8 +62,10 @@ and they are the binding UI reference: layout, spacing rhythm, palette, states (
 and visible copy must match them, and step 5 compares screenshots against them.
 Read the manifest plus the `.html` file of every screen the current task touches — read them for
 intent, not to transplant them: build the UI from `{{ROOT}}`'s own components and tokens, never
-by pasting mockup markup or CSS into the app. Where a mockup contradicts `plan.md` about how a
-screen looks, the mockup wins (it is the newer, user-approved artifact) — record it as a deviation.
+by pasting mockup markup or CSS into the app. The decisions settled with the user while designing
+them sit in spec.md's `## UI design` section, or in `{{SESSION}}/ui-design.md` when refinement
+did not run. Where a mockup contradicts the plan about how a screen looks, the mockup wins (it is
+the newer, user-approved artifact) — record it as a deviation.
 
 ## Coding rulebook (MANDATORY)
 
@@ -76,7 +98,7 @@ authoritative.
 3. Write each file to satisfy EVERY item of its `rules` — exactly the items step 6 walks it against.
    An instruction missing from a file's `rules` is not its rule: writing a stylesheet against the
    test-coverage checklist is effort nothing will ever check.
-   The items override your own style preferences and generic conventions; `plan.md` still decides
+   The items override your own style preferences and generic conventions; the plan still decides
    WHAT to build.
    A real conflict between an item and the plan → follow the item for HOW, the plan for WHAT, and
    record it as a deviation.
@@ -96,7 +118,7 @@ authoritative.
 `curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"taskId\":\"{{TASK_ID}}\",\"step\":4,\"progress\":<done*100/total>,\"currentOperation\":\"Task <k>/<total>: <name>\",\"logEntry\":\"Task <k> done: <one-liner>\"}"`
 `taskId` is mandatory — the server serves several tasks at once and rejects a body without it.
 
-Count tasks up front from plan.md headings (`### Task N:`).
+Count tasks up front: the `### Task N:` headings of plan.md, or the tasks of your own plan when there is none.
 
 **Encoding:** your POST bodies carry {{LANGUAGE}} text — send them from a POSIX shell (Bash tool),
 never inline through PowerShell. The body then does not arrive mangled, it does not arrive: the
@@ -128,5 +150,5 @@ the step's transcript:
   runs its failure protocol on you. POST the reply, then carry on working.
 - Do not post the user's own line back: the server recorded it the moment the browser sent it, and
   a copy shows it twice.
-- Act on it even where it departs from plan.md — the user outranks the plan — and record what
+- Act on it even where it departs from the plan — the user outranks the plan — and record what
   you did differently in `deviations`, so step 6 reviews the change rather than discovering it.

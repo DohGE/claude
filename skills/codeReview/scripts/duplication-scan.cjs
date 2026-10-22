@@ -3,8 +3,9 @@
 // Copy/paste detection for the revision a review covers. jscpd scans the WHOLE
 // reviewed tree - a copy of an untouched file is found only when that file is
 // scanned too - and the clone pairs are then narrowed to the ones the diff wrote:
-// a pair survives when one side is at least half made of changed lines. That side
-// is the anchor the reviewer reports on, the other one the source it repeats.
+// a pair survives when one side is at least half made of changed lines and the
+// block exists at least three times. That side is the anchor the reviewer reports
+// on, the other copies the sources it repeats.
 //
 // jscpd's own baseline mode (`--baseline-from-ref`) was measured for this and
 // rejected: editing one literal inside a clone that already existed changes the
@@ -31,6 +32,8 @@ const jscpdFlags = ['--reporters', 'json', '--ignore-identifiers', '--max-gap-li
 // is left alone rather than let the match run on into the code below it.
 const importStatement = String.raw`(?m)^import\s(?:[^;\n]|\n[\s}])*?\sfrom\s*['"][^'"\n]*['"];?`;
 const minChangedShare = 0.5;
+// Duplication is a finding from its third copy: two may still diverge, three are a pattern.
+const minCopies = 3;
 // Per target: a diff that vendors a library would otherwise put hundreds of entries
 // into the context the orchestrator reads.
 const candidateLimit = 50;
@@ -75,28 +78,48 @@ function mergeOverlapping(items, absorb = () => {}) {
 }
 
 // jscpd clone pairs -> the candidates the diff wrote, one per block: a block matched
-// by two detectors or against two sources is opened by the reviewer once.
+// by two detectors or against two sources is opened by the reviewer once. Pairs that
+// share a block (overlapping sides in one file) chain into one group of copies, the
+// pairs the diff did not touch included; a candidate needs `minCopies` of them and
+// names every other copy as a source.
 function pickCandidates(duplicates, files) {
   const byPath = new Map(files.map((f) => [f.path, f]));
-  const anchors = [];
-  for (const clone of duplicates || []) {
+  const pairs = (duplicates || []).map((clone) => {
     const [first, second] = [clone.firstFile, clone.secondFile].map((side) => {
       const p = String(side.name).replace(/\\/g, '/').replace(/^\.\//, '');
       return { path: p, start: side.start, end: side.end, share: changedShare(byPath.get(p), side.start, side.end) };
     });
+    return { first, second, kind: clone.kind };
+  });
+  // Pair i's sides are numbered 2i and 2i + 1; each lands in the block that covers it.
+  const blocks = mergeOverlapping(
+    pairs.flatMap(({ first, second }, i) => [{ ...first, sides: [2 * i] }, { ...second, sides: [2 * i + 1] }]),
+    (into, item) => into.sides.push(...item.sides),
+  );
+  const blockOf = [];
+  blocks.forEach((block, b) => block.sides.forEach((side) => { blockOf[side] = b; }));
+  const parent = blocks.map((_, b) => b);
+  const find = (b) => (parent[b] === b ? b : (parent[b] = find(parent[b])));
+  pairs.forEach((_, i) => { parent[find(blockOf[2 * i])] = find(blockOf[2 * i + 1]); });
+  const copies = new Map();
+  blocks.forEach((_, b) => copies.set(find(b), [...(copies.get(find(b)) || []), b]));
+  const anchors = [];
+  pairs.forEach(({ first, second, kind }, i) => {
     // Both sides written (two copies the diff adds) is still one candidate - each
     // names the other - taken on the second side, which in one file is the later copy.
     const anchor = first.share > second.share ? first : second;
-    if (anchor.share < minChangedShare) continue;
-    const source = anchor === first ? second : first;
+    if (anchor.share < minChangedShare) return;
+    const own = blockOf[anchor === first ? 2 * i : 2 * i + 1];
+    const group = copies.get(find(own));
+    if (group.length < minCopies) return;
     anchors.push({
       path: anchor.path,
       start: anchor.start,
       end: anchor.end,
-      sources: [{ path: source.path, start: source.start, end: source.end }],
-      kinds: [clone.kind],
+      sources: group.filter((b) => b !== own).map((b) => ({ path: blocks[b].path, start: blocks[b].start, end: blocks[b].end })),
+      kinds: [kind],
     });
-  }
+  });
   return mergeOverlapping(anchors, (into, item) => {
     into.sources.push(...item.sources);
     into.kinds.push(...item.kinds);

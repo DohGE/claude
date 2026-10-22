@@ -29,7 +29,7 @@ test.beforeEach(async () => {
   }
   // Exactly what the browser sends on submit — the server stores it for the re-render.
   await post('/api/answer', { taskId: 't1', kind: 'step1',
-    taskDescription: 'Zaproszenia', businessRequirements: 'Admin zaprasza',
+    taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: 'POST /invites',
     hintsNote: 'układ z ekranu 2', mockups: [], contracts: [], hints: ['a.png', 'b.png'],
     authProvided: false, generateMockups: true });
@@ -46,17 +46,19 @@ test('formularz wraca wypełniony poprzednim zgłoszeniem', async ({ page }) => 
   await page.goto(base);
   await page.waitForSelector('#branch');
   await expect(page.locator('#task')).toHaveValue('Zaproszenia');
-  await expect(page.locator('#biz')).toHaveValue('Admin zaprasza');
   await expect(page.locator('#branch')).toHaveValue('feature/zaproszenia');
   await expect(page.locator('#contractsText')).toHaveValue('POST /invites');
   await expect(page.locator('#hintsNote')).toHaveValue('układ z ekranu 2');
   await expect(page.locator('#genMockups')).toBeChecked();
+  await expect(page.locator('#refinement')).toBeChecked();
+  await expect(page.locator('#storyDesc')).not.toBeChecked();
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(2);
   // Nic się nie zmieniło, więc nie ma czego wysyłać — agenci zostają w spokoju.
   await expect(page.locator('#next')).toBeDisabled();
   await expect(page.locator('#changeHint')).toBeVisible();
-  await expect(page.locator('#next')).toHaveText('Resubmit and re-run refinement');
+  await expect(page.locator('#next')).toHaveText('Resubmit');
   // Dopiero realna zmiana otwiera ponowne zgłoszenie.
-  await page.fill('#biz', 'Admin i menedżer zapraszają');
+  await page.fill('#task', 'Zaproszenia od admina i menedżera');
   await expect(page.locator('#next')).toBeEnabled();
   await expect(page.locator('#changeHint')).toBeHidden();
   // Opis materiałów jest widoczny, bo pliki już są — mimo pustego inputu plikowego.
@@ -66,10 +68,10 @@ test('formularz wraca wypełniony poprzednim zgłoszeniem', async ({ page }) => 
 test('ponowne zgłoszenie zapowiada zawężony re-run', async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#next');
-  await page.fill('#biz', 'Admin i menedżer zapraszają');
+  await page.fill('#task', 'Zaproszenia od admina i menedżera');
   await page.click('#next');
   await expect(page.locator('#confirmTitle')).toHaveText('Resubmit the requirements?');
-  await expect(page.locator('#confirmText')).toContainText('re-runs on what you changed');
+  await expect(page.locator('#confirmText')).toContainText('re-run on what you changed');
 });
 
 test('wgrany plik da się usunąć i znika z kolejnego zgłoszenia', async ({ page }) => {
@@ -89,12 +91,12 @@ test('wgrany plik da się usunąć i znika z kolejnego zgłoszenia', async ({ pa
 test('edycja i ponowne wysłanie nadpisuje zapisane zgłoszenie', async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#branch');
-  await page.fill('#biz', 'Admin i menedżer zapraszają');
+  await page.fill('#task', 'Zaproszenia od admina i menedżera');
   await page.fill('#branch', 'feature/zaproszenia-v2');
   await page.click('#next');
   await page.click('#confirmOk');
   const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
-  expect(answer.businessRequirements).toBe('Admin i menedżer zapraszają');
+  expect(answer.taskDescription).toBe('Zaproszenia od admina i menedżera');
   expect(answer.branch).toBe('feature/zaproszenia-v2');
   // Pliki, których nie ruszono, przechodzą do nowego zgłoszenia.
   expect(answer.hints).toEqual(['a.png', 'b.png']);
@@ -112,6 +114,47 @@ test('sam toggle makiet wystarcza za zmianę', async ({ page }) => {
   await page.click('#confirmOk');
   const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
   expect(answer.generateMockups).toBe(false);
+});
+
+test('przełączniki refinementu i story też są zmianą i włączają kroki', async ({ page }) => {
+  await page.goto(base);
+  await page.waitForSelector('#storyDesc');
+  await page.uncheck('#refinement');
+  await page.check('#storyDesc');
+  await expect(page.locator('#next')).toBeEnabled();
+  await page.click('#next');
+  await page.click('#confirmOk');
+  const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
+  expect(answer.refinement).toBe(false);
+  expect(answer.storyDescription).toBe(true);
+  const steps = (await (await fetch(`${base}/api/state`)).json()).tasks[0].steps;
+  expect(steps.filter(s => [2, 3, 8].includes(s.id)).map(s => s.enabled)).toEqual([false, true, true]);
+});
+
+test('przebiegi review: dodanie, flagi z listy skilla, limit trzech i usunięcie', async ({ page }) => {
+  await page.goto(base);
+  await page.waitForSelector('#reviewRuns .run');
+  // Domyślnie dwa przebiegi: pierwszy bez flag, drugi --since-last.
+  const run = n => page.locator(`#reviewRuns .run[data-run="${n}"]`);
+  await expect(run(0).locator('input:checked')).toHaveCount(0);
+  await expect(run(1).locator('input[data-flag="--since-last"]')).toBeChecked();
+  // Lista flag przychodzi z SKILL.md codeReview — z opisem w podpowiedzi.
+  await expect(run(0).locator('input[data-flag="--only-md"]')).toHaveCount(1);
+  await expect(run(0).locator('input[data-flag="--project"]')).toHaveCount(0);
+  await expect(run(0).locator('label:has(input[data-flag="--light"])')).toHaveAttribute('title', /\S/);
+  await expect(page.locator('#next')).toBeDisabled();
+  await page.click('#addRun');
+  await expect(page.locator('#next')).toBeEnabled();
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(3);
+  await expect(page.locator('#addRun')).toBeDisabled();
+  await run(2).locator('input[data-flag="--light"]').check();
+  await run(0).locator('.run-rm').click();
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(2);
+  await expect(page.locator('#addRun')).toBeEnabled();
+  await page.click('#next');
+  await page.click('#confirmOk');
+  const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
+  expect(answer.codeReview).toEqual([{ flags: ['--since-last'] }, { flags: ['--light', '--since-last'] }]);
 });
 
 test('po starcie implementacji formularz jest tylko do odczytu', async ({ page }) => {
@@ -135,7 +178,7 @@ test('zapisane poświadczenia są sygnalizowane, a pola zostają puste', async (
   await expect(page.locator('#authLogin')).toHaveValue('');
   await expect(page.locator('#authPassword')).toHaveValue('');
   // Bez ponownego wpisania poświadczeń odpowiedź nadal mówi, że są.
-  await page.fill('#biz', 'Admin i menedżer zapraszają');
+  await page.fill('#task', 'Zaproszenia od admina i menedżera');
   await page.click('#next');
   await page.click('#confirmOk');
   const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();

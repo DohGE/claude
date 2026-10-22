@@ -27,7 +27,6 @@ test.afterEach(async () => {
 
 async function fillRequired(page) {
   await page.fill('#task', 'Opis zadania');
-  await page.fill('#biz', 'Wymagania biznesowe');
   await page.fill('#branch', 'feature/test');
 }
 
@@ -150,7 +149,7 @@ test('usunięcie wgranego pliku nie czyści wpisanych pól', async ({ page }) =>
   await post('/api/upload', { taskId: 't1', category: 'hints', filename: 'ekran.png',
     dataBase64: Buffer.from('png').toString('base64') });
   await post('/api/answer', { taskId: 't1', kind: 'step1', taskDescription: 'Opis',
-    businessRequirements: 'Wymagania', branch: 'feature/pierwszy', hints: ['ekran.png'] });
+    branch: 'feature/pierwszy', hints: ['ekran.png'] });
   await page.reload();
   await page.waitForSelector('#files-hints');
   await page.fill('#task', 'Opis po zmianie');

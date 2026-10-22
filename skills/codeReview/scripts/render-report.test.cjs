@@ -146,8 +146,9 @@ const REPORT = [
 test('parseArgs requires a report and derives the html path', () => {
   assert.deepStrictEqual(
     rr.parseArgs(['--report=reports/a-b.md']),
-    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false },
+    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false, light: false },
   );
+  assert.strictEqual(rr.parseArgs(['--report=a.md', '--light']).light, true);
   const withRuleText = rr.parseArgs(['--report=a.md', '--with-rule-text']);
   assert.deepStrictEqual([withRuleText.withRuleText, withRuleText.withChecklist], [true, true], 'the rule text keeps the checklists');
   assert.strictEqual(rr.parseArgs(['--report=a.MD']).out, 'a.html');
@@ -587,21 +588,21 @@ test('main writes the html next to the report and removes the source', (t) => {
 test('main --with-rule-text shows each checklist item with its rule text', (t) => {
   const dir = tempDir(t, 'cr-render-rules-');
   const md = path.join(dir, 'raport.md');
-  const proof = [...checklistOf('src/app/user.service.ts', ['[x] general#1-2 — OK (brak wystąpień)']), '<!-- coverage: src/app/user.service.ts 2/2 -->'];
+  const proof = [...checklistOf('src/app/user.service.ts', ['[x] general#2-3 — OK (brak wystąpień)']), '<!-- coverage: src/app/user.service.ts 2/2 -->'];
   const source = `${REPORT}\n${proof.join('\n')}\n`;
   fs.writeFileSync(md, source, 'utf8');
 
   const result = runMain([`--report=${md}`, '--with-rule-text']);
   assert.strictEqual(result.code, 0);
   const items = embeddedPayload(fs.readFileSync(path.join(dir, 'raport.html'), 'utf8')).coverage[0].items;
-  assert.deepStrictEqual(items.map((item) => item.id), ['general#1', 'general#2']);
+  assert.deepStrictEqual(items.map((item) => item.id), ['general#2', 'general#3']);
   assert.ok(items.every((item) => item.rule && item.rule.length > 20), 'every item of the range gets its own rule');
   assert.notStrictEqual(items[0].rule, items[1].rule);
 
   fs.writeFileSync(md, source, 'utf8');
   assert.strictEqual(runMain([`--report=${md}`, '--only-md', '--with-rule-text']).code, 0);
-  const line = fs.readFileSync(md, 'utf8').split('\n').find((text) => text.startsWith('[x] general#1-2'));
-  assert.match(line, / — Reguła: general#1: .+ \| general#2: .+/, 'the Markdown carries the rules on the item line');
+  const line = fs.readFileSync(md, 'utf8').split('\n').find((text) => text.startsWith('[x] general#2-3'));
+  assert.match(line, / — Reguła: general#2: .+ \| general#3: .+/, 'the Markdown carries the rules on the item line');
 });
 
 test('main leaves the checklists out of the page unless --with-checklist is given', (t) => {
@@ -1016,6 +1017,60 @@ test('main embeds the snippet of the reviewed file in the payload', (t) => {
   const snippet = payload.files[0].findings[0].snippet;
   assert.deepStrictEqual(snippet.hunks[0].lines.map((l) => l.text), ['one', 'two', 'three', 'four']);
   assert.deepStrictEqual(snippet.hunks[0].lines.filter((l) => l.hit).map((l) => l.n), [3]);
+});
+
+test('main --light leaves out every Low finding and every code snippet', (t) => {
+  const dir = tempDir(t, 'cr-render-light-');
+  fs.mkdirSync(path.join(dir, 'src', 'app'), { recursive: true });
+  for (const name of ['user.service.ts', 'user.component.html']) fs.writeFileSync(path.join(dir, 'src', 'app', name), 'one\ntwo\nthree\n'.repeat(15), 'utf8');
+  const md = path.join(dir, 'raport.md');
+  fs.writeFileSync(md, REPORT, 'utf8');
+
+  const result = runMain([`--report=${md}`, `--project=${dir}`, '--light']);
+  assert.strictEqual(result.code, 0);
+  assert.strictEqual(result.err, '');
+  assert.strictEqual(result.out.trim().split('\n')[1], 'severity: critical=1 high=1 medium=1 low=0 missing-unit-test=1');
+  assert.ok(!fs.existsSync(md), 'nothing drifted, so the Markdown goes');
+  const payload = embeddedPayload(fs.readFileSync(path.join(dir, 'raport.html'), 'utf8'));
+  assert.deepStrictEqual(payload.files.map((file) => file.findings.map((f) => f.severity)), [['critical', 'high'], ['medium', 'missing-unit-test']]);
+  assert.ok(payload.files.every((file) => file.full === null && file.findings.every((f) => f.snippet === null)), 'no code on the page');
+
+  fs.writeFileSync(md, REPORT, 'utf8');
+  assert.strictEqual(runMain([`--report=${md}`, '--only-md', '--light']).code, 0);
+  assert.strictEqual(fs.readFileSync(md, 'utf8'), rr.stripLowFindings(REPORT), 'the Markdown report is cut the same way');
+  assert.ok(!fs.readFileSync(md, 'utf8').includes('⚪'));
+});
+
+test('stripLowFindings cuts the Low findings, a section they leave empty, and nothing else', () => {
+  const low = findingOf({ severity: '⚪ **Low**', problem: 'Drobiazg.' });
+  const source = reportOf(
+    '<!-- since-last: 1 unchanged file(s) skipped; previous report: a/raport.md -->',
+    '',
+    ['## src/a.ts', ''], findingOf({}), low, findingOf({ severity: '🟡 **Medium**' }), low,
+    ['## src/b.ts', ''], low,
+    checklistOf('src/b.ts', ['[x] general#1 nazwy — NARUSZENIE (L1)']), '<!-- coverage: src/b.ts 1/1 -->', '',
+    ['## src/c.ts', ''], low, findingOf({ severity: '🔵 **Missing Unit Test**' }),
+  );
+  const stripped = rr.stripLowFindings(source);
+  assert.strictEqual(stripped, reportOf(
+    '<!-- since-last: 1 unchanged file(s) skipped; previous report: a/raport.md -->',
+    '',
+    ['## src/a.ts', ''], findingOf({}), findingOf({ severity: '🟡 **Medium**' }),
+    checklistOf('src/b.ts', ['[x] general#1 nazwy — NARUSZENIE (L1)']), '<!-- coverage: src/b.ts 1/1 -->', '',
+    ['## src/c.ts', ''], findingOf({ severity: '🔵 **Missing Unit Test**' }),
+  ), 'an emptied section keeps its comments, and a section keeping a finding keeps its header');
+  const report = rr.parseReport(stripped);
+  assert.deepStrictEqual(report.warnings, []);
+  assert.deepStrictEqual(report.files.map((file) => file.path), ['src/a.ts', 'src/c.ts']);
+  assert.deepStrictEqual(report.coverage.map((entry) => entry.path), ['src/b.ts']);
+  assert.strictEqual(rr.stripLowFindings(stripped), stripped, 'nothing left to cut');
+  assert.strictEqual(rr.stripLowFindings(source.replace(/\n/g, '\r\n')), stripped.replace(/\n/g, '\r\n'), 'CRLF stays CRLF');
+
+  const allLow = rr.stripLowFindings(reportOf(['## src/a.ts', ''], low, checklistOf('src/a.ts', 1), '<!-- coverage: src/a.ts 1/1 -->', ''));
+  assert.strictEqual(allLow, reportOf(checklistOf('src/a.ts', 1), '<!-- coverage: src/a.ts 1/1 -->', '', 'Nie wykryto problemów.', ''));
+  const empty = rr.parseReport(allLow);
+  assert.strictEqual(empty.emptyState, 'Nie wykryto problemów.');
+  assert.deepStrictEqual([empty.files, empty.coverage.map((entry) => entry.path), empty.warnings], [[], ['src/a.ts'], []], 'the proof before the closing line is still read');
 });
 
 test('attachSnippets hangs one full view on the file, not on each finding', (t) => {

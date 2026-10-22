@@ -10,13 +10,24 @@ Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Ste
 
 ## Inputs
 
-Read first: `{{SESSION}}/spec.md`, `{{SESSION}}/plan.md`, `{{SESSION}}/checklist.md`, and every
-image in `{{SESSION}}/mockups/` (Read renders them) — those are the user's own references, the
-starting point for your design, not something to ignore or reproduce pixel-for-pixel.
+Read first: `{{SESSION}}/requirements.md` and every image in `{{SESSION}}/mockups/` (Read renders
+them) — those images are the user's own references, the starting point for your design, not
+something to ignore or reproduce pixel-for-pixel.
+Feature Refinement (step 2) runs only when the user switched it on, so what your screens serve
+depends on whether it left `{{SESSION}}/spec.md`:
+
+- it exists → read it with `{{SESSION}}/plan.md` and `{{SESSION}}/checklist.md`: the refined
+  requirement, settled with the user;
+- it does not → the `## Task description` section of requirements.md is the whole requirement.
+  Nobody refined it, so where it leaves a screen or a state open, decide it the way the project's
+  existing screens would and say so in your round summary — the user settles it in the review.
+
+The `## Pipeline steps`, `## Code review` and `## Agent settings` sections of requirements.md
+record how the pipeline runs — never a requirement.
 Also read every file in `{{SESSION}}/hints/` together with the "Additional materials" note in
 `{{SESSION}}/requirements.md`: they say what the user wants taken from those materials (a layout,
-a component, a tone) and what to leave behind — design direction that ranks below spec.md and
-above your own taste.
+a component, a tone) and what to leave behind — design direction that ranks below the requirement
+(spec.md, or the task description) and above your own taste.
 Then explore `{{PROJECT}}` for the real design language: global stylesheets, design tokens/theme
 files, component library, an existing screen closest to the feature. The mockup must look like it
 already belongs to this application — matching type scale, spacing, radii, palette and component
@@ -25,7 +36,7 @@ shapes — not like a generic template.
 ## Naming and copy rulebook (MANDATORY)
 
 Every string you draw ends up as a translation entry written in step 4 and reviewed against the
-`doh:codeReview` rulebook in step 6, and every name you pick propagates into spec.md, the components
+`doh:codeReview` rulebook in step 6, and every name you pick propagates into the design record, the components
 and the translation keys. So the copy is final copy, and the names are the app's names.
 
 1. Run the matcher twice — once bare for the file kinds the rulebook knows, once for the files whose
@@ -33,10 +44,11 @@ and the translation keys. So the copy is final copy, and the names are the app's
    - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` → `kinds[]`, each
      file kind's `kind`, `pattern` and `role`: where the rulebook expects every file this feature adds,
      and so the shape of the names you pick.
-   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<the project's base i18n file>,<one template path from plan.md>"`
+   - `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}" --files="<the project's base i18n file>,<one template path>"`
      → read the `rules` file of each of those two paths: the whole checklist of the translations
      kind and of the template kind, item by item under `<id>#<n>`, the naming and consistency items
-     among them — exactly what step 6 will judge the result by.
+     among them — exactly what step 6 will judge the result by. The template path is one plan.md
+     creates or, without plan.md, the template of the existing screen closest to the feature.
    Both runs layer the project's OWN file kinds from `{{PROJECT}}/.claude/doh/instructions/` on top of
    the skill's (reported as `projectInstructionsDir`): when it is not null they are in what you just
    read — a project kind replaces the skill's kind of the same name, and an item a project kind
@@ -95,8 +107,11 @@ Do NOT use AskUserQuestion — there is no terminal user.
 
 ## Approval
 
-When the orchestrator sends `APPROVED — update spec.md, plan.md and checklist.md …`, the design is
-frozen. Then, and only then:
+When the orchestrator sends `APPROVED — record the approved design as your brief's Approval section
+says …`, the design is frozen. Then, and only then, record it where the steps after you look for
+it — which depends on whether refinement left a `{{SESSION}}/spec.md`.
+
+**spec.md exists:**
 
 1. `{{SESSION}}/spec.md` — add or replace a `## UI design` section. That heading is a FIXED
    IDENTIFIER: write it in English exactly like this even though the spec around it is in
@@ -110,7 +125,19 @@ frozen. Then, and only then:
 3. `{{SESSION}}/checklist.md` — add one `verify: visual` line per screen/state that the validation
    agent must compare against a mockup, and update items the design changed. Same format:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`.
-4. Finish with the result JSON below.
+4. Delete `{{SESSION}}/ui-design.md` if it exists: it recorded your design from a run without
+   refinement, spec.md holds the design now, and two records drift apart.
+
+**No spec.md** — refinement did not run, so there is no spec, plan or checklist to patch, and you
+create none of them:
+
+1. Write `{{SESSION}}/ui-design.md` holding the same `## UI design` section — the same FIXED
+   IDENTIFIER heading in English, the screen list with file names, the states each screen covers
+   and the design decisions settled during the chat. It is the design record of every step after
+   you: step 4 builds from it, and step 5 turns each screen and state it names into a
+   `verify: visual` check — so name every one.
+
+Then finish with the result JSON below.
 
 ## Revision mode
 
@@ -119,7 +146,10 @@ requirement files (`requirements.md`, `requirements-prev.md`, `requirements-chan
 a revision. Read them, and also open every file `requirements-changes.md` names as ADDED under
 `{{SESSION}}/mockups/` and `{{SESSION}}/hints/` — a revision is exactly when a user attaches the
 reference image they meant all along, and it reaches you only if you open it. A file named as removed
-stops being a reference. Then rework ONLY the screens the change touches: every other file in
+stops being a reference. When the change switched Feature Refinement on, `spec.md`, `plan.md` and
+`checklist.md` are new to you: read them before you decide what the change touches; when it
+switched it off, they are gone and the task description is the requirement again. Then rework ONLY
+the screens the change touches: every other file in
 `{{SESSION}}/generated-mockups/` stays byte-identical, keeps its filename and keeps its manifest
 entry. Do not redesign, re-theme or "refresh" a screen the change does not reach.
 
@@ -143,8 +173,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Rules
 
-- Write ONLY inside `{{SESSION}}` (`generated-mockups/`, plus spec/plan/checklist after approval).
-- Each `.md` you rewrite after the approval goes out in ONE write — the Write tool, or a single
+- Write ONLY inside `{{SESSION}}` (`generated-mockups/`, plus after approval spec/plan/checklist —
+  or `ui-design.md` when there is no spec.md).
+- Each `.md` you write after the approval goes out in ONE write — the Write tool, or a single
   Bash heredoc if your harness refuses a `.md` write from a sub-agent. One write either way: a
   file assembled from several appends is one that ends half-written when anything goes wrong.
   Never touch `{{PROJECT}}`, never `git commit`, never change branch — no implementation happens here.
@@ -153,7 +184,7 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
-- After approval: `{"type":"result","summary":"<screens, key design decisions, what changed in spec/plan/checklist, ~8 sentences in {{LANGUAGE}}>","screens":[{"id","title","file"}]}`
+- After approval: `{"type":"result","summary":"<screens, key design decisions, what changed in spec/plan/checklist or that ui-design.md records them, ~8 sentences in {{LANGUAGE}}>","screens":[{"id","title","file"}]}`
 - Unrecoverable problem: `{"type":"error","report":"<what blocks the mockups, in {{LANGUAGE}}>"}`
 
 Never paste mockup markup into your messages — the files on disk are the deliverable.

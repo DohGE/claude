@@ -18,7 +18,8 @@
       "items": [
         {
           "id": "utils#10",
-          "text": "Utils are never exported through a barrel — consumers import the concrete `*.util.ts` file (relative within the area, alias from outside)."
+          "text": "Utils are never exported through a barrel — consumers import the concrete `*.util.ts` file (relative within the area, alias from outside).",
+          "severity": "low"
         }
       ]
     }]

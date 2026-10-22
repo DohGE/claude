@@ -1,6 +1,6 @@
 ---
 name: codeReview
-description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist) with severity, real line numbers, violated rule and expected result
+description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist; --light skips the rules of severity low and leaves Low findings and code snippets out) with severity, real line numbers, violated rule and expected result
 hooks:
   PreToolUse:
     - hooks:
@@ -386,7 +386,7 @@ For each file:
    - `computed()`/`pipe(map(...))` over facade values (component, feature-component and ngrx-facade instructions);
    - naming rules (general instruction) plus naming consistency across the diff;
    - code-quality rules (code-quality instruction): duplicated code as full 🔴 High findings;
-     unnecessary, unused and boilerplate code, every comment the diff adds, inconsistency as full
+     unnecessary, unused and boilerplate code, inconsistency as full
      🟡 Medium findings — never nits to skip;
    - structure rules: canonical area layout and `index.ts` barrel placement (architecture instruction);
    - test scaffolding rules (unit-tests instruction plus the matching per-type test instruction):
@@ -671,14 +671,18 @@ The last bundle's `## Dalej` names the first, and the first names the second.
 - Assign severity by these criteria, picking the highest that applies:
   - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
   - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification), a spec that throws or fails as written (it dereferences an input it never sets, compares against a stale snapshot, lacks a provider the code under test injects, hands one stub to several dependencies or a stub without a member the code calls, passes projector arguments in the wrong order) — a broken test, not a weak one — and every duplication finding (code-quality's duplicated-logic and copy-paste-with-a-tweak items), whether jscpd listed it or the review found it.
-    A duplication filed under another item is one finding naming both: the bundle marks such pairs `ta sama wada` (an `endpoints` entry written twice is `http-service#9; code-quality#1`), and the fixed severity of `code-quality#1` then applies to it.
-  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every other code-quality finding (unnecessary, unused or boilerplate code, an added comment, inconsistency) — those stay Medium however cosmetic they look.
+    Duplication is a finding from its third copy: two copies break only an item that forbids that very repeat (an `endpoints` entry written twice breaks `http-service#9`, at its own severity).
+    From the third copy on, such a duplication is one finding naming both (`http-service#9; code-quality#1`), and the fixed severity of `code-quality#1` then applies to it.
+  - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every other code-quality finding (unnecessary, unused or boilerplate code) — those stay Medium however cosmetic they look; only an inconsistency with the surrounding code (`code-quality#8`) is fixed Low.
   - ⚪ **Low** — readability, naming-convention or style drift with no behavioral impact and not covered by the code-quality instruction.
   - 🔵 **Missing Unit Test** — new or changed behavior without the matching spec change (report it even when the same lines also carry findings of other severities).
     A missing spec is 🔵 whichever item flags it — `test-coverage`, `util-guard-unit-test` or an item of what the file is — never 🟡 because the item that caught it is not a test instruction.
 - A fixed severity outranks these criteria: `Ważność stała: <severity>` under an instruction's heading in the bundle, or `ważność stała: <severity>` under one of its items, is the severity of every finding under it.
   A finding that names several addresses takes the highest fixed one, and the criteria compete with it only when one of its addresses has none.
+  A 🔵 **Missing Unit Test** is the exception: a missing spec keeps it whatever severity the item that flags it fixes.
   The assembly corrects a severity that misses it and says how many it set (`check-part: ważność stała z rulebooka ustawiona w …`).
+- Under `target.light` (a `--light` run) no bundle lists an item of fixed severity low, and the renderer cuts every ⚪ **Low** finding from the finished report.
+  Still write each one as above: the part check wants a finding behind every `NARUSZENIE`, and the cut needs its severity to find it.
 - When the violated rule is behavioral, **Problem:** names the observable runtime consequence
   (infinite dispatch loop, race condition, subscription leak, crash on null, stale UI) — and
   severity is picked from that consequence, not from the rule's category.
@@ -784,6 +788,9 @@ After a compaction, the hook names what of them to read again.
      The review itself is the same either way: every part is still written with its checklist and checked (Step 3).
    - `--with-rule-text` → pass it through to the context script (`target.withRuleText`); it implies `--with-checklist`.
      The renderer adds the full text of its rule to every checklist item of the finished report; the parts are written exactly as without it.
+   - `--light` → pass it through to the context script (`target.light`).
+     Every checklist leaves out the items whose fixed severity is low (the item's own `severity`, else its instruction's), so the review walks every other rule.
+     The renderer cuts every ⚪ **Low** finding from the finished report, and the HTML page shows no code snippet.
    - `--no-batch` → pass it through to the context script: every file is walked alone, its part in a message of its own (`target.batches` stays empty).
    - `--no-dedup-items` → pass it through to the context script: every bundle shows every item in full.
      Without it `target.dedupItems` is true, and an item an earlier bundle of the run already showed is shown again only by reference (Step 3 point 1).
@@ -795,7 +802,7 @@ After a compaction, the hook names what of them to read again.
    - `--since-last` → pass it through to the context script (`INCREMENTAL`). It reviews only the
      files whose content moved since the previous review of that target, using the snapshot the
      script keeps in the branch's `cache/` folder. Meant for a RE-review of a target already reviewed (the
-     implementNewFeature review loop uses it from cycle 2 on); on a first review it warns and
+     implementNewFeature review step uses it for its second pass); on a first review it warns and
      reviews everything.
      The snapshot is written when the CONTEXT is built, before any file is analyzed — so it records
      what the previous run was going to review, not what it finished. After a review that died
@@ -811,7 +818,7 @@ After a compaction, the hook names what of them to read again.
      INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
      instead, which is how you review a folder of another repository.
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--with-rule-text] [--no-batch] [--no-dedup-items]`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--with-rule-text] [--light] [--no-batch] [--no-dedup-items]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
 5. Parse the JSON from stdout — the part of the context the review uses:

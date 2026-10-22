@@ -20,6 +20,7 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
 | `/codeReview [target] --with-checklist` | any of the above, but the report keeps every file's walked checklist and coverage marker (the page's **Pokrycie checklist** section) |
 | `/codeReview [target] --with-rule-text` | `--with-checklist`, plus the full text of its rule under every checklist item (on the page) or after ` — Reguła: ` on the item's line (in an `--only-md` Markdown) |
+| `/codeReview [target] --light` | any of the above, but no checklist walks an item of severity `low`, the report keeps no ⚪ Low finding, and the page shows no code snippet (see [Light runs](#light-runs)) |
 | `/codeReview [target] --no-batch` | any of the above, but every file is walked in a message of its own instead of small files together (see [Token cost](#token-cost)) |
 | `/codeReview [target] --no-dedup-items` | any of the above, but every bundle shows every item in full, instead of an item an earlier bundle already showed arriving as a reference to that bundle (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
@@ -29,7 +30,7 @@ literally called `feature/a,b` cannot be named in that list — it would be read
 reported as two "Branch not found" errors for names you never typed. Check that branch out and run
 `/codeReview` with no arguments instead: auto mode reviews the current branch without naming it.
 
-`--only-md`, `--with-checklist`, `--with-rule-text`, `--no-batch` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
+`--only-md`, `--with-checklist`, `--with-rule-text`, `--light`, `--no-batch` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
 The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
 `--with-checklist` changes only what the finished report keeps: every file is walked, written and checked with its checklist either way, and without the flag the renderer cuts the checklists, the coverage markers and the cross-file `<!-- unverified:` block from it — from the page and from an `--only-md` Markdown alike.
 The run's summary still states the coverage, read off the line the assembly prints.
@@ -39,7 +40,7 @@ mode) staged, where the reports land, and which `CLAUDE.md` and `.claude/doh/ins
 Without it everything is relative to the current working directory. Pass it whenever the code you
 want reviewed is not where your shell is — most importantly from a `git worktree`, which is how
 implementNewFeature runs every task after the first; its review agent passes the task's own root on
-every cycle, so one task's review can never stage or report on another task's tree.
+both passes, so one task's review can never stage or report on another task's tree.
 
 Branch names are sanitised for the filesystem, so two branches can land on one name — `feature/x` and `feature-x` both become `feature-x`. Reviewing both in one run would overwrite the first report with the second and make them share one `--since-last` snapshot; the context script warns and names both branches, and the fix is to review them in separate runs.
 
@@ -61,7 +62,7 @@ Only the 30 newest branch folders under `runs/` are kept — older ones are prun
 Reports written before this layout (`.claude/doh/{branch}/{branch}-…md|html`) stay where they are; a `--since-last` snapshot found there is moved into `cache/<branch>/` on the next run.
 
 `--since-last` turns a run into a re-review: every run records the post-image blob of each reviewed file in `cache/<branch>/.last-review-<kind>.json`, and the next incremental run drops the files whose blob has not moved (they are listed in a warning, and the previous report stays the reference for them).
-It is meant for a target already reviewed in this session — the implementNewFeature review loop uses it from cycle 2 on; on a first review it warns and reviews everything.
+It is meant for a target already reviewed in this session — the implementNewFeature review step uses it for its second pass; on a first review it warns and reviews everything.
 The snapshot is recorded while the context is built, before the first file is analyzed, so it says what the previous run intended to review rather than what it completed. A run that died half-way still recorded every file, and the next `--since-last` will skip the ones it never reached — an unchanged tree then reports "nothing to review". After an interrupted review, re-run the target in full instead. The same applies once the previous report has been pruned away: the run warns that nothing on disk covers the skipped files any more.
 
 An interrupted review resumes by itself: a run that died before its assembly leaves its part files (`raport.partNN.md`) in its run folder, and the next run of the same target picks them up.
@@ -94,7 +95,7 @@ The context lists the batches in `target.batches`, and a bundle's `partia:` line
 
 Item dedup shortens every bundle read after the first: an item an earlier bundle of the run already showed arrives as a reference to that bundle, while the facts and probe hits under it stay this file's own.
 A compaction resets it, so the bundles read after one show every item in full again.
-It is on by default since the A/B run of 2026-10-01 (`scripts/score-review.cjs --compare`, see `test-environment/README.md`); `--no-dedup-items` turns it off.
+It is on by default since the A/B run of 2026-10-01 (`scripts/score-review.cjs --compare`); `--no-dedup-items` turns it off.
 
 A compaction re-attaches only the head of `SKILL.md`, so that file is ordered by need rather than by step.
 What the walk of every file needs comes first; Steps 1–2, which run once, stand after a `<!-- one-time:start -->` marker; the cross-file pass and the assembly are `references/cross-file.md` and `references/assembly.md`, read when the run reaches them.
@@ -149,7 +150,7 @@ An item may carry seven more keys, each checked when the rulebook loads, so a ty
 - `probe` — one probe or a list: code that often breaks the item (`{ "pattern": "<regex>", "message": "…" }`), code that should be there and is not (`{ "absent": "<regex>", "anchor": "<regex>", "message": "…" }`), a built-in scan (`{ "builtin": "for-without-empty" }`) or a fact kind that points rather than contradicts (`{ "fact": "export-single-importer" }`).
   A hit is a `SONDA` line of the bundle: it never makes a finding by itself, it names a line the item's verdict must answer.
 - `secondQuestion` — one question an OK on the item must also answer (`drugie pytanie: <answer>`).
-  It is kept for the items the scorer's false-OK list (`scripts/score-review.cjs`, see `test-environment/README.md`) shows ticked OK where the answer key has them broken and the entry went unreported, and which no `facts` or `probe` of the item would have contradicted.
+  It is kept for the items the scorer's false-OK list (`scripts/score-review.cjs`) shows ticked OK where the answer key has them broken and the entry went unreported, and which no `facts` or `probe` of the item would have contradicted.
 - `answer` — the script's answer to that question, computed from the whole repository: `repo-search` (every literal, condition with a value and label mapping of the file, with how many other files hold it) or `input-binding` (where `withComponentInputBinding()` is on, and where route parameters are read by hand).
   The bundle prints it under the question as `odpowiedź skryptu:`, so the review cites it instead of running that search again; a file the literal passes do not read (a spec, a stylesheet) gets no `repo-search` answer, and facts read from part of the repository give none at all.
 - `severity` — the severity every finding naming the item is reported with (`critical`, `high`, `medium`, `low` or `missing-unit-test`), in place of its instruction's (see below); the bundle prints it under the item as `ważność stała:`.
@@ -180,8 +181,9 @@ An instruction may fix the severity of its findings the same way, with `severity
 The bundle prints it under the instruction's heading as `Ważność stała:`.
 A finding naming several addresses takes the highest severity they fix — or the reviewer's own, when one of its addresses fixes none and the reviewer's is higher.
 The assembly sets that severity on every finding, whatever the part said, and prints how many it changed.
+A finding the reviewer marked 🔵 Missing Unit Test keeps it, since a missing spec is 🔵 whichever item flags it.
 
-Performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication, dead/unnecessary/boilerplate code, every added comment, inconsistency — always 🟡 Medium) and test coverage have instructions of their own, walked by every kind they concern.
+Performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication from its third copy, dead/unnecessary/boilerplate code, inconsistency — always 🟡 Medium) and test coverage have instructions of their own, walked by every kind they concern.
 The reviewed project's own `CLAUDE.md` (repo root, if present) is one more rulebook: its rules decide verdicts and override conflicting checklist items, but get no `<id>#<n>` of their own.
 Every file is also reviewed against the universal points (cross-file consistency incl. architecture and naming, regressions, readability), whatever its kind.
 A regression there is behavior the change breaks — a crash, a wrong result, a flow the user cannot finish.
@@ -263,6 +265,23 @@ That is the honest gap above, working as designed — never close it by ticking 
 Only a `--with-checklist` run raises it, because otherwise the renderer cuts the blocks unread; the assembly's coverage line names the same gap either way.
 (Two more warnings go to stderr only and never keep the Markdown, because neither says anything about the format: a `--with-checklist` report with no coverage markers at all, and a failure to detect the pull request.)
 
+## Light runs
+
+`--light` reviews against a shorter rulebook: every plan leaves out the items whose fixed severity is `low` — the item's own `severity`, else its instruction's (see [Instructions](#instructions)) — and an instruction left with no item drops out of the plan.
+An item carries `low` when it rules on form rather than behavior — naming, formatting, imports, file and folder layout, the choice between two equivalent patterns, typing, spec and workflow conventions, consistency with the surrounding code (`code-quality#8`): component and model file names, i18n key names, `describe`/`it` titles, the order of actions, handlers, selectors and facade signals, `[class.x]` over `ngClass`, `host: {}` over `@HostBinding`, self-closing tags.
+Such an item is fixed `medium` instead when its findings are worth reporting in every run — descriptive names are `general#2`, `data-test` hooks `component#23`, `component#24` and `component-template#13`.
+An item that pairs a clause of form with one that can break the build or the behavior carries `low` too unless it was singled out the same way, and a fixed severity sets the severity of the item's findings in every run, not only under `--light`, so a finding naming only such items is ⚪ **Low** whatever it breaks.
+Everything built from the plans follows: `checklistTotal`, `instructionsCatalog` and the bundles hold only what is left, so a file walks and ticks the shorter list as its whole checklist.
+The context script warns how many items it left out and names the first ten; when no item of the rulebook has severity `low`, it warns that every checklist is walked whole.
+A finding of an item without a fixed severity still gets the severity the reviewer judges, so a ⚪ **Low** finding can still reach a part.
+The renderer cuts every one of them, after the assembly has set the fixed severities, together with a file section the cut leaves without a finding: the `severity:` line prints `low=0`, and a report left with no finding at all says `Nie wykryto problemów.`.
+The page also carries no code — no snippet under a finding and no full view of a file.
+Under `--with-checklist` the walked items keep their verdicts, so an item whose only finding was Low still reads `NARUSZENIE` (✗ on the page) with no finding left to show for it.
+
+The setting is recorded with the run.
+While `--light` leaves out any item, an interrupted run is resumed only by a run of the same setting, because the two walk different checklists; otherwise the context script warns, names the run folder to delete and starts from scratch.
+A `--since-last` run without `--light` after one with it warns that the files it skips were never checked against the items of severity `low` and that the previous report shows no Low finding — re-run that target without `--since-last` for a full review.
+
 ## Review scope
 
 Everything is evaluated, but only what the change touched is reported:
@@ -291,9 +310,13 @@ The terminal summary names the base and which of the three steps picked it.
 Every target is scanned for copy-paste by [jscpd](https://github.com/kucherenko/jscpd) before the review starts, and every duplication finding — whether jscpd listed it or the review found it — is reported as 🔴 **High**.
 
 - **What is scanned** — the whole reviewed revision, not only the changed files, because a copy of an untouched file is found only when that file is scanned too: the branch's commit, the index for `staged`, the working tree for `folder` (tracked and untracked files, not the ignored ones). The revision is exported to a temporary folder outside the repository and deleted afterwards; the checkout, the index and every ref stay as they were. Paths the review skips and `.snap` files are left out.
-- **What is kept** — only the clone pairs the diff wrote: one side has to be at least half made of changed lines. That side is the copy the finding is anchored on, the other one the source it repeats. Editing one line inside a clone that already existed is therefore not a candidate. jscpd's own `--baseline-from-ref` was measured and rejected for exactly that case: a one-literal edit changes the clone's fingerprint and reads as two new clones.
+- **What is kept** — only the clone pairs the diff wrote: one side has to be at least half made of changed lines, and the block has to exist at least three times, because a duplication is a finding from its third copy.
+  Pairs that share a block (overlapping sides in one file) chain into one group of copies, the pairs the diff did not touch included.
+  The written side is the copy the finding is anchored on, every other copy of its group a source it repeats.
+  Editing one line inside a clone that already existed is therefore not a candidate.
+  jscpd's own `--baseline-from-ref` was measured and rejected for exactly that case: a one-literal edit changes the clone's fingerprint and reads as two new clones.
 - **How it matches** — token runs of at least 30 tokens (`--min-tokens 30`), with renamed identifiers (`--ignore-identifiers`) and one or two inserted or dropped lines (`--max-gap-lines 2`) still matching. jscpd's default of 50 tokens was measured on 15 commits of an Angular monorepo: it listed 24 candidates against 67 at 30, and missed e.g. a nine-line mapping copied within one component. Import statements are skipped, because with identifiers ignored any two import lists match. The AST mode (`--similarity`) is off: on the same monorepo 212 of its 235 pairs were the CLI-generated spec skeleton matched against every other spec. The project's own `.jscpd.json` and `package.json#jscpd` are ignored, so its threshold and ignores never decide what the review sees.
-- **What the review gets** — `target.duplicationCandidates`, at most 50 per target (the overflow is a warning): `{ path, lines, sources: ["<path>:<from>-<to>"], kinds: ["exact" | "renamed" | "similar"] }`. The reviewer opens both sides of each one and dismisses it only when the blocks share no logic: a shape the framework or a generator dictates (a TestBed skeleton, a module or route declaration, a generated `project.json` or `tsconfig`), parallel data (translation files), or the same syntax around different calls and fields.
+- **What the review gets** — `target.duplicationCandidates`, at most 50 per target (the overflow is a warning): `{ path, lines, sources: ["<path>:<from>-<to>"], kinds: ["exact" | "renamed" | "similar"] }`. The reviewer opens every copy of each one and dismisses it only when the blocks share no logic: a shape the framework or a generator dictates (a TestBed skeleton, a module or route declaration, a generated `project.json` or `tsconfig`), parallel data (translation files), or the same syntax around different calls and fields.
 - **What jscpd cannot see** — logic written again in other words, or a helper that already exists in a shared folder. For every exported function, class, pipe, directive, validator, util or constant the diff adds, the review therefore searches the reviewed revision itself with `target.commands.grep` (`git grep` over the branch's commit, the index, or the working tree, its matches written to a file of the target's work folder).
 - **Running it** — `npx --yes jscpd@5.3.1`, pinned because the report shape is read as that version writes it. Nothing is installed into the project; the first run downloads jscpd into the npx cache, later runs are served from it. A scan that cannot run — no npx, offline on the first run, a timeout after 180 s — never stops the review: it becomes a warning, and duplication is then searched for by the review alone.
 
@@ -325,7 +348,7 @@ The default output is one self-contained page — inline CSS and JS, no fonts, i
 It follows the reader's light/dark theme, and a button in the top right corner of the header switches between the two by hand — the pick lands in `localStorage` under one key shared by every report, and is applied before the first paint so a remembered theme never flashes the other one.
 The heading names the branches the review compares; when an open pull request was found, its own title and number go under them, and the title is appended to the page's `<title>` as well — the browser tab is where the branch names alone say the least.
 
-- **Code snippet** — every finding carries a collapsible view of the cited lines with three lines of context. When those lines changed, it is a side-by-side diff like GitHub's split view: the file before the change on the left under its own line numbers, after it on the right, the k-th removal facing the k-th addition inside a change block and a blank cell facing whatever has no counterpart. Each side scrolls horizontally on its own. A snippet with nothing changed in it (a folder review, or a finding on a line the diff left alone) stays a single column. A switch in the snippet header swaps between the cited lines and the whole file; the full view renders under the same rules — split diff when the file changed, single column when it did not — highlights the cited lines, scrolls inside its own box and opens on the first highlight. Files over 3000 lines are not embedded, and their switch says so.
+- **Code snippet** (not under `--light`) — every finding carries a collapsible view of the cited lines with three lines of context. When those lines changed, it is a side-by-side diff like GitHub's split view: the file before the change on the left under its own line numbers, after it on the right, the k-th removal facing the k-th addition inside a change block and a blank cell facing whatever has no counterpart. Each side scrolls horizontally on its own. A snippet with nothing changed in it (a folder review, or a finding on a line the diff left alone) stays a single column. A switch in the snippet header swaps between the cited lines and the whole file; the full view renders under the same rules — split diff when the file changed, single column when it did not — highlights the cited lines, scrolls inside its own box and opens on the first highlight. Files over 3000 lines are not embedded, and their switch says so.
 - **Pokrycie checklist** (only under `--with-checklist`) — a collapsed section under the findings: one row per analyzed file with its `<checked>/<total>`, opening to every checklist item the reviewer walked, marked ✓ compliant, ✗ reported or ○ unverified. A file that did not finish its walk shows its count in the High colour. It is the one part of the page no filter touches, and a report with no findings still carries it.
 - **File tree** — the sidebar maps the whole change, not the review: every path in `git diff --name-status` between the base and the reviewed branch (or in the index, for a staged review), nested by directory, with chains of single-child directories folded into one row the way GitHub folds them. The name says what the change did to the file, in the diff's own colours: green for a file it introduced, yellow for one it only touched (a rename or a copy included — it appears solely under the name the change leaves it with), struck-through red for one it removed. A deleted file is otherwise left out, since it is not part of the structure the change ends with, unless it drew a finding — no finding is ever left without a row. Whether a file drew one is the icon's job instead: a file written about is marked with the severity badge of the worst finding the current filters leave in it, the same 🟤🔴🟡⚪🔵 the finding itself carries, followed by how many there are. Every row reserves the slot whether or not it fills it, so one icon never pushes its neighbours' names out of line. The counts and the badges move with the filters, the structure does not, and a file with nothing to show keeps its row. Clicking a file with findings opens and flashes its section. A folder review has no diff, and an older report was rendered before the tree carried one, so both fall back to the files that were reported on.
 - **Severity filter** — one toggle chip per severity present in the report, with a count.
@@ -421,11 +444,12 @@ It names the target and where it stands, the Reads that resume it (the next batc
 Its state is one small JSON file per session.
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
-Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source] [--only-md] [--with-checklist] [--with-rule-text]`.
+Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source] [--only-md] [--with-checklist] [--with-rule-text] [--light]`.
 `--with-rule-text` implies `--with-checklist` and adds each item's rule text from the rulebook, after the verdicts are parsed, so a rule's own wording never reads as a verdict.
 Without `--with-checklist` it first cuts the checklist blocks, coverage markers and the `<!-- unverified:` block, so the page has no **Pokrycie checklist** section and a Markdown it leaves behind (a drift, `--keep-source`) carries none either; `--only-md` does only that cut, in place, and renders nothing.
+`--light` then cuts every ⚪ **Low** finding and a file section that loses its last finding to the cut — before the parse, so the page, the warnings' line numbers and a Markdown left behind (or the `--only-md` report) read the same text — and attaches no snippet (see [Light runs](#light-runs)).
 Under `--with-checklist` it reads the per-file checklist blocks and coverage markers too, and reconciles them: the ticks are recounted, and a short walk, a missing or malformed block or a marker the ticks contradict warns (and keeps the Markdown), while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions. Any other multi-line HTML comment in the report is swallowed whole instead of being read as findings.
-Every finding also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
+Every finding — except under `--light` — also carries a collapsible code snippet showing the cited lines with three lines of context, highlighted in the finding's severity colour.
 The cited lines come from `**Linia:**`: bare numbers and spans, plus the other spellings of the same list (`L12`, an em dash or minus sign between the ends, `;` between entries, backticks); a note in parentheses is set aside whole.
 Any other entry warns and names itself, and a field that points at no line at all warns too.
 `--mode` decides what the snippet is: `branch` reads `git show <branch>:<path>` plus `git diff -U0 <base>...<branch>`, `staged` reads the index plus `git diff -U0 --cached`, and both render a real before/after split diff; `folder` (and a missing `--mode`) renders the working-tree file with no diff markers.

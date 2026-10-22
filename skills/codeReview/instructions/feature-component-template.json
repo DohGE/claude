@@ -2,13 +2,7 @@
   "kind": "feature-component-template",
   "pattern": "src/app/**/components-<area>/feature/<name>/<name>.component.html",
   "role": "Template of a feature or dialog component.",
-  "describedBy": [
-    {
-      "id": "component#2",
-      "text": "Template and styles are separate files referenced by `templateUrl` and exactly one of `styleUrl`/`styleUrls`; every component has its own `.scss` file, even an empty one."
-    }
-  ],
-  "itemCount": 79,
+  "itemCount": 76,
   "instructions": [
     {
       "id": "component-template",
@@ -21,11 +15,13 @@
       "items": [
         {
           "id": "component-template#1",
-          "text": "Only native control flow: `@if/@else`, `@for`, `@switch`, `@let` — never `*ngIf`, `*ngFor`, `*ngSwitch` or `*ngVar`."
+          "text": "Only native control flow: `@if/@else`, `@for`, `@switch`, `@let` — never `*ngIf`, `*ngFor`, `*ngSwitch` or `*ngVar`.",
+          "severity": "low"
         },
         {
           "id": "component-template#2",
           "text": "`@let` declarations at the top of the template unpack `computed()`/signal values that are used more than once; `@let` is block-scoped, so a value needed only inside an `@if`/`@for` is declared inside that block, and it is never treated as a mutable variable — it re-evaluates with its expression.",
+          "severity": "low",
           "probe": [
             {
               "builtin": "signal-reads-without-let"
@@ -61,11 +57,13 @@
         },
         {
           "id": "component-template#7",
-          "text": "Class and style bindings use `[class.x]` / `[style.x.px]` — never `ngClass`/`ngStyle`."
+          "text": "Class and style bindings use `[class.x]` / `[style.x.px]` — never `ngClass`/`ngStyle`.",
+          "severity": "low"
         },
         {
           "id": "component-template#8",
           "text": "No `async` pipe — observables are converted with `toSignal()` in the component and the template reads the signal.",
+          "severity": "low",
           "sameAs": [
             "best-practices#12"
           ]
@@ -90,15 +88,18 @@
         },
         {
           "id": "component-template#12",
-          "text": "Event bindings contain nothing but ONE call to one component handler (`(click)=\"onRowClick(item.id)\"`). Never logic composed in the template: no `output.emit(...)`, no `$event.stopPropagation()`/`preventDefault()`, no `signal.set(...)`/`update(...)`, no assignment, no `&&`/ternary chain, no second statement after a `;`. The class handler does all of it and receives `$event` as an argument when it needs the event — template-composed logic lives outside the class, so no component spec can assert it and no reader of the class sees the emit or the stopped propagation."
+          "text": "Event bindings contain nothing but ONE call to one component handler (`(click)=\"onRowClick(item.id)\"`). Never logic composed in the template: no `output.emit(...)`, no `$event.stopPropagation()`/`preventDefault()`, no `signal.set(...)`/`update(...)`, no assignment, no `&&`/ternary chain, no second statement after a `;`. The class handler does all of it and receives `$event` as an argument when it needs the event — template-composed logic lives outside the class, so no component spec can assert it and no reader of the class sees the emit or the stopped propagation.",
+          "severity": "low"
         },
         {
           "id": "component-template#13",
-          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant). On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template."
+          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant). On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template.",
+          "severity": "medium"
         },
         {
           "id": "component-template#14",
           "text": "Static strings/constants are passed as plain attributes (`prop=\"value\"`), not property bindings of a literal (`[prop]=\"'value'\"`); `[...]` only for real expressions — with one exception: when an input name collides with a native HTML attribute (e.g. `title`), the binding form `[title]=\"'test'\"` is required even for a literal, because plain `title=\"test\"` also lands in the DOM as the native attribute and triggers unwanted browser behavior (a tooltip).",
+          "severity": "medium",
           "probe": [
             {
               "pattern": "<[a-z][\\w]*-[\\w-]*\\b[^>]*?\\s(?<at>title)\\s*=\\s*\"",
@@ -108,11 +109,13 @@
         },
         {
           "id": "component-template#15",
-          "text": "Repeated markup between branches is extracted to `ng-template` + `[ngTemplateOutlet]` instead of being duplicated in `@if/@else`."
+          "text": "Repeated markup between branches is extracted to `ng-template` + `[ngTemplateOutlet]` instead of being duplicated in `@if/@else`.",
+          "severity": "medium"
         },
         {
           "id": "component-template#16",
           "text": "Before adding new markup, the shared library and the application are searched for a component that already does it, and it is reused — something suitable usually exists. Raw native elements are the signal to look: a hand-built `<table>`, `<input>`/`<select>`/`<textarea>` (with its own label and error markup), `<button>`, dialog, tooltip or pagination is a finding whenever the design system ships the equivalent component; native tags stay only for structural markup nothing wraps (`<div>`, `<span>`, `<section>`, headings, lists) or where the checked library truly has no counterpart.",
+          "severity": "medium",
           "sameAs": [
             "architecture#9"
           ]
@@ -120,6 +123,7 @@
         {
           "id": "component-template#17",
           "text": "Global utility classes are added only when they change something; no redundant classes.",
+          "severity": "medium",
           "probe": [
             {
               "pattern": "\\bclass\\s*=\\s*\"[^\"]*?(?<![\\w-])(?<at>[mp][trblxy]?-0)(?![\\w-])",
@@ -133,11 +137,13 @@
         },
         {
           "id": "component-template#19",
-          "text": "A component or directive element that projects no content is self-closing (`<app-user-card [user]=\"user()\" />`), not an empty tag pair."
+          "text": "A component or directive element that projects no content is self-closing (`<app-user-card [user]=\"user()\" />`), not an empty tag pair.",
+          "severity": "low"
         },
         {
           "id": "component-template#20",
-          "text": "Loop metadata comes from the `@for` block itself — `$index`, `$count`, `$first`, `$last`, `$even`, `$odd` (aliased with `let idx = $index` where a nested block shadows them); a counter signal maintained next to the loop, or an index threaded down from the parent, is a finding."
+          "text": "Loop metadata comes from the `@for` block itself — `$index`, `$count`, `$first`, `$last`, `$even`, `$odd` (aliased with `let idx = $index` where a nested block shadows them); a counter signal maintained next to the loop, or an index threaded down from the parent, is a finding.",
+          "severity": "low"
         },
         {
           "id": "component-template#21",
@@ -153,27 +159,22 @@
       "items": [
         {
           "id": "feature-component#6",
-          "text": "Presentation is delegated to `ui-*` children or shared/library components; the feature wires facade state to children through inputs/outputs and does not render rich markup itself."
+          "text": "Presentation is delegated to `ui-*` children or shared/library components; the feature wires facade state to children through inputs/outputs and does not render rich markup itself.",
+          "severity": "low"
         },
         {
           "id": "feature-component#7",
-          "text": "An extensive, complex, or over-50-line template is extracted into `ui-*` children rather than left inline in the feature component; the feature keeps only the wiring markup that binds facade state to those children."
+          "text": "An extensive, complex, or over-50-line template is extracted into `ui-*` children rather than left inline in the feature component; the feature keeps only the wiring markup that binds facade state to those children.",
+          "severity": "low"
         }
       ]
     },
     {
       "id": "i18n",
       "name": "Translations",
-      "selectedItems": "2,9,11",
+      "selectedItems": "9,11",
       "checklistSize": 12,
       "items": [
-        {
-          "id": "i18n#2",
-          "text": "Before adding a key, the base file is searched for an existing translation with the same meaning — generic reusable texts are referenced, never duplicated per area; a new key exists only when no existing one fits semantically; the same phrase never lives under two keys.",
-          "facts": [
-            "i18n-duplicate-value"
-          ]
-        },
         {
           "id": "i18n#9",
           "text": "Changing or renaming an existing key requires checking every consumer of that key first.",
@@ -201,6 +202,7 @@
         {
           "id": "architecture#9",
           "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
+          "severity": "medium",
           "sameAs": [
             "component-template#16"
           ]
@@ -234,6 +236,7 @@
         {
           "id": "best-practices#12",
           "text": "Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction).",
+          "severity": "low",
           "sameAs": [
             "component-template#8"
           ]
@@ -248,7 +251,7 @@
       "id": "security",
       "name": "Security",
       "gate": "the file carries something a security rule can bite - code, markup, configuration or data; a pure re-export barrel (only `export * from` lines) carries none of it",
-      "selectedItems": "2-3,6,12",
+      "selectedItems": "2,6,12",
       "checklistSize": 13,
       "items": [
         {
@@ -257,10 +260,6 @@
           "sameAs": [
             "component-template#10"
           ]
-        },
-        {
-          "id": "security#3",
-          "text": "No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings."
         },
         {
           "id": "security#6",
@@ -282,8 +281,8 @@
       "id": "performance",
       "name": "Performance & change detection",
       "gate": "the file holds Angular runtime code or a template - a component, directive, pipe, service, effect, store, config or bindings, not only type/const declarations or re-exports",
-      "selectedItems": "1-2,9,11-15",
-      "checklistSize": 17,
+      "selectedItems": "1-2,11-15,18",
+      "checklistSize": 18,
       "items": [
         {
           "id": "performance#1",
@@ -293,10 +292,6 @@
         {
           "id": "performance#2",
           "text": "Template expressions are cheap: no objects/arrays/`new Date()` rebuilt on every check inside bindings; derivations go through `computed()`, selectors or pure pipes (method calls inside bindings are owned by the component-template instruction and reported there)."
-        },
-        {
-          "id": "performance#9",
-          "text": "`resource`/`httpResource` reads are guarded with `hasValue()` before `.value()` (an errored resource throws on read); a resource depending on another resource derives its `params` from the source resource's signal, never by calling the source's `.value()` inside the loader."
         },
         {
           "id": "performance#11",
@@ -317,6 +312,10 @@
         {
           "id": "performance#15",
           "text": "Images: the LCP/hero image is marked `priority`; every `ngSrc` image declares `width` + `height` (or `fill` with a positioned parent) so it cannot shift layout."
+        },
+        {
+          "id": "performance#18",
+          "text": "A template reads a `resource`/`httpResource` value only behind `hasValue()` (e.g. `@if (users.hasValue())`) — `.value()` of an errored resource throws on read."
         }
       ]
     },
@@ -332,7 +331,7 @@
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. Markup, styles or handlers the diff ADDS are reviewed even when they extend an already inaccessible structure; a barrier living entirely in untouched lines is not a finding. Judge only what the diff itself makes checkable — a hard-coded color pair, a declared size, a missing name, a handler bound to one input modality. Never guess at a value that would need the running app (a themed color resolved at runtime, a screen-reader announcement) and never report a criterion as passing or failing on a hunch."
       ],
       "selectedItems": "1-8,10-13,15-18,20-35",
-      "checklistSize": 35,
+      "checklistSize": 37,
       "items": [
         {
           "id": "accessibility#1",
@@ -477,15 +476,15 @@
       "severity": "medium",
       "preamble": [
         "The two duplication items (the first two below) are reported with severity 🔴 **High**, every other violation of this checklist with 🟡 **Medium** — never softened because it looks cosmetic and never raised because it looks dangerous.",
-        "This instruction OWNS duplication, dead/unnecessary code, boilerplate, added comments and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
-        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy); duplication, dead code or inconsistency living entirely in untouched lines is not."
+        "This instruction OWNS duplication, dead/unnecessary code, boilerplate and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
+        "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1,3-6,8",
-      "checklistSize": 8,
+      "selectedItems": "1,8-9,12-13",
+      "checklistSize": 13,
       "items": [
         {
           "id": "code-quality#1",
-          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing twice — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key (look for it with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Report every copy at the place that should reuse instead of repeat, and name the existing source it duplicates.",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the target's `commands.grep`, which searches the reviewed revision and names the file its matches are written to). Two occurrences are not a finding under this item. Report every copy at the place that should reuse instead of repeat, and name the other copies.",
           "facts": [
             "repeated-literal",
             "repeated-condition",
@@ -499,38 +498,24 @@
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
           "answer": "repo-search",
-          "severity": "high",
-          "sameAs": [
-            "http-service#9",
-            "pipes#7"
-          ]
-        },
-        {
-          "id": "code-quality#3",
-          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, template refs/inputs/outputs nothing binds, SCSS rules whose selector the template no longer contains, i18n keys nothing resolves, and leftovers of an earlier iteration of this very change.",
-          "facts": [
-            "export-unused",
-            "barrel-unused",
-            "guard-without-route",
-            "pipe-unused",
-            "i18n-unused-key"
-          ]
-        },
-        {
-          "id": "code-quality#4",
-          "text": "No unnecessary code: a wrapper that only forwards to the wrapped call, a variable used once on the very next line, `else` after a `return`, a condition that can never be false, `?.`/`??`/`try` guarding a value the types already guarantee, a hand-written helper an existing shared function already provides, an abstraction (interface, base class, generic, options object) introduced for a single consumer \"for the future\"."
-        },
-        {
-          "id": "code-quality#5",
-          "text": "No boilerplate: empty or pass-through lifecycle hooks and constructors, getters/methods that only return a field, scaffolding and generator leftovers (placeholder markup, sample fields, `TODO` stubs nothing tracks), values re-declared although the framework already defaults to them, and ceremony that adds no behavior."
-        },
-        {
-          "id": "code-quality#6",
-          "text": "The diff adds NO comments — every comment line the change introduces is a finding, whatever it says: narration of the next line, block or function, signature-repeating JSDoc, section banners (`// --- helpers ---`), author/date/ticket/changelog notes, a description of what the change did (that belongs in the commit message), and equally the \"explaining WHY\" kind. Meaning is carried by names, types and structure; when code needs a sentence to be understood, the finding is the code, not the missing comment. Only machine-read directives survive: `@ts-expect-error`/`@ts-ignore`/`eslint-disable*`/`prettier-ignore` with the one-line justification the best-practices instruction requires, and the `// consts` / `// enums` / `// interfaces` / `// types` barrel headers the models instruction prescribes."
+          "severity": "high"
         },
         {
           "id": "code-quality#8",
-          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it belongs to the general instruction. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported."
+          "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it is a finding only under the instruction that sets that convention. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported.",
+          "severity": "low"
+        },
+        {
+          "id": "code-quality#9",
+          "text": "No unused template code: template reference variables and `@let` declarations nothing reads, event-handler statements whose only effect nothing observes (e.g. assigning a field nothing reads), branches that can never render, and markup left over from an earlier iteration of this very change."
+        },
+        {
+          "id": "code-quality#12",
+          "text": "No unnecessary template code: a `@let` used once on the very next line, a condition that can never be false, `?.`/`??` guarding a value the types already guarantee."
+        },
+        {
+          "id": "code-quality#13",
+          "text": "No template boilerplate: scaffolding and generator leftovers (placeholder markup, `TODO` stubs nothing tracks), values re-declared although the framework already defaults to them, and ceremony that adds no behavior."
         }
       ]
     }

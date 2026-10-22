@@ -31,7 +31,7 @@ const said = chat => (chat || []).map(({ role, text }) => ({ role, text }));
 const getState = async base => (await fetch(`${base}/api/state`)).json();
 const task0 = async base => (await getState(base)).tasks[0];
 
-test('GET /api/state returns one task with the 7-step pipeline and Mockups opt-in', async t => {
+test('GET /api/state returns one task with the 8-step pipeline, Mockups and Story opt-in', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);
   t.after(() => app.server.close());
@@ -44,10 +44,11 @@ test('GET /api/state returns one task with the 7-step pipeline and Mockups opt-i
   assert.equal(task.id, 't1');
   assert.deepEqual(task.steps.map(s => s.name),
     ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-      'Validation & E2E', 'Code Review', 'Mockoon Mocks']);
+      'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description']);
   assert.ok(task.steps.every(s => s.status === 'waiting'));
-  // Mockups is the only step the stepper hides until the step-1 toggle enables it.
-  assert.deepEqual(task.steps.filter(s => s.enabled === false).map(s => s.id), [3]);
+  // Mockups and Story are the steps the stepper hides until a step-1 switch enables them;
+  // refinement has a switch too, but it starts on.
+  assert.deepEqual(task.steps.filter(s => s.enabled === false).map(s => s.id), [3, 8]);
   assert.equal(task.activeStep, 1);
   assert.equal(task.mockupReview, null);
   assert.equal(task.step1, null);
@@ -331,7 +332,7 @@ test('a step1 answer is stored on the task so the form can be re-rendered', asyn
   const base = await listen(app);
   t.after(() => app.server.close());
   await post(base, '/api/answer', { taskId: 't1', kind: 'step1',
-    taskDescription: 'Zaproszenia', businessRequirements: 'Admin zaprasza',
+    taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
     mockups: [], contracts: [], hints: [], authProvided: false, generateMockups: true });
   const task = await task0(base);
@@ -474,7 +475,9 @@ test('POST /api/tasks copies files, credentials and form values but never the br
   assert.equal(t2.branch, '');
   assert.equal(t2.step1Submitted, false);
   assert.equal(t2.authSaved, true);
-  assert.equal(t2.step1.taskDescription, 'Opis');
+  // A form saved before the two fields were merged keeps the second one, folded in.
+  assert.equal(t2.step1.taskDescription, 'Opis\n\nWymagania');
+  assert.equal(t2.step1.businessRequirements, undefined);
   assert.equal(t2.step1.contractsText, 'POST /invites');
   assert.equal(t2.step1.generateMockups, true);
   assert.equal(t2.step1.branch, '');
@@ -798,11 +801,11 @@ test('the step names SKILL.md quotes at the user are the names the server ships'
   const names = (await getState(base)).tasks[0].steps.map(s => s.name);
   const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
   for (const quoted of ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-    'Validation & E2E', 'Code Review', 'Mockoon Mocks']) {
+    'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description']) {
     assert.ok(names.includes(quoted), 'the server still ships the step named ' + quoted);
     assert.ok(skill.includes(quoted), 'SKILL.md still names the step ' + quoted);
   }
-  assert.strictEqual(names.length, 7);
+  assert.strictEqual(names.length, 8);
 });
 
 test('an answer reaches the poll with the field names SKILL.md tells the run to read', async t => {
@@ -880,7 +883,7 @@ test('a field past the cap is marked as cut, not quietly shortened', async t => 
   t.after(() => app.server.close());
   const long = 'x'.repeat(200 * 1024 + 10);
   await post(base, '/api/answer', { taskId: 't1', kind: 'step1', taskDescription: 'krótki opis',
-    businessRequirements: 'wymagania', branch: 'feature/x', contractsText: long });
+    branch: 'feature/x', contractsText: long });
   const form = (await task0(base)).step1;
   assert.ok(form.contractsText.length > 200 * 1024, 'the cut leaves a marker behind it');
   assert.match(form.contractsText, /ucięte/, 'and the marker says what happened');
@@ -996,7 +999,7 @@ const AGENTS_FORM = {
 };
 
 const step1 = (base, extra) => post(base, '/api/answer', { taskId: 't1', kind: 'step1',
-  taskDescription: 'Opis', businessRequirements: 'Wymagania', branch: 'feature/x', ...extra });
+  taskDescription: 'Opis', branch: 'feature/x', ...extra });
 
 test('krok 1 zapamiętuje model i effort agenta, globalnie i per krok', async t => {
   const app = createApp(tmpDir());
@@ -1010,7 +1013,7 @@ test('krok 1 zapamiętuje model i effort agenta, globalnie i per krok', async t 
   assert.deepStrictEqual(agents.steps['4'], { model: '', effort: 'max' });
   assert.deepStrictEqual(agents.steps['6'], { model: 'haiku', effort: '' });
   // Kroki bez nadpisania dziedziczą — w stanie stoją jako puste, nie jako brak klucza.
-  assert.deepStrictEqual(Object.keys(agents.steps), ['2', '3', '4', '5', '6', '7']);
+  assert.deepStrictEqual(Object.keys(agents.steps), ['2', '3', '4', '5', '6', '7', '8']);
 });
 
 test('model i effort spoza listy schodzą do dziedziczenia, nie lecą do agenta', async t => {
@@ -1460,3 +1463,120 @@ test('E2E_LOCK and its FIFO queue read back from the state alone', async t => {
   assert.strictEqual(now.queued[0], 't2', 'the oldest queue entry goes next');
 });
 
+// --- Optional steps, review runs and the story ------------------------------------
+
+test('the step-1 switches decide which of refinement, mockups and story the stepper shows', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const switched = async () => (await task0(base)).steps
+    .filter(s => [2, 3, 8].includes(s.id)).map(s => [s.id, s.enabled]);
+  // Refinement runs unless the form says otherwise: a form from before its switch ran it.
+  await step1(base, {});
+  assert.deepStrictEqual(await switched(), [[2, true], [3, false], [8, false]]);
+  // A revision flips them back and forth: the switch, not the first answer, decides.
+  await step1(base, { refinement: false, generateMockups: true, storyDescription: true });
+  assert.deepStrictEqual(await switched(), [[2, false], [3, true], [8, true]]);
+  const form = (await task0(base)).step1;
+  assert.strictEqual(form.refinement, false);
+  assert.strictEqual(form.generateMockups, true);
+  assert.strictEqual(form.storyDescription, true);
+});
+
+test('the orchestrator gets the step-1 answer as stored, not as sent', async t => {
+  // requirements.md is written from the answer, so the merge and the flag check have to
+  // have happened by the time the orchestrator reads it.
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { businessRequirements: 'Wymagania', codeReview: [{ flags: ['--light', '--bogus'] }] });
+  const { answer } = await (await fetch(`${base}/api/answer`)).json();
+  assert.strictEqual(answer.kind, 'step1');
+  assert.strictEqual(answer.taskId, 't1');
+  assert.strictEqual(answer.taskDescription, 'Opis\n\nWymagania');
+  assert.strictEqual(answer.businessRequirements, undefined);
+  assert.strictEqual(answer.refinement, true);
+  assert.deepStrictEqual(answer.codeReview, [{ flags: ['--light'] }]);
+});
+
+test('review runs: one to three, only flags codeReview takes, the two passes when none are set', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, {});
+  assert.deepStrictEqual((await task0(base)).step1.codeReview,
+    [{ flags: [] }, { flags: ['--since-last'] }], 'no runs set is the default, never no review');
+  await step1(base, { codeReview: [] });
+  assert.strictEqual((await task0(base)).step1.codeReview.length, 2, 'an empty list too');
+  await step1(base, { codeReview: [
+    // --project is the pipeline's own, a made-up flag would reach codeReview as a branch.
+    { flags: ['--light', '--made-up', '--project', '--project=x'] },
+    // Kept in the skill's own order, whatever order the page sent.
+    { flags: ['--since-last', '--only-md'] },
+    {},
+    { flags: ['--light'] }] });
+  assert.deepStrictEqual((await task0(base)).step1.codeReview, [
+    { flags: ['--light'] }, { flags: ['--only-md', '--since-last'] }, { flags: [] }]);
+});
+
+test('GET /api/review-flags lists the switches codeReview takes, read from its SKILL.md', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const res = await fetch(`${base}/api/review-flags`);
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  const names = body.flags.map(f => f.name);
+  for (const flag of ['--only-md', '--since-last', '--light', '--with-checklist']) {
+    assert.ok(names.includes(flag), `${flag} in ${names}`);
+  }
+  assert.ok(!names.includes('--project'), 'the one flag with a value is the pipeline\'s own');
+  assert.strictEqual(new Set(names).size, names.length, 'each flag once');
+  for (const f of body.flags) assert.ok(f.description.trim().length > 10, `${f.name} has a description`);
+  assert.deepStrictEqual(body.defaultRuns, [{ flags: [] }, { flags: ['--since-last'] }]);
+  assert.strictEqual(body.maxRuns, 3);
+});
+
+test('GET /api/story serves the task story as plain text, 404 before it is written', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.strictEqual((await fetch(`${base}/api/story?taskId=t1`)).status, 404);
+  assert.strictEqual((await fetch(`${base}/api/story?taskId=t9`)).status, 404);
+  const story = '## Opis\n\nJako admin chcę <b>zapraszać</b> użytkowników.\n\n## Kryteria akceptacji\n\n1. Zaproszenie dochodzi.\n';
+  fs.mkdirSync(path.join(dir, 'tasks', 't1'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'tasks', 't1', 'story.md'), story, 'utf8');
+  const res = await fetch(`${base}/api/story?taskId=t1`);
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/plain/, 'markup in a story is shown, never rendered');
+  assert.strictEqual(res.headers.get('cache-control'), 'no-store', 'a rewritten story shows up');
+  assert.strictEqual(await res.text(), story);
+});
+
+test('a run resumed from a seven-step state gets the story step, and its form the merged description', async t => {
+  const dir = tmpDir();
+  const old = { tasks: [{ id: 't1', branch: 'feature/x', root: null, activeStep: 4,
+    steps: [1, 2, 3, 4, 5, 6, 7].map(id => ({ id, name: `S${id}`, status: 'waiting',
+      progress: null, enabled: id !== 3, currentOperation: '', report: null, log: [], chat: [] })),
+    question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0, reviewSummary: null,
+    mockupReview: null, summary: null, step1Submitted: true, authSaved: false,
+    step1: { taskDescription: 'Opis', businessRequirements: 'Wymagania', branch: 'feature/x' } }],
+  nextTaskId: 2 };
+  fs.writeFileSync(path.join(dir, 'pipeline-state.json'), JSON.stringify(old));
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const task = await task0(base);
+  assert.deepStrictEqual(task.steps.map(s => s.id), [1, 2, 3, 4, 5, 6, 7, 8]);
+  const story = task.steps.find(s => s.id === 8);
+  assert.strictEqual(story.name, 'Story Description');
+  assert.strictEqual(story.enabled, false, 'an old form never asked for a story');
+  assert.deepStrictEqual(story.chat, []);
+  assert.strictEqual(task.step1.taskDescription, 'Opis\n\nWymagania');
+  assert.strictEqual(task.step1.businessRequirements, undefined);
+  assert.strictEqual(task.step1.refinement, true, 'an old form ran the refinement');
+  assert.deepStrictEqual(task.step1.codeReview, [{ flags: [] }, { flags: ['--since-last'] }]);
+  const res = await postState(base, { step: 8, status: 'in_progress', activeStep: 8 });
+  assert.strictEqual(res.status, 200, 'the appended step takes updates like any other');
+});

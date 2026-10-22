@@ -13,8 +13,12 @@ Read first: `{{SESSION}}/requirements.md`, every image in `{{SESSION}}/mockups/`
 The `hints/` files and the "Additional materials" note in requirements.md are the user's guidance,
 not scope: mine them for what to imitate, reuse or avoid, let them shape your questions and the
 decisions you record — never copy them into spec.md as if they were requirements.
-The `## Agent settings` section of requirements.md is a record of how this pipeline was
-configured to run — never a requirement, never something to ask about.
+The `## Pipeline steps`, `## Code review` and `## Agent settings` sections of requirements.md are
+records of how this pipeline was configured to run — never a requirement, never something to ask
+about.
+When `{{SESSION}}/ui-design.md` exists, the user approved screens in `{{SESSION}}/generated-mockups/`
+before refinement was switched on: read it as settled design decisions — do not re-ask them. The
+mockup agent folds them into spec.md's `## UI design` section after you.
 Then explore `{{PROJECT}}` (structure, conventions, existing modules the feature touches).
 
 ## Question protocol (MANDATORY)

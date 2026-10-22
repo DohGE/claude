@@ -99,7 +99,7 @@ function expandItemSpec(spec) {
 }
 
 function parseArgs(argv) {
-  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false };
+  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false, light: false };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--keep-source') {
@@ -121,6 +121,11 @@ function parseArgs(argv) {
       args.withRuleText = true;
       continue;
     }
+    // Every Low finding is cut from the report, and the page shows no code snippet.
+    if (arg === '--light') {
+      args.light = true;
+      continue;
+    }
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
     // Refused rather than skipped: a mistyped --project loses every code snippet and
     // a mistyped --out writes the page somewhere nobody looks, both while exiting 0.
@@ -134,7 +139,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist, --with-rule-text).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist, --with-rule-text, --light).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.md").');
   if (!args.out) args.out = args.report.replace(/\.md$/i, '') + '.html';
@@ -2520,6 +2525,78 @@ function stripChecklists(markdown) {
   return changed ? out.join(text.includes('\r\n') ? '\r\n' : '\n') : text;
 }
 
+// The Markdown a --light run leaves behind: every Low finding cut - after the assembly
+// gave each finding its fixed severity - and a file section the cut leaves empty with it.
+// A finding runs to the next lead line, section or comment; no comment and no line
+// outside a finding is ever cut. A report the cut leaves without any finding ends with
+// the line that says so, last because the parser stops at it. A report with no Low
+// finding comes back unchanged.
+function stripLowFindings(markdown) {
+  const text = String(markdown);
+  const lines = text.split(/\r?\n/);
+  const out = [];
+  // A section no finding of which is kept yet: its lines wait until one is. `cut` = it
+  // lost a Low finding, and `comment` is where its first comment starts - an emptied
+  // section keeps its lines from there, so a checklist block of the file stays.
+  let held = null;
+  let open = false;
+  let cutting = false;
+  let changed = false;
+  let kept = 0;
+  const emit = (raw, comment) => {
+    if (!held) { out.push(raw); return; }
+    if (comment && held.comment === -1) held.comment = held.lines.length;
+    held.lines.push(raw);
+  };
+  const release = (whole) => {
+    if (held && (whole || !held.cut)) out.push(...held.lines);
+    else if (held && held.comment !== -1) out.push(...held.lines.slice(held.comment));
+    held = null;
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (open) {
+      emit(raw, true);
+      if (line.includes('-->')) open = false;
+      continue;
+    }
+    if (line.startsWith('<!--') || line.startsWith(skippedPrefix)) {
+      open = line.startsWith('<!--') && !line.includes('-->');
+      cutting = false;
+      emit(raw, true);
+      continue;
+    }
+    if (reSection.test(line)) {
+      release(false);
+      held = { lines: [raw], cut: false, comment: -1 };
+      cutting = false;
+      continue;
+    }
+    const lead = line.match(reSeverity);
+    if (lead) {
+      cutting = severityByEmoji.get(lead[1]).key === 'low';
+      if (cutting) {
+        changed = true;
+        if (held) held.cut = true;
+        continue;
+      }
+      kept++;
+      release(true);
+      out.push(raw);
+      continue;
+    }
+    if (!cutting) emit(raw, false);
+  }
+  if (!changed) return text;
+  release(false);
+  if (kept === 0) {
+    while (out.length > 0 && !out[out.length - 1].trim()) out.pop();
+    out.push('', emptyBodies[0]);
+  }
+  if (lines[lines.length - 1] === '' && out[out.length - 1] !== '') out.push('');
+  return out.join(text.includes('\r\n') ? '\r\n' : '\n');
+}
+
 function main(argv) {
   let args;
   try {
@@ -2537,10 +2614,12 @@ function main(argv) {
   }
   // Cut before the parse, so the page, the warnings' line numbers and a Markdown
   // left behind all read the same text.
-  const text = args.withChecklist ? markdown : stripChecklists(markdown);
+  let text = args.withChecklist ? markdown : stripChecklists(markdown);
+  if (args.light) text = stripLowFindings(text);
   if (args.onlyMd) {
-    // The Markdown is the report: nothing to render, only the checklists to leave out
-    // or, under --with-rule-text, the rules' words to add.
+    // The Markdown is the report: nothing to render, only the checklists and, under
+    // --light, the Low findings to leave out or, under --with-rule-text, the rules'
+    // words to add.
     const written = args.withRuleText ? appendRuleTexts(text, projectRootFor(args.report, args.project)) : text;
     if (written !== markdown) {
       try {
@@ -2559,7 +2638,8 @@ function main(argv) {
   resolveRuleAddresses(report, projectRoot);
   if (args.withRuleText) attachChecklistRules(report, projectRoot);
   const source = { mode: args.mode, base: args.base, branch: args.branch };
-  attachSnippets(report, projectRoot, source);
+  // A --light page carries no code: no snippet under a finding, no full view of a file.
+  if (!args.light) attachSnippets(report, projectRoot, source);
   report.changed = changedFiles(projectRoot, source);
   const pullRequest = report.emptyState ? { pr: null, warning: null } : detectPullRequest(projectRoot, args.branch);
   report.pr = pullRequest.pr;
@@ -2601,7 +2681,7 @@ function main(argv) {
     try {
       fs.writeFileSync(args.report, text, 'utf8');
     } catch (err) {
-      process.stderr.write(`Nie udało się usunąć checklist ze źródłowego Markdownu: ${args.report} (${(err && err.message) || err})\n`);
+      process.stderr.write(`Nie udało się zapisać przyciętego źródłowego Markdownu: ${args.report} (${(err && err.message) || err})\n`);
     }
   }
   process.stdout.write(`${args.out}\n${severityLine(report)}\n`);
@@ -2612,7 +2692,7 @@ module.exports = {
   severityLine,
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
   projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, attachChecklistRules, appendRuleTexts, buildPayload, renderHtml, reportNameOf, detectPullRequest,
-  changedFiles, treeEntries, stripChecklists, main,
+  changedFiles, treeEntries, stripChecklists, stripLowFindings, main,
   // check-part.cjs validates each part file against the same grammar this parser reads.
   emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reUnverifiedOpen, reViolationVerdict, expandItemSpec,
   // The severity lead lines a finding may open with, which the bundles and the assembly write.

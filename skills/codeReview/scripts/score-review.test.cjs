@@ -422,7 +422,7 @@ test('--lint-key names the entries without checklist items and the items their i
     crossFile: [],
   });
   assert.match(text, /checklist items no violation names: \d+\/\d+\n/);
-  assert.match(text, /\n {2}general#1 :: /);
+  assert.match(text, /\n {2}general#3 :: /);
   assert.doesNotMatch(text, /\n {2}general#2 :: /);
   assert.match(text, /naming no checklist item: 1\/4\n {2}v004 \[general\] src\/app\/a\.ts :: /);
   assert.match(text, /items no instruction of their entry has: 2\n {2}v002 security#1\n {2}v003 general#999$/);

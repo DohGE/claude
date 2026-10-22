@@ -14,18 +14,27 @@ try {
 } catch { /* the sibling skill is optional; the orchestrator still writes the file */ }
 
 const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-  'Validation & E2E', 'Code Review', 'Mockoon Mocks'];
-// Ids stay fixed so agent prompts can hardcode their step number; opt-in steps
-// start disabled and the orchestrator enables them from the step-1 answer.
-const OPTIONAL_STEPS = [3];
+  'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description'];
+// Ids stay fixed so agent prompts can hardcode their step number. That is why Story
+// Description is 8 although it runs between Mockups and Implementation: it was added
+// last, and renumbering would have moved every step after it. The stepper orders the
+// tiles itself. Opt-in steps start disabled; the steps a switch on the form controls
+// follow that switch from the step-1 answer on.
+const OPTIONAL_STEPS = [3, 8];
 const STATUSES = ['waiting', 'in_progress', 'completed', 'failed'];
 // One fixed port, so the stepper always lives at the same URL: the user can keep the
 // tab open across runs, and everything the browser remembers for that origin - the
 // agent settings, the E2E credentials - is still there on the next one.
 const DEFAULT_PORT = 9999;
+const REFINEMENT_STEP = 2;
 const MOCKUP_STEP = 3;
+const STORY_STEP = 8;
+// The steps added after the state file's shape was settled. A run resumed from an older
+// file gets them appended.
+const ADDED_STEPS = [STORY_STEP];
 const MOCKUP_DIR = 'generated-mockups';
 const MOCKOON_FILE = 'mockoon.json';
+const STORY_FILE = 'story.md';
 const MOCKUP_TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8',
@@ -34,7 +43,7 @@ const MOCKUP_TYPES = {
 };
 // Every sub-agent the pipeline spawns runs on a step, so a per-step override is the
 // finest grain the setting can have. Step 1 has no agent: the form IS step 1.
-const AGENT_STEPS = [2, 3, 4, 5, 6, 7];
+const AGENT_STEPS = [2, 3, 4, 5, 6, 7, 8];
 // What the Agent tool accepts as a model override, and the effort levels the
 // orchestrator knows how to turn into a thinking directive. Anything else is stored as
 // '' (inherit): a value the spawn cannot use would only fail halfway through the run.
@@ -67,7 +76,7 @@ const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
   'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root',
   'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary']);
 
-// One task is one feature on one branch with its own seven-step pipeline, its own
+// One task is one feature on one branch with its own eight-step pipeline, its own
 // artifacts under tasks/<id>/ and its own sub-agents. A run holds one or more.
 function taskState(id) {
   return {
@@ -171,19 +180,107 @@ function agentsOf(raw, models) {
   };
 }
 
+// The review step runs /doh:codeReview one to three times, and the form sets the flags of
+// every run. They are read from that skill's own SKILL.md, whose "Strip the flags FIRST"
+// list is what the skill actually honours, and read per request, so a flag added or
+// renamed there reaches the form without this file being touched. A copy kept here would
+// go stale the way the hardcoded model list did, and a stale flag is worse than a missing
+// one: codeReview takes a word it does not know for a branch name. The description is the
+// README's usage row where there is one, written for a person; else the bullet's own
+// first sentence.
+const CODE_REVIEW_DIR = path.join(__dirname, '..', '..', 'codeReview');
+const MAX_REVIEW_RUNS = 3;
+const defaultReviewRuns = () => [{ flags: [] }, { flags: ['--since-last'] }];
+
+function flagText(row, bullet) {
+  let s = row ? row.replace(/^any of the above, but /, '')
+    : bullet.replace(/^pass it through to the context script(?: \([^)]*\))?[:.]?\s*/, '');
+  s = s.replace(/\s*\(see (?:\[[^\]]*\]\([^)]*\)|[^()[\]])*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*|`/g, '')
+    .replace(/\s+/g, ' ').trim();
+  if (!row) s = (s.match(/^.*?[.!?](?=\s|$)/) || [s])[0];
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// [{ name, description }], or null when the skill cannot be read.
+function readReviewFlags() {
+  let skill;
+  let readme = '';
+  try {
+    skill = fs.readFileSync(path.join(CODE_REVIEW_DIR, 'SKILL.md'), 'utf8').replace(/\r\n?/g, '\n');
+  } catch (_e) {
+    return null;
+  }
+  try {
+    readme = fs.readFileSync(path.join(CODE_REVIEW_DIR, 'README.md'), 'utf8').replace(/\r\n?/g, '\n');
+  } catch (_e) { /* the bullets alone still describe every flag */ }
+  const rows = new Map();
+  for (const m of readme.matchAll(/^\| `\/codeReview(?: \[target\])? (--[a-z][\w-]*)` \| (.+) \|$/gm)) {
+    rows.set(m[1], m[2]);
+  }
+  const start = skill.search(/^2\. Strip the flags FIRST/m);
+  if (start === -1) return null;
+  const end = skill.indexOf('\n3. ', start);
+  const flags = [];
+  // A bullet with the lines indented under it.
+  for (const m of skill.slice(start, end === -1 ? undefined : end)
+    .matchAll(/^ {3}- `(--[a-z][\w-]*)(=[^`]*)?` → (.*(?:\n {5}.*)*)/gm)) {
+    // A switch has nowhere to put a value, and the one flag that takes one, --project, is
+    // the pipeline's own: the review agent always points it at the task's worktree.
+    if (m[2] || flags.some(f => f.name === m[1])) continue;
+    flags.push({ name: m[1], description: flagText(rows.get(m[1]), m[3]) });
+  }
+  return flags;
+}
+
+// Every run as { flags: [...] }, in the skill's own order. `known` is the flag names
+// readReviewFlags() found; null keeps any well-formed flag, so a skill that cannot be
+// read for a moment does not wipe what the user set. A missing or empty list is the
+// default, the two passes the review step ran before they could be configured.
+function reviewRunsOf(raw, known) {
+  if (!Array.isArray(raw) || !raw.length) return defaultReviewRuns();
+  return raw.slice(0, MAX_REVIEW_RUNS).map(r => {
+    const given = new Set((Array.isArray(r && r.flags) ? r.flags : []).map(String));
+    return { flags: known ? known.filter(f => given.has(f))
+      : [...given].filter(f => /^--[a-z][a-z0-9-]*$/.test(f)) };
+  });
+}
+
 // The step-1 form, and nothing else a client happens to send. `models` are the values
-// this session can spawn.
-function formOf(body, models) {
+// this session can spawn, `reviewFlags` what readReviewFlags() returned.
+function formOf(body, models, reviewFlags) {
+  // The task description and the business requirements were two fields until they were
+  // merged: every agent read them together anyway. A form saved before that - a resumed
+  // run, a copied task - still carries the second one, so it is folded in, not lost.
+  const description = [body.taskDescription, body.businessRequirements]
+    .map(v => String(v == null ? '' : v)).filter(v => v.trim()).join('\n\n');
   return {
-    taskDescription: text(body.taskDescription),
-    businessRequirements: text(body.businessRequirements),
+    taskDescription: text(description),
     branch: text(body.branch),
     contractsText: text(body.contractsText),
     hintsNote: text(body.hintsNote),
     mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
-    authProvided: !!body.authProvided, generateMockups: !!body.generateMockups,
+    authProvided: !!body.authProvided,
+    // A form from before the switch existed ran the refinement, so only an explicit
+    // false turns it off.
+    refinement: body.refinement !== false,
+    generateMockups: !!body.generateMockups,
+    storyDescription: !!body.storyDescription,
+    codeReview: reviewRunsOf(body.codeReview, reviewFlags && reviewFlags.map(f => f.name)),
     agents: agentsOf(body.agents, models)
   };
+}
+
+// The steps a switch on the form controls. The stepper shows a disabled step as absent,
+// so the tiles follow the form as soon as it is submitted.
+function applySwitches(task) {
+  const f = task.step1;
+  for (const [id, on] of [[REFINEMENT_STEP, f.refinement], [MOCKUP_STEP, f.generateMockups],
+    [STORY_STEP, f.storyDescription]]) {
+    const step = (task.steps || []).find(s => s.id === id);
+    if (step) step.enabled = on;
+  }
 }
 
 // Clients are LLM sub-agents; despite instructions some post through
@@ -263,6 +360,7 @@ function createApp(sessionDir, opts = {}) {
   // Read once: the orchestrator writes the file before it starts the server.
   const models = loadModels(sessionDir);
   const modelValues = models.map(m => m.value);
+  const form = body => formOf(body, modelValues, readReviewFlags());
   const stateFile = path.join(sessionDir, 'pipeline-state.json');
   let state;
   try {
@@ -274,11 +372,20 @@ function createApp(sessionDir, opts = {}) {
     // field is read on every render and appended to by every agent, so it is filled
     // in here rather than defended against at each of those places.
     for (const t of state.tasks) {
-      for (const st of t.steps || []) if (!Array.isArray(st.chat)) st.chat = [];
-      // A run resumed in a session whose Agent tool no longer offers a model it
-      // picked would fail at that step's spawn; it inherits instead, and the form
-      // shows it that way.
-      if (t.step1 && typeof t.step1 === 'object') t.step1.agents = agentsOf(t.step1.agents, modelValues);
+      // A step added since the file was written - Story Description - is appended by id,
+      // in the state a new task would give it. Only those: a file that lacks one of the
+      // original seven is damaged, not old, and filling the gap in would hide it.
+      if (!Array.isArray(t.steps)) t.steps = [];
+      for (const st of taskState(t.id).steps) {
+        if (ADDED_STEPS.includes(st.id) && !t.steps.some(s => s.id === st.id)) t.steps.push(st);
+      }
+      for (const st of t.steps) if (!Array.isArray(st.chat)) st.chat = [];
+      // Through the same normalisation as a submitted form: it merges the business
+      // requirements of an older form into the description and fills in the switches
+      // and the review runs. And a run resumed in a session whose Agent tool no longer
+      // offers a model it picked would fail at that step's spawn; it inherits instead,
+      // and the form shows it that way.
+      if (t.step1 && typeof t.step1 === 'object') t.step1 = form(t.step1);
     }
   } catch (_e) {
     // Losing the state silently is the worst outcome: the run reappears at step 1
@@ -513,10 +620,16 @@ function createApp(sessionDir, opts = {}) {
           // and re-sent to the browser once a second, so anything else a client
           // sends would be paid for on every tick. Credentials never pass through
           // here — they go to /api/auth and only a flag comes back in the answer.
-          task.step1 = formOf(body, modelValues);
+          task.step1 = form(body);
           task.step1Submitted = true;
           task.branch = task.step1.branch;
+          applySwitches(task);
           persist();
+          // The orchestrator gets the form as stored, not as sent: requirements.md is
+          // written from it, and only the stored one has the description merged and the
+          // review flags checked against what codeReview takes.
+          pushAnswer({ kind: 'step1', ...task.step1, taskId: task.id });
+          return sendJson(res, 200, { ok: true });
         }
         if (body.kind === 'mockup' && body.decision === 'feedback') {
           const step = findStep(task, MOCKUP_STEP);
@@ -567,7 +680,8 @@ function createApp(sessionDir, opts = {}) {
         // of writing. `src` is read for the two things only the server has - the uploaded
         // files and auth.json. The branch is dropped whatever the caller sent: two tasks
         // cannot share one, and an empty required field forces a deliberate name.
-        task.step1 = formOf({ ...v, ...copied, branch: '', authProvided: task.authSaved }, modelValues);
+        task.step1 = form({ ...v, ...copied, branch: '', authProvided: task.authSaved });
+        applySwitches(task);
         state.tasks.push(task);
         persist();
         return sendJson(res, 200, { id: task.id });
@@ -679,6 +793,30 @@ function createApp(sessionDir, opts = {}) {
           'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'
         });
         return res.end(data);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/story') {
+        // The same window onto the task's story.md: the step-8 agent writes the story and
+        // the browser shows and copies it from here. Plain text, so a story that happens
+        // to hold markup is shown as written and never rendered.
+        const task = findTask(url.searchParams.get('taskId'));
+        if (!task) return sendJson(res, 404, { error: 'not found' });
+        let data;
+        try {
+          data = fs.readFileSync(path.join(taskDir(task.id), STORY_FILE));
+        } catch (_e) {
+          return sendJson(res, 404, { error: 'not found' });
+        }
+        res.writeHead(200, {
+          'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'
+        });
+        return res.end(data);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/review-flags') {
+        // Asked once, when the page opens; see readReviewFlags. An unreadable skill
+        // leaves the runs without switches, never without runs.
+        return sendJson(res, 200, {
+          flags: readReviewFlags() || [], defaultRuns: defaultReviewRuns(), maxRuns: MAX_REVIEW_RUNS
+        });
       }
       if (req.method === 'GET' && url.pathname.startsWith(`/${MOCKUP_DIR}/`)) {
         // Read-only window into one task's generated-mockups for the review iframe.

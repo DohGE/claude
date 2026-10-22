@@ -647,6 +647,13 @@ test('assembly --assemble: only a passed check appends the parts, removes them w
   assert.strictEqual(fs.readFileSync(f.reportPath, 'utf8'), report);
 });
 
+test('renderArgsOf hands the renderer the output choices of the run', () => {
+  const target = { reportPath: 'r/raport.md', htmlReportPath: 'r/raport.html', kind: 'branch', branch: 'feature', baseBranch: 'master' };
+  assert.deepStrictEqual(cp.renderArgsOf(target, '/repo'), ['--report=r/raport.md', '--project=/repo', '--mode=branch', '--branch=feature', '--base=master']);
+  assert.deepStrictEqual(cp.renderArgsOf({ ...target, htmlReportPath: null, withChecklist: true, light: true }, '/repo'),
+    ['--report=r/raport.md', '--only-md', '--with-checklist', '--light']);
+});
+
 test('assembly: the coverage numbers are counted, not trusted', (t) => {
   const f = fixture(t);
   fs.writeFileSync(f.part(1), partA({ marker: '<!-- coverage: src/a.ts 2/9 -->' }));
@@ -784,7 +791,7 @@ test('hook: two findings of one sameAs pair over the same lines pass, with a not
   assert.strictEqual(cp.hookResult({ ...input, tool_input: { ...input.tool_input, content: narrower } }), null);
 });
 
-test('assembly: the rulebook\'s fixed severity settles a finding, but never lowers one an unfixed address raised', (t) => {
+test('assembly: the rulebook\'s fixed severity settles a finding, but never lowers one an unfixed address raised nor replaces a 🔵', (t) => {
   const f = fixture(t);
   const facts = (severity) => withRules({ severity });
   fs.writeFileSync(f.part(1), partA());
@@ -799,6 +806,9 @@ test('assembly: the rulebook\'s fixed severity settles a finding, but never lowe
   // component#1 fixes nothing: the reviewer's Critical stands above general#2's High.
   fs.writeFileSync(f.part(1), partA().replace('🟡 **Medium**', '🟤 **Critical**'));
   assert.strictEqual(cp.rewriteSeverities(f.target, facts({ 'general#2': 'high' })), 0);
+  // A missing spec stays 🔵 whichever item flags it, even with every address fixed.
+  fs.writeFileSync(f.part(1), partA().replace('🟡 **Medium**', '🔵 **Missing Unit Test**'));
+  assert.strictEqual(cp.rewriteSeverities(f.target, facts({ general: 'low', component: 'low' })), 0);
 
   // The assembly applies them once every part passed, and says how many it changed.
   fs.writeFileSync(f.part(1), partA());

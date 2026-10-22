@@ -1015,9 +1015,11 @@ function rewriteCoverage(target) {
 
 // The fixed severities (facts.json `rules.severity`, by item address or instruction id) settle
 // each finding's severity line once every part passed: the highest one its addresses carry -
-// and the reviewer's own, when an address carries none and the reviewer's is higher. Returns
-// how many findings changed.
+// and the reviewer's own, when an address carries none and the reviewer's is higher. A 🔵 stays:
+// a missing spec is Missing Unit Test whichever item flags it (SKILL.md Step 4). Returns how
+// many findings changed.
 function fixedLevel(addresses, fixed, current) {
+  if (current === 'missing-unit-test') return current;
   const levels = addresses.map((address) => fixed[address] || fixed[address.split('#')[0]] || null);
   const known = levels.filter(Boolean);
   if (known.length === 0) return null;
@@ -1860,6 +1862,7 @@ function renderArgsOf(target, project) {
     : [`--report=${target.reportPath}`, '--only-md'];
   if (target.withChecklist) args.push('--with-checklist');
   if (target.withRuleText) args.push('--with-rule-text');
+  if (target.light) args.push('--light');
   return args;
 }
 

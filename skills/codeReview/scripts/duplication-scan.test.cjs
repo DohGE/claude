@@ -29,41 +29,49 @@ test('changedShare is the part of a clone side the diff wrote', () => {
   assert.strictEqual(dup.changedShare(undefined, 1, 40), 0, 'a file outside the review wrote no line');
 });
 
-test('a copy the diff adds is anchored on the copy and names its source', () => {
-  const found = dup.pickCandidates([clone(['src\\orig.ts', 2, 15], ['src\\copy.ts', 3, 16])], [added('src/copy.ts')]);
-  assert.deepStrictEqual(found, [{ path: 'src/copy.ts', lines: '3-16', sources: ['src/orig.ts:2-15'], kinds: ['exact'] }]);
+test('a copy the diff adds to a block written twice is anchored on the copy and names both', () => {
+  const found = dup.pickCandidates([
+    clone(['src\\orig.ts', 2, 15], ['src\\copy.ts', 3, 16]),
+    clone(['src\\orig.ts', 2, 15], ['src\\util.ts', 5, 18]),
+  ], [added('src/copy.ts')]);
+  assert.deepStrictEqual(found, [{ path: 'src/copy.ts', lines: '3-16', sources: ['src/orig.ts:2-15', 'src/util.ts:5-18'], kinds: ['exact'] }]);
+});
+
+test('a block written twice is no candidate yet', () => {
+  assert.deepStrictEqual(dup.pickCandidates([clone(['src/orig.ts', 2, 15], ['src/copy.ts', 3, 16])], [added('src/copy.ts')]), []);
 });
 
 test('editing a line inside a clone that already existed is not new duplication', () => {
   // jscpd's own baseline mode reports this pair as new: the edit changes the clone's
   // fingerprint. Measured by the lines the diff wrote, it is one line of fourteen.
   const files = [{ path: 'src/a.ts', status: 'M', changedLines: '7' }];
-  assert.deepStrictEqual(dup.pickCandidates([clone(['src/a.ts', 2, 15], ['src/b.ts', 2, 15])], files), []);
+  const pairs = [clone(['src/a.ts', 2, 15], ['src/b.ts', 2, 15]), clone(['src/a.ts', 2, 15], ['src/c.ts', 2, 15])];
+  assert.deepStrictEqual(dup.pickCandidates(pairs, files), []);
 });
 
 test('the anchor is the side the diff wrote, first or second', () => {
   const files = [{ path: 'src/a.ts', status: 'M', changedLines: '20-35' }];
   assert.deepStrictEqual(
-    dup.pickCandidates([clone(['src/a.ts', 21, 34], ['src/util.ts', 1, 14])], files),
-    [{ path: 'src/a.ts', lines: '21-34', sources: ['src/util.ts:1-14'], kinds: ['exact'] }],
+    dup.pickCandidates([clone(['src/a.ts', 21, 34], ['src/util.ts', 1, 14]), clone(['src/util.ts', 1, 14], ['src/b.ts', 3, 16])], files),
+    [{ path: 'src/a.ts', lines: '21-34', sources: ['src/b.ts:3-16', 'src/util.ts:1-14'], kinds: ['exact'] }],
   );
 });
 
 test('a side counts as written from half of its lines up', () => {
-  const pair = [clone(['src/a.ts', 1, 10], ['src/b.ts', 1, 10])];
+  const pairs = [clone(['src/a.ts', 1, 10], ['src/b.ts', 1, 10]), clone(['src/b.ts', 1, 10], ['src/c.ts', 1, 10])];
   const half = [{ path: 'src/a.ts', status: 'M', changedLines: '1-5' }];
   const less = [{ path: 'src/a.ts', status: 'M', changedLines: '1-4' }];
-  assert.strictEqual(dup.pickCandidates(pair, half).length, 1);
-  assert.strictEqual(dup.pickCandidates(pair, less).length, 0);
+  assert.strictEqual(dup.pickCandidates(pairs, half).length, 1);
+  assert.strictEqual(dup.pickCandidates(pairs, less).length, 0);
 });
 
-test('two copies the diff adds are one candidate, anchored on the later one', () => {
+test('a pair the diff wrote on both sides is one candidate, anchored on the later copy', () => {
   const files = [added('src/a.ts'), added('src/b.ts')];
   assert.deepStrictEqual(
     dup.pickCandidates([clone(['src/a.ts', 1, 9], ['src/b.ts', 1, 9]), clone(['src/a.ts', 1, 9], ['src/a.ts', 20, 28])], files),
     [
-      { path: 'src/a.ts', lines: '20-28', sources: ['src/a.ts:1-9'], kinds: ['exact'] },
-      { path: 'src/b.ts', lines: '1-9', sources: ['src/a.ts:1-9'], kinds: ['exact'] },
+      { path: 'src/a.ts', lines: '20-28', sources: ['src/a.ts:1-9', 'src/b.ts:1-9'], kinds: ['exact'] },
+      { path: 'src/b.ts', lines: '1-9', sources: ['src/a.ts:1-9', 'src/a.ts:20-28'], kinds: ['exact'] },
     ],
   );
 });
@@ -74,11 +82,12 @@ test('overlapping clones of one block are one candidate', () => {
   const found = dup.pickCandidates([
     clone(['src/a.ts', 4, 10], ['src/f.ts', 5, 11], 'renamed'),
     clone(['src/a.ts', 2, 15], ['src/f.ts', 2, 16], 'similar'),
+    clone(['src/a.ts', 3, 15], ['src/h.ts', 1, 13]),
     clone(['src/g.ts', 30, 40], ['src/f.ts', 40, 50]),
   ], [added('src/f.ts')]);
+  // f.ts:40-50 repeats g.ts once: two copies.
   assert.deepStrictEqual(found, [
-    { path: 'src/f.ts', lines: '2-16', sources: ['src/a.ts:2-15'], kinds: ['renamed', 'similar'] },
-    { path: 'src/f.ts', lines: '40-50', sources: ['src/g.ts:30-40'], kinds: ['exact'] },
+    { path: 'src/f.ts', lines: '2-16', sources: ['src/a.ts:2-15', 'src/h.ts:1-13'], kinds: ['renamed', 'similar'] },
   ]);
 });
 
@@ -205,7 +214,7 @@ test('a scan reads the whole reviewed tree and keeps the pairs the diff wrote', 
     },
   });
   assert.deepStrictEqual(result, {
-    candidates: [{ path: 'src/copy.ts', lines: '1-9', sources: ['src/orig.ts:1-9'], kinds: ['exact'] }],
+    candidates: [{ path: 'src/copy.ts', lines: '1-9', sources: ['src/old.ts:1-9', 'src/orig.ts:1-9'], kinds: ['exact'] }],
     omitted: 0,
   });
   assert.ok(scannedRoot && !fs.existsSync(scannedRoot), 'the export is removed after the scan');
@@ -225,11 +234,12 @@ test('a scan that cannot run says why instead of failing the review', (t) => {
 test('a scan lists a bounded number of candidates and counts the rest', (t) => {
   const dir = copyRepo(t);
   const extra = 3;
-  const pairs = Array.from({ length: dup.candidateLimit + extra }, (_, i) => clone([`src/o${i}.ts`, 1, 9], [`src/c${i}.ts`, 1, 9]));
+  const blocks = Array.from({ length: dup.candidateLimit + extra }, (_, i) => i);
+  const pairs = blocks.flatMap((i) => [clone([`src/o${i}.ts`, 1, 9], [`src/c${i}.ts`, 1, 9]), clone([`src/o${i}.ts`, 1, 9], [`src/p${i}.ts`, 1, 9])]);
   const result = dup.scanDuplicates({
     project: dir,
     source: { ref: 'feature/copy' },
-    files: pairs.map((_, i) => added(`src/c${i}.ts`)),
+    files: blocks.map((i) => added(`src/c${i}.ts`)),
     run: () => ({ duplicates: pairs }),
   });
   assert.strictEqual(result.candidates.length, dup.candidateLimit);

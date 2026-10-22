@@ -44,16 +44,20 @@ test('jeden task nie pokazuje zakładek', async ({ page }) => {
 
 test('Copy of current task kopiuje formularz, pokazuje zakładki i czyści branch', async ({ page }) => {
   await page.fill('#task', 'Zaproszenia');
-  await page.fill('#biz', 'Admin zaprasza');
   await page.fill('#contractsText', 'POST /invites');
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.uncheck('#refinement');
   await page.check('#genMockups');
+  await page.check('#storyDesc');
+  await page.click('#addRun');
   await page.click('#createTask');
   await expect(page.locator('#tabs .tab')).toHaveCount(2);
   await expect(page.locator('#task')).toHaveValue('Zaproszenia');
-  await expect(page.locator('#biz')).toHaveValue('Admin zaprasza');
   await expect(page.locator('#contractsText')).toHaveValue('POST /invites');
+  await expect(page.locator('#refinement')).not.toBeChecked();
   await expect(page.locator('#genMockups')).toBeChecked();
+  await expect(page.locator('#storyDesc')).toBeChecked();
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(3);
   // Dwa taski nie mogą dzielić brancha, więc nowy startuje bez niego.
   await expect(page.locator('#branch')).toHaveValue('');
   await expect(page.locator('#next')).toBeDisabled();
@@ -72,7 +76,7 @@ test('wgrane pliki są kopiowane do nowego taska', async ({ page }) => {
   await fetch(`${base}/api/answer`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ taskId: 't1', kind: 'step1', taskDescription: 'Opis',
-      businessRequirements: 'Wymagania', branch: 'feature/pierwszy', hints: ['ekran.png'] })
+      branch: 'feature/pierwszy', hints: ['ekran.png'] })
   });
   await page.reload();
   await page.waitForSelector('#files-hints');
@@ -96,7 +100,6 @@ test('zakładki przełączają widok i pokazują znacznik oczekiwania', async ({
 
 test('etykieta otwartej zakładki podąża za wpisywanym branchem', async ({ page }) => {
   await page.fill('#task', 'Opis');
-  await page.fill('#biz', 'Wymagania');
   await page.click('#createTask');
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
   await page.fill('#branch', 'feature/drugi');
@@ -109,7 +112,6 @@ test('etykieta otwartej zakładki podąża za wpisywanym branchem', async ({ pag
 
 test('wpisywanie brancha nie przebudowuje paska zakładek', async ({ page }) => {
   await page.fill('#task', 'Opis');
-  await page.fill('#biz', 'Wymagania');
   await page.click('#createTask');
   const tab = page.locator('#tabs .tab[data-task=t1]');
   // Jeśli pasek się przebuduje, ten węzeł zostanie odłączony i klik w niego
@@ -138,7 +140,6 @@ test('zakładkę da się zamknąć tylko przed startem taska', async ({ page }) 
 
 test('branch zajęty przez inny task blokuje Next z własnym komunikatem', async ({ page }) => {
   await page.fill('#task', 'Opis');
-  await page.fill('#biz', 'Wymagania');
   await page.fill('#branch', 'feature/zaproszenia');
   await page.click('#next');
   await page.click('#confirmOk');
@@ -148,7 +149,7 @@ test('branch zajęty przez inny task blokuje Next z własnym komunikatem', async
   // Drugi task tworzony ręcznie, bo formularz pierwszego jest już zamknięty.
   await fetch(`${base}/api/tasks`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ values: { taskDescription: 'Opis 2', businessRequirements: 'Wym 2' } })
+    body: JSON.stringify({ values: { taskDescription: 'Opis 2' } })
   });
   await state({ taskId: 't2', step: 1, status: 'in_progress', activeStep: 1 });
   await page.click('#tabs .tab[data-task=t2]');
@@ -162,7 +163,6 @@ test('branch zajęty przez inny task blokuje Next z własnym komunikatem', async
 
 test('niewysłany formularz przeżywa utworzenie taska i powrót na zakładkę', async ({ page }) => {
   await page.fill('#task', 'Opis pierwszego');
-  await page.fill('#biz', 'Wymagania pierwszego');
   await page.fill('#branch', 'feature/pierwszy');
   await page.click('#createTask');
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
@@ -170,7 +170,6 @@ test('niewysłany formularz przeżywa utworzenie taska i powrót na zakładkę',
   await page.click('#tabs .tab[data-task=t1]');
   // Nic nie zostało wysłane, więc serwer o tym nie wie — to czysto ekranowy stan.
   await expect(page.locator('#task')).toHaveValue('Opis pierwszego');
-  await expect(page.locator('#biz')).toHaveValue('Wymagania pierwszego');
   await expect(page.locator('#branch')).toHaveValue('feature/pierwszy');
   await expect(page.locator('#next')).toBeEnabled();
   await page.click('#tabs .tab[data-task=t2]');
@@ -180,7 +179,6 @@ test('niewysłany formularz przeżywa utworzenie taska i powrót na zakładkę',
 
 test('wysłanie brancha przez sąsiada blokuje otwarty formularz bez przerysowania', async ({ page }) => {
   await page.fill('#task', 'Opis');
-  await page.fill('#biz', 'Wymagania');
   await page.click('#createTask');
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
   await page.fill('#branch', 'feature/kolizja');
@@ -235,16 +233,16 @@ test('zamknięcie otwartej zakładki wraca na pierwszy task', async ({ page }) =
 
 test('New empty task zakłada task bez kopiowania formularza', async ({ page }) => {
   await page.fill('#task', 'Zaproszenia');
-  await page.fill('#biz', 'Admin zaprasza');
   await page.fill('#contractsText', 'POST /invites');
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.uncheck('#refinement');
   await page.check('#genMockups');
   await page.setInputFiles('#hints', [file('ekran.png')]);
   await page.click('#createEmptyTask');
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
   await expect(page.locator('#task')).toHaveValue('');
-  await expect(page.locator('#biz')).toHaveValue('');
   await expect(page.locator('#contractsText')).toHaveValue('');
+  await expect(page.locator('#refinement')).toBeChecked();
   await expect(page.locator('#branch')).toHaveValue('');
   await expect(page.locator('#genMockups')).not.toBeChecked();
   expect(await picked(page, '#hints')).toEqual([]);
@@ -257,7 +255,6 @@ test('New empty task zakłada task bez kopiowania formularza', async ({ page }) 
 
 test('wybrane, jeszcze niewgrane pliki przeżywają kopię i lądują na dysku nowego taska', async ({ page }) => {
   await page.fill('#task', 'Opis');
-  await page.fill('#biz', 'Wymagania');
   await page.setInputFiles('#hints', [file('ekran.png')]);
   await page.fill('#hintsNote', 'Układ kart z ekranu');
   await page.click('#createTask');
