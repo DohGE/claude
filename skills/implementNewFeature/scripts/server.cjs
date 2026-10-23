@@ -4,6 +4,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { usageReader } = require('./usage.cjs');
+const { manualCommand, launchOrchestrator } = require('./launch-orchestrator.cjs');
 // The session holds auth.json — the user's real credentials — and SKILL.md asks the
 // orchestrator to write the catch-all .gitignore next to it by hand. Doing it here too
 // costs nothing and removes the one prose step whose omission would let step 6's
@@ -84,6 +86,17 @@ const isImage = name => !!IMAGE_TYPES[path.extname(String(name)).toLowerCase()];
 const SCREENSHOT_DIR = 'mockup-screenshots';
 const OPEN_FOLDERS = [SCREENSHOT_DIR];
 const IMPLEMENTATION_STEP = 4;
+// The step that runs the project's E2E suite - one task at a time, through the slot this
+// server keeps (POST /api/e2e): two suites at once fight over the app's ports and the browser.
+const VALIDATION_STEP = 5;
+const E2E_WAITING = 'Waiting for the E2E slot';
+// Every task has an orchestrator of its own (launch-orchestrator.cjs). One is listening while
+// its waiter's poll is parked here and working between two polls; one not seen for this long,
+// or whose poll was cut off mid-wait - which is what closing its terminal does to the waiter -
+// is closed, and its task may be taken over.
+const ORCHESTRATOR_IDLE_MS = 15 * 60 * 1000;
+// A terminal opened for a task has this long to poll before the page offers to open another.
+const LAUNCH_GRACE_MS = 5 * 60 * 1000;
 // The route before implementation, in the order the stepper shows it. Ids are fixed, so
 // Story Description (8) runs before Implementation (4).
 const PRE_STEPS = [REFINEMENT_STEP, MOCKUP_STEP, STORY_STEP];
@@ -109,7 +122,7 @@ const READERS = { [REFINEMENT_STEP]: [MOCKUP_STEP, STORY_STEP], [MOCKUP_STEP]: [
 // orchestrator, and what travels through it belongs to whoever reads it.
 const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
   'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root',
-  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary']);
+  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate']);
 
 // One task is one feature on one branch with its own eight-step pipeline, its own
 // artifacts under tasks/<id>/ and its own sub-agents. A run holds one or more.
@@ -141,7 +154,10 @@ function pushChat(step, msg) {
   // retry, and its own memory is summarised away on a long run - so the line has to be
   // recoverable from here, and recovering it means knowing which side of the failure it
   // fell on. Log entries have carried a time all along; these now do too.
+  // The id is what the page deletes a line by. Per step and never reused, so a line dropped
+  // past the cap or deleted cannot hand its number to the next one.
   const line = {
+    id: step.chatSeq = (step.chatSeq || 0) + 1,
     role: msg.role === 'user' ? 'user' : 'agent',
     text: text(msg.text, MAX_CHAT_TEXT),
     time: new Date().toISOString(),
@@ -158,9 +174,29 @@ function pushLog(step, entry) {
   if (step.log.length > MAX_LOG) step.log.splice(0, step.log.length - MAX_LOG);
 }
 
-function initialState() {
-  return { tasks: [taskState('t1')], nextTaskId: 2 };
+// The session that starts the run orchestrates its first task; `starter` is its id.
+function initialState(starter = null) {
+  const first = taskState('t1');
+  first.orchestrator = { session: starter, claimedAt: starter ? new Date().toISOString() : null };
+  return { tasks: [first], nextTaskId: 2, e2e: { holder: null, queue: [] } };
 }
+
+// The slot as the steps showed it before the server kept it: held by the task whose step 5
+// runs or waits for its retry, queued in the order the waiting ones were told so.
+function e2eFromSteps(tasks) {
+  const step = t => (t.steps || []).find(s => s.id === VALIDATION_STEP) || {};
+  const holder = tasks.find(t => ['in_progress', 'failed'].includes(step(t).status));
+  const queuedAt = t => ((step(t).log || []).filter(e => e.text === 'Queued for the E2E slot').at(-1) || {}).time || '';
+  const queue = tasks.filter(t => step(t).status === 'waiting' && step(t).currentOperation === E2E_WAITING)
+    .sort((a, b) => queuedAt(a).localeCompare(queuedAt(b))).map(t => t.id);
+  return { holder: holder ? holder.id : null, queue };
+}
+
+// One directory however it is spelled: separators, a trailing one, and case on Windows.
+const rootKey = p => {
+  const r = path.resolve(String(p));
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+};
 
 function safeName(raw) {
   const name = path.basename(String(raw || '').replace(/\\/g, '/'));
@@ -187,6 +223,11 @@ const text = (v, limit = MAX_FIELD) => {
   return `${value.slice(0, limit)} […ucięte: pole przekroczyło ${Math.round(limit / 1024)} KB…]`;
 };
 const names = v => (Array.isArray(v) ? v : []).map(safeName).filter(Boolean).slice(0, 200);
+// One line of a step's log: an answer of a paragraph is still one entry the eye can take in.
+const brief = (v, limit = 120) => {
+  const value = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
+};
 
 const pick = (allowed, v) => (allowed.includes(String(v == null ? '' : v)) ? String(v) : '');
 
@@ -404,10 +445,12 @@ function restartFrom(task, revision) {
     const i = ROUTE_ORDER.indexOf(step.id);
     if ((i > at && step.status !== 'waiting') || revision.switchedOff.includes(step.id)) {
       Object.assign(step, { status: 'waiting', progress: null, currentOperation: '', report: null });
+      delete step.stopped;
     }
   }
   const step = (task.steps || []).find(s => s.id === revision.restartAt);
   if (!step) return;
+  delete step.stopped;
   Object.assign(step, { status: 'in_progress', progress: 5, report: null,
     currentOperation: step.id === IMPLEMENTATION_STEP ? 'Starting implementation'
       : 'Requirements changed - repeating this step' });
@@ -494,6 +537,18 @@ function sendJson(res, code, obj) {
   res.end(body);
 }
 
+// The stepper page, curl and the waiter pass; a request another site made the browser send
+// does not. Host is checked first because the other two are only ever compared against it.
+function sameOrigin(req, url) {
+  const host = req.headers.host || '';
+  if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(host)) return false;
+  const origin = req.headers.origin;
+  if (origin && origin.toLowerCase() !== `http://${host.toLowerCase()}`) return false;
+  const site = req.headers['sec-fetch-site'];
+  const page = req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html');
+  return !site || site === 'same-origin' || site === 'none' || page;
+}
+
 function createApp(sessionDir, opts = {}) {
   const dohDir = path.dirname(path.resolve(sessionDir));
   // Every run of one project shares this; two projects never do. With a fixed port
@@ -509,13 +564,30 @@ function createApp(sessionDir, opts = {}) {
   const models = loadModels(sessionDir);
   const modelValues = models.map(m => m.value);
   const form = body => formOf(body, modelValues, readReviewFlags());
+  // The session that started the server orchestrates the first task of a fresh run; every
+  // other task gets a session of its own, opened by `launcher` (null in the tests, which must
+  // never open a terminal). The usage corner reads each one's own snapshot (usage.cjs).
+  const starterSession = opts.starterSession !== undefined ? opts.starterSession
+    : process.env.CLAUDE_CODE_SESSION_ID || null;
+  const launcher = opts.launchOrchestrator || null;
+  const projectDir = path.resolve(opts.project || process.cwd());
+  const readers = new Map();
+  const readUsage = opts.readUsage || (session => {
+    if (!readers.has(session)) {
+      // Only the starting session's effort is in this process's environment.
+      readers.set(session, usageReader({ sessionId: session, env: session === starterSession ? process.env : {} }));
+    }
+    return readers.get(session)();
+  });
   const stateFile = path.join(sessionDir, 'pipeline-state.json');
   let state;
   try {
     state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     // A state file from before tasks existed cannot be migrated meaningfully —
     // its single run has no branch and no task dir. Start clean instead.
-    if (!Array.isArray(state.tasks) || !state.tasks.length) state = initialState();
+    if (!Array.isArray(state.tasks) || !state.tasks.length) state = initialState(starterSession);
+    if (!state.e2e || typeof state.e2e !== 'object') state.e2e = e2eFromSteps(state.tasks);
+    if (!Array.isArray(state.e2e.queue)) state.e2e.queue = [];
     // A run resumed from a state file written by an older version has no chats. The
     // field is read on every render and appended to by every agent, so it is filled
     // in here rather than defended against at each of those places.
@@ -527,7 +599,11 @@ function createApp(sessionDir, opts = {}) {
       for (const st of taskState(t.id).steps) {
         if (ADDED_STEPS.includes(st.id) && !t.steps.some(s => s.id === st.id)) t.steps.push(st);
       }
-      for (const st of t.steps) if (!Array.isArray(st.chat)) st.chat = [];
+      for (const st of t.steps) {
+        if (!Array.isArray(st.chat)) st.chat = [];
+        // Lines written before they had ids get them in order, so they can be deleted too.
+        for (const m of st.chat) if (m.id == null) m.id = st.chatSeq = (st.chatSeq || 0) + 1;
+      }
       // Through the same normalisation as a submitted form: it merges the business
       // requirements of an older form into the description and fills in the switches
       // and the review runs. And a run resumed in a session whose Agent tool no longer
@@ -543,7 +619,19 @@ function createApp(sessionDir, opts = {}) {
     try {
       if (fs.existsSync(stateFile)) fs.renameSync(stateFile, `${stateFile}.corrupt`);
     } catch (_e2) { /* best effort: a fresh start still beats refusing to run */ }
-    state = initialState();
+    state = initialState(starterSession);
+  }
+
+  // Each task's orchestrator as this process has seen it: { session, listening, seen, gone }.
+  // Not persisted - only a poll proves a session alive, and none has reached a server that
+  // has just started. A session the state names counts as seen at the start, so a restart
+  // does not hand its task to whichever session polls first.
+  const startedAt = Date.now();
+  const live = new Map();
+  for (const t of state.tasks) {
+    if (t.orchestrator && t.orchestrator.session) {
+      live.set(t.id, { session: t.orchestrator.session, listening: 0, seen: startedAt, gone: false });
+    }
   }
 
   const findTask = id => state.tasks.find(t => t.id === id);
@@ -552,6 +640,16 @@ function createApp(sessionDir, opts = {}) {
   // send step 3's chat wherever index 2 happens to sit, and a shorter one would
   // send it to `undefined`. Both are silent - the agent sees 200 either way.
   const findStep = (task, id) => (task.steps || []).find(s => s.id === id);
+  // The step an answer from the page goes to, when the user had stopped it: a message names
+  // its step, mockup feedback is step 3's, and an answer or a gate decision belongs to the
+  // step the pipeline is on.
+  const stoppedStepOf = (task, body) => {
+    const id = body.kind === 'message' ? Number(body.step)
+      : body.kind === 'mockup' ? MOCKUP_STEP
+        : body.kind === 'answer' || body.kind === 'decision' ? task.activeStep : null;
+    const step = id == null ? null : findStep(task, id);
+    return step && step.stopped ? step : null;
+  };
   const taskDir = id => path.join(sessionDir, 'tasks', id);
   const openFolder = opts.openFolder || openInFileManager;
   // Once implementation has started, what it was built from stays put: only the settings
@@ -564,6 +662,63 @@ function createApp(sessionDir, opts = {}) {
   const flowFrozen = task => !!task.summary || (task.step1Submitted && implementing(task));
   const FROZEN = 'implementation has started - only the code review, agent and authorization '
     + 'settings can still change';
+
+  const alive = l => !!l && (l.listening > 0 || (!l.gone && Date.now() - l.seen < ORCHESTRATOR_IDLE_MS));
+  // none: no session was ever started or seen for the task; starting: a terminal was opened
+  // and its session has not polled yet; listening: its waiter is parked here; working: it is
+  // between two polls; closed: it is gone, or never came up.
+  function orchestratorStatus(task) {
+    const o = task.orchestrator;
+    if (!o) return 'none';
+    const l = live.get(task.id);
+    if (l && l.listening > 0) return 'listening';
+    const launched = o.launchedAt ? Date.parse(o.launchedAt) : 0;
+    if (launched && (!l || l.seen < launched)) {
+      return !o.launchError && Date.now() - launched < LAUNCH_GRACE_MS ? 'starting' : 'closed';
+    }
+    if (!l) return 'none';
+    return alive(l) ? 'working' : 'closed';
+  }
+  const orchestratorView = task => ({ status: orchestratorStatus(task),
+    session: (task.orchestrator && task.orchestrator.session) || null,
+    launchError: (task.orchestrator && task.orchestrator.launchError) || null });
+
+  // Opens the task's terminal. The record is written before the launch is awaited, so a form
+  // sent twice in a row opens one terminal, not two.
+  async function launchFor(task) {
+    if (!task.orchestrator) task.orchestrator = { session: null, claimedAt: null };
+    Object.assign(task.orchestrator, { launchedAt: new Date().toISOString(), launchError: null });
+    persist();
+    let r;
+    try {
+      r = await launcher({ project: projectDir, taskId: task.id, port: server.address().port });
+    } catch (e) {
+      r = { launched: false, command: manualCommand(task.id, server.address().port), cwd: projectDir, error: e.message };
+    }
+    if (!r.launched) task.orchestrator.launchError = r.error || 'the terminal did not open';
+    persist();
+    return r;
+  }
+
+  // The slot goes to the next queued task still running, whose orchestrator hears it as an
+  // answer of its own. `dequeue` also takes the task out of the queue: it no longer needs a turn.
+  function releaseE2e(taskId, dequeue) {
+    const e2e = state.e2e;
+    if (dequeue) e2e.queue = e2e.queue.filter(id => id !== taskId);
+    if (e2e.holder !== taskId) return;
+    e2e.holder = null;
+    while (e2e.queue.length && !e2e.holder) {
+      const next = findTask(e2e.queue.shift());
+      if (!next || next.summary) continue;
+      e2e.holder = next.id;
+      const step = findStep(next, VALIDATION_STEP);
+      if (step) {
+        step.currentOperation = 'Took the E2E slot';
+        pushLog(step, 'Took the E2E slot');
+      }
+      pushAnswer({ kind: 'e2e', taskId: next.id });
+    }
+  }
 
   // Uploads and removals happen before the form is sent, so they are recorded as they
   // happen and read when it arrives. The first submission has nothing to differ from.
@@ -586,6 +741,62 @@ function createApp(sessionDir, opts = {}) {
     const dir = path.join(taskDir(task.id), ATTACHMENTS);
     return names(raw).filter(n => isImage(n) && fs.existsSync(path.join(dir, n)))
       .slice(0, MAX_ATTACHMENTS);
+  }
+
+  // What the user answered leaves the page the moment it is sent, not when the orchestrator
+  // gets round to it: a question or a gate left on screen until the agent's next post replaced
+  // it asked again for a decision already made, with the reply trailing under it. So it is
+  // taken down here, and what was decided is filed on the step - an answer in its log,
+  // feedback in its transcript - where the progress view that takes its place shows it.
+  // Everything is still forwarded: a reply to a question already replaced takes nothing down,
+  // and the orchestrator, which knows what it was for, decides what it means.
+  function consumeGate(task, body, attached) {
+    const active = findStep(task, task.activeStep);
+    const images = attached.length ? ` (+${attached.length} image${attached.length > 1 ? 's' : ''})` : '';
+    const say = (step, operation, entry) => {
+      if (!step) return;
+      step.currentOperation = operation;
+      if (entry) pushLog(step, entry);
+    };
+    if (body.kind === 'answer') {
+      if (!task.question || String(task.question.id) !== String(body.questionId)) return;
+      task.question = null;
+      task.questionSeq = (task.questionSeq || 0) + 1;
+      say(active, 'Processing answer…', `${body.questionId}: ${brief(body.value)}${images}`);
+    } else if (body.kind === 'decision') {
+      const review = task.reviewSummary;
+      const what = task.activeStep === STORY_STEP ? 'story' : 'plan';
+      if (body.decision === 'approve' && review && !review.answered) {
+        task.reviewSummary = null;
+        say(active, 'Approved — moving on…', `The ${what} was approved`);
+      } else if (body.decision === 'feedback' && active) {
+        // Into the transcript even with the gate already down: what went to the agent is
+        // what the transcript is the record of.
+        pushChat(active, { role: 'user', text: body.text, attachments: attached });
+        if (review && !review.answered) {
+          review.answered = new Date().toISOString();
+          say(active, `Reworking the ${what}…`);
+        }
+      } else if (body.decision === 'retry' && active && active.status === 'failed') {
+        // The orchestrator respawns the agent; the step stops showing the failure now.
+        active.status = 'in_progress';
+        active.report = null;
+        say(active, 'Retrying the step…', 'Retry requested');
+      }
+    } else if (body.kind === 'mockup') {
+      const step = findStep(task, MOCKUP_STEP);
+      const review = task.mockupReview;
+      if (body.decision === 'feedback') {
+        pushChat(step, { role: 'user', text: body.text, attachments: attached });
+        if (review && !review.answered) {
+          review.answered = new Date().toISOString();
+          say(step, 'Reworking the mockups…');
+        }
+      } else if (body.decision === 'approve' && review && !review.answered) {
+        task.mockupReview = null;
+        say(step, 'Approved — updating spec, plan and checklist…', 'The mockups were approved');
+      }
+    }
   }
 
   function copyCategory(fromId, toId, category) {
@@ -624,6 +835,13 @@ function createApp(sessionDir, opts = {}) {
     }
     const task = findTask(body.taskId);
     if (!task) throw new Error(`unknown task ${body.taskId}`);
+    // Every task's orchestrator picks its working directory on its own (SKILL.md step 4), so the
+    // project's checkout is claimed here, where two of them cannot both win it: a root another
+    // task holds is refused, and the one refused takes a worktree.
+    if (body.root != null) {
+      const holder = state.tasks.find(t => t.id !== task.id && t.root && rootKey(t.root) === rootKey(body.root));
+      if (holder) throw Object.assign(new Error(`root ${body.root} is task ${holder.id}'s`), { status: 409 });
+    }
     // A chat line with nowhere to go used to vanish: the agent sees 200, the user sees
     // silence. The step is what the transcript hangs on, so its absence is an error.
     if (body.chat && body.step === undefined) throw new Error('chat requires step');
@@ -633,6 +851,10 @@ function createApp(sessionDir, opts = {}) {
       if (body.status !== undefined) {
         if (!STATUSES.includes(body.status)) throw new Error(`bad status ${body.status}`);
         step.status = body.status;
+        // A step that finished, failed or went back to waiting has nothing left to resume. A
+        // post that keeps it running leaves a Stop standing: the agent may still report
+        // progress in the seconds before the orchestrator gets round to stopping it.
+        if (body.status !== 'in_progress') delete step.stopped;
       }
       if (body.enabled !== undefined) step.enabled = !!body.enabled;
       if (body.progress !== undefined) step.progress = body.progress;
@@ -680,6 +902,18 @@ function createApp(sessionDir, opts = {}) {
           : (task.mockupSeq = (task.mockupSeq || 0) + 1)
       };
     }
+    // A gate means the agent ended its turn with something for the user, so a Stop that lost
+    // the race to it has nothing left to interrupt.
+    const gate = body.mockupReview ? MOCKUP_STEP
+      : body.question || body.reviewSummary ? task.activeStep : null;
+    if (gate != null && findStep(task, gate)) delete findStep(task, gate).stopped;
+    // A review gate the user sent feedback to is hidden until the agent's next round
+    // (`answered`, set by POST /api/answer). An agent that answers the feedback with a remark
+    // only - `noted` - sends no new round, so the orchestrator hands the same one back.
+    if (body.reopenGate) {
+      if (task.reviewSummary) delete task.reviewSummary.answered;
+      if (task.mockupReview) delete task.mockupReview.answered;
+    }
     // The step-3 composer's own name for the same thing, kept so the mockup agent's
     // prompt needs no step number: it writes to step 3's chat like any other agent.
     if (body.mockupChat) {
@@ -688,6 +922,12 @@ function createApp(sessionDir, opts = {}) {
       pushChat(step, body.mockupChat);
     }
     if (body.summary !== undefined) task.summary = body.summary;
+    // The E2E slot follows its holder's step 5: done or put back, the step frees it; failed, it
+    // keeps it for the retry. A finished task neither holds it nor waits for it.
+    if (body.step === VALIDATION_STEP && (body.status === 'completed' || body.status === 'waiting')) {
+      releaseE2e(task.id, body.status === 'completed');
+    }
+    if (body.summary != null) releaseE2e(task.id, true);
     persist();
   }
 
@@ -740,25 +980,37 @@ function createApp(sessionDir, opts = {}) {
     return null;
   }
 
-  function popAnswer(taskId, waitMs, req) {
+  // `sign` is the polled task's entry in `live`: while the poll is parked its orchestrator is
+  // listening, and the moment the poll ends is when it was last seen.
+  function popAnswer(taskId, waitMs, req, sign) {
     const queued = takeQueued(taskId);
     if (queued) return Promise.resolve(queued);
     if (!waitMs) return Promise.resolve(null);
     return new Promise(resolve => {
-      const waiter = { taskId: taskId || null, resolve, timer: null };
+      if (sign) sign.listening++;
+      const waiter = { taskId: taskId || null, timer: null, resolve: a => {
+        if (sign) {
+          sign.listening--;
+          sign.seen = Date.now();
+        }
+        resolve(a);
+      } };
       // A poll whose client is gone must not stay parked: pushAnswer picks the
       // first matching waiter, so a dead one would swallow the answer into a
       // closed socket instead of queueing it, and the next poll would find
       // nothing. The user sees the answer sent and the pipeline never moves.
-      const drop = () => {
+      const drop = gone => {
         const i = waiters.indexOf(waiter);
         if (i === -1) return;
         waiters.splice(i, 1);
         clearTimeout(waiter.timer);
-        resolve(null);
+        // Hung up mid-wait: a waiter does that only when it is killed, and a session that
+        // ends takes its waiter with it. One that ran its poll out is between two polls.
+        if (gone && sign) sign.gone = true;
+        waiter.resolve(null);
       };
-      waiter.timer = setTimeout(drop, waitMs);
-      if (req) req.once('close', drop);
+      waiter.timer = setTimeout(() => drop(false), waitMs);
+      if (req) req.once('close', () => drop(true));
       waiters.push(waiter);
     });
   }
@@ -773,19 +1025,28 @@ function createApp(sessionDir, opts = {}) {
     } catch (_e) {
       return sendJson(res, 400, { error: 'bad request line' });
     }
+    // Since this server can open a terminal running Claude Code, a page from anywhere else
+    // must not be able to call it. Whatever another site makes the browser send says so -
+    // its Origin, or Sec-Fetch-Site - and a name rebound to 127.0.0.1 still arrives with its
+    // own Host. The page itself may be reached from a link; it is only a page.
+    if (!sameOrigin(req, url)) return sendJson(res, 403, { error: 'cross-origin request refused' });
     try {
       if (req.method === 'GET' && url.pathname === '/api/state') {
         // projectKey is computed, never persisted: it follows the directory the
         // session lives in, so a moved project gets a new one rather than a stale one.
         // The models are the session's too, so a resumed run offers what it can spawn now.
-        return sendJson(res, 200, { ...state, project: projectKey, models });
+        // So is the usage: per task, what its orchestrator's session has spent.
+        const orchestrators = Object.fromEntries(state.tasks.map(t => [t.id, orchestratorView(t)]));
+        const usage = Object.fromEntries(state.tasks.filter(t => t.orchestrator && t.orchestrator.session)
+          .map(t => [t.id, readUsage(t.orchestrator.session)]));
+        return sendJson(res, 200, { ...state, project: projectKey, models, orchestrators, usage });
       }
       if (req.method === 'POST' && url.pathname === '/api/state') {
         const body = JSON.parse(await readBody(req, res) || '{}');
         try {
           applyUpdate(body);
         } catch (e) {
-          return sendJson(res, 400, { error: e.message });
+          return sendJson(res, e.status || 400, { error: e.message });
         }
         return sendJson(res, 200, { ok: true });
       }
@@ -820,34 +1081,50 @@ function createApp(sessionDir, opts = {}) {
           // written from it, and only the stored one has the description merged and the
           // review flags checked against what codeReview takes.
           pushAnswer({ kind: 'step1', ...task.step1, ...(revision ? { revision } : {}), taskId: task.id });
+          // The first form of a task nobody orchestrates opens the session that will; the
+          // answer waits in the queue for its first poll.
+          if (!revision && !task.orchestrator && launcher) launchFor(task).catch(() => {});
           return sendJson(res, 200, revision ? { ok: true, revision } : { ok: true });
         }
-        // The Stop button. The step is failed here and now, so the page shows its failure
-        // gate at once; the orchestrator stops the agent when the answer reaches it.
+        // The Stop button. It interrupts the agent and nothing else: the step keeps its status,
+        // its gate and its transcript, and the page only says it was stopped. The flag stays
+        // until the user sends that step something - which is what resumes the agent - or the
+        // step moves on. The orchestrator stops the agent when the answer reaches it.
         if (body.kind === 'stop') {
           const step = findStep(task, Number(body.step));
           if (!step || !AGENT_STEPS.includes(step.id)) return sendJson(res, 400, { error: 'unknown step' });
           if (step.status !== 'in_progress') {
             return sendJson(res, 409, { error: `step ${step.id} is not running` });
           }
-          Object.assign(step, { status: 'failed', report: 'Stopped by the user.', currentOperation: 'Stopped' });
+          if (step.stopped) return sendJson(res, 409, { error: `step ${step.id} is already stopped` });
+          step.stopped = new Date().toISOString();
           pushLog(step, 'Stopped by the user');
-          if (task.activeStep === step.id && task.question) {
-            task.question = null;
-            task.questionSeq = (task.questionSeq || 0) + 1;
-          }
-          if (step.id === REFINEMENT_STEP || step.id === STORY_STEP) task.reviewSummary = null;
-          if (step.id === MOCKUP_STEP) task.mockupReview = null;
           persist();
           pushAnswer({ kind: 'stop', step: step.id, taskId: task.id });
           return sendJson(res, 200, { ok: true });
         }
-        const attached = attachmentsOf(task, body.attachments);
-        if (body.kind === 'mockup' && body.decision === 'feedback') {
-          const step = findStep(task, MOCKUP_STEP);
-          if (!step) return sendJson(res, 400, { error: `unknown step ${MOCKUP_STEP}` });
-          pushChat(step, { role: 'user', text: body.text, attachments: attached });
+        // The × on a line the user wrote. It leaves the transcript at once, so a retry or a
+        // spawn never hands it over, and the orchestrator tells the agent that may have read it.
+        // Only the user's own lines: what an agent said is its record of the work.
+        if (body.kind === 'delete') {
+          const step = findStep(task, Number(body.step));
+          if (!step) return sendJson(res, 400, { error: 'unknown step' });
+          const i = (step.chat || []).findIndex(m => m.role === 'user' && m.id === Number(body.id));
+          if (i === -1) return sendJson(res, 404, { error: `step ${step.id} has no message ${body.id} of yours` });
+          const [line] = step.chat.splice(i, 1);
           persist();
+          const answer = { kind: 'delete', step: step.id, id: line.id, text: line.text, taskId: task.id };
+          if (line.attachments) {
+            answer.attachments = line.attachments.map(n => path.join(taskDir(task.id), ATTACHMENTS, n));
+          }
+          // A stopped agent hears about it too, but it is not resumed by it: the flag stays.
+          if (step.stopped) answer.afterStop = true;
+          pushAnswer(answer);
+          return sendJson(res, 200, { ok: true });
+        }
+        const attached = attachmentsOf(task, body.attachments);
+        if (body.kind === 'mockup' && !findStep(task, MOCKUP_STEP)) {
+          return sendJson(res, 400, { error: `unknown step ${MOCKUP_STEP}` });
         }
         // A message typed on a step that has no gate of its own: it goes to that step's
         // agent through the orchestrator, and into the step's transcript right now, so
@@ -856,12 +1133,19 @@ function createApp(sessionDir, opts = {}) {
           const step = findStep(task, Number(body.step));
           if (!step) return sendJson(res, 400, { error: 'unknown step' });
           pushChat(step, { role: 'user', text: body.text, attachments: attached });
-          persist();
         }
+        consumeGate(task, body, attached);
+        // Whatever the user sends a stopped step is what resumes its agent: the flag goes, and
+        // the answer says so, so the orchestrator can tell the agent it was cut off mid-work.
+        const resumed = stoppedStepOf(task, body);
+        if (resumed) delete resumed.stopped;
+        persist();
         // The transcript keeps bare names for the thumbnails; the orchestrator gets the
         // absolute paths, which is what the agent it forwards them to can Read.
         const answer = { ...body, taskId: task.id };
         delete answer.attachments;
+        delete answer.afterStop;
+        if (resumed) answer.afterStop = true;
         if (attached.length) {
           answer.attachments = attached.map(n => path.join(taskDir(task.id), ATTACHMENTS, n));
         }
@@ -870,12 +1154,83 @@ function createApp(sessionDir, opts = {}) {
       }
       if (req.method === 'GET' && url.pathname === '/api/answer') {
         const taskId = url.searchParams.get('taskId') || null;
-        if (taskId && !findTask(taskId)) return sendJson(res, 400, { error: 'unknown task' });
+        const task = taskId ? findTask(taskId) : null;
+        if (taskId && !task) return sendJson(res, 400, { error: 'unknown task' });
+        // A task's poll is its orchestrator's sign of life, and with a `session` it is also a
+        // claim: the first session to poll a task orchestrates it. Another one is refused
+        // while that one is alive - two would act on the same answers - and takes the task
+        // over once it is not.
+        let sign = null;
+        if (task) {
+          const session = url.searchParams.get('session') || null;
+          sign = live.get(task.id) || { session: null, listening: 0, seen: 0, gone: false };
+          if (session && sign.session && sign.session !== session && alive(sign)) {
+            return sendJson(res, 409, { error: `task ${task.id} has an orchestrator of its own`, session: sign.session });
+          }
+          live.set(task.id, sign);
+          Object.assign(sign, { seen: Date.now(), gone: false });
+          if (session) sign.session = session;
+          if (session && (!task.orchestrator || task.orchestrator.session !== session)) {
+            if (!task.orchestrator) task.orchestrator = {};
+            Object.assign(task.orchestrator, { session, claimedAt: new Date().toISOString(), launchError: null });
+            persist();
+          }
+        }
         // 300 s cap: long polls resolve instantly when an answer arrives, so a
         // high cap only reduces the number of empty polls while the user thinks.
         const waitS = Math.min(Math.max(parseInt(url.searchParams.get('wait') || '0', 10) || 0, 0), 300);
-        const answer = await popAnswer(taskId, waitS * 1000, req);
+        const answer = await popAnswer(taskId, waitS * 1000, req, sign);
         return sendJson(res, 200, { answer });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/orchestrator') {
+        // What a session opened for a task reads first: where the run keeps its files, and
+        // what the task's orchestrator looks like from here (SKILL.md, "Attach").
+        const task = findTask(url.searchParams.get('taskId'));
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        const port = server.address().port;
+        return sendJson(res, 200, { taskId: task.id, sessionDir: path.resolve(sessionDir), projectDir, port,
+          command: manualCommand(task.id, port), ...orchestratorView(task) });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/orchestrator/launch') {
+        // The page's "Open" on a task whose orchestrator is gone, or never came up.
+        const body = JSON.parse(await readBody(req, res) || '{}');
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        const status = orchestratorStatus(task);
+        if (status === 'listening' || status === 'working') {
+          return sendJson(res, 409, { error: `task ${task.id} already has an orchestrator (${status})` });
+        }
+        if (!launcher) {
+          return sendJson(res, 200, { launched: false, command: manualCommand(task.id, server.address().port),
+            cwd: projectDir, error: 'this server opens no terminals' });
+        }
+        return sendJson(res, 200, await launchFor(task));
+      }
+      if (req.method === 'POST' && url.pathname === '/api/e2e') {
+        // The one E2E run at a time (VALIDATION_STEP). The reply says whether the slot is the
+        // caller's now. A task that has to wait is queued and shown waiting, and its
+        // orchestrator hears `{ "kind": "e2e" }` when the slot comes round to it.
+        const body = JSON.parse(await readBody(req, res) || '{}');
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        const e2e = state.e2e;
+        if (!e2e.holder || e2e.holder === task.id) {
+          e2e.holder = task.id;
+          e2e.queue = e2e.queue.filter(id => id !== task.id);
+          persist();
+          return sendJson(res, 200, { granted: true });
+        }
+        if (!e2e.queue.includes(task.id)) {
+          e2e.queue.push(task.id);
+          const step = findStep(task, VALIDATION_STEP);
+          if (step) {
+            Object.assign(step, { status: 'waiting', currentOperation: E2E_WAITING });
+            pushLog(step, 'Queued for the E2E slot');
+          }
+          task.activeStep = VALIDATION_STEP;
+          persist();
+        }
+        return sendJson(res, 200, { granted: false, holder: e2e.holder, queue: e2e.queue });
       }
       if (req.method === 'POST' && url.pathname === '/api/tasks') {
         const body = JSON.parse(await readBody(req, res) || '{}');
@@ -917,7 +1272,9 @@ function createApp(sessionDir, opts = {}) {
           return sendJson(res, 400, { error: 'task already started' });
         }
         state.tasks = state.tasks.filter(t => t.id !== task.id);
+        state.e2e.queue = state.e2e.queue.filter(id => id !== task.id);
         answers.delete(task.id);
+        live.delete(task.id);
         releaseWaiters(task.id);
         try { fs.rmSync(taskDir(task.id), { recursive: true, force: true }); } catch {}
         persist();
@@ -1190,10 +1547,13 @@ function main() {
   };
   const sessionDir = get('--session-dir');
   if (!sessionDir) {
-    console.error('usage: node server.cjs --session-dir <dir> [--port <n>]');
+    console.error('usage: node server.cjs --session-dir <dir> [--port <n>] [--project <dir>]');
     process.exit(1);
   }
-  const app = createApp(path.resolve(sessionDir), { onShutdown: () => process.exit(0) });
+  // The project is where every task's own orchestrator is started; the launchers pass the
+  // directory they were run from, which is the one the run's first session works in.
+  const app = createApp(path.resolve(sessionDir), { onShutdown: () => process.exit(0),
+    project: get('--project'), launchOrchestrator });
   // `--port 0` (the tests) still means "any free port"; everything else defaults to
   // the fixed one.
   const arg = get('--port');

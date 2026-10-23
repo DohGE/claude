@@ -116,40 +116,46 @@ test('panel makiet renderuje podgląd, czat i przełącza ekrany', async ({ page
   await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('Lista');
 });
 
-// Ekrany numerowane <widok>.<przypadek>, tak jak je nazywa references/mockup-agent.md.
+// Stany numerowane <widok>.<stan> od 0.0, tak jak je nazywa references/mockup-agent.md:
+// jeden plik na widok, a fragment adresu wybiera stan, który plik pokazuje.
 const NUMBERED = [
-  { id: '1.0', view: 'Logowanie', title: 'Pusty formularz', file: '1.0-login.html' },
-  { id: '1.1', view: 'Logowanie', title: 'Błąd hasła', file: '1.1-login-error.html' },
-  { id: '2.0', view: 'Lista', title: 'Lista', file: '2.0-list.html' }
+  { id: '0.0', view: 'Logowanie', title: 'Pusty formularz', file: '0-login.html' },
+  { id: '0.1', view: 'Logowanie', title: 'Błąd hasła', file: '0-login.html' },
+  { id: '1.0', view: 'Lista', title: 'Lista', file: '1-list.html' }
 ];
+const VIEW_HTML = '<!doctype html><h1 id="mk"></h1><script>'
+  + 'const show = () => { mk.textContent = location.hash.slice(1); };'
+  + 'show(); addEventListener("hashchange", show);</script>';
 // 1x1 px PNG
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64');
 
-test('ekrany <widok>.<przypadek> są pogrupowane w zakładki widoków i ich przypadków',
+test('stany <widok>.<stan> są pogrupowane w zakładki widoków i ich stanów',
   async ({ page }) => {
     const d = path.join(dir, 'tasks', 't1', 'generated-mockups');
     fs.mkdirSync(d, { recursive: true });
-    for (const s of NUMBERED) fs.writeFileSync(path.join(d, s.file), `<!doctype html><h1 id="mk">${s.id}</h1>`);
+    for (const file of new Set(NUMBERED.map(s => s.file))) fs.writeFileSync(path.join(d, file), VIEW_HTML);
     await postState({ step: 3, enabled: true, status: 'in_progress', activeStep: 3,
       mockupReview: { rev: 1, text: 'Dwa widoki', screens: NUMBERED } });
     await page.goto(base);
     await page.waitForSelector('#mockupFrame');
-    await expect(page.locator('#viewTabs button')).toHaveText(['1 Logowanie', '2 Lista']);
-    await expect(page.locator('#caseTabs button')).toHaveText(['1.0 Pusty formularz', '1.1 Błąd hasła']);
+    await expect(page.locator('#viewTabs button')).toHaveText(['0 Logowanie', '1 Lista']);
+    await expect(page.locator('#caseTabs button')).toHaveText(['0.0 Pusty formularz', '0.1 Błąd hasła']);
+    await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('0.0');
+    // Ten sam plik, inny stan: wybiera go fragment adresu.
+    await page.click('#caseTabs [data-screen="0.1"]');
+    await expect(page.locator('#mockupFrame')).toHaveAttribute('src', /\/0-login\.html\?rev=1#0\.1$/);
+    await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('0.1');
+    await expect(page.locator('#caseTabs [data-screen="0.1"]')).toHaveClass(/selected/);
+    // Widok otwiera się na swoim pierwszym stanie.
+    await page.click('#viewTabs [data-view="1"]');
     await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('1.0');
-    await page.click('#caseTabs [data-screen="1.1"]');
-    await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('1.1');
-    await expect(page.locator('#caseTabs [data-screen="1.1"]')).toHaveClass(/selected/);
-    // Widok otwiera się na swoim pierwszym przypadku.
-    await page.click('#viewTabs [data-view="2"]');
-    await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('2.0');
-    await expect(page.locator('#caseTabs button')).toHaveText(['2.0 Lista']);
+    await expect(page.locator('#caseTabs button')).toHaveText(['1.0 Lista']);
     // Kolejna runda agenta zostawia na ekranie to, co było wybrane.
     await postState({ step: 3, mockupReview: { rev: 2, text: 'Poprawione', screens: NUMBERED } });
     await expect(page.locator('.summary-text')).toHaveText('Poprawione');
-    await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('2.0');
+    await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('1.0');
   });
 
 test('przycisk otwiera folder zrzutów makiet, gdy zrzuty już są', async ({ page }) => {
@@ -195,7 +201,7 @@ test('przełącznik Desktop/Mobile zmienia szerokość podglądu', async ({ page
   expect(await size()).toEqual(['390px', '780px']);
 });
 
-test('Send nie blokuje panelu i od razu pokazuje wiadomość w czacie', async ({ page }) => {
+test('Send zdejmuje bramę makiet i od razu pokazuje wiadomość w czacie', async ({ page }) => {
   await openMockupPanel(page);
   await page.fill('#mockupFeedback', 'Przycisk na pełną szerokość');
   await page.click('#sendMockup');
@@ -203,21 +209,26 @@ test('Send nie blokuje panelu i od razu pokazuje wiadomość w czacie', async ({
     { kind: 'mockup', decision: 'feedback', text: 'Przycisk na pełną szerokość' });
   // serwer zapisuje wiadomość od razu, więc czat nie czeka na rundę agenta
   await expect(page.locator('.msg.user')).toContainText('Przycisk na pełną szerokość');
-  await expect(page.locator('#sendMockup')).toBeEnabled();
-  await expect(page.locator('#mockupFeedback')).toHaveValue('');
+  // a bramę zdejmuje do następnej rundy — nic na niej nie czeka już na usera
+  await expect(page.locator('#sendMockup')).toHaveCount(0);
+  await expect(page.locator('#approveMockup')).toHaveCount(0);
+  await expect(page.locator('#op')).toContainText('Reworking the mockups…');
 });
 
-test('kolejna wiadomość idzie, zanim agent odpowie na poprzednią', async ({ page }) => {
+test('kolejna wiadomość idzie z rozmowy kroku, zanim agent odpowie na poprzednią', async ({ page }) => {
   await openMockupPanel(page);
   await page.fill('#mockupFeedback', 'Przycisk na pełną szerokość');
   await page.click('#sendMockup');
   expect(await takeAnswer()).toMatchObject({ text: 'Przycisk na pełną szerokość' });
-  await page.fill('#mockupFeedback', 'I większy odstęp nad stopką');
-  await page.click('#sendMockup');
-  expect(await takeAnswer()).toMatchObject({ text: 'I większy odstęp nad stopką' });
+  await page.fill('#stepMessage', 'I większy odstęp nad stopką');
+  await page.click('#sendStepMessage');
+  expect(await takeAnswer()).toMatchObject(
+    { kind: 'message', step: 3, text: 'I większy odstęp nad stopką' });
   await expect(page.locator('.msg.user')).toHaveCount(2);
-  // panel nie przeładował się między wiadomościami, więc podgląd stoi nietknięty
+  // następna runda agenta przywraca bramę z podglądem
+  await postState({ step: 3, mockupReview: { rev: 2, text: 'Poprawione', screens: SCREENS } });
   await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('Logowanie');
+  await expect(page.locator('#sendMockup')).toBeDisabled();
 });
 
 test('runda agenta nie gubi tekstu pisanego w trakcie', async ({ page }) => {

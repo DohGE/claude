@@ -16,6 +16,8 @@ hooks:
 You are the **orchestrator**. You never implement, test, or review code yourself.
 Sub-agents do all heavy work; you hold only: task records, step statuses, artifact paths, short summaries.
 Dynamic texts (questions, reports, summary) stay in the user's conversation language; UI chrome is English.
+Arguments with `--attach <taskId> --port <n>` start this session at "Attach"; any other start runs
+"Setup" (both at the end of this file).
 
 <!-- lean-mode:start (generated from shared/caveman-ultra.md) -->
 ## Lean mode: caveman ultra
@@ -77,8 +79,17 @@ Without that tool, re-read the file or re-run the command with narrower output.
   An agent that finishes with NO parsable JSON — it crashed, was cut off, or answered in prose — counts
   as `{"type":"error"}` for its step: run the failure protocol with a report saying the agent ended
   without a result. Never wait for a message that is not coming, and never re-read the step as still
-  running: a step-5 agent dying this way would otherwise hold `E2E_LOCK` for the rest of the run and
+  running: a step-5 agent dying this way would otherwise hold the E2E slot for the rest of the run and
   strand every task queued behind validation.
+  The one exception is an agent you halted with TaskStop for a Stop: it ends without JSON because
+  you stopped it, so that ending moves nothing (see "Stopping a step").
+- `{"type":"noted"}` (a FIXED IDENTIFIER) is an agent's answer to a `[Stopped]` or `[Deleted]`
+  notice that left it nothing to do: it replied in the transcript and is idle. Nothing moves —
+  status, progress and any gate stay as they are, and the next answer for that step goes to
+  the same agent. When the step is still `in_progress`, POST
+  `{"taskId":"T","step":N,"currentOperation":"Waiting for you","reopenGate":true}`: the panel
+  stops claiming work, and a plan, story or mockup gate the user's feedback took off the screen
+  comes back, since no revised one is coming (see "A send takes its gate off the screen").
 - Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND, on the model and effort step 1 asked for (see "Model and effort"); continue an existing one with SendMessage (its context is preserved).
 - The pipeline NEVER commits in the target project. Each task works on its own branch; stage its changes at the very end.
 - Update the stepper before and after every phase so the browser always reflects reality.
@@ -86,48 +97,53 @@ Without that tool, re-read the file or re-run the command with narrower output.
 ## The run is an event loop, not a walk
 
 A run holds one or more **tasks**. A task is one feature on one branch with its own eight-step
-pipeline, its own `<SESSION>/tasks/<id>/` and its own sub-agents. Tasks are independent; they share
-only the server, the browser page and one Validation & E2E slot.
+pipeline, its own `<SESSION>/tasks/<id>/`, its own sub-agents and its own orchestrator, a separate
+Claude Code session. Tasks share only the server, the browser page and one Validation & E2E
+slot. You orchestrate ONE task, T: `t1` when this session ran Setup, else the one `--attach` named
+(see "Attach"). Every other task is another session's — never act on it.
 
-Hold this per task, and nothing more:
+Hold this for T, and nothing more:
 
     { id, branch, root, step, agentIds{refinement, mockup, story, impl, validation, review, mockoon},
       refinement, mockups, story, revisionCount, mockupRounds, agents, notes }
 
 Then loop until the user shuts the server down:
 
-1. Before ending ANY turn of the loop, run `node "<SKILL_DIR>/scripts/wait-answer.cjs" --port PORT` with
+1. Before ending ANY turn of the loop, run `node "<SKILL_DIR>/scripts/wait-answer.cjs" --port PORT --task T` with
    the Bash tool's `run_in_background: true`, then end your turn. Never wait in the foreground: the
    waiter's exit and each sub-agent's completion are what wake you, and a turn spent on an empty poll
    re-reads the whole conversation for nothing. Starting it when one is already listening is safe —
    the second one exits at once with `WAITER_RUNNING`.
 2. The waiter exits → read its output lines (FIXED IDENTIFIERS, never translated):
-   - `ANSWER <json>` — one per answer, in arrival order; act on each one's `taskId` state machine in
-     that order, then back to 1.
+   - `ANSWER <json>` — one per answer, in arrival order; act on each in that order, then back to 1.
    - `WAIT_TIMEOUT` — 50 minutes passed with nothing: back to 1 (the new waiter is the keep-alive).
    - `WAITER_RUNNING <pid>` — another waiter is still listening: end your turn without a new one.
-   - `SERVER_GONE` — the server is gone: stop looping and end your turn.
-3. A sub-agent completion notification arrives → advance THAT task's state machine, then back to 1.
+   - `ORCHESTRATOR_RUNNING <session>` — another session orchestrates T: tell the user, stop looping.
+   - `SERVER_GONE`, or `TASK_GONE` (T was removed) — stop looping and end your turn.
+3. A sub-agent completion notification arrives → advance T's state machine, then back to 1.
 4. `{"kind":"summary","decision":"shutdown"}` → stop looping and end your turn.
-5. Once every task has had its final summary, a `WAIT_TIMEOUT` ends the loop instead: do not start
+5. Once T has had its final summary, a `WAIT_TIMEOUT` ends the loop instead: do not start
    another waiter (see "Final summary", point 7).
 
-Answer kinds and where they belong: `step1` → step 1 of that task (the first one starts its
-pipeline, every later one is a revision); `answer` → the question that task's agent asked;
-`decision` → that task's plan or story gate, failure gate or Mockoon gate; `mockup` → that task's mockup
-gate; `message` → a line typed on a step's own composer, for that step's agent (see "Talking to
-a running agent"); `stop` → the Stop button of a running step (see "Stopping a step"); `summary` →
-that task's summary screen.
+Answer kinds and where they belong: `step1` → step 1 (the first one starts T's pipeline, every
+later one is a revision); `answer` → the question T's agent asked; `decision` → the plan or story
+gate, failure gate or Mockoon gate; `mockup` → the mockup gate; `message` → a line typed on a step's
+own composer, for that step's agent (see "Talking to a running agent"); `stop` → the Stop button of
+a running step (see "Stopping a step"); `delete` → the × on one of the user's own lines in a step's
+transcript (see "Talking to a running agent"); `summary` → the summary screen; `e2e` → the E2E slot
+came round to T (see "E2E slot").
 Each kind carries its own fields, and they are what you read — never guess a name: `answer` has
 `questionId` and `value` (the answer TEXT is `value`, not `text`); `decision` and `mockup` have
 `decision` plus a `text` on `feedback`; `message` has `step` and `text`; `stop` has `step`;
-`summary` has `decision`; `step1` carries the form as the server normalised it — `refinement`,
+`delete` has `step`, the line's `id` and its `text`; `summary` has `decision`; `step1` carries the form as the server normalised it — `refinement`,
 `generateMockups` and `storyDescription` are booleans, and `codeReview` is a list of one to three
 runs, each `{"flags":[…]}` — and every `step1` after the first adds `revision` (see "Revising
-step 1"). An `answer`, a `message` and a `feedback` may also carry `attachments`, the absolute
-paths of images the user attached in steps 2, 3 and 8: the key is there only when there is at
-least one, and then the text may be empty (see "Talking to a running agent"). Every
-one also carries `taskId`, which is how you route it. Reading the wrong name yields `undefined`,
+step 1"). An `answer`, a `message`, a `feedback` and a `delete` may also carry `attachments`, the
+absolute paths of images the user attached in steps 2, 3 and 8: the key is there only when there
+is at least one, and then the text may be empty (see "Talking to a running agent"). An `answer`, a
+`decision`, a `mockup`, a `message` or a `delete` for a step the user stopped carries
+`afterStop: true` (see "Stopping a step"). Every
+one also carries `taskId`, always T's. Reading the wrong name yields `undefined`,
 and the run then forwards an empty answer to the agent instead of stopping.
 Two server caps bound what a form can carry: a request body over 25 MB is answered with
 `413 body over 25 MB`, which the page shows as a rejected send, and any single text field over its cap is stored
@@ -146,37 +162,33 @@ over the steps a task has already reached, and the requirements form is one of t
 that reaches you, so never expect a "went back" message and never move `activeStep` to follow the
 user — `activeStep` says where the PIPELINE is, and the browser decides what it shows.
 
-**Sending text does not block a task's panel**, so one message may be followed by another before an
-agent has answered the first. Extra `answer` and `mockup`/`feedback` messages are therefore
-normal: SendMessage each to that step's agent as it arrives, in order, and never drop one. An
-`answer` arriving while no question is open is an afterthought to the previous one — pass it on the
-same way, and never read it as a gate decision. Gate decisions (`approve`, `retry`, `finish`,
-`mockoon`, `shutdown`) still arrive at most once per gate, because those buttons do lock the panel.
+**A send takes its gate off the screen at once.** The server acts on what the page sends before it
+wakes you: an `answer` to the open question clears it (`question` becomes null, and the step logs
+`<id>: <answer>` and reads `Processing answer…`), a `feedback` marks the plan, story or mockup gate
+`answered` and puts the text in that step's `chat`, an `approve` drops the gate, and a `retry` puts
+the failed step back `in_progress`. So the user sees the step at work, never a gate they already
+answered — and you never clear a question, a gate or a failure the server already did. A gate
+answered with feedback stays off the screen until you POST the agent's next round (a new
+`reviewSummary` or `mockupReview` replaces it) or `reopenGate` (see `noted`).
+Each gate takes one answer, so what the user thinks of next is a `message` from the step's
+composer: SendMessage each to that step's agent as it arrives, in order, and never drop one. An
+`answer` or a `feedback` that still arrives for a gate already answered (a page that had not caught
+up) is the same kind of afterthought — pass it on, and never read it as a gate decision. Gate
+decisions (`approve`, `retry`, `finish`, `mockoon`, `shutdown`) arrive at most once per gate.
 
-**"Wait for T's `kind==X`" below never means blocking the run on T.** It means: stay in this loop,
-keep polling unfiltered, keep serving whatever arrives for other tasks, and resume T's step when its
-`X` shows up. Never poll with `&taskId=`, and never discard an answer because it belongs elsewhere —
-one task waiting at a gate must not stall the others.
+**"Wait for T's `kind==X`" below never means blocking.** It means: stay in this loop with the waiter
+armed, keep serving whatever else arrives for T, and resume T's step when its `X` shows up.
 
-Because agents run in the background, several tasks can sit in steps 2-4, 6 and 8 at once. A task that
-fails does not stop the run: the others keep going while it waits at its gate.
+Other tasks run in sessions of their own, so several sit in steps 2-4, 6 and 8 at once, and one
+that fails stops none of the others.
 
-**E2E_LOCK.** Chrome, the Claude in Chrome extension, the Playwright installation and the app's dev
-port are single-instance, so only ONE task may be inside step 5 at a time. The lock is NOT something
-you hold in your head: a long run summarises your memory away, and a lock you have forgotten puts
-two tasks on one Chrome and one dev port. It is a reading of `/api/state`, taken fresh each time you
-need it:
-
-- **Held** by any task whose step 5 has started and not finished — `in_progress`, or `failed` while
-  its failure protocol runs, because the lock covers the retry too.
-- **Queued**: every task whose step 5 is `waiting` with `currentOperation` `"Waiting for the E2E
-  slot"`. A task reaching step 5 while the lock is held is posted as
-  `{"taskId":"<id>","step":5,"status":"waiting","activeStep":5,"currentOperation":"Waiting for the E2E slot","logEntry":"Queued for the E2E slot"}`
-  — that log entry is what carries the arrival time, and FIFO is by that time. Order the queue by it
-  rather than by the order you happen to remember, which is the part that does not survive.
-
-The lock is held for the whole step, including any failure-protocol retry, and released when the task
-leaves step 5 — then start the queued task whose `Queued for the E2E slot` entry is the oldest.
+**E2E slot.** Chrome, the Claude in Chrome extension, the Playwright installation and the app's dev
+port are single-instance, so only ONE task may be inside step 5 at a time, and the SERVER keeps the
+slot, never your memory. POST `/api/e2e` with `{"taskId":"T"}`: `{"granted":true}` → T has it;
+`{"granted":false,…}` → the server queued T (first come, first served) and shows its step 5
+waiting: wait for T's `kind=="e2e"`. T keeps the slot through step 5 — a Stop and a failure-protocol
+retry included — and the server hands it on once step 5 is posted `completed` or T's summary is
+set. Never release it yourself.
 
 ## Spawning a sub-agent
 
@@ -217,7 +229,7 @@ that still holds a placeholder; a hand-made one hands `{{ROOT}}` to the agent as
 | `{{ROOT}}` | the task's working directory. Before step 4 it is `PROJECT`; step 4 fixes it to `PROJECT` or to the task's worktree |
 | `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}` | the values from Setup (points 3 and 1) |
 | `{{EFFORT}}` | the thinking directive for THIS step, from the table in "Model and effort" — often the empty string, which makes the paragraph disappear |
-| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation`. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on |
+| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation` — all but `story.md`, which the story agent writes in English whatever it is. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on |
 
 ## Model and effort
 
@@ -303,28 +315,61 @@ The same line ends the `## Task description` of `requirements.md` when the form 
 the pictures the user attached to the description (step 1, point 3): every agent that reads the
 description reads them with it — and you still never do.
 
+**Deleted lines.** The × on one of the user's own lines in a step's transcript — a composer
+message, or mockup feedback — reaches you as
+`{"kind":"delete","taskId":"T","step":N,"id":…,"text":"…"}` once the server has taken the line
+out of that step's `chat`. Like a message, it is never a decision and moves nothing:
+
+- **That step's agent is alive** — working, waiting at a gate, or stopped → SendMessage
+  `[Deleted] The user deleted their message: "<text>"` (a FIXED IDENTIFIER, English verbatim),
+  plus, when it carries `attachments`, the line `Its images: <path>, <path>` — never the
+  `Attached images` line, which would have the agent Read them again. The agent drops what that
+  line asked for, then carries on or ends with `noted` (see "Hard rules").
+- **The step failed, or has no agent yet** → POST
+  `{"taskId":"T","step":N,"logEntry":"Message deleted; the retry will not get it"}` and nothing
+  else: a retry or a first spawn reads the step's `chat` afresh, and the line is no longer in it.
+
 ## Stopping a step
 
-Every running step's panel has a Stop button. It reaches you as
-`{"kind":"stop","taskId":"T","step":N}`, and the server has already done the state part: step N
-is `failed` with the report `Stopped by the user.`, its log ends with `Stopped by the user` — the
-failure entry a retry measures the transcript from — and its question, plan gate or mockup gate
-is closed, so the page shows the failure gate at once. Your part:
+Every running step's panel has a Stop button. It halts what the step's agent is doing and nothing
+else: the step stays `in_progress`, an open question, plan, story or mockup gate stays open, and
+the panel only notes that the agent was stopped. It reaches you as
+`{"kind":"stop","taskId":"T","step":N}` once the server has flagged the step `stopped` and logged
+`Stopped by the user`. Your part:
 
-1. Stop step N's agent with the TaskStop tool (the id from `agentIds(T)`) and forget the id. A
-   result or a completion notice that still arrives from it belongs to no step: ignore it. If its
-   result beat the stop to you and you already posted the step `completed`, ignore the stop
-   instead — there is nothing left to interrupt.
-2. Carry on at "Failure protocol" point 2, skipping its point 1: the step is already failed. Step
-   7 carries on at its own point 4, after that point's POST. A stopped step 5 holds `E2E_LOCK` like
-   any failed one until the user decides.
+1. Stop step N's agent with the TaskStop tool (the id from `agentIds(T)`) and KEEP the id: the
+   user's next word goes to the same agent, which resumes with its context. Its ending carries no
+   JSON and moves nothing (see "Hard rules"). An agent idle at a gate has nothing to halt, and the
+   call changes nothing.
+2. A result that beat the stop, or still arrives from the agent, is handled as usual: it moves the
+   step on, and the server drops the flag once the step leaves `in_progress` or opens a gate.
+3. Whatever the user sends the stopped step next arrives with `afterStop: true`. Forward it as
+   its kind says, with `[Stopped] The user stopped you mid-work; what follows is what they sent next.`
+   (a FIXED IDENTIFIER, English verbatim) on its own line first. Every kind but `delete` also ends
+   the stop on the server, so the answers after it come without the marker. Two cases differ:
+   - `approve` at step 2 or 8 normally needs no agent, but a stopped one may have half-rewritten
+     the plan or the story the user approved. SendMessage
+     `[Stopped] APPROVED AS SHOWN — undo whatever you changed after your last result, then reply with that result JSON again.`
+     (a FIXED IDENTIFIER) and, when that result arrives, POST the gate's `approve` body (step 2
+     point 4, step 8 point 3) instead of opening the gate again.
+   - `approve` at step 3 is the usual `APPROVED — …` text after the `[Stopped]` line: the mockup
+     brief puts the round on screen back before recording it.
+   The agent then answers with its usual JSON, or with `noted` when the user only asked or
+   remarked something.
+4. When SendMessage cannot reach the agent any more, spawn a fresh one for the step, per
+   "Spawning a sub-agent", with every `user` entry of the step's `chat` under `## What the user
+   said in this step` and the forwarded text last.
+5. A stopped step 5 keeps the E2E slot. To abandon a stopped step, the user tells its agent
+   to give up: it ends with its error JSON, and the failure protocol takes it from there.
 
 ## Server helpers (use exactly these shapes)
 
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
-  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
+  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
+  `reopenGate` puts a plan, story or mockup gate the user answered with feedback back on screen
+  as it was (see `noted` in "Hard rules"); with no such gate it changes nothing.
   `chat` appends to the transcript of the step named in the same body — every step has one, and
   it is what the panel's composer writes into and reads back. A body carrying `chat` without
   `step` is answered 400: the line would have nowhere to go. `mockupChat` is the same thing
@@ -343,11 +388,11 @@ is closed, so the page shows the failure gate at once. Your part:
   ONE POST only when they share both and nothing (user interaction, agent work) happens between them
   — e.g. completing a step and activating the next in the same task is a single body.
 - Wait for a user answer: only through the background waiter of the event loop (point 1), which
-  long-polls `/api/answer?wait=290` → `{"answer":{...,"taskId":"t1"}|null}` for you. Never curl
-  `/api/answer` yourself while a waiter may be listening: two pollers split the answers between them.
-  Poll WITHOUT `taskId`: this is the event loop and it must see every task's answers. The returned
-  object names the task it belongs to — route on it, never drop it because it belongs to another
-  task. (`&taskId=t1` exists for a targeted wait; the orchestrator should not need it.)
+  long-polls `/api/answer?taskId=T&session=<this session's id>&wait=290` →
+  `{"answer":{...,"taskId":"T"}|null}` for you. Never curl `/api/answer` yourself: two pollers split
+  the answers between them, and a poll without `taskId` takes other tasks' answers from their own
+  orchestrators. The `session` is the claim: the first session to poll a task orchestrates it while
+  it is alive, and the server answers any other one `409` (the waiter's `ORCHESTRATOR_RUNNING`).
   ALWAYS pass `timeout: 320000` to the Bash tool for this call — the default 120 s tool timeout
   would kill the poll mid-wait. The poll returns instantly once the user answers; the long wait
   only spares empty polls. If curl cannot connect, the server died: re-run the launcher (state
@@ -371,7 +416,12 @@ copies the open task step 1 form and its uploaded files) and "New empty task" (a
 work from whatever step that task is on. Either way the browser switches to the new task and puts
 it into its own step 1. There is NO barrier —
 each task starts its own pipeline the moment ITS form is submitted, so the user can launch task 1
-while still writing task 2.
+while still writing task 2. A task's first submission is also what gives it an orchestrator: the
+server opens a new terminal in `PROJECT` running
+`claude "/doh:implementNewFeature --attach <id> --port PORT"`, and that session runs the task (see
+"Attach"). Nothing about it is yours: a `step1` reaches you for T only. When no terminal opens, the
+stepper's top-right corner shows the task's orchestrator `closed` with an "Open session" button
+that offers the command to run by hand.
 
 On a `step1` answer for task T:
 
@@ -544,17 +594,21 @@ doing, in this order:
 2. Spawn the refinement agent from `references/refinement-agent.md`, per "Spawning a sub-agent".
 3. Route this task's answers and its agent's final JSON:
    - `{"type":"question","id","text","options"?}` → POST `{"taskId":"T","question":{...}}`, wait for
-     T's `kind=="answer"`, then **immediately** (before contacting the agent) POST
-     `{"taskId":"T","question":null,"step":2,"progress":<min(60, 20+5×answers so far)>,"currentOperation":"Processing answer…","logEntry":"<id>: <answer, shortened>"}`
-     so the UI reacts to the click at once, then SendMessage the answer text to the agent. You own
-     the Q&A progress — the agent does not report between questions. A further `answer` for T while
-     no question is open is the user adding to what they just said: SendMessage it to the same agent
-     and keep waiting for its next JSON.
-   - `{"type":"result","summary"}` → spec/plan/checklist now exist in `<SESSION>/tasks/T`. Go to 4.
+     T's `kind=="answer"`. The server has already taken the question down and logged the answer
+     (see "A send takes its gate off the screen"), so POST only
+     `{"taskId":"T","step":2,"progress":<min(60, 20+5×answers so far)>}`, then SendMessage the
+     answer text to the agent. You own the Q&A progress — the agent does not report between
+     questions. A `message` for step 2 before its next JSON is the user adding to what they just
+     said: SendMessage it to the same agent and keep waiting for that JSON.
+   - `{"type":"result","summary","critical"}` → spec/plan/checklist now exist in `<SESSION>/tasks/T`. Go to 4.
    - `{"type":"error","report"}` → failure protocol (below) for step 2.
-4. Gate: POST `{"taskId":"T","reviewSummary":{"text":"<summary>"}}`; wait for T's `kind=="decision"`:
+4. Gate: POST `{"taskId":"T","reviewSummary":{"text":"<summary>","critical":[…]}}`, with `critical`
+   copied from the result as it came (`[]` when it has none): the panel lists it as "Critical
+   information" above the summary, where approving cannot pass it by. Wait for T's `kind=="decision"`:
    - `approve` → POST `{"taskId":"T","reviewSummary":null,"step":2,"status":"completed","activeStep":<the next step>}`; continue there.
-   - `feedback` → SendMessage the feedback to the agent; back to 3.
+     With `afterStop`, the agent first restores the plan it showed ("Stopping a step", point 3).
+   - `feedback` → SendMessage the feedback to the agent; back to 3. The gate is off the screen
+     already, and the agent's next result puts the revised plan up in its place.
 
 ## Step 3 — Mockups (interactive, conditional)
 
@@ -577,8 +631,10 @@ about it reaches the prompt.
      the server appends `mockupChat` to it, which is why clearing `mockupReview` never erases the
      conversation.
      Take the screenshots with `node "<SKILL_DIR>/scripts/screenshot-mockups.cjs" "<SESSION>/tasks/T"`.
-     It refills `<SESSION>/tasks/T/mockup-screenshots/` with one full-page PNG per screen at desktop
-     width (1280 px), named `<id> <view> - <title>.png`; the panel's "Open screenshots folder"
+     It refills `<SESSION>/tasks/T/mockup-screenshots/` with one full-page PNG per manifest entry —
+     every state of every view, each loaded through its `#<id>` fragment — at desktop width
+     (1280 px), named `<id> <view> - <title>.png`, the id numbered `{0-9}.{0-99}` (view, then
+     state, both from 0); the panel's "Open screenshots folder"
      button opens that folder for the user. It prints one line, a FIXED IDENTIFIER:
      `SCREENSHOTS <count> <dir>`, or `SCREENSHOTS_FAILED <reason>` — then post the round anyway,
      with `Screenshots could not be taken: <reason>` at the end of the `mockupChat` text. The first
@@ -587,12 +643,11 @@ about it reaches the prompt.
      `node "<SKILL_DIR>/node_modules/@playwright/test/cli.js" install chromium`, then try once more.
      Never Read the screenshots: they are for the user.
      Then wait for T's `kind=="mockup"`:
-     - `decision=="feedback"` → **immediately** (before contacting the agent) POST
-       `{"taskId":"T","step":3,"currentOperation":"Reworking the mockup…","logEntry":"Feedback: <shortened>"}`
-       so the UI reacts to the click at once, then SendMessage the feedback text to the agent. Do NOT
-       post the line as `mockupChat` — the server already appended it when the browser sent it.
-       The composer is not locked while the agent reworks, so more feedback may arrive: SendMessage
-       each one as it comes, in order, and keep waiting for the round. Back to 3.
+     - `decision=="feedback"` → SendMessage the feedback text to the agent, and post nothing: the
+       server already took the round off the screen, put the step at `Reworking the mockups…` and
+       appended the line to the transcript — a `mockupChat` copy would show it twice. What the user
+       adds while the agent reworks comes from the step's composer as `message`: SendMessage each
+       one as it comes, in order, and keep waiting for the round. Back to 3.
      - `decision=="approve"` → SendMessage exactly (a FIXED IDENTIFIER — English verbatim):
        `APPROVED — record the approved design as your brief's Approval section says, then reply
        with the result JSON.` Back to 3.
@@ -620,15 +675,16 @@ skip it like step 3.
      the same way — with
      `{"taskId":"T","step":8,"progress":90,"currentOperation":"Waiting for your review","reviewSummary":{"text":"<summary>"},"logEntry":"Story written: <N> acceptance criteria"}`,
      then wait for T's `kind=="decision"`:
-     - `feedback` → **immediately** (before contacting the agent) POST
-       `{"taskId":"T","step":8,"currentOperation":"Reworking the story…","logEntry":"Feedback: <shortened>"}`
-       so the UI reacts to the click at once, then SendMessage the feedback text to the agent,
-       with its attachments line. The gate stays open while the agent reworks, so more feedback
-       may arrive: SendMessage each one as it comes, in order. Back to 3 — every result opens the
-       gate again, and its new `rev` replaces the story on screen.
+     - `feedback` → SendMessage the feedback text to the agent, with its attachments line, and
+       post nothing: the server already took the gate off the screen, put the step at `Reworking
+       the story…` and put the feedback in its transcript. What the user adds while the agent
+       reworks comes from the step's composer as `message`: SendMessage each one as it comes, in
+       order. Back to 3 — every result opens the gate again, and its new `rev` puts the revised
+       story on screen.
      - `approve` → POST
        `{"taskId":"T","reviewSummary":null,"step":8,"status":"completed","progress":100,"activeStep":4}`
-       and start step 4. When a feedback you forwarded has no result yet, wait for the agent's
+       and start step 4 — with `afterStop`, only once the agent has restored the story it
+       showed ("Stopping a step", point 3). When a feedback you forwarded has no result yet, wait for the agent's
        next result first and post this instead of a new gate: the user approved with the change
        on its way, and implementation must not start on a story that is being rewritten.
    - `{"type":"error","report"}` → failure protocol for step 8.
@@ -640,19 +696,29 @@ skip it like step 3.
 
 ## Step 4 — Implementation (view-only)
 
-1. Pick this task's working directory `ROOT`, once, here:
-   - no other task has claimed `PROJECT` yet → `ROOT = PROJECT`, and
-     `git -C "<ROOT>" checkout -b <branch>` (or `checkout <branch>` when it already exists). Mark
-     `PROJECT` claimed for the rest of the run.
-   - otherwise → `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<slug>-<taskId>`,
+1. Pick this task's working directory `ROOT`, once, here. A new branch starts from the
+   repository's main branch `BASE`, never from whatever happens to be checked out — unless the user
+   asked for another start (a branch they named, or the current one) in the requirements or since,
+   and then from that. `BASE` is the first that `git -C "<PROJECT>" rev-parse --verify --quiet <name>`
+   finds of: the name `git -C "<PROJECT>" symbolic-ref --short refs/remotes/origin/HEAD` gives
+   without its `origin/`, `main`, `master`, then the same three under `origin/`. A branch that
+   already exists is checked out as it is, with its own commits.
+   Every task's orchestrator picks on its own, so the project's checkout is the server's to hand
+   out: POST `{"taskId":"T","root":"<PROJECT>"}` first.
+   - `200` → `ROOT = PROJECT`, T's for the rest of the run, and
+     `git -C "<ROOT>" checkout -b <branch> <BASE>` (or `checkout <branch>` when it already exists).
+     When git refuses because of local changes, go to
+     the failure protocol with its message — never stash, reset or discard the user's work.
+   - `409` (`root … is task tN's`: another task has it) →
+     `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<slug>-<taskId>`,
      where `<slug>` is the branch with `/` and non-ASCII replaced by `-`. The task id is what keeps
      the path unique: two different branches can slugify to the same string, and `worktree add`
      would then fail on an existing directory. Create it with
-     `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch>`.
-     When the branch already exists and is not checked out anywhere, drop `-b`. When it IS checked
-     out elsewhere, go to the failure protocol with a report naming the conflict.
-   A worktree is created from HEAD, so it has neither `node_modules` nor the untracked local config
-   the app needs. Bootstrap it before spawning anything, with ONE call (Bash tool):
+     `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch> <BASE>`.
+     When the branch already exists and is not checked out anywhere, use
+     `git -C "<PROJECT>" worktree add "<ROOT>" <branch>`. When it IS checked out elsewhere, go to
+     the failure protocol with a report naming the conflict.
+   A fresh worktree has neither `node_modules` nor the untracked local config the app needs. Bootstrap it before spawning anything, with ONE call (Bash tool):
 
        node "<SKILL_DIR>/scripts/bootstrap-worktree.cjs" --root="<ROOT>" --project="<PROJECT>"
 
@@ -687,8 +753,8 @@ skip it like step 3.
 
 ## Step 5 — Validation & E2E (view-only, except the Chrome-extension prompt)
 
-Take `E2E_LOCK` first; if it is held, queue this task as described in the event-loop section and come
-back when the lock frees.
+Take the E2E slot first (see "E2E slot"): POST `/api/e2e` with `{"taskId":"T"}`, and on
+`{"granted":false,…}` wait for T's `kind=="e2e"` before point 1.
 
 1. POST `{"taskId":"T","step":5,"status":"in_progress","activeStep":5,"progress":0}`.
 2. Spawn the validation agent from `references/validation-agent.md`, per "Spawning a sub-agent". It runs the task's own unit
@@ -702,19 +768,17 @@ back when the lock frees.
 3. Route this task's answers and its agent's final JSON:
    - `{"type":"question","id","text","options"?}` → the extension is unavailable, and it is
      REQUIRED: the agent is blocked until the user installs/enables it. POST `{"taskId":"T","question":{...}}`,
-     wait for T's `kind=="answer"`, then **immediately** (before contacting the agent) POST
-     `{"taskId":"T","question":null,"step":5,"currentOperation":"Retrying the Chrome extension…","logEntry":"<id>: <answer, shortened>"}`
-     so the UI reacts to the click at once, then SendMessage the answer text to the agent. Never
-     tell it to continue without the extension, and never re-spawn it with that requirement waived.
+     wait for T's `kind=="answer"` — the server has already taken the question down and logged
+     the answer — then POST `{"taskId":"T","step":5,"currentOperation":"Retrying the Chrome extension…"}`
+     and SendMessage the answer text to the agent. Never tell it to continue without the
+     extension, and never re-spawn it with that requirement waived.
    - `{"type":"result","compliance":NN,"testsSummary","unitSummary","mockupSummary","uxSummary","apiMockSummary"}`
-     with `compliance>=99` → POST completed and RELEASE `E2E_LOCK`. Keep `apiMockSummary` for the
+     with `compliance>=99` → POST completed (the server hands the slot on). Keep `apiMockSummary` for the
      final summary — it says which endpoints were faked, so the user knows what was never proven
      against a real API.
    - `{"type":"error","report"}` (<99% after 3 cycles, a unit suite that stayed red, or an
-     extension that never became available) → failure protocol. The lock stays held across a
-     `retry`, because the retry is still this task inside step 5 — but RELEASE it the moment the
-     task leaves the step in any direction, including `finish`. A failed-and-finished task that
-     kept the lock would strand every other task in front of validation for the rest of the run.
+     extension that never became available) → failure protocol. T keeps the slot across a
+     `retry`, because the retry is still T inside step 5; a `finish` frees it with the summary.
 
 ## Step 6 — Code Review (view-only)
 
@@ -740,8 +804,8 @@ It can run any number of times ("Regenerate" is the same step over the same file
 3. `{"type":"result","routes":N,"summary"}` → POST `{"taskId":"T","step":7,"status":"completed","progress":100}`;
    the panel then shows the JSON with a Copy button. Keep the route count and the summary only.
 4. `{"type":"error","report"}` → POST `{"taskId":"T","step":7,"status":"failed","report":"<report>"}`, then wait
-   for T's `kind=="decision"`: `retry` → POST `{"taskId":"T","step":7,"status":"in_progress","report":null}`
-   and re-spawn the agent **fresh**; `finish` → the user went back to the summary, so leave the step
+   for T's `kind=="decision"`: `retry` → the server has already put step 7 back
+   `in_progress`, so just re-spawn the agent **fresh**; `finish` → the user went back to the summary, so leave the step
    failed and keep looping.
 
 ## Failure protocol (any step, any task)
@@ -750,8 +814,8 @@ It can run any number of times ("Regenerate" is the same step over the same file
    the question matters: a step that failed while waiting for an answer would otherwise re-show that
    stale question the moment a retry flips the status back to in_progress.
 2. Wait for T's `kind=="decision"`:
-   - `retry` → POST `{"taskId":"T","step":N,"status":"in_progress","report":null}`; re-spawn that
-     step's agent **fresh**: render its brief again, then a new Agent call whose prompt carries the
+   - `retry` → the server has already put the step back `in_progress` and cleared its `report`
+     (post neither); re-spawn that step's agent **fresh**: render its brief again, then a new Agent call whose prompt carries the
      pointer plus a note about the previous failure report path plus every `user` entry of that
      step's `chat` later than its failure log entry, under `## What the user added after the
      failure`. Read them back from `/api/state` rather than from memory: on a long run yours has
@@ -762,9 +826,9 @@ It can run any number of times ("Regenerate" is the same step over the same file
      the id. The stepper numbers the tiles it shows, in pipeline order, so with only refinement on
      step 4 is the tile labelled 3 and with a story it is not even the next id: an id quoted at the
      user points them at the wrong tile. Names never drift.
-3. If the task held `E2E_LOCK`, release it on `finish` and start the queued task with the oldest
-   `Queued for the E2E slot` log entry — read the queue from `/api/state`, never from memory.
-4. A failed task does not end the run: keep serving the others from the event loop.
+3. The E2E slot needs nothing from you: a `finish` sets T's summary, and that frees the slot for
+   the next task in the queue.
+4. A failed task does not end the run: the other tasks go on in their own sessions.
 
 ## Final summary (per task)
 
@@ -775,9 +839,9 @@ It can run any number of times ("Regenerate" is the same step over the same file
 3. POST `{"taskId":"T","summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `mockupComparison` = its `mockupSummary` - every renamed field is listed here, so a missing line reads as "no source" and the section lands empty even when the step did the work; `uxReview` = its `uxSummary`; `codeReview` = the review agent's `reviewSummary`, which also names every finding it rejected and on what ground). Put the task's branch and `ROOT` at the top of `changes` so the user can find the work.
 4. Stage that task's changes: `git -C "<ROOT>" add -A` (already done by its step-6 agent; verify with
    `git -C "<ROOT>" status --short`). Worktrees have their own index, so tasks never stage into each other.
-5. When EVERY task has finished, print ONE combined summary in the terminal (user's language): a row
-   per task with its branch, working directory and final status, then the per-task details.
-6. Suggest `superpowers:finishing-a-development-branch` per task, and — for the tasks that got a
+5. Print T's summary in the terminal (user's language): its branch, working directory and final
+   status, then the details. Every other task's orchestrator prints its own.
+6. Suggest `superpowers:finishing-a-development-branch` for T's branch, and — when T got a
    worktree — `git worktree remove <ROOT>` AFTERWARDS, in that order. The order is not a preference:
    the pipeline deliberately ends with the work staged and uncommitted, and `git worktree remove`
    refuses a worktree in that state (`fatal: ... contains modified or untracked files`). Say so when
@@ -785,13 +849,15 @@ It can run any number of times ("Regenerate" is the same step over the same file
    feature the run just built. Finish the branch first (commit, merge or PR), then remove the
    worktree; the pipeline never removes one itself, and it holds copies of the project's `.env*`
    files, so an abandoned worktree leaves those sitting outside the project.
-7. Leave the server running. Do NOT kill the PID yourself. After the combined summary, keep the one
-   waiter that is listening (start it if none is) and serve what it brings — a "Generate Mockoon
-   mocks" press arrives this way — but when it ends in `WAIT_TIMEOUT`, end your turn WITHOUT starting
-   another. Tell the user, in the combined summary, that a button pressed after that waits in the
-   server until they type anything in this terminal; then drain the queue with
-   `curl -s "http://127.0.0.1:PORT/api/answer"` (no `wait`) until it returns `null`, act on each
-   answer, and go back to the event loop. The run ends when the user presses "Shut down server" or
+7. Leave the server running — other tasks may still be on it. Do NOT kill the PID yourself. After
+   the summary, keep T's waiter listening (start it if none is) and serve what it brings — a
+   "Generate Mockoon mocks" press arrives this way — but when it ends in `WAIT_TIMEOUT`, end your
+   turn WITHOUT starting another. Tell the user, in the summary, that a button pressed after that
+   waits in the server until they type anything in this terminal, or until "Open session" in the
+   stepper's corner opens a new one for T; then drain the queue with
+   `node "<SKILL_DIR>/scripts/wait-answer.cjs" --port PORT --task T --minutes 0` in the foreground,
+   act on each `ANSWER`, and go back to the event loop. The run ends when the user presses "Shut
+   down server" — it stops every task's run, so they press it once the others are done too — or
    the server dies. Point them at the button rather
    than letting them close the terminal: pressing it is also what wipes every task's `auth.json`, so a
    run killed any other way leaves the credentials they typed sitting in the session directory
@@ -831,8 +897,8 @@ It can run any number of times ("Regenerate" is the same step over the same file
    A missing or unreadable file does not stop the run: the form then offers `opus`, `sonnet`,
    `haiku` and `fable` without versions.
 4. Start the server (pick the script for the OS):
-   - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -Open`
-   - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --open`
+   - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -ProjectDir "<PROJECT>" -Open`
+   - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --project-dir "<PROJECT>" --open`
    - `PORT` is **9999**, always. stdout is `{"port":9999}` — read it to confirm the server came
      up, not to learn a number. Tell the user the stepper is open at `http://127.0.0.1:9999/`.
      The port is fixed because the browser remembers things per origin: the stepper's tab, the
@@ -841,5 +907,41 @@ It can run any number of times ("Regenerate" is the same step over the same file
      never shut down. Do NOT look for a free port and do NOT start the pipeline anyway: show the
      launcher's message, tell the user to close the other stepper with its "Shut down server"
      button, and stop your turn there.
-5. A run starts with one task, `t1`. POST `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}`
-   and enter the event loop.
+   - The page's top-right corner shows THIS session's tokens, its 5-hour and weekly limits, your
+     model, effort and context in use. Only Claude Code's status line receives those, so the
+     server reads the snapshot `scripts/statusline-relay.cjs` keeps of it, per session id. Until
+     the user's `statusLine` command runs through the relay
+     (`node "<SKILL_DIR>/scripts/statusline-relay.cjs" <their command>`), the corner says so and
+     names the script. Never edit the user's settings for it yourself, and never open their
+     credentials to fill it in.
+5. A run starts with one task, `t1`, and this session is its orchestrator: `T = t1`. POST
+   `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}` and enter the event loop.
+
+## Attach
+
+`--attach <taskId> --port <n>` in the arguments means the stepper opened this session for ONE task
+of a run that is already up — on that task's first submitted form, or from "Open session" in the
+page's corner. The terminal runs `claude`, or what `DOH_CLAUDE_COMMAND` in the server's environment
+names instead (e.g. `claude --permission-mode acceptEdits`). Do this instead of Setup:
+
+1. `T` = the task id, `PORT` = the port, `SKILL_DIR` as in Setup point 1. Read
+   `curl -s "http://127.0.0.1:PORT/api/orchestrator?taskId=T"`: `SESSION` = its `sessionDir`,
+   `PROJECT` = its `projectDir`. The server and `models.json` are the run's: start or write
+   neither. No reply means the run is over — say so and stop.
+2. Take T over and drain what already waits for it, in the foreground:
+   `node "<SKILL_DIR>/scripts/wait-answer.cjs" --port PORT --task T --minutes 0`.
+   `ORCHESTRATOR_RUNNING <session>` → another session still runs T: tell the user and stop.
+   `TASK_GONE` → stop.
+3. Read T's entry of `/api/state` (its `branch` and `root` too) and go on from the first that fits:
+   - a drained `step1` → "Step 1", as for any `step1`; step 1 never sent → the event loop, where
+     the form arrives as one.
+   - a summary → "Final summary", point 7.
+   - a drained `e2e` → step 5 from point 1: the slot is T's. Step 5 `Waiting for the E2E slot` →
+     POST `/api/e2e` again (the server keeps T's place) and wait for `kind=="e2e"`.
+   - a step `failed` → "Failure protocol" from point 2.
+   - a step after 1 `in_progress` with no question or gate on screen → its agent ended with the
+     session that ran it: POST `{"taskId":"T","step":N,"currentOperation":"Resuming in a new session"}`
+     and re-spawn it **fresh**, as a `retry` does, with "the session orchestrating T ended" in
+     place of the failure report.
+   Act on every other drained `ANSWER` as usual. Whatever would go to an agent of the old session
+   goes to a fresh one, as "Stopping a step" point 4 says. Then enter the event loop.

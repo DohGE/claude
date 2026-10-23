@@ -5,15 +5,19 @@ OPEN=0
 # One fixed URL, so the browser tab and everything it remembers for that origin
 # survive a restart. The override exists for tooling that must not fight a live run.
 PORT=9999
+# Where the sessions of the tasks added from the stepper open (launch-orchestrator.cjs).
+PROJECT_DIR="$(pwd)"
 while [ $# -gt 0 ]; do
   case "$1" in
     --session-dir) SESSION_DIR="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    --project-dir) PROJECT_DIR="$2"; shift 2 ;;
     --open) OPEN=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
-[ -n "$SESSION_DIR" ] || { echo "usage: start-server.sh --session-dir <dir> [--port <n>] [--open]" >&2; exit 1; }
+[ -n "$SESSION_DIR" ] || { echo "usage: start-server.sh --session-dir <dir> [--port <n>] [--project-dir <dir>] [--open]" >&2; exit 1; }
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$SESSION_DIR"
 # The old instance has to go first: it holds the port, and the new one refuses to
@@ -44,7 +48,7 @@ if [ -f "$SESSION_DIR/server.json" ]; then
   fi
   rm -f "$SESSION_DIR/server.json"
 fi
-nohup node "$SCRIPT_DIR/server.cjs" --session-dir "$SESSION_DIR" --port "$PORT" \
+nohup node "$SCRIPT_DIR/server.cjs" --session-dir "$SESSION_DIR" --port "$PORT" --project "$PROJECT_DIR" \
   > "$SESSION_DIR/server.log" 2>&1 &
 NODE_PID=$!
 # A taken port makes the server exit instead of moving, so waiting out the full

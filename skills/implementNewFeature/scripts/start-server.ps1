@@ -4,9 +4,14 @@ param(
   # remembers for that origin, survives every restart. The override exists for
   # tooling that must not fight a live run for the port.
   [int]$Port = 9999,
+  # Where the sessions of the tasks added from the stepper open (launch-orchestrator.cjs);
+  # the current directory when not given.
+  [string]$ProjectDir = '',
   [switch]$Open
 )
 $ErrorActionPreference = 'Stop'
+if (-not $ProjectDir) { $ProjectDir = (Get-Location).ProviderPath }
+$ProjectDir = (Resolve-Path -LiteralPath $ProjectDir).ProviderPath
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverJs = Join-Path $scriptDir 'server.cjs'
 New-Item -ItemType Directory -Force $SessionDir | Out-Null
@@ -41,7 +46,11 @@ if (Test-Path $serverJson) {
   }
   Remove-Item $serverJson -Force
 }
-$nodeArgs = @($serverJs, '--session-dir', $SessionDir, '--port', "$Port")
+# Start-Process joins its arguments with bare spaces, so a path with a space in it would come
+# apart: each goes in quotes, a trailing backslash doubled so that it does not escape the quote.
+function ConvertTo-Arg([string]$s) { '"' + ($s -replace '(\\+)$', '$1$1') + '"' }
+$nodeArgs = @((ConvertTo-Arg $serverJs), '--session-dir', (ConvertTo-Arg $SessionDir), '--port', "$Port",
+  '--project', (ConvertTo-Arg $ProjectDir))
 $log = Join-Path $SessionDir 'server.log'
 $outLog = Join-Path $SessionDir 'server.out.log'
 

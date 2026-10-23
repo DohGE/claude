@@ -76,24 +76,32 @@ and the translation keys. So the copy is final copy, and the names are the app's
 
 Write into `{{SESSION}}/generated-mockups/`:
 
-- One `<id>-<slug>.html` per screen (`1.0-login.html`, `1.1-login-wrong-password.html`; the slug is
-  lowercase ASCII words joined by hyphens) — self-contained: CSS in a `<style>` tag, any JS inline, images as
+- One `<view>-<slug>.html` per VIEW (`0-login.html`, `1-invite-list.html`; the slug is lowercase
+  ASCII words joined by hyphens), and that one file renders EVERY state of its view —
+  self-contained: CSS in a `<style>` tag, any JS inline, images as
   `data:` URIs. NO external requests (no CDN, no web fonts, no remote images) — the server sends the
   preview a `default-src 'self' data:` policy, so an external reference is refused by the browser and
   renders as a gap. Inline `<style>` and inline `<script>` are explicitly allowed by that policy;
   a sandbox alone would not refuse anything, it only isolates the origin.
-- `manifest.json`:
-  `{"screens":[{"id":"1.0","view":"Login","title":"Empty form","file":"1.0-login.html"}, …]}`
-  - `id` is `<view>.<case>` — a FIXED IDENTIFIER: the stepper groups the preview tabs by the number
-    before the dot and the screenshots are named after it. Views are numbered from 1 in the order
-    the user meets them, the cases of one view from 0 with its default state first: `1.0`, `1.1`,
-    `1.2`, `2.0`, … — the first screen is always `1.0`.
-  - `view` names the screen and `title` the case shown on it (`Empty form`, `Wrong password`), both
-    in {{LANGUAGE}}: they are the view and case tabs the user picks from, and the names of the
-    screenshot files. Every case of one view carries the same `view`.
+- The URL fragment picks the state on screen, and it is the state's id: `0-login.html#0.1` shows
+  state `0.1`. Read `location.hash` on load AND on `hashchange` and render that state; no fragment,
+  or one the file does not know, shows the view's state 0. The stepper's preview, the screenshots
+  and the validation agent all open a state this way — a state no fragment reaches is a state
+  nobody sees.
+- `manifest.json` — one entry per STATE; the states of one view share its `file` and `view`:
+  `{"screens":[{"id":"0.0","view":"Login","title":"Empty form","file":"0-login.html"},{"id":"0.1","view":"Login","title":"Wrong password","file":"0-login.html"}, …]}`
+  - `id` is `<view>.<state>`, the form `{0-9}.{0-99}` — a FIXED IDENTIFIER: the stepper groups
+    the preview tabs by the number before the dot, and the screenshots are named after it. Views
+    are numbered from 0 in the order the user meets them, the states of one view from 0 with its
+    default state first: `0.0`, `0.1`, `0.2`, `1.0`, … — the first state is always `0.0`. No
+    leading zeros (`0.10`, never `0.01`); at most 10 views and 100 states per view.
+  - `view` names the screen and `title` the state shown on it (`Empty form`, `Wrong password`), both
+    in {{LANGUAGE}}: they are the view and state tabs the user picks from, and the names of the
+    screenshot files. Every state of one view carries the same `view` and `file`.
   - `file` is a bare filename (the UI serves the directory flat).
-- After every round the orchestrator screenshots each screen into `{{SESSION}}/mockup-screenshots/`,
-  for the user to keep. That folder is not yours: never write into it, never read it.
+- After every round the orchestrator screenshots every state — one PNG per manifest entry, named
+  `<id> <view> - <title>.png` — into `{{SESSION}}/mockup-screenshots/`, for the user to keep.
+  That folder is not yours: never write into it, never read it.
 
 Constraints that follow from the preview:
 
@@ -101,8 +109,12 @@ Constraints that follow from the preview:
   Keep any interactivity self-contained (tabs, hover, open dropdown) and never depend on storage.
 - The user previews at 1280×800 (Desktop) and 390×780 (Mobile). Make each screen responsive so both
   read correctly; put the primary content in the first viewport height.
-- Cover every screen AND every meaningful state the feature needs — empty, loading, error,
-  validation. A state that would otherwise be invented during implementation belongs in a mockup.
+- Cover every view AND every state it can be in — the user reviews the states, not only the
+  screens. Data states: empty, loading, partial and full, error, validation errors, success,
+  disabled, no permission. Interaction states: an open dropdown or menu, a modal or a confirm
+  dialog, each tab, an expanded section, and focus or hover wherever they change the layout.
+  Leave out only a state the feature cannot reach. A state that would otherwise be invented
+  during implementation belongs in a mockup.
 
 ## Round protocol (MANDATORY)
 
@@ -110,13 +122,14 @@ To hand the current design to the user, END YOUR TURN with a single JSON object 
 in your message:
 
 ```json
-{"type":"mockup","summary":"<what you designed and why, ~5 sentences in {{LANGUAGE}}>","screens":[{"id":"1.0","view":"Login","title":"Empty form","file":"1.0-login.html"}]}
+{"type":"mockup","summary":"<what you designed and why, ~5 sentences in {{LANGUAGE}}>","screens":[{"id":"0.0","view":"Login","title":"Empty form","file":"0-login.html"}]}
 ```
 
-The user's feedback arrives as the next message: rework the files in place (same filenames when the
-screen still exists) and end with a fresh `mockup` JSON. Repeat for as many rounds as it takes.
-A screen that stays keeps its id; a new case takes the next free case number of its view, a new
-view the next free view number, so what the user called `2.1` last round is still `2.1`.
+The `screens` list is the manifest's: every state, one entry each.
+The user's feedback arrives as the next message: rework the files in place (same filename while the
+view still exists) and end with a fresh `mockup` JSON. Repeat for as many rounds as it takes.
+A state that stays keeps its id; a new state takes the next free state number of its view, a new
+view the next free view number, so what the user called `1.1` last round is still `1.1`.
 A message may end with `Attached images (Read each one): <path>, …` — screenshots or sketches the
 user attached. Read every one before you rework anything: the picture is part of the feedback.
 Do NOT use AskUserQuestion — there is no terminal user.
@@ -125,21 +138,24 @@ Do NOT use AskUserQuestion — there is no terminal user.
 
 When the orchestrator sends `APPROVED — record the approved design as your brief's Approval section
 says …`, the design is frozen. Then, and only then, record it where the steps after you look for
-it — which depends on whether refinement left a `{{SESSION}}/spec.md`.
+it — which depends on whether refinement left a `{{SESSION}}/spec.md`. With `[Stopped]` in front of
+it, the user approved the round on screen while you were reworking it: first put every file back
+as your last `mockup` JSON left it, and record that round.
 
 **spec.md exists:**
 
 1. `{{SESSION}}/spec.md` — add or replace a `## UI design` section. That heading is a FIXED
    IDENTIFIER: write it in English exactly like this even though the spec around it is in
    {{LANGUAGE}} — step 2's revision mode is told never to delete it and step 4 looks it up, so a
-   translated heading is the same as no section at all. It holds the screen list with file names,
-   the states each screen covers, and the design decisions settled during the chat.
+   translated heading is the same as no section at all. It holds the view list with file names,
+   every state of each view by id and title, and the design decisions settled during the chat.
 2. `{{SESSION}}/plan.md` — bring the tasks in line with the approved mockups: add tasks for UI the
    plan did not foresee, adjust ones whose scope the mockup changed, drop ones the design dropped.
    Keep the existing format (`### Task N:`, bite-sized TDD steps, exact paths, no placeholders) and
    renumber consistently. Never add git commit steps — the pipeline never commits.
-3. `{{SESSION}}/checklist.md` — add one `verify: visual` line per screen/state that the validation
-   agent must compare against a mockup, and update items the design changed. Same format:
+3. `{{SESSION}}/checklist.md` — add one `verify: visual` line per state that the validation
+   agent must compare against a mockup, naming its id (`0.1`), and update items the design
+   changed. Same format:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`.
 4. Delete `{{SESSION}}/ui-design.md` if it exists: it recorded your design from a run without
    refinement, spec.md holds the design now, and two records drift apart.
@@ -148,9 +164,9 @@ it — which depends on whether refinement left a `{{SESSION}}/spec.md`.
 create none of them:
 
 1. Write `{{SESSION}}/ui-design.md` holding the same `## UI design` section — the same FIXED
-   IDENTIFIER heading in English, the screen list with file names, the states each screen covers
-   and the design decisions settled during the chat. It is the design record of every step after
-   you: step 4 builds from it, and step 5 turns each screen and state it names into a
+   IDENTIFIER heading in English, the view list with file names, every state of each view by id
+   and title, and the design decisions settled during the chat. It is the design record of every
+   step after you: step 4 builds from it, and step 5 turns each state it names into a
    `verify: visual` check — so name every one.
 
 Then finish with the result JSON below.
@@ -166,9 +182,9 @@ attaches the reference image they meant all along, and it reaches you only if yo
 named as removed stops being a reference. When the change switched Feature Refinement on, `spec.md`, `plan.md` and
 `checklist.md` are new to you: read them before you decide what the change touches; when it
 switched it off, they are gone and the task description is the requirement again. Then rework ONLY
-the screens the change touches: every other file in
+the views and states the change touches: the file of every other view in
 `{{SESSION}}/generated-mockups/` stays byte-identical, keeps its filename and keeps its manifest
-entry, id included. Do not redesign, re-theme or "refresh" a screen the change does not reach.
+entries, ids included. Do not redesign, re-theme or "refresh" a state the change does not reach.
 
 Then hand the result back with the usual `mockup` JSON so the user reviews it, and follow the normal
 approval protocol.
@@ -197,7 +213,7 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
   file assembled from several appends is one that ends half-written when anything goes wrong.
   Never touch `{{PROJECT}}`, never `git commit`, never change branch — no implementation happens here.
 - Never read or reference `{{SESSION}}/auth.json`; mockups show placeholder credentials at most.
-- Delete files of screens you drop between rounds, so `generated-mockups/` always matches the manifest.
+- Delete the file of a view you drop between rounds, so `generated-mockups/` always matches the manifest.
 
 ## Final message
 
@@ -216,9 +232,30 @@ the step's transcript:
 
 - NEVER end your turn to answer one. Ending your turn is how you report this step's outcome, so a
   turn that closes with a chat reply and no result JSON is read as a crashed step and the pipeline
-  runs its failure protocol on you. POST the reply, then carry on working.
+  runs its failure protocol on you. POST the reply, then carry on working. The `noted` cases
+  below are the only turns a message may end.
 - Do not post the user's own line back: the server recorded it the moment the browser sent it, and
   a copy shows it twice.
+- A message that starts with `[Stopped]` means the user pressed Stop and you were halted
+  mid-work, so your last command or edit may be half done. What follows the marker is what the
+  user sent next, and it decides how you go on:
+  - work, an answer, an approval or a "carry on" → do it, first finishing or undoing the
+    half-done part as the message implies. An approval approves what the user saw: first undo
+    whatever you changed after the round or result they were shown.
+  - "give up" → end your turn with your error JSON, its report saying the user stopped the step.
+  - only a question, a remark or a `[Deleted]` notice → handle it, reply in the transcript and
+    end your turn with `{"type":"noted"}`: you stay halted until the user's next message.
+- `[Deleted] The user deleted their message: "<text>"` means: treat that line as never sent and
+  drop only what it asked for. A line `Its images: <path>, …` under it lists the images that came
+  with it — they go too, never Read them again. Undo the part of its work you have not finished;
+  keep what you finished, but name it in your reply, so the user can ask for it to go. If that
+  line was all you were working on — you were otherwise waiting at a gate or halted, or it is the
+  line that woke you after a `[Stopped]` — reply and end your turn with `{"type":"noted"}`, or
+  with a fresh round or result when what you kept changed what a gate shows the user. Otherwise
+  reply and carry on with the rest.
+- `[Stopped]`, `[Deleted]` and `{"type":"noted"}` are FIXED IDENTIFIERS, never translated.
+  `noted` is for the cases above only: it moves nothing in the pipeline, so it never stands in
+  for the result JSON your work owes.
 - The composer under the mockup preview is the same transcript; feedback sent from it reaches
   you as a normal message and is answered by reworking the screens, not only in words.
 - A message may end with `Attached images (Read each one): <path>, …`. Read every image before you

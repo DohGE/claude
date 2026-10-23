@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 'use strict';
-// Screenshots of every screen of one task's mockups, for the user to keep or share outside
-// the stepper: <taskDir>/mockup-screenshots/<id> <view> - <case>.png, one per screen of
-// generated-mockups/manifest.json, at desktop width and the whole page long. The folder is
-// emptied first, so it always holds exactly the round the review panel shows.
+// Screenshots of every state of one task's mockups, for the user to keep or share outside
+// the stepper: <taskDir>/mockup-screenshots/<id> <view> - <state>.png, one per entry of
+// generated-mockups/manifest.json - every state of every view, numbered <view>.<state> from
+// 0.0 - at desktop width and the whole page long. A view's file renders all of its states
+// and the URL fragment picks one (references/mockup-agent.md). The folder is emptied
+// first, so it always holds exactly the round the review panel shows.
 //
 // Usage: node screenshot-mockups.cjs <taskDir>
 // Prints ONE line (FIXED IDENTIFIERS - the orchestrator matches them):
@@ -21,16 +23,38 @@ const { MOCKUP_DIR, MOCKUP_TYPES, SCREENSHOT_DIR } = require('./server.cjs');
 const ORIGIN = 'http://mockups.invalid';
 const VIEWPORT = { width: 1280, height: 800 };
 
-// `1.0 Login - Empty form.png`. Windows refuses a handful of characters and a trailing dot
-// or space, so they go; the id in front keeps two screens with the same titles apart.
-function fileNameOf(screen, index) {
-  const id = String(screen.id || index + 1);
+// A state's id: <view>.<state>, both counted from 0 - at most 10 views of 100 states each.
+// FIXED IDENTIFIER, shared with references/mockup-agent.md.
+const SCREEN_ID = /^\d\.(?:\d|[1-9]\d)$/;
+
+// The manifest's own ids when every one is a <view>.<state> and none repeats. Otherwise
+// all of them are numbered afresh - views in the order they first appear, states in order
+// within each view - so the names still sort and never collide.
+function screenIds(screens) {
+  const ids = screens.map(s => String(s.id || ''));
+  if (ids.every(id => SCREEN_ID.test(id)) && new Set(ids).size === ids.length) return ids;
+  const views = [];
+  const states = [];
+  return screens.map(s => {
+    const key = String(s.view || s.file);
+    let view = views.indexOf(key);
+    if (view < 0) {
+      view = views.push(key) - 1;
+      states[view] = 0;
+    }
+    return `${view}.${states[view]++}`;
+  });
+}
+
+// `0.0 Login - Empty form.png`. Windows refuses a handful of characters and a trailing dot
+// or space, so they go; the id in front keeps two states with the same titles apart.
+function fileNameOf(screen, id) {
   const words = [screen.view, screen.title].map(v => String(v || '').trim()).filter(Boolean);
   const label = words.length === 2 && words[0] === words[1] ? [words[0]] : words;
   const name = `${id} ${label.join(' - ')}`
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
     .replace(/\s+/g, ' ').trim().slice(0, 150).replace(/[. ]+$/, '');
-  return `${name || index + 1}.png`;
+  return `${name}.png`;
 }
 
 // Thrown, never process.exit(): on a pipe the line printed just before an exit can be lost.
@@ -82,9 +106,14 @@ async function main() {
       }
       return route.fulfill({ status: 200, contentType: type, body });
     });
+    const ids = screenIds(screens);
     for (const [i, screen] of screens.entries()) {
-      await page.goto(`${ORIGIN}/${encodeURIComponent(screen.file)}`, { waitUntil: 'load' });
-      await page.screenshot({ path: path.join(out, fileNameOf(screen, i)), fullPage: true });
+      // The states of a view share its file. A new fragment alone would not load the page
+      // again, so the query - which the route above ignores - makes every state a fresh load.
+      const id = encodeURIComponent(ids[i]);
+      await page.goto(`${ORIGIN}/${encodeURIComponent(screen.file)}?state=${id}#${id}`,
+        { waitUntil: 'load' });
+      await page.screenshot({ path: path.join(out, fileNameOf(screen, ids[i])), fullPage: true });
     }
   } finally {
     await browser.close();
@@ -92,7 +121,7 @@ async function main() {
   console.log(`SCREENSHOTS ${screens.length} ${out}`);
 }
 
-module.exports = { fileNameOf };
+module.exports = { fileNameOf, screenIds };
 if (require.main === module) {
   main().catch(e => {
     console.log(`SCREENSHOTS_FAILED ${firstLine(e)}`);

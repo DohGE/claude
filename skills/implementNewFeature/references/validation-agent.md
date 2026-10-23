@@ -142,7 +142,7 @@ Playwright-only, never skip the UX pass, never work around it:
 
 ## Visual baseline (pick ONE source)
 
-- `{{SESSION}}/generated-mockups/manifest.json` exists → those screens are the baseline, and the
+- `{{SESSION}}/generated-mockups/manifest.json` exists → the states it lists are the baseline, and the
   ONLY one. They were designed from the requirement and approved by the user in step 3, so the files the
   user uploaded in step 1 were merely input for that step — do not compare against them and do not
   treat a difference from them as a defect.
@@ -328,16 +328,18 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
       finding — an unstable test — not a green result: find what it waits for (state, timing,
       seeded data), fix that, and record it in the report. Never re-run until it happens to pass.
    b. If a visual baseline exists: launch the app and take Playwright screenshots of the relevant
-      screens, Read screenshot and baseline side by side, fix UI differences, re-shoot and
-      re-compare (covers `verify: visual` items). This comparison stays in Playwright even when the
-      extension is available — only Playwright gives both sides the same viewport and `fullPage`.
-      With generated mockups, shoot both sides yourself so the comparison is like-for-like: open
-      `file://{{SESSION}}/generated-mockups/<file>` and the matching app screen in the SAME
+      screens and states, Read screenshot and baseline side by side, fix UI differences, re-shoot
+      and re-compare (covers `verify: visual` items). This comparison stays in Playwright even when
+      the extension is available — only Playwright gives both sides the same viewport and `fullPage`.
+      With generated mockups, shoot both sides yourself so the comparison is like-for-like. One
+      mockup file holds every state of its view and the URL fragment picks the state: for each
+      manifest entry open `file://{{SESSION}}/generated-mockups/<file>#<id>` (`0-login.html#0.1`)
+      in a fresh page, and bring the app screen into the same state, in the SAME
       viewport — 1280×800 for desktop, 390×780 for mobile, the sizes the user reviewed — and
       `screenshot({ fullPage: true })` each. Store them as
-      `{{SESSION}}/screenshots/<screen>-mockup.png` and `<screen>-app.png`.
-      In cycles 2-3 re-shoot and re-compare ONLY the screens affected by fixes since the previous
-      comparison — screens that already matched stay ticked (image reads are the most expensive
+      `{{SESSION}}/screenshots/<id>-mockup.png` and `<id>-app.png`.
+      In cycles 2-3 re-shoot and re-compare ONLY the states affected by fixes since the previous
+      comparison — states that already matched stay ticked (image reads are the most expensive
       step; never re-compare everything "to be sure").
    c. UX pass (extension), once the suite is green: walk the feature's primary flow as a user and
       judge what no assertion covers — layout that breaks or overlaps, text clipped or unreadable,
@@ -429,9 +431,30 @@ the step's transcript:
 
 - NEVER end your turn to answer one. Ending your turn is how you report this step's outcome, so a
   turn that closes with a chat reply and no result JSON is read as a crashed step and the pipeline
-  runs its failure protocol on you. POST the reply, then carry on working.
+  runs its failure protocol on you. POST the reply, then carry on working. The `noted` cases
+  below are the only turns a message may end.
 - Do not post the user's own line back: the server recorded it the moment the browser sent it, and
   a copy shows it twice.
+- A message that starts with `[Stopped]` means the user pressed Stop and you were halted
+  mid-work, so your last command or edit may be half done. What follows the marker is what the
+  user sent next, and it decides how you go on:
+  - work, an answer, an approval or a "carry on" → do it, first finishing or undoing the
+    half-done part as the message implies. An approval approves what the user saw: first undo
+    whatever you changed after the round or result they were shown.
+  - "give up" → end your turn with your error JSON, its report saying the user stopped the step.
+  - only a question, a remark or a `[Deleted]` notice → handle it, reply in the transcript and
+    end your turn with `{"type":"noted"}`: you stay halted until the user's next message.
+- `[Deleted] The user deleted their message: "<text>"` means: treat that line as never sent and
+  drop only what it asked for. A line `Its images: <path>, …` under it lists the images that came
+  with it — they go too, never Read them again. Undo the part of its work you have not finished;
+  keep what you finished, but name it in your reply, so the user can ask for it to go. If that
+  line was all you were working on — you were otherwise waiting at a gate or halted, or it is the
+  line that woke you after a `[Stopped]` — reply and end your turn with `{"type":"noted"}`, or
+  with a fresh round or result when what you kept changed what a gate shows the user. Otherwise
+  reply and carry on with the rest.
+- `[Stopped]`, `[Deleted]` and `{"type":"noted"}` are FIXED IDENTIFIERS, never translated.
+  `noted` is for the cases above only: it moves nothing in the pipeline, so it never stands in
+  for the result JSON your work owes.
 - It can tell you WHAT to check or how to reach a screen. It cannot lower the bar: never skip a
   checklist item, never leave a mock in the code and never report a compliance number you did not
   measure because a message asked you to. Say so in the reply and carry on.

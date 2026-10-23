@@ -98,6 +98,14 @@ test('zakładki przełączają widok i pokazują znacznik oczekiwania', async ({
   await expect(page.locator('#tabs .tab[data-task=t1] .dot.in_progress')).toBeVisible();
 });
 
+test('zakładki z branchami zaczynają się od lewej krawędzi, jak panel pod nimi', async ({ page }) => {
+  await page.click('#createTask');
+  await expect(page.locator('#tabs .tab')).toHaveCount(2);
+  const left = async sel => (await page.locator(sel).first().boundingBox()).x;
+  expect(Math.abs(await left('#tabs .tab') - await left('#tabs'))).toBeLessThanOrEqual(1);
+  expect(Math.abs(await left('#tabs .tab') - await left('#panel'))).toBeLessThanOrEqual(1);
+});
+
 test('etykieta otwartej zakładki podąża za wpisywanym branchem', async ({ page }) => {
   await page.fill('#task', 'Opis');
   await page.click('#createTask');
@@ -201,25 +209,23 @@ test('zakładkę da się otworzyć z klawiatury', async ({ page }) => {
   await expect(page.locator('#tabs .tab[data-task=t1]')).toHaveAttribute('aria-selected', 'true');
 });
 
-test('przełączenie zakładki nie odblokowuje wysłanej już odpowiedzi', async ({ page }) => {
+test('przełączenie zakładki nie przywraca zaakceptowanej bramy', async ({ page }) => {
   await page.click('#createTask');
   await state({ taskId: 't1', step: 2, status: 'in_progress', activeStep: 2,
     reviewSummary: { text: 'Plan na trzy zadania' } });
   await page.click('#tabs .tab[data-task=t1]');
   await page.click('#approve');
   await page.click('#confirmOk');
-  await expect(page.locator('#panel .notice')).toBeVisible();
+  // Akceptację zdejmuje serwer, zanim orkiestrator się ruszy: nie ma czego kliknąć drugi raz.
+  await expect(page.locator('#approve')).toHaveCount(0);
   const drained = await (await fetch(`${base}/api/answer?wait=5`)).json();
   expect(drained.answer.decision).toBe('approve');
-  // Powrót na zakładkę przerysowuje panel — blokada musi przetrwać, inaczej
-  // drugi klik dopisałby duplikat, który późniejsza brama wzięłaby za swój.
+  // Powrót na zakładkę przerysowuje panel ze stanu serwera — brama nie wraca, więc
+  // drugi klik nie dopisze duplikatu, który późniejsza brama wzięłaby za swój.
   await page.click('#tabs .tab[data-task=t2]');
   await page.click('#tabs .tab[data-task=t1]');
-  await expect(page.locator('#approve')).toBeDisabled();
-  await expect(page.locator('#panel .notice')).toBeVisible();
-  // Dopiero ruch orkiestratora zdejmuje blokadę.
-  await state({ taskId: 't1', step: 2, status: 'completed', activeStep: 4, reviewSummary: null });
-  await expect(page.locator('#panel .notice')).toHaveCount(0);
+  await expect(page.locator('#log')).toContainText('The plan was approved');
+  await expect(page.locator('#approve')).toHaveCount(0);
 });
 
 test('zamknięcie otwartej zakładki wraca na pierwszy task', async ({ page }) => {

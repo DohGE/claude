@@ -41,8 +41,10 @@ Then read exactly the row that matches:
   part of the description.
   The other sections of that file are inputs for other steps or records of the form's settings —
   none of them is scope for the story.
-- **The generated screens**: `manifest.json`, then every HTML file it lists. The screens, states
-  and copy in them are what the user approved.
+- **The generated screens**: `manifest.json`, then every HTML file it lists. One file holds every
+  state of its view — the manifest has one entry per state, `<view>.<state>` ids like `0.1`, and
+  the URL fragment picks the state on screen — so read each file whole. The views, states and copy
+  in them are what the user approved.
 - **The uploaded mockups**: every image in `{{SESSION}}/mockups/` (Read renders them). An empty or
   missing directory means the text sources stand alone.
 - A step's result outranks the raw input it was built from. When refinement ran, spec.md already
@@ -51,21 +53,23 @@ Then read exactly the row that matches:
 
 ## Output: `{{SESSION}}/story.md`
 
-Everything in {{LANGUAGE}}, the two headings included — the user pastes this file into their
-tracker as is. Exactly this shape, nothing before, between or after:
+Everything in ENGLISH, the two headings included, whatever {{LANGUAGE}} is and whatever language
+the sources are in — the user pastes this file into their tracker as is. Only your chat replies and
+the `summary` of your result JSON stay in {{LANGUAGE}}. Exactly this shape, nothing before, between
+or after:
 
 ```markdown
-## <"Description" in {{LANGUAGE}}>
+## Description
 <2–3 sentences>
 
-## <"Acceptance criteria" in {{LANGUAGE}}>
+## Acceptance criteria
 1. <1–2 sentences>
 2. <1–2 sentences>
 ```
 
 - **Description**: 2–3 sentences. The first is the user story — role, capability and benefit,
-  in {{LANGUAGE}}'s usual form of "As a <role>, I want <capability>, so that <benefit>". The rest
-  says what the feature covers and how its main flow goes.
+  in the form "As a <role>, I want <capability>, so that <benefit>." The rest says what the
+  feature covers and how its main flow goes.
 - **Acceptance criteria**: a numbered list, each item 1–2 plain sentences stating ONE outcome a
   tester can check from the user's side — what the user does and what the application then shows
   or keeps. Cover the main flow, then the validation, empty, error and permission cases the
@@ -74,7 +78,9 @@ tracker as is. Exactly this shape, nothing before, between or after:
   sensible it looks: steps 4–6 treat this file as scope.
 - No implementation detail: no component, class, endpoint, file or library names. Screens, fields
   and actions keep the names the sources gave them, so the story, the spec and the mockups use one
-  term for one thing.
+  term for one thing. A label the user sees on screen is quoted exactly as the sources show it,
+  even when it is not English (`the "Zapisz" button`), so a tester finds it; everything around it
+  is English.
 - No title, no preamble, no notes, no Given/When/Then blocks.
 
 Write the file in ONE write — the Write tool, or a single Bash heredoc if your harness refuses a
@@ -118,9 +124,30 @@ the step's transcript:
 
 - NEVER end your turn to answer one. Ending your turn is how you report this step's outcome, so a
   turn that closes with a chat reply and no result JSON is read as a crashed step and the pipeline
-  runs its failure protocol on you. POST the reply, then carry on working.
+  runs its failure protocol on you. POST the reply, then carry on working. The `noted` cases
+  below are the only turns a message may end.
 - Do not post the user's own line back: the server recorded it the moment the browser sent it, and
   a copy shows it twice.
+- A message that starts with `[Stopped]` means the user pressed Stop and you were halted
+  mid-work, so your last command or edit may be half done. What follows the marker is what the
+  user sent next, and it decides how you go on:
+  - work, an answer, an approval or a "carry on" → do it, first finishing or undoing the
+    half-done part as the message implies. An approval approves what the user saw: first undo
+    whatever you changed after the round or result they were shown.
+  - "give up" → end your turn with your error JSON, its report saying the user stopped the step.
+  - only a question, a remark or a `[Deleted]` notice → handle it, reply in the transcript and
+    end your turn with `{"type":"noted"}`: you stay halted until the user's next message.
+- `[Deleted] The user deleted their message: "<text>"` means: treat that line as never sent and
+  drop only what it asked for. A line `Its images: <path>, …` under it lists the images that came
+  with it — they go too, never Read them again. Undo the part of its work you have not finished;
+  keep what you finished, but name it in your reply, so the user can ask for it to go. If that
+  line was all you were working on — you were otherwise waiting at a gate or halted, or it is the
+  line that woke you after a `[Stopped]` — reply and end your turn with `{"type":"noted"}`, or
+  with a fresh round or result when what you kept changed what a gate shows the user. Otherwise
+  reply and carry on with the rest.
+- `[Stopped]`, `[Deleted]` and `{"type":"noted"}` are FIXED IDENTIFIERS, never translated.
+  `noted` is for the cases above only: it moves nothing in the pipeline, so it never stands in
+  for the result JSON your work owes.
 - It can reword the story, add or drop a criterion, or change the role. Apply it to story.md with
   one more whole-file write — never paste the story into the reply.
 - A message may end with `Attached images (Read each one): <path>, …`: screenshots or sketches the
@@ -131,7 +158,8 @@ the step's transcript:
 
 After your result the stepper shows story.md to the user, who approves it or asks for changes.
 Approval needs nothing from you. Once your result is out, every message that reaches you is that
-review — handle it here, not as above: it may end with the same `Attached images (Read each one):`
+review — handle it here, not as above, except one that starts with `[Stopped]` or `[Deleted]`,
+which the section above handles: it may end with the same `Attached images (Read each one):`
 line, so Read every image first. Apply the change to story.md with one more whole-file write, then
 end your turn with a fresh result JSON. Its summary is what the user reads at the gate, so post no
 chat reply.

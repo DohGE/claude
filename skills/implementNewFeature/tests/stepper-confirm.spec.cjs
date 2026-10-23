@@ -142,18 +142,16 @@ test('powtórzone id pytania nadal odświeża panel', async ({ page }) => {
   await page.fill('#freeAnswer', 'Tak');
   await page.click('#send');
   await page.click('#confirmOk');
-  // odpowiedź nie blokuje panelu: pole jest czyste, a wysłane widać w śladzie
-  await expect(page.locator('#sentTrail .msg.user')).toContainText('Tak');
-  await expect(page.locator('#freeAnswer')).toHaveValue('');
-  await expect(page.locator('#send')).toBeEnabled();
+  // Wysłana odpowiedź zdejmuje pytanie z ekranu od razu, bez czekania na agenta.
+  await expect(page.locator('#gate')).toHaveCount(0);
+  await expect(page.locator('#log')).toContainText('q1: Tak');
   // ten sam id, nowa treść — bez licznika po stronie serwera panel by się nie odświeżył
-  await postState({ question: null });
   await postState({ step: 2, question: { id: 'q1', text: 'Drugie pytanie?' } });
   await expect(page.locator('#panel p').first()).toHaveText('Drugie pytanie?');
-  await expect(page.locator('#sentTrail .msg')).toHaveCount(0);
+  await expect(page.locator('#freeAnswer')).toHaveValue('');
 });
 
-test('do wysłanej odpowiedzi można dorzucić kolejną', async ({ page }) => {
+test('po odpowiedzi drugą myśl dopisuje się w rozmowie kroku', async ({ page }) => {
   await postState({ step: 2, status: 'in_progress', activeStep: 2,
     question: { id: 'q1', text: 'Ile ról?' } });
   await page.goto(base);
@@ -162,15 +160,15 @@ test('do wysłanej odpowiedzi można dorzucić kolejną', async ({ page }) => {
   await page.click('#send');
   await page.click('#confirmOk');
   expect(await takeAnswer()).toMatchObject({ kind: 'answer', value: 'Trzy' });
-  await page.fill('#freeAnswer', 'Właściwie cztery — dochodzi audytor');
-  await page.click('#send');
-  await page.click('#confirmOk');
-  expect(await takeAnswer())
-    .toMatchObject({ kind: 'answer', value: 'Właściwie cztery — dochodzi audytor' });
-  await expect(page.locator('#sentTrail .msg.user')).toHaveCount(2);
+  // Pytania już nie ma, więc korekta idzie do agenta jako wiadomość, nie jako decyzja.
+  await page.fill('#stepMessage', 'Właściwie cztery — dochodzi audytor');
+  await page.click('#sendStepMessage');
+  expect(await takeAnswer()).toMatchObject(
+    { kind: 'message', step: 2, text: 'Właściwie cztery — dochodzi audytor' });
+  await expect(page.locator('#stepChat .msg.user')).toContainText('Właściwie cztery');
 });
 
-test('feedback do planu też zostawia bramę czynną', async ({ page }) => {
+async function sendPlanFeedback(page) {
   await postState({ step: 2, status: 'in_progress', activeStep: 2,
     reviewSummary: { text: 'Podsumowanie planu' } });
   await page.goto(base);
@@ -178,9 +176,26 @@ test('feedback do planu też zostawia bramę czynną', async ({ page }) => {
   await page.fill('#feedback', 'Rozbij zadanie 2');
   await page.click('#sendFeedback');
   expect(await takeAnswer()).toMatchObject({ kind: 'decision', decision: 'feedback' });
-  await expect(page.locator('#feedback')).toHaveValue('');
-  await expect(page.locator('#sentTrail .msg.user')).toContainText('Rozbij zadanie 2');
+}
+
+test('feedback do planu zdejmuje bramę do następnej wersji planu', async ({ page }) => {
+  await sendPlanFeedback(page);
+  // Bramy nie ma; uwaga zostaje w rozmowie kroku, a krok mówi, że przerabia plan.
+  await expect(page.locator('#approve')).toHaveCount(0);
+  await expect(page.locator('#stepChat .msg.user')).toContainText('Rozbij zadanie 2');
+  await expect(page.locator('#op')).toContainText('Reworking the plan…');
+  await postState({ step: 2, reviewSummary: { text: 'Plan po uwagach' } });
   await expect(page.locator('#approve')).toBeEnabled();
+  await expect(page.getByText('Plan po uwagach')).toBeVisible();
+});
+
+test('reopenGate przywraca bramę, którą feedback zdjął', async ({ page }) => {
+  await sendPlanFeedback(page);
+  await expect(page.locator('#approve')).toHaveCount(0);
+  // Agent odpisał tylko w rozmowie ({"type":"noted"}) — plan na bramie się nie zmienił.
+  await postState({ step: 2, currentOperation: 'Waiting for you', reopenGate: true });
+  await expect(page.locator('#approve')).toBeEnabled();
+  await expect(page.getByText('Podsumowanie planu')).toBeVisible();
 });
 
 test('nowe pytanie czyści niewysłaną odpowiedź na poprzednie', async ({ page }) => {

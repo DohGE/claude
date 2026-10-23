@@ -26,7 +26,8 @@ test.beforeEach(async () => {
   await new Promise(r => app.server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${app.server.address().port}`;
   fs.mkdirSync(path.join(dir, 'tasks', 't1'), { recursive: true });
-  writeStory('## Opis\nJako zapraszający chcę wysłać zaproszenie.\n\n## Kryteria akceptacji\n1. Pole e-mail jest wymagane.\n');
+  // story.md jest zawsze po angielsku, niezależnie od języka rozmowy.
+  writeStory('## Description\nAs an inviter I want to send an invitation.\n\n## Acceptance criteria\n1. The e-mail field is required.\n');
   await state({ step: 1, status: 'completed' });
   await state({ step: 2, status: 'completed' });
   await state({ step: 8, enabled: true, status: 'in_progress', activeStep: 8, progress: 90,
@@ -42,7 +43,7 @@ test('bramka pokazuje story.md z podsumowaniem, a Approve rusza implementację',
   await page.goto(base);
   await expect(page.locator('#panel h2')).toHaveText('Story review');
   await expect(page.getByText('Jedno kryterium z planu')).toBeVisible();
-  await expect(page.locator('#storyText')).toContainText('1. Pole e-mail jest wymagane.');
+  await expect(page.locator('#storyText')).toContainText('1. The e-mail field is required.');
   await expect(page.locator('#copyStory')).toBeEnabled();
   await page.click('#approve');
   await expect(page.locator('#confirmTitle')).toHaveText('Approve the story?');
@@ -60,16 +61,19 @@ test('uwagi do story niosą obrazek', async ({ page }) => {
   expect(answer).toMatchObject({ kind: 'decision', decision: 'feedback',
     text: 'Dodaj kryterium o błędnym adresie' });
   expect(answer.attachments.map(p => path.basename(p))).toEqual(['1-kryteria.png']);
-  await expect(page.locator('#sentTrail .msg')).toHaveCount(1);
+  // Bramka znika do następnej wersji story; uwagi z obrazkiem zostają w rozmowie kroku.
+  await expect(page.locator('#approve')).toHaveCount(0);
+  await expect(page.locator('#stepChat .msg.user img')).toHaveCount(1);
+  await expect(page.locator('#op')).toContainText('Reworking the story…');
 });
 
 test('nowa wersja story podmienia tekst i czyści niewysłane uwagi', async ({ page }) => {
   await page.goto(base);
-  await expect(page.locator('#storyText')).toContainText('Pole e-mail');
+  await expect(page.locator('#storyText')).toContainText('The e-mail field');
   await page.fill('#feedback', 'Krócej');
-  writeStory('## Opis\nNowa wersja.\n\n## Kryteria akceptacji\n1. Adres musi być poprawny.\n');
+  writeStory('## Description\nA new version.\n\n## Acceptance criteria\n1. The address must be valid.\n');
   await state({ step: 8, reviewSummary: { text: 'Po uwagach' } });
-  await expect(page.locator('#storyText')).toContainText('Adres musi być poprawny.');
+  await expect(page.locator('#storyText')).toContainText('The address must be valid.');
   await expect(page.locator('#feedback')).toHaveValue('');
 });
 
@@ -81,12 +85,17 @@ test('refinement obejrzany w trakcie bramki story nie pokazuje planu do akceptac
   await expect(page.locator('#approve')).toHaveCount(0);
 });
 
-test('Stop zamyka bramkę story', async ({ page }) => {
+test('Stop zostawia bramkę story, a Approve po nim mówi, że przyszło po Stopie', async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#storyText');
   await page.click('#stopStep');
   await page.click('#confirmOk');
-  await expect(page.locator('#panel h2')).toHaveText('Story Description — stopped');
-  await expect(page.locator('#approve')).toHaveCount(0);
+  await expect(page.locator('#stoppedNote')).toBeVisible();
+  await expect(page.locator('#panel h2')).toHaveText('Story review');
+  await expect(page.locator('#storyText')).toContainText('The e-mail field');
   expect(await takeAnswer()).toEqual({ kind: 'stop', step: 8, taskId: 't1' });
+  await page.click('#approve');
+  await page.click('#confirmOk');
+  expect(await takeAnswer()).toEqual({ kind: 'decision', decision: 'approve', taskId: 't1',
+    afterStop: true });
 });
