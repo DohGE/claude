@@ -49,7 +49,12 @@ test('odpowiedź na pytanie refinementu niesie obrazek', async ({ page }) => {
   // Orkiestrator dostaje ścieżki bezwzględne, które agent może przeczytać.
   expect(names(answer)).toEqual(['1-role.png']);
   expect(fs.readFileSync(answer.attachments[0]).equals(PNG)).toBe(true);
-  await expect(page.locator('#sentTrail .msg img')).toHaveCount(1);
+  // Odpowiedź schodzi z ekranu od razu; zostaje po niej wpis w logu kroku.
+  await expect(page.locator('#gate')).toHaveCount(0);
+  await expect(page.locator('#log')).toContainText('q1: Jak na zrzucie (+1 image)');
+  // Wysłany obrazek nie czeka na tacce na następne pytanie.
+  await state({ step: 2, question: { id: 'q2', text: 'A uprawnienia?' } });
+  await page.waitForSelector('#freeAnswer');
   await expect(page.locator('[data-attach-tray="answer"] img')).toHaveCount(0);
 });
 

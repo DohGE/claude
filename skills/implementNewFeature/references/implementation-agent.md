@@ -61,8 +61,10 @@ script, never straight through the shell:
 If `{{SESSION}}/generated-mockups/manifest.json` exists, the user approved those screens in step 3
 and they are the binding UI reference: layout, spacing rhythm, palette, states (empty/loading/error)
 and visible copy must match them, and step 5 compares screenshots against them.
-Read the manifest plus the `.html` file of every screen the current task touches — read them for
-intent, not to transplant them: build the UI from `{{ROOT}}`'s own components and tokens, never
+Read the manifest plus the `.html` file of every view the current task touches. One file holds
+every state of its view — the manifest has one entry per state, `<view>.<state>` ids like `0.1`,
+and the URL fragment picks the state on screen — so build every state it draws, not only the
+default one. Read them for intent, not to transplant them: build the UI from `{{ROOT}}`'s own components and tokens, never
 by pasting mockup markup or CSS into the app. The decisions settled with the user while designing
 them sit in spec.md's `## UI design` section, or in `{{SESSION}}/ui-design.md` when refinement
 did not run. Where a mockup contradicts the plan about how a screen looks, the mockup wins (it is
@@ -85,7 +87,7 @@ authoritative.
    so in a worktree it reads the worktree's copy), and they are already layered in: a project kind
    replaces the skill's kind of the same name, and an item a project kind restates reads the
    project's text in every kind.
-   A worktree is checked out from HEAD, so it carries those rules only if they are COMMITTED — when
+   A worktree is checked out from a commit, so it carries those rules only if they are COMMITTED — when
    `projectInstructionsDir` comes back null here but the main checkout has such a directory, say so
    in `deviations` rather than reaching outside `{{ROOT}}` for it.
 2. Before writing or editing any file, run it again with every file the task touches:
@@ -148,8 +150,29 @@ the step's transcript:
 
 - NEVER end your turn to answer one. Ending your turn is how you report this step's outcome, so a
   turn that closes with a chat reply and no result JSON is read as a crashed step and the pipeline
-  runs its failure protocol on you. POST the reply, then carry on working.
+  runs its failure protocol on you. POST the reply, then carry on working. The `noted` cases
+  below are the only turns a message may end.
 - Do not post the user's own line back: the server recorded it the moment the browser sent it, and
   a copy shows it twice.
+- A message that starts with `[Stopped]` means the user pressed Stop and you were halted
+  mid-work, so your last command or edit may be half done. What follows the marker is what the
+  user sent next, and it decides how you go on:
+  - work, an answer, an approval or a "carry on" → do it, first finishing or undoing the
+    half-done part as the message implies. An approval approves what the user saw: first undo
+    whatever you changed after the round or result they were shown.
+  - "give up" → end your turn with your error JSON, its report saying the user stopped the step.
+  - only a question, a remark or a `[Deleted]` notice → handle it, reply in the transcript and
+    end your turn with `{"type":"noted"}`: you stay halted until the user's next message.
+- `[Deleted] The user deleted their message: "<text>"` means: treat that line as never sent and
+  drop only what it asked for. A line `Its images: <path>, …` under it lists the images that came
+  with it — they go too, never Read them again. Undo the part of its work you have not finished;
+  keep what you finished, but name it in your reply, so the user can ask for it to go. If that
+  line was all you were working on — you were otherwise waiting at a gate or halted, or it is the
+  line that woke you after a `[Stopped]` — reply and end your turn with `{"type":"noted"}`, or
+  with a fresh round or result when what you kept changed what a gate shows the user. Otherwise
+  reply and carry on with the rest.
+- `[Stopped]`, `[Deleted]` and `{"type":"noted"}` are FIXED IDENTIFIERS, never translated.
+  `noted` is for the cases above only: it moves nothing in the pipeline, so it never stands in
+  for the result JSON your work owes.
 - Act on it even where it departs from the plan — the user outranks the plan — and record what
   you did differently in `deviations`, so step 6 reviews the change rather than discovering it.

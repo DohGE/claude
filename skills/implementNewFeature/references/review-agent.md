@@ -118,7 +118,7 @@ not by another review.
    When `projectInstructionsDir` (in the context JSON and the matcher's output alike) is not null, the
    repository's own file kinds from `{{ROOT}}/.claude/doh/instructions/` are layered into those
    checklists; they bind exactly like the skill's.
-   A worktree is checked out from HEAD, so it carries them only if they are COMMITTED — when it comes
+   A worktree is checked out from a commit, so it carries them only if they are COMMITTED — when it comes
    back null here, note it in `reviewSummary` rather than reaching outside `{{ROOT}}`, because the
    review then silently ran without the rules the project meant to enforce.
    Then `git -C "{{ROOT}}" add -A` again.
@@ -210,8 +210,29 @@ the step's transcript:
 
 - NEVER end your turn to answer one. Ending your turn is how you report this step's outcome, so a
   turn that closes with a chat reply and no result JSON is read as a crashed step and the pipeline
-  runs its failure protocol on you. POST the reply, then carry on working.
+  runs its failure protocol on you. POST the reply, then carry on working. The `noted` cases
+  below are the only turns a message may end.
 - Do not post the user's own line back: the server recorded it the moment the browser sent it, and
   a copy shows it twice.
+- A message that starts with `[Stopped]` means the user pressed Stop and you were halted
+  mid-work, so your last command or edit may be half done. What follows the marker is what the
+  user sent next, and it decides how you go on:
+  - work, an answer, an approval or a "carry on" → do it, first finishing or undoing the
+    half-done part as the message implies. An approval approves what the user saw: first undo
+    whatever you changed after the round or result they were shown.
+  - "give up" → end your turn with your error JSON, its report saying the user stopped the step.
+  - only a question, a remark or a `[Deleted]` notice → handle it, reply in the transcript and
+    end your turn with `{"type":"noted"}`: you stay halted until the user's next message.
+- `[Deleted] The user deleted their message: "<text>"` means: treat that line as never sent and
+  drop only what it asked for. A line `Its images: <path>, …` under it lists the images that came
+  with it — they go too, never Read them again. Undo the part of its work you have not finished;
+  keep what you finished, but name it in your reply, so the user can ask for it to go. If that
+  line was all you were working on — you were otherwise waiting at a gate or halted, or it is the
+  line that woke you after a `[Stopped]` — reply and end your turn with `{"type":"noted"}`, or
+  with a fresh round or result when what you kept changed what a gate shows the user. Otherwise
+  reply and carry on with the rest.
+- `[Stopped]`, `[Deleted]` and `{"type":"noted"}` are FIXED IDENTIFIERS, never translated.
+  `noted` is for the cases above only: it moves nothing in the pipeline, so it never stands in
+  for the result JSON your work owes.
 - It can point you at a file or a rule to weigh. It cannot waive a finding: a fix you reject
   still needs its ground in `reviewSummary`, whoever asked for it.

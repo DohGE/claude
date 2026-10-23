@@ -30,17 +30,19 @@ function task(id, active, steps = {}, extra = {}) {
 
 // A project whose run lives in `.claude/doh/<stamp>`, and a transcript that names it the way a
 // JSONL line does - Windows separators escaped - from a worktree the session `cd`-ed into.
-function fixture(t, { tasks = null, serverPid = process.pid, waiterPid = null, mention = true } = {}) {
+function fixture(t, { tasks = null, e2e = undefined, serverPid = process.pid, waiters = {}, mention = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pipeline-hooks-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, 'project');
   const session = path.join(project, '.claude', 'doh', '20261001-120000');
   fs.mkdirSync(session, { recursive: true });
   fs.writeFileSync(path.join(session, 'server.json'), JSON.stringify({ port: 9999, pid: serverPid }));
-  if (tasks) fs.writeFileSync(path.join(session, 'pipeline-state.json'), JSON.stringify({ tasks, nextTaskId: tasks.length + 1 }));
+  if (tasks) fs.writeFileSync(path.join(session, 'pipeline-state.json'), JSON.stringify({ tasks, nextTaskId: tasks.length + 1, e2e }));
   const locks = path.join(root, 'locks');
   fs.mkdirSync(locks);
-  if (waiterPid) fs.writeFileSync(path.join(locks, 'doh-answer-waiter-9999.json'), JSON.stringify({ pid: waiterPid, startedAt: Date.now() }));
+  for (const [taskId, pid] of Object.entries(waiters)) {
+    fs.writeFileSync(path.join(locks, `doh-answer-waiter-9999-${taskId}.json`), JSON.stringify({ pid, startedAt: Date.now(), windowMs: 3000000 }));
+  }
   const worktree = path.join(project, 'worktree');
   const lines = [{ type: 'user', cwd: project, message: { content: 'go' } }];
   if (mention) {
@@ -57,8 +59,9 @@ function fixture(t, { tasks = null, serverPid = process.pid, waiterPid = null, m
 }
 
 test('compact: names the run, where each task stands, the E2E slot and the sections to read again', (t) => {
+  // A run from before the server recorded orchestrators and kept the slot: one session for all.
   const f = fixture(t, {
-    waiterPid: process.pid,
+    waiters: { t1: process.pid },
     tasks: [
       task('t1', 4, { 4: { status: 'in_progress', currentOperation: 'Writing tests' } }, { branch: 'feature/a' }),
       task('t2', 5, { 5: { status: 'in_progress' } }),
@@ -71,9 +74,13 @@ test('compact: names the run, where each task stands, the E2E slot and the secti
   assert.ok(note.includes('- t1 on `feature/a`: step 4 Implementation - in_progress, "Writing tests"'), note);
   assert.ok(note.includes('- t2 on no branch yet: step 5 Validation & E2E - in_progress'), note);
   assert.ok(note.includes('- t3 on no branch yet: step 5 Validation & E2E - waiting, "Waiting for the E2E slot"; a question is open'), note);
-  assert.ok(note.includes('- E2E_LOCK: held by t2; queued: t3'), note);
-  assert.ok(note.includes(`- waiter: listening (pid ${process.pid}) - do not start a second one`), note);
-  assert.ok(note.includes(`${sectionOf('Server helpers')} (Server helpers`), 'the cut runs through Server helpers');
+  assert.ok(note.includes('- E2E slot: held by t2; queued: t3'), note);
+  assert.ok(note.includes(`- waiter for t1: listening (pid ${process.pid}) - do not start a second one`), note);
+  assert.ok(note.includes('- waiter for t2: none is listening'), note);
+  assert.ok(!note.includes('- you orchestrate'), note);
+  for (const title of ['Talking to a running agent', 'Stopping a step', 'Server helpers']) {
+    assert.ok(note.includes(`${sectionOf(title)} (${title}`), `the cut reached ${title}: ${note}`);
+  }
   assert.ok(note.includes(`${sectionOf('Step 4 ')} (Step 4`), note);
   assert.ok(note.includes(`${sectionOf('Step 5 ')} (Step 5`), note);
   assert.ok(!/\(Step 2 |\(Failure protocol|\(Final summary/.test(note), 'only what the tasks\' state calls for');
@@ -91,7 +98,28 @@ test('compact: a failed step adds the failure protocol; a shown summary the fina
   for (const title of ['Step 6 ', 'Step 7 ', 'Failure protocol', 'Final summary']) {
     assert.ok(note.includes(`${sectionOf(title)} (${title.trim()}`), `${title}: ${note}`);
   }
-  assert.ok(note.includes('- waiter: none is listening - start one (loop card point 1) before you end this turn'), note);
+  assert.ok(note.includes('- waiter for t1: none is listening - start one (loop card point 1) before you end this turn'), note);
+});
+
+test('compact: a session hears only of the task it orchestrates, and of the server\'s E2E slot', (t) => {
+  const own = (session) => ({ orchestrator: { session, claimedAt: '2026-10-01T12:00:00.000Z' } });
+  const f = fixture(t, {
+    waiters: { t1: process.pid, t2: process.pid },
+    e2e: { holder: 't3', queue: ['t2'] },
+    tasks: [
+      task('t1', 4, { 4: { status: 'in_progress' } }, own('s0')),
+      task('t2', 5, { 5: { status: 'waiting', currentOperation: 'Waiting for the E2E slot' } }, own('s1')),
+      task('t3', 5, { 5: { status: 'in_progress' } }, own('s3')),
+    ],
+  });
+  const note = noteOf(hooks.onCompact(f.input, f.env));
+  assert.ok(note.includes('- you orchestrate t2 only: every other task has an orchestrator of its own'), note);
+  assert.ok(note.includes('- t2 on no branch yet: step 5 Validation & E2E - waiting, "Waiting for the E2E slot"'), note);
+  assert.ok(!/- t[13] on /.test(note), note);
+  assert.ok(note.includes('- E2E slot: held by t3; queued: t2 (the server hands it on in this order)'), note);
+  assert.ok(note.includes(`- waiter for t2: listening (pid ${process.pid})`), note);
+  assert.ok(!note.includes('waiter for t1'), note);
+  assert.ok(note.includes(`${sectionOf('Step 5 ')} (Step 5`) && !note.includes('(Step 4'), note);
 });
 
 test('compact: a task before implementation can still be revised; the story step has its own section', (t) => {
@@ -131,8 +159,9 @@ test('compact: no note without a live server, or for a session whose transcript 
 test('skillSections: only what the compaction cut, each section up to the next heading', () => {
   const skill = hooks.skillSections(skillFile);
   const titles = skill.sections.map((s) => s.title);
-  assert.ok(titles.some((title) => title.startsWith('Server helpers')), 'it straddles the cut');
-  assert.ok(!titles.some((title) => title.startsWith('Talking to a running agent')), 'that one stays in the head');
+  assert.ok(titles.some((title) => title.startsWith('Talking to a running agent')), 'it straddles the cut');
+  assert.ok(!titles.some((title) => title.startsWith('Model and effort')), 'that one stays in the head');
+  for (const s of skill.sections) assert.ok(s.line + s.limit > skill.cutLine, `${s.title} runs past the cut`);
   const summary = skill.sections.find((s) => s.title.startsWith('Final summary'));
   const lines = fs.readFileSync(skillFile, 'utf8').split(/\r?\n/);
   assert.ok(lines[summary.line - 1 + summary.limit].startsWith('<!-- one-time:start -->'), 'Final summary ends at the one-time part');
@@ -143,7 +172,7 @@ test('skillSections: only what the compaction cut, each section up to the next h
 test('loop card: short enough to ride in every compaction, and the plugin\'s compaction hook asks this part', () => {
   const card = hooks.loopCard(skillFile).join('\n');
   assert.ok(card.length <= 3000, `${card.length} chars`);
-  for (const term of ['wait-answer.cjs', 'run_in_background', 'WAITER_RUNNING', 'E2E_LOCK', '"taskId"', 'SendMessage']) {
+  for (const term of ['wait-answer.cjs', '--task T', 'run_in_background', 'WAITER_RUNNING', 'ORCHESTRATOR_RUNNING', '/api/e2e', '"taskId"', 'SendMessage']) {
     assert.ok(card.includes(term), term);
   }
   const shared = require('../../../scripts/compact-hook.cjs');

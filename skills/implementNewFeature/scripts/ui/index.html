@@ -10,6 +10,7 @@
     --bg:#07090f; --card:#1c2438; --card-2:#121927; --border:#324061; --border-hi:#44567f;
     --text:#eef1f8; --muted:#9aa3ba; --accent:#7c8cf8; --accent-2:#a78bfa;
     --waiting:#64748b; --in_progress:#7c8cf8; --completed:#34d399; --failed:#f87171;
+    --warn:#fbbf24;
   }
   * { box-sizing:border-box; }
   body {
@@ -43,7 +44,7 @@
        background:linear-gradient(90deg,var(--accent),var(--accent-2));
        -webkit-background-clip:text; background-clip:text; color:transparent; }
   /* Task tabs appear only from the second task on — one task looks like it always did. */
-  .tabs-bar { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .tabs-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
   .tabs-bar[hidden], .viewbar[hidden] { display:none; }
   .tabs-bar .tab { display:inline-flex; align-items:center; gap:8px; margin:0; padding:8px 12px;
           max-width:100%; font-size:12.5px; font-weight:600; background:var(--card);
@@ -247,17 +248,40 @@
   .msg .who { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.8px;
           font-weight:700; margin-bottom:4px; color:var(--muted); }
   .msg.user .who { color:var(--accent); }
-  .chat:empty, .sent:empty { display:none; }
-  .sent { margin-top:18px; border-top:1px solid var(--border); }
+  /* The × that takes back a line of the user's own, while its step is live. */
+  .msg { position:relative; }
+  .msg .rm { position:absolute; top:8px; right:0; margin:0; padding:0; width:20px; height:20px;
+          font-size:13px; line-height:1; border-radius:50%; color:var(--muted);
+          background:var(--card-2); border:1px solid var(--border); }
+  .msg .rm:hover:not(:disabled) { color:var(--failed); transform:none; filter:none; }
+  .chat:empty { display:none; }
   .gate-actions { display:flex; gap:10px; flex-wrap:wrap; }
+  /* What the step asks of the user, between its progress and its log: the question or the
+     review is the one thing to act on, and what led up to it stays on screen around it. */
+  .gate-card { margin:4px 0 16px; padding:16px 18px 18px; border:1px solid var(--border-hi);
+          border-radius:12px; background:rgba(124,140,248,.07); }
+  .gate-card > :first-child { margin-top:0; }
+  .gate-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.8px;
+          color:var(--accent); }
+  .gate-question { margin:6px 0 4px; white-space:pre-wrap; }
+  /* The plan's risks and caveats: read before the plan is approved, so set apart from it. */
+  .critical { margin:0 0 14px; padding:12px 14px; border:1px solid rgba(251,191,36,.45);
+          border-left:4px solid var(--warn); border-radius:10px; background:rgba(251,191,36,.08); }
+  .critical h3 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.8px;
+          color:var(--warn); }
+  .critical ul { margin:0; padding-left:18px; font-size:13px; }
+  .critical li + li { margin-top:4px; }
   /* The composer rides the bottom of the viewport, so a long mockup page never
-     scrolls the field to answer with off the screen. */
+     scrolls the field to answer with off the screen. Its buttons stay level with
+     the middle of the field, however tall it grows. */
   .composer { position:sticky; bottom:0; z-index:2; display:flex; flex-wrap:wrap; gap:10px;
-          align-items:flex-end; margin:16px -24px -24px; padding:14px 24px 16px;
+          align-items:center; margin:16px -24px -24px; padding:14px 24px 16px;
           background:var(--card); border-top:1px solid var(--border); border-radius:0 0 16px 16px; }
   /* The pictures waiting to go with the message sit on a row of their own above it. */
   .composer .thumbs { flex:1 0 100%; margin:0; }
-  .composer textarea { flex:1; min-height:44px; }
+  /* A block, not the inline default: inside its .copy-wrap an inline field leaves a
+     descender gap under it, and the buttons would centre on the gap too. */
+  .composer textarea { flex:1; min-height:44px; display:block; }
   .composer .copy-wrap { flex:1; }
   .composer button { margin:0; flex:none; }
   .bar { height:8px; background:var(--card-2); border:1px solid var(--border); border-radius:99px;
@@ -286,6 +310,9 @@
   .notice { display:flex; align-items:center; gap:10px; margin-top:16px; padding:12px 14px;
           border:1px solid var(--border-hi); border-radius:10px; background:rgba(124,140,248,.08);
           font-size:13px; }
+  /* A stopped agent: the step's panel stays as it was, with this under its title. */
+  .stopped-note { margin:0 0 14px; padding:12px 14px; border:1px solid var(--border-hi);
+          border-radius:10px; background:rgba(124,140,248,.08); font-size:13px; }
   .spinner { width:14px; height:14px; border-radius:50%; border:2px solid var(--accent);
           border-top-color:transparent; animation:spin .8s linear infinite; flex:none; }
   @keyframes spin { to { transform:rotate(360deg); } }
@@ -305,6 +332,36 @@
           max-width:min(560px, calc(100vw - 32px)); padding:11px 16px; border-radius:12px;
           border:1px solid #7f1d1d; background:#2a1113; color:#fecaca; font-size:13px;
           box-shadow:0 20px 40px -24px rgba(0,0,0,.9); }
+  /* The orchestrator session's usage in the page's top-right corner, level with the title.
+     Where the row would reach the title it takes a line of its own under it instead. */
+  .usage { position:absolute; top:14px; right:18px; z-index:5; display:flex; flex-wrap:wrap;
+          gap:6px; font-size:12px; }
+  .usage[hidden] { display:none; }
+  .usage .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px;
+          background:var(--card-2); border:1px solid var(--border); border-radius:99px;
+          white-space:nowrap; cursor:default; }
+  .usage .chip.off { color:var(--muted); border-style:dashed; }
+  .usage .k { color:var(--muted); }
+  .usage b { font-weight:600; font-variant-numeric:tabular-nums; }
+  .usage .meter { width:34px; height:4px; border-radius:99px; background:var(--border);
+          overflow:hidden; }
+  .usage .meter > span { display:block; height:100%; background:var(--accent); }
+  .usage .meter > .warm { background:var(--warn); }
+  .usage .meter > .hot { background:var(--failed); }
+  /* First in the corner, the active task's own orchestrator: a dot in the colour of its status,
+     and the button that opens a session where none is running. */
+  .usage .dot { width:7px; height:7px; border-radius:50%; background:var(--waiting); flex:none; }
+  .usage .dot.listening { background:var(--completed); }
+  .usage .dot.working { background:var(--in_progress); }
+  .usage .dot.starting { background:var(--warn); }
+  .usage .dot.closed { background:var(--failed); }
+  .usage button.chip { margin:0; font-weight:600; color:var(--text); cursor:pointer; }
+  .usage button.chip:hover:not(:disabled) { border-color:var(--border-hi); transform:none; }
+  .usage button.chip:disabled { color:var(--muted); }
+  dialog.confirm pre.cmd { margin:12px 0 4px; padding:10px 12px; background:var(--card-2);
+          border:1px solid var(--border); border-radius:10px; font-size:12.5px;
+          white-space:pre-wrap; overflow-wrap:anywhere; }
+  @media (max-width:1240px) { .usage { position:static; margin:-16px 0 18px; } }
 </style>
 </head>
 <body>
@@ -322,6 +379,7 @@
 </aside>
 <div class="wrap">
   <h1>implementNewFeature</h1>
+  <div class="usage" id="usage" hidden></div>
   <div class="tabs-bar" id="tabs" hidden></div>
   <div class="stepper" id="stepper"></div>
   <div class="viewbar" id="viewbar" hidden></div>
@@ -334,6 +392,16 @@
   <div class="confirm-actions">
     <button id="confirmCancel" class="secondary">Cancel</button>
     <button id="confirmOk">Confirm</button>
+  </div>
+</dialog>
+<dialog id="sessionDialog" class="confirm" aria-labelledby="sessionTitle">
+  <h3 id="sessionTitle">Open this task's session yourself</h3>
+  <p id="sessionWhy"></p>
+  <pre class="cmd" id="sessionCommand"></pre>
+  <p id="sessionCwd"></p>
+  <div class="confirm-actions">
+    <button id="sessionClose" class="secondary">Close</button>
+    <button id="sessionCopy">Copy command</button>
   </div>
 </dialog>
 <script>
@@ -354,8 +422,6 @@ const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 const ATTACH_STEPS = [2, 3, STORY_STEP];
 const MAX_ATTACHMENTS = 20;
 const ATTACHMENTS = 'attachments';
-// What the server writes as the report of a step the user stopped.
-const STOPPED_REPORT = 'Stopped by the user.';
 // Where the orchestrator puts the PNGs of every mockup round, next to the mockups.
 const SCREENSHOT_DIR = 'mockup-screenshots';
 // Step 1 has no agent of its own - the form IS step 1 - so the overrides start at 2.
@@ -400,6 +466,11 @@ let activeTask = null;
 // The last polled state, so the step-1 form can check the other tasks' branches
 // without threading the whole document through every render function.
 let lastState = null;
+// Polls overlap - the interval's, and the one a send runs the moment the server has it - so
+// each is numbered, and one answered after a later one is dropped: drawn, it would put back
+// the gate the user has just answered.
+let pollSeq = 0;
+let drawnSeq = 0;
 // The open step-1 form's gate, so a sibling task submitting its branch can make
 // this form re-check without re-rendering it (which would wipe what is typed).
 let refreshGate = null;
@@ -588,19 +659,19 @@ const viewOf = id => (view[id] || (view[id] = {
   // A file added or removed since the last submission. The form's own lists are
   // rewritten by the server on a removal, so only this remembers it happened.
   filesDirty: false,
-  // What is typed into the mockup composer, and what is typed into or already sent
-  // from the panel now on screen — a Send no longer locks, so all of it must survive
-  // a redraw. sentSig is the panel the last two belong to; the composer's own draft
-  // outlives every mockup round, so it is not tied to one.
-  mockupDraft: '', answerDraft: '', sent: [], sentSig: null,
+  // What is typed into the mockup composer, and into the answer field of the gate now on
+  // screen - both must survive a redraw. draftSig is the gate the answer belongs to; the
+  // composer's own draft outlives every mockup round, so it is not tied to one.
+  mockupDraft: '', answerDraft: '', draftSig: null,
   // What is typed into a step's composer but not sent, per step: walking to another
   // tile and back is a re-render, and the message must still be there.
   msgDrafts: {},
   // An irreversible decision still locks the panel until the orchestrator moves the
   // state. The lock is remembered per task, because switching tabs re-renders the
   // panel and would otherwise hand back a live button — and a second click would
-  // queue a duplicate decision that a later gate then mistakes for its own.
-  locked: null, lockedSig: null
+  // queue a duplicate decision that a later gate then mistakes for its own. lockedHide: the
+  // lock took the panel's content off the screen with it.
+  locked: null, lockedSig: null, lockedHide: false
 }));
 
 // Refuses what `git check-ref-format` refuses, without shelling out to git.
@@ -703,14 +774,18 @@ $('#confirmCancel').addEventListener('click', () => $('#confirmDialog').close('c
 
 // Instant click feedback: disable every control and show a spinner notice.
 // The panel stays locked until the orchestrator changes the state (sig changes).
-function lockPanel(message, remember = true) {
+// `hide` takes the panel's content off the screen too, for a decision that leaves nothing
+// on it to read - Finish, on a failure the user has given up on.
+function lockPanel(message, remember = true, hide = false) {
   if (remember) {
     const v = viewOf(activeTask);
     v.locked = message;
     v.lockedSig = lastSig;
+    v.lockedHide = hide;
   }
   document.querySelectorAll('#panel button, #panel textarea, #panel input, #panel select')
     .forEach(el => { el.disabled = true; });
+  if (hide) [...$('#panel').children].forEach(el => { el.style.display = 'none'; });
   const n = document.createElement('div');
   n.className = 'notice';
   const spin = document.createElement('span');
@@ -782,6 +857,7 @@ window.addEventListener('resize', () => {
 
 async function tick() {
   if (serverDown) return;
+  const seq = ++pollSeq;
   let state;
   try {
     state = await (await fetch('/api/state')).json();
@@ -790,6 +866,8 @@ async function tick() {
     lastSig = null;
     return;
   }
+  if (seq < drawnSeq) return;
+  drawnSeq = seq;
   if (!activeTask || !state.tasks.some(t => t.id === activeTask)) {
     activeTask = state.tasks[0].id;
     lastSig = null;
@@ -801,11 +879,121 @@ async function tick() {
     if (refreshGate) refreshGate();
   }
   const task = state.tasks.find(t => t.id === activeTask);
+  renderUsage((state.usage || {})[activeTask], (state.orchestrators || {})[activeTask], task);
   renderTabs(state);
   renderStepper(task);
   renderViewBar(task);
   renderPanel(state, task);
 }
+
+// The active task's orchestrator - every task has a Claude Code session of its own - and that
+// session's own numbers, as its status line last reported them (usage.cjs): what it has spent,
+// how much of the 5-hour and the weekly limit that is, what it runs on and how full its context
+// is. Drawn again only when one of them moved; the tooltips say the rest.
+const compact = n => (n == null ? '—' : n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 1 : 2)}M`
+  : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+const grouped = n => (n == null ? '—' : Number(n).toLocaleString('en-US'));
+const pctText = p => (p == null ? '—' : `${Math.round(p)}%`);
+function resetsText(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const day = d.toDateString() === new Date().toDateString() ? ''
+    : `${d.toLocaleDateString('en-US', { weekday: 'short' })} `;
+  return ` · resets ${day}${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+}
+const ORCHESTRATOR_STATUS = {
+  starting: ['starting…', 'A terminal was opened for this task; its session has not polled for answers yet.'],
+  listening: ['listening', 'This task\'s session is waiting for an answer from this page.'],
+  working: ['working', 'This task\'s session is at work and will pick up answers when it is done.'],
+  closed: ['closed', 'This task\'s session stopped listening - its terminal was closed, or it has not '
+    + 'been heard from for 15 minutes. Answers wait here until a session takes the task.'],
+  none: ['none', 'No session runs this task yet. Answers wait here until one takes the task.'],
+};
+function orchestratorChips(o) {
+  const [text, why] = ORCHESTRATOR_STATUS[o.status] || ORCHESTRATOR_STATUS.none;
+  const title = `${why}${o.launchError ? `\nThe last terminal did not open: ${o.launchError}` : ''}`;
+  const status = `<span class="chip" id="orchestratorStatus" title="${esc(title)}"><span
+    class="dot ${esc(o.status)}"></span><span class="k">Orchestrator</span><b>${esc(text)}</b></span>`;
+  return ['closed', 'none'].includes(o.status)
+    ? `${status}<button type="button" class="chip" id="openSession" title="${esc('Opens a terminal in the '
+      + 'project with a Claude Code session of its own for this task')}">Open session</button>`
+    : status;
+}
+function renderUsage(u, o, task) {
+  const box = $('#usage');
+  // A task whose form was never sent has nothing for a session to do yet.
+  const orch = o && (o.status !== 'none' || (task && task.step1Submitted)) ? o : null;
+  const sigNow = JSON.stringify([u || null, orch]);
+  if (!box || box.dataset.sig === sigNow) return;
+  box.dataset.sig = sigNow;
+  box.hidden = !u && !orch;
+  if (box.hidden) return;
+  const head = orch ? orchestratorChips(orch) : '';
+  if (!u) {
+    box.innerHTML = head;
+    return;
+  }
+  const asOf = u.asOf ? `\nAs of ${new Date(u.asOf).toLocaleTimeString('en-GB')}, from the orchestrator's status line` : '';
+  // A level meter only where there is a limit to reach: amber from 70%, red from 90%.
+  const chip = (label, value, title, pct) => `<span class="chip" title="${esc(title + asOf)}"><span
+    class="k">${esc(label)}</span><b>${esc(value)}</b>${pct == null ? '' : `<span class="meter"><span${
+    pct >= 90 ? ' class="hot"' : pct >= 70 ? ' class="warm"' : ''} style="width:${
+    Math.max(3, Math.min(100, Math.round(pct)))}%"></span></span>`}</span>`;
+  const effort = u.effort ? chip('Effort', u.effort, 'The orchestrator\'s thinking effort') : '';
+  if (!u.relay) {
+    box.innerHTML = `${head}${effort}<span class="chip off" title="${esc('Only the status line is told the '
+      + 'session\'s usage. Set statusLine.command in ~/.claude/settings.json to\nnode "'
+      + `${u.relayScript || 'statusline-relay.cjs'}" <your status line command>\nand the numbers `
+      + 'show up here on its next update.')}">Usage: connect the status line</span>`;
+    return;
+  }
+  const t = u.tokens || {};
+  const total = t.input == null && t.output == null ? null : (t.input || 0) + (t.output || 0);
+  const limit = (label, name, l) => chip(label, pctText(l && l.usedPct),
+    l ? `${name}: ${pctText(l.usedPct)} used${resetsText(l.resetsAt)}` : `${name}: not reported`,
+    l && l.usedPct);
+  const c = u.context || {};
+  box.innerHTML = [
+    head,
+    chip('Tokens', compact(total), `This session: ${grouped(t.input)} input · ${grouped(t.output)} output${
+      u.costUsd != null ? ` · $${u.costUsd.toFixed(2)} at API prices` : ''}`),
+    limit('5h', 'The 5-hour limit', u.fiveHour),
+    limit('Week', 'The weekly limit', u.weekly),
+    chip('Model', u.model || '—', 'The orchestrator\'s model'),
+    effort || chip('Effort', '—', 'The orchestrator\'s thinking effort'),
+    chip('Context', pctText(c.usedPct), c.size
+      ? `${grouped(c.used)} of ${grouped(c.size)} tokens in the context window` : 'The context window',
+    c.usedPct),
+  ].join('');
+}
+
+// The server opens the session (POST /api/orchestrator/launch): it knows the project and the
+// port. Where it opens no terminal, the dialog gives the command to run in one.
+async function openSession() {
+  const btn = $('#openSession');
+  if (btn) btn.disabled = true;
+  const r = await postJson('/api/orchestrator/launch', { taskId: activeTask });
+  if (r.launched === false) showSessionCommand(r);
+  // The chip is drawn anew either way: the status moves on, or the button comes back.
+  $('#usage').dataset.sig = '';
+  tick();
+}
+function showSessionCommand(r) {
+  $('#sessionWhy').textContent = `No terminal could be opened from here${r.error ? ` (${r.error})` : ''}. `
+    + 'Run this in a terminal of your own:';
+  $('#sessionCommand').textContent = r.command;
+  $('#sessionCwd').textContent = r.cwd ? `in the project directory, ${r.cwd}` : '';
+  $('#sessionCopy').textContent = 'Copy command';
+  $('#sessionDialog').showModal();
+}
+$('#usage').addEventListener('click', e => {
+  if (e.target.closest('#openSession')) openSession();
+});
+$('#sessionCopy').addEventListener('click', async () => {
+  await copyText($('#sessionCommand').textContent);
+  $('#sessionCopy').textContent = 'Copied';
+});
+$('#sessionClose').addEventListener('click', () => $('#sessionDialog').close());
 
 // Rebuilt every tick like the stepper — the bar holds no input, so a background
 // task changing state never re-renders (and never clears) the open panel.
@@ -998,14 +1186,32 @@ function renderViewBar(task) {
   });
 }
 
-// A task stopped at a gate, waiting for the user rather than for an agent.
-const pending = task => !!(task.question || task.reviewSummary || task.mockupReview);
+// A review the user sent feedback to stays in the state for the agent's next round, marked
+// `answered` by the server - and off the screen: the user has said what they had to say.
+const gateOpen = gate => !!gate && !gate.answered;
+
+// A task waiting for the user rather than for an agent: stopped at a gate, or with an
+// agent the user stopped and has not yet told how to go on.
+const pending = task => !!(task.question || gateOpen(task.reviewSummary) || gateOpen(task.mockupReview))
+  || task.steps.some(s => s.stopped);
 
 // Whether this step is the one the pipeline is on — so its buttons answer something
 // and its composer reaches an agent. Step 7 is the exception on the summary test: its
 // gate opens after the summary is written.
 const liveOf = (task, step) =>
   step.id === task.activeStep && (step.id === MOCKOON_STEP || !task.summary);
+
+// The gate the step on screen holds open for the user, if any. A question belongs to whatever
+// step is running. The plan and the story are approved at the same gate, on whichever of the
+// two steps the pipeline is on - a story gate must not show up on the finished refinement.
+// The mockups are step 3's.
+function gateOf(task, step) {
+  const live = liveOf(task, step);
+  if (task.question && live) return 'question';
+  if ((step.id === 2 || step.id === STORY_STEP) && gateOpen(task.reviewSummary) && live) return 'review';
+  if (step.id === 3 && gateOpen(task.mockupReview)) return 'mockup';
+  return null;
+}
 
 function sig(task) {
   const v = viewOf(task.id);
@@ -1015,9 +1221,10 @@ function sig(task) {
     task.question ? `q${task.questionSeq || 0}` : '',
     // rev changes on every agent round, so a revised plan replaces the one on
     // screen instead of leaving stale text under a gate the user is answering.
-    task.reviewSummary ? `r${task.reviewSummary.rev || 0}` : '',
-    // Same for the mockups, where it also clears the lock left by an Approve.
-    task.mockupReview ? `m${task.mockupReview.rev || 0}` : '',
+    // An answered gate is a different screen - the step without it - and so is one reopened.
+    task.reviewSummary ? `r${task.reviewSummary.rev || 0}${task.reviewSummary.answered ? 'a' : ''}` : '',
+    // Same for the mockups.
+    task.mockupReview ? `m${task.mockupReview.rev || 0}${task.mockupReview.answered ? 'a' : ''}` : '',
     task.summary ? '1' : '',
     // The Mockoon step changes status while the summary is the visible screen,
     // and the switch between the two screens is local — both must re-render.
@@ -1044,8 +1251,8 @@ function renderPanel(state, task) {
   wireTextareas();
   // The orchestrator has not moved this task since the answer went out, so the
   // panel goes back under its lock instead of offering the button again.
-  if (v.locked && v.lockedSig === s) lockPanel(v.locked, false);
-  else { v.locked = null; v.lockedSig = null; }
+  if (v.locked && v.lockedSig === s) lockPanel(v.locked, false, v.lockedHide);
+  else { v.locked = null; v.lockedSig = null; v.lockedHide = false; }
 }
 
 function renderActive(task, step) {
@@ -1066,14 +1273,10 @@ function renderActive(task, step) {
   if (task.summary && v.viewStep == null) return renderSummary(task);
   if (step.status === 'failed') return renderFailed(step, live);
   // A question carries no step of its own — it belongs to whatever step is running.
-  if (task.question && live) return renderQuestion(task.question, step);
+  if (gateOf(task, step) === 'question') return renderQuestion(task, task.question, step);
   if (step.id === 1) return renderStep1(task);
-  // The plan and the story are approved at the same gate, on whichever of the two steps
-  // the pipeline is on - a story gate must not show up on the finished refinement.
-  if ((step.id === 2 || step.id === STORY_STEP) && task.reviewSummary && live) {
-    return renderReview(task.reviewSummary, step);
-  }
-  if (step.id === 3 && task.mockupReview) return renderMockupReview(task.mockupReview, step);
+  if (gateOf(task, step) === 'review') return renderReview(task, task.reviewSummary, step);
+  if (gateOf(task, step) === 'mockup') return renderMockupReview(task.mockupReview, step);
   if (step.id === STORY_STEP && step.status === 'completed') return renderStory(task, step);
   renderProgress(task, step);
 }
@@ -1539,10 +1742,14 @@ function wireBackButton() {
   btn.addEventListener('click', () => gotoStep(1));
 }
 
-// A line of a conversation, with the pictures that went with it.
-const msgHtml = (role, text, attachments) =>
-  `<div class="msg ${role === 'user' ? 'user' : 'agent'}">
-    <span class="who">${role === 'user' ? 'You' : 'Agent'}</span>${esc(text)}${
+// A line of a conversation, with the pictures that went with it. A line of the user's own
+// in a step's live transcript carries the × that deletes it. A line keeps its white space
+// (pre-wrap), so the markup breaks only inside tags - between them it would show.
+const msgHtml = (role, text, attachments, id, deletable) =>
+  `<div class="msg ${role === 'user' ? 'user' : 'agent'}"${id != null ? ` data-id="${id}"` : ''}><span
+    class="who">${role === 'user' ? 'You' : 'Agent'}</span>${
+  deletable && role === 'user' && id != null ? `<button type="button" class="rm" data-delete="${id}"
+    aria-label="Delete this message" title="Delete this message">×</button>` : ''}${esc(text)}${
   (attachments || []).length ? `<div class="thumbs">${attachments.map(n =>
     thumbHtml(uploadUrl(ATTACHMENTS, n), n)).join('')}</div>` : ''}</div>`;
 
@@ -1557,8 +1764,9 @@ const attachedOf = key => viewOf(activeTask).attach[key] || [];
 
 // Wires one picker and its tray. Returns what a send calls first: it uploads the tray
 // and resolves to the stored names - or to null when an upload failed, and then the
-// message is not sent at all, so its text and pictures stay where they are.
-function wireAttach(key) {
+// message is not sent at all, so its text and pictures stay where they are. `onChange`
+// hears of every picture picked or removed - a Send may wait on one.
+function wireAttach(key, onChange) {
   const btn = document.querySelector(`[data-attach="${key}"]`);
   if (!btn) return async () => [];
   const v = viewOf(activeTask);
@@ -1574,6 +1782,7 @@ function wireAttach(key) {
       draw();
     }));
     btn.disabled = attachedOf(key).length >= MAX_ATTACHMENTS;
+    if (onChange) onChange();
   };
   btn.addEventListener('click', () => input.click());
   input.addEventListener('change', () => {
@@ -1598,60 +1807,95 @@ function wireAttach(key) {
   };
 }
 
-// Every agent step can be stopped while it runs. The server fails it on the spot, so the
-// failure gate - Retry or Finish - is on screen before the orchestrator has even heard.
+// Every agent step can be stopped while it runs. A Stop only interrupts the agent: the
+// step keeps its status and its panel, and whatever the user sends it next is what the
+// agent goes on with.
 const stoppable = step => {
   const task = currentTask();
   return !!task && step.id !== 1 && step.status === 'in_progress' && liveOf(task, step);
 };
-// The step's title, with the Stop button beside it while there is something to stop.
-const panelHead = (title, step) => `<div class="panel-head"><h2>${title}</h2>${
-  stoppable(step) ? '<button type="button" id="stopStep" class="danger">Stop</button>' : ''}</div>`;
+const STOPPED_NOTE = 'Stopped. The agent is waiting — whatever you send on this step next '
+  + 'tells it how to go on.';
+// The step's title, with the Stop button beside it while there is something to stop -
+// and once it is stopped, the note that says so under the title in the button's place.
+const panelHead = (title, step) => {
+  const stop = stoppable(step);
+  return `<div class="panel-head"><h2>${title}</h2>${stop ? `<button type="button"
+    id="stopStep" class="danger"${step.stopped ? ' hidden' : ''}>Stop</button>` : ''}</div>${
+  stop ? `<div class="stopped-note" id="stoppedNote"${step.stopped ? '' : ' hidden'}>${
+    STOPPED_NOTE}</div>` : ''}`;
+};
 function wireStop(step) {
   const btn = $('#stopStep');
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    const ok = await askConfirm({ title: 'Stop this step?',
-      text: 'Its agent is interrupted at once and the step is marked as stopped. Retry runs it '
-        + 'again; Finish ends the pipeline there.',
-      confirmLabel: 'Stop the step' });
+    const ok = await askConfirm({ title: 'Stop the agent?',
+      text: 'It stops what it is doing right now, and the step stays as it is. Whatever you '
+        + 'send on this step next tells the agent how to go on.',
+      confirmLabel: 'Stop the agent' });
     if (!ok) return;
-    lockPanel('Stopping the step…');
-    await sendAnswer({ kind: 'stop', step: step.id });
+    btn.disabled = true;
+    if (!(await sendAnswer({ kind: 'stop', step: step.id })).ok) btn.disabled = false;
     tick();
   });
 }
+// The Stop button and its note trade places as the flag comes and goes, without a
+// redraw - a Stop leaves the panel as it was, and so does the message that resumes it.
+function updateStopped(step) {
+  const note = $('#stoppedNote');
+  const btn = $('#stopStep');
+  if (!note || !btn || note.hidden === !step.stopped) return;
+  note.hidden = !step.stopped;
+  btn.hidden = !!step.stopped;
+  btn.disabled = false;
+}
 
-// What belongs to the panel on screen rather than to the task: the messages already
-// sent from it and the one still half-typed in it. A tab switch, a walk back to the
-// requirements and a poll all redraw the same panel — same signature — and both have
-// to come back. A new question or a revised plan is a different panel, and both start
-// empty, because neither would still be an answer to what is being asked.
+// What belongs to the panel on screen rather than to the task: the answer still half-typed
+// in it and the pictures picked for it. A tab switch, a walk back to the requirements and
+// a poll all redraw the same panel — same signature — and both have to come back. A new
+// question or a revised plan is a different panel, and starts empty, because neither would
+// still be an answer to what is being asked.
 function panelView() {
   const v = viewOf(activeTask);
-  if (v.sentSig !== lastSig) {
-    v.sent = [];
+  if (v.draftSig !== lastSig) {
     v.answerDraft = '';
     (v.attach.answer || []).forEach(dropFileUrl);
     v.attach.answer = [];
-    v.sentSig = lastSig;
+    v.draftSig = lastSig;
   }
   return v;
 }
 
-// A text message no longer locks the panel, so this trail is what tells the user
-// it went out. It belongs to the panel on screen and is dropped with it — the
-// mockup step has the server's own chat instead and never uses this.
-function renderSentTrail() {
-  const box = $('#sentTrail');
-  if (!box) return;
-  box.innerHTML = panelView().sent.map(m => msgHtml('user', m.text, m.attachments)).join('');
+// A Send is offered only for something to send: typed text, or a picture in the tray.
+// Returns the check, for what changes either without an input event - a send emptying
+// the field, a picture picked or removed.
+function wireSendable(field, button, key) {
+  const sync = () => {
+    button.disabled = field.disabled || (!field.value.trim() && !attachedOf(key).length);
+  };
+  field.addEventListener('input', sync);
+  sync();
+  return sync;
 }
 
-function pushSent(text, attachments) {
-  panelView().sent.push({ text, attachments });
-  renderSentTrail();
+// A send in flight. The controls it went from wait for the server, so a second click
+// cannot send it twice, and a send that failed hands them back with its text still in
+// them. A gate is the server's to take down - it does so as it records the answer - so
+// the poll run right away redraws the panel without it, not one round of the agent later.
+async function sendFrom(scope, send, sync) {
+  const controls = [...document.querySelectorAll(`${scope} button, ${scope} textarea, ${scope} input`)]
+    .filter(el => !el.disabled);
+  controls.forEach(el => { el.disabled = true; });
+  const ok = await send();
+  if (ok) await tick();
+  controls.forEach(el => { el.disabled = false; });
+  if (sync) sync();
+  return ok;
 }
+
+// The step's bar and the operation under it, both kept current by updateDynamic.
+const progressBar = () => `<div class="bar"><div id="barFill"></div></div>
+    <div class="op" id="op"></div>`;
 
 // The composer of a gate that takes free text: what is typed stays with the panel
 // until it is sent, so a redraw hands it straight back.
@@ -1668,43 +1912,53 @@ function wireComposer(sel) {
   };
 }
 
-function renderQuestion(q, step) {
+// The question goes over the step's own progress, log and transcript, not in their place:
+// what the agent was doing when it asked is half of what the question means.
+function renderQuestion(task, q, step) {
   // Steps 1-3 are the interactive ones — there an answer is confirmed before it is sent.
   // Step 5 only asks to retry the Chrome extension, which needs no gate.
   const confirmFirst = step.id <= 3;
   const pictures = ATTACH_STEPS.includes(step.id);
-  // An answer never locks the panel: the user may follow it with a correction or
-  // an afterthought while the agent is still reading the first one.
+  const opts = (q.options || []).map((o, i) =>
+    `<button data-opt="${i}">${esc(o)}</button>`).join('');
+  $('#panel').innerHTML = `
+    ${panelHead(esc(step.name || STEP_NAMES[step.id - 1]), step)}
+    ${progressBar()}
+    <div class="gate-card" id="gate">
+      <div class="gate-label">The agent asks</div>
+      <p class="gate-question">${esc(q.text)}</p>
+      <div class="options">${opts}</div>
+      <label>…or type your own answer</label>
+      <textarea id="freeAnswer"></textarea>
+      ${pictures ? attachTray('answer') : ''}
+      <div class="gate-actions">
+        <button id="send">Send answer</button>
+        ${pictures ? attachButton('answer') : ''}
+        ${step.id === 2 ? backButton() : ''}
+      </div>
+    </div>
+    <ul class="log" id="log"></ul>
+    ${chatBox(step, true)}`;
+  // The composer first: it is what starts a new panel with an empty tray.
+  const clearAnswer = wireComposer('#freeAnswer');
+  const sync = wireSendable($('#freeAnswer'), $('#send'), 'answer');
+  const takeAttachments = wireAttach('answer', sync);
+  // One answer per question: the server takes the question down as it records the answer,
+  // and a second thought goes to the agent as a message, from the step's own composer.
   const submit = async (value, after) => {
     const count = attachedOf('answer').length;
     if (confirmFirst && !await askConfirm({ title: 'Send this answer?',
       text: [value, count ? `+ ${count} attached image${count > 1 ? 's' : ''}` : '']
         .filter(Boolean).join('\n\n'),
       confirmLabel: 'Send answer' })) return;
-    const attachments = await takeAttachments();
-    if (!attachments) return;
-    if (after) after();
-    pushSent(value, attachments);
-    sendAnswer({ kind: 'answer', questionId: q.id, value, attachments });
+    await sendFrom('#gate', async () => {
+      const attachments = await takeAttachments();
+      if (!attachments) return false;
+      const ok = !!(await sendAnswer({ kind: 'answer', questionId: q.id, value, attachments })).ok;
+      if (ok && after) after();
+      return ok;
+    }, sync);
   };
-  const opts = (q.options || []).map((o, i) =>
-    `<button data-opt="${i}">${esc(o)}</button>`).join('');
-  $('#panel').innerHTML = `
-    ${panelHead(esc(step.name || STEP_NAMES[step.id - 1]), step)}
-    <p>${esc(q.text)}</p>
-    <div class="options">${opts}</div>
-    <div class="sent" id="sentTrail"></div>
-    <label>…or type your own answer</label>
-    <textarea id="freeAnswer"></textarea>
-    ${pictures ? attachTray('answer') : ''}
-    <div class="gate-actions">
-      <button id="send">Send answer</button>
-      ${pictures ? attachButton('answer') : ''}
-      ${step.id === 2 ? backButton() : ''}
-    </div>`;
-  // The composer first: it is what starts a new panel with an empty tray.
-  const clearAnswer = wireComposer('#freeAnswer');
-  const takeAttachments = wireAttach('answer');
   document.querySelectorAll('[data-opt]').forEach(btn =>
     btn.addEventListener('click', () =>
       submit(q.options[+btn.dataset.opt], () => btn.classList.add('selected'))));
@@ -1713,36 +1967,56 @@ function renderQuestion(q, step) {
     if (!value && !attachedOf('answer').length) return;
     submit(value, clearAnswer);
   });
-  renderSentTrail();
   wireBackButton();
   wireStop(step);
+  wireDelete(step);
+  updateDynamic(task, step);
 }
 
+// What the refinement wants read before its plan is approved - risks, caveats, a choice the
+// implementer must not get wrong - in a list of its own above the summary, where an Approve
+// cannot pass it by. A result without any, or an older one that kept them in its summary,
+// shows the summary alone.
+const criticalOf = review => (Array.isArray(review.critical) ? review.critical
+  : typeof review.critical === 'string' ? [review.critical] : [])
+  .map(c => String(c).trim()).filter(Boolean);
+
 // The plan gate shows the refinement's summary; the story gate shows the story itself,
-// read from the task dir, with the agent's summary above it.
-function renderReview(review, step) {
+// read from the task dir, with the agent's summary above it. Both go over the step's
+// progress, log and transcript, like a question.
+function renderReview(task, review, step) {
   const story = step.id === STORY_STEP;
+  const critical = criticalOf(review);
   $('#panel').innerHTML = `
     ${panelHead(story ? 'Story review' : 'Plan review', step)}
-    ${story ? `<p class="muted">${esc(review.text)}</p>
-    <pre class="report" id="storyText">Loading…</pre>
-    <div class="gate-actions">
-      <button id="approve">Approve</button>
-      <button id="copyStory" class="secondary" disabled>Copy story</button>
-    </div>` : `<pre class="summary-text">${esc(review.text)}</pre>
-    <button id="approve">Approve</button>`}
-    <div class="sent" id="sentTrail"></div>
-    <label>…or request changes</label>
-    <textarea id="feedback"></textarea>
-    ${attachTray('answer')}
-    <div class="gate-actions">
-      <button id="sendFeedback" class="secondary">Send feedback</button>
-      ${attachButton('answer')}
-      ${backButton()}
-    </div>`;
+    ${progressBar()}
+    <div class="gate-card" id="gate">
+      ${critical.length ? `<div class="critical"><h3>Critical information</h3>
+        <ul>${critical.map(c => `<li>${esc(c)}</li>`).join('')}</ul></div>` : ''}
+      ${story ? `<p class="muted">${esc(review.text)}</p>
+      <pre class="report" id="storyText">Loading…</pre>
+      <div class="gate-actions">
+        <button id="approve">Approve</button>
+        <button id="copyStory" class="secondary" disabled>Copy story</button>
+      </div>` : `<pre class="summary-text">${esc(review.text)}</pre>
+      <button id="approve">Approve</button>`}
+      <label>…or request changes</label>
+      <textarea id="feedback"></textarea>
+      ${attachTray('answer')}
+      <div class="gate-actions">
+        <button id="sendFeedback" class="secondary">Send feedback</button>
+        ${attachButton('answer')}
+        ${backButton()}
+      </div>
+    </div>
+    <ul class="log" id="log"></ul>
+    ${chatBox(step, true)}`;
   const clearFeedback = wireComposer('#feedback');
-  const takeAttachments = wireAttach('answer');
+  const sync = wireSendable($('#feedback'), $('#sendFeedback'), 'answer');
+  const takeAttachments = wireAttach('answer', sync);
   wireStop(step);
+  // The server takes the gate down as it records the approval, so what the poll draws next
+  // is the step moving on - not this panel under a lock until the orchestrator gets round.
   $('#approve').addEventListener('click', async () => {
     const ok = await askConfirm({
       title: story ? 'Approve the story?' : 'Approve the plan?',
@@ -1750,30 +2024,37 @@ function renderReview(review, step) {
         : 'The next step starts right away and agents begin changing files in your project.',
       confirmLabel: 'Approve and continue' });
     if (!ok) return;
-    lockPanel('Approved — starting implementation…');
-    sendAnswer({ kind: 'decision', decision: 'approve' });
+    sendFrom('#gate', async () => !!(await sendAnswer({ kind: 'decision', decision: 'approve' })).ok, sync);
   });
-  $('#sendFeedback').addEventListener('click', async () => {
+  // Feedback takes the gate down too, until the agent's next round puts up what it revised;
+  // the transcript under it keeps what was asked for.
+  $('#sendFeedback').addEventListener('click', () => {
     const t = $('#feedback').value.trim();
     if (!t && !attachedOf('answer').length) return;
-    const attachments = await takeAttachments();
-    if (!attachments) return;
-    clearFeedback();
-    pushSent(t, attachments);
-    sendAnswer({ kind: 'decision', decision: 'feedback', text: t, attachments });
+    sendFrom('#gate', async () => {
+      const attachments = await takeAttachments();
+      if (!attachments) return false;
+      const ok = !!(await sendAnswer({ kind: 'decision', decision: 'feedback', text: t, attachments })).ok;
+      if (ok) clearFeedback();
+      return ok;
+    }, sync);
   });
-  renderSentTrail();
   wireBackButton();
+  wireDelete(step);
   if (story) loadStory();
+  updateDynamic(task, step);
 }
 
+// One file renders every state of its view, and the fragment - the state's id - picks
+// the one on screen.
 function mockupUrl(review, screen) {
   return `/generated-mockups/${encodeURIComponent(activeTask)}/${
-    encodeURIComponent(screen.file)}?rev=${review.rev || 0}`;
+    encodeURIComponent(screen.file)}?rev=${review.rev || 0}${
+    screen.id ? `#${encodeURIComponent(screen.id)}` : ''}`;
 }
 
-// Screens numbered <view>.<case> - 1.0, 1.1, 2.0 - are grouped by view, so a dozen states
-// of three screens read as three tabs and a row of cases. A screen from a manifest
+// Screens numbered <view>.<state> - 0.0, 0.1, 1.0 - are grouped by view, so a dozen states
+// of three views read as three tabs and a row of states. A screen from a manifest
 // without the numbering is a view of its own.
 const screenKey = s => String(s.id || s.file);
 function mockupViews(screens) {
@@ -1839,7 +2120,7 @@ function renderMockupReview(review, step) {
     </div>
     <div class="tabs cases" id="caseTabs"></div>
     <div id="preview"></div>
-    <div class="chat" id="stepChat">${chatHtml(step.chat || [])}</div>
+    ${chatBox(step, liveOf(currentTask(), step))}
     <div class="gate-actions">
       <button id="approveMockup">Approve mockups</button>
       ${screenshotsButton()}
@@ -1884,21 +2165,26 @@ function renderMockupReview(review, step) {
       v.mockupViewport = btn.dataset.viewport;
       drawPreview(review);
     }));
-  const takeAttachments = wireAttach('mockup');
-  // Sending does not lock: the user may add a second thought before the agent has
-  // even read the first. The server records each message as it arrives, so the chat
-  // shows it without waiting for the orchestrator to come back round.
+  const sync = wireSendable($('#mockupFeedback'), $('#sendMockup'), 'mockup');
+  const takeAttachments = wireAttach('mockup', sync);
+  // Feedback takes the mockups down until the agent's next round puts up the new ones: the
+  // server marks the gate answered as it records the message, and the poll run right away
+  // shows the step at work, with the message in its transcript.
   const send = async () => {
     const el = $('#mockupFeedback');
     const t = el.value.trim();
     if (!t && !attachedOf('mockup').length) return;
-    const attachments = await takeAttachments();
-    if (!attachments) return;
-    el.value = '';
-    v.mockupDraft = '';
-    autoGrow(el);
-    await sendAnswer({ kind: 'mockup', decision: 'feedback', text: t, attachments });
-    tick();
+    await sendFrom('#panel', async () => {
+      const attachments = await takeAttachments();
+      if (!attachments) return false;
+      const ok = !!(await sendAnswer({ kind: 'mockup', decision: 'feedback', text: t, attachments })).ok;
+      if (ok) {
+        el.value = '';
+        v.mockupDraft = '';
+        autoGrow(el);
+      }
+      return ok;
+    }, sync);
   };
   $('#mockupFeedback').addEventListener('input', () => {
     v.mockupDraft = $('#mockupFeedback').value;
@@ -1916,11 +2202,11 @@ function renderMockupReview(review, step) {
         + 'for the E2E comparison. Implementation starts next.',
       confirmLabel: 'Approve and continue' });
     if (!ok) return;
-    lockPanel('Approved — the agent is updating spec, plan and checklist…');
-    sendAnswer({ kind: 'mockup', decision: 'approve' });
+    sendFrom('#panel', async () => !!(await sendAnswer({ kind: 'mockup', decision: 'approve' })).ok, sync);
   });
   wireBackButton();
   wireStop(step);
+  wireDelete(step);
   wireScreenshots();
   drawPreview(review);
 }
@@ -1953,7 +2239,11 @@ function wireScreenshots() {
   });
 }
 
-const chatHtml = msgs => msgs.map(m => msgHtml(m.role, m.text, m.attachments)).join('');
+const chatHtml = (msgs, live) =>
+  msgs.map(m => msgHtml(m.role, m.text, m.attachments, m.id, live)).join('');
+// A step's transcript. While the step is live, the user's own lines in it can be deleted.
+const chatBox = (step, live) => `<div class="chat" id="stepChat"${live ? ' data-live="1"' : ''}>${
+  chatHtml(step.chat || [], live)}</div>`;
 
 // Every step's panel carries the conversation with that step's agent. The steps that
 // ask something of their own (a question, a plan gate, the mockup review) bring their
@@ -1962,7 +2252,7 @@ const chatHtml = msgs => msgs.map(m => msgHtml(m.role, m.text, m.attachments)).j
 const chatBlock = (step, live) => {
   const pictures = ATTACH_STEPS.includes(step.id);
   return `
-  <div class="chat" id="stepChat">${chatHtml(step.chat || [])}</div>
+  ${chatBox(step, live)}
   ${live ? `<div class="composer">
     ${pictures ? attachTray(`msg${step.id}`) : ''}
     <textarea id="stepMessage" data-max-vh="30" rows="1"
@@ -1973,26 +2263,34 @@ const chatBlock = (step, live) => {
 };
 
 // Sending does not lock the panel and does not move the step: the agent keeps working
-// and answers in the same transcript, so a second thought can follow the first.
+// and answers in the same transcript, so a second thought can follow the first. Only
+// the composer waits for the server, and gets the field back empty once it has the line.
 function wireChat(step) {
+  wireDelete(step);
   const el = $('#stepMessage');
   if (!el) return;
   const drafts = viewOf(activeTask).msgDrafts;
+  const key = `msg${step.id}`;
   el.value = drafts[step.id] || '';
   el.addEventListener('input', () => { drafts[step.id] = el.value; });
-  const takeAttachments = wireAttach(`msg${step.id}`);
+  const sync = wireSendable(el, $('#sendStepMessage'), key);
+  const takeAttachments = wireAttach(key, sync);
   const send = async () => {
     const t = el.value.trim();
-    if (!t && !attachedOf(`msg${step.id}`).length) return;
-    const attachments = await takeAttachments();
-    if (!attachments) return;
-    el.value = '';
-    drafts[step.id] = '';
-    autoGrow(el);
+    if (!t && !attachedOf(key).length) return;
     // The server records the line as it arrives, so it shows without waiting for
     // the orchestrator to come back round the poll.
-    await sendAnswer({ kind: 'message', step: step.id, text: t, attachments });
-    tick();
+    await sendFrom('#panel .composer', async () => {
+      const attachments = await takeAttachments();
+      if (!attachments) return false;
+      const ok = !!(await sendAnswer({ kind: 'message', step: step.id, text: t, attachments })).ok;
+      if (ok) {
+        el.value = '';
+        drafts[step.id] = '';
+        autoGrow(el);
+      }
+      return ok;
+    }, sync);
   };
   el.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
@@ -2002,19 +2300,44 @@ function wireChat(step) {
   $('#sendStepMessage').addEventListener('click', send);
 }
 
+// The × on a line of the user's own. The line leaves the transcript, and the agent is
+// told to drop whatever it started for that line alone. One listener on the box, so the
+// lines a poll appends or redraws need no wiring of their own.
+function wireDelete(step) {
+  const box = $('#stepChat[data-live]');
+  if (!box) return;
+  box.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-delete]');
+    if (!btn) return;
+    const ok = await askConfirm({ title: 'Delete this message?',
+      text: 'It leaves the conversation and the agent is told to drop it: whatever it started '
+        + 'for this message alone stops. Work it already finished stays until you ask for it '
+        + 'to be undone.',
+      confirmLabel: 'Delete message' });
+    if (!ok) return;
+    btn.disabled = true;
+    const res = await sendAnswer({ kind: 'delete', step: step.id, id: Number(btn.dataset.delete) });
+    if (!res.ok) btn.disabled = false;
+    tick();
+  });
+}
+
 // Appended rather than re-rendered: rebuilding the panel would reload the mockup
-// preview iframe and throw away whatever is half-typed in the composer.
+// preview iframe and throw away whatever is half-typed in the composer. Only a deleted
+// line - the lines on screen no longer lead the transcript - redraws, and the box alone.
 function updateChat(step) {
   const box = $('#stepChat');
   if (!box) return;
   const msgs = step.chat || [];
-  const have = box.childElementCount;
-  if (have === msgs.length) return;
-  if (have > msgs.length) {
-    box.innerHTML = chatHtml(msgs);
+  const live = !!box.dataset.live;
+  const shown = [...box.children].map(el => el.dataset.id);
+  if (shown.length > msgs.length || shown.some((id, i) => id !== String(msgs[i].id))) {
+    box.innerHTML = chatHtml(msgs, live);
     return;
   }
-  box.insertAdjacentHTML('beforeend', chatHtml(msgs.slice(have)));
+  if (shown.length < msgs.length) {
+    box.insertAdjacentHTML('beforeend', chatHtml(msgs.slice(shown.length), live));
+  }
 }
 
 function renderProgress(task, step) {
@@ -2023,8 +2346,7 @@ function renderProgress(task, step) {
   const shots = step.id === 3 && step.status !== 'waiting';
   $('#panel').innerHTML = `
     ${panelHead(esc(step.name), step)}
-    <div class="bar"><div id="barFill"></div></div>
-    <div class="op" id="op"></div>
+    ${progressBar()}
     ${shots ? `<div class="gate-actions">${screenshotsButton()}</div>
     <p class="hint" id="shotsHint" hidden></p>` : ''}
     <ul class="log" id="log"></ul>
@@ -2038,17 +2360,23 @@ function renderProgress(task, step) {
 // Runs on every tick of a view-only step, which is most of a long run — so each
 // piece is written only when its own value actually moved.
 function updateDynamic(task, step) {
+  updateStopped(step);
   updateChat(step);
+  // Under a question or a review the step waits on the user, whatever the agent last said
+  // it was doing - and a bar that runs on would say otherwise.
+  const waiting = { question: 'Waiting for your answer', review: 'Waiting for your review' }[
+    gateOf(task, step)];
   const fill = $('#barFill');
   if (fill) {
-    const indeterminate = step.progress == null && step.status === 'in_progress';
+    const indeterminate = !waiting && step.progress == null && step.status === 'in_progress'
+      && !step.stopped;
     const width = indeterminate ? '100%' : `${step.progress || 0}%`;
     fill.classList.toggle('indeterminate', indeterminate);
     if (fill.style.width !== width) fill.style.width = width;
   }
   const op = $('#op');
   const opText = (step.progress != null ? `${step.progress}% — ` : '')
-    + (step.currentOperation || '');
+    + (waiting || step.currentOperation || '');
   if (op && op.textContent !== opText) op.textContent = opText;
   const log = $('#log');
   if (!log) return;
@@ -2064,13 +2392,11 @@ function renderFailed(step, live) {
   // Step 7 runs after the pipeline is already finished, so declining its retry drops
   // the user back on the summary instead of ending the run.
   const isMockoon = step.id === MOCKOON_STEP;
-  // The server's own report for a Stop: the same gate, but nothing went wrong.
-  const outcome = step.report === STOPPED_REPORT ? 'stopped' : 'failed';
   // Nobody is waiting on this one any more, so Retry and Finish would send a
   // decision into an empty queue for a later gate to mistake for its own.
   if (!live) {
     $('#panel').innerHTML = `
-      <h2>${esc(step.name)} — ${outcome}</h2>
+      <h2>${esc(step.name)} — failed</h2>
       <pre class="report">${esc(step.report || 'No report provided.')}</pre>
       <p class="muted">The pipeline is no longer waiting on this step.</p>
       ${chatBlock(step, false)}`;
@@ -2079,28 +2405,33 @@ function renderFailed(step, live) {
   // The agent that failed is gone, so what is typed here is not for it: the
   // orchestrator holds it and hands it to the fresh agent a retry spawns.
   $('#panel').innerHTML = `
-    <h2>${esc(step.name)} — ${outcome}</h2>
+    <h2>${esc(step.name)} — failed</h2>
     <pre class="report">${esc(step.report || 'No report provided.')}</pre>
     <button id="retry" class="danger">Retry step</button>
     <button id="${isMockoon ? 'backToSummary' : 'finish'}" class="secondary">${
       isMockoon ? 'Back to summary' : 'Finish'}</button>
     ${chatBlock(step, true)}`;
   wireChat(step);
-  $('#retry').addEventListener('click', () => {
-    lockPanel('Retrying the step…');
-    sendAnswer({ kind: 'decision', decision: 'retry' });
-  });
+  // The server puts the step back to work as it records the retry, so the poll run right
+  // away draws it running - the failure is not left on screen until the new agent reports.
+  $('#retry').addEventListener('click', () =>
+    sendFrom('#panel', async () => !!(await sendAnswer({ kind: 'decision', decision: 'retry' })).ok));
   if (isMockoon) {
     // The decision still goes out — it is what releases the orchestrator's failure gate.
-    $('#backToSummary').addEventListener('click', () => {
-      sendAnswer({ kind: 'decision', decision: 'finish' });
-      backToSummary();
+    $('#backToSummary').addEventListener('click', async () => {
+      if ((await sendAnswer({ kind: 'decision', decision: 'finish' })).ok) backToSummary();
     });
     return;
   }
-  $('#finish').addEventListener('click', () => {
-    lockPanel('Finishing the pipeline…');
-    sendAnswer({ kind: 'decision', decision: 'finish' });
+  // Nothing on a failure the user gives up on is left to read, so it leaves the screen with
+  // the click, and the lock's notice is all there is until the summary is written.
+  $('#finish').addEventListener('click', async () => {
+    lockPanel('Finishing the pipeline…', true, true);
+    if ((await sendAnswer({ kind: 'decision', decision: 'finish' })).ok) return;
+    // Not sent: the failure comes back as it was, buttons and all.
+    viewOf(activeTask).locked = null;
+    lastSig = null;
+    tick();
   });
 }
 

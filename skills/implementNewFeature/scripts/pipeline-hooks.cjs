@@ -3,12 +3,14 @@
 // implementNewFeature's part of the plugin's SessionStart(compact) hook (scripts/compact-hook.cjs).
 //
 // A compaction re-attaches only the first 20,000 characters of SKILL.md: the cut falls inside
-// "Server helpers", and every step, the failure protocol and the final summary go with it. A
+// "Talking to a running agent", and the rest of the head, every step, the failure protocol and
+// the final summary go with it. A
 // session resumed in a new process gets none of it back. The orchestrator's own notes are a
 // summary by then too - but the run's state is not: the server persists it in
-// `<SESSION>/pipeline-state.json` on every update. This reads it and names, for the session
-// that drives the run, where each task stands, the E2E slot and the waiter, the sections of
-// SKILL.md to read again, and the loop card (references/loop-card.md).
+// `<SESSION>/pipeline-state.json` on every update. This reads it and names, for the task the
+// session orchestrates - every task has an orchestrator of its own, and the state records which
+// session it is - where it stands, the E2E slot and the task's waiter, the sections of SKILL.md
+// to read again, and the loop card (references/loop-card.md).
 //
 // The run is found without any state of the hook's own. The session's transcript names its
 // session directory - every render, spawn and launcher command carries `<SESSION>` - and the
@@ -31,8 +33,9 @@ const oneTimeMarker = '<!-- one-time:start -->';
 // separators a JSONL transcript writes: `/`, or `\` escaped as `\\`.
 const reSessionStamp = /(?:\.claude(?:\\\\|\/)+doh|\.implementNewFeature)(?:\\\\|\/)+(\d{8}-\d{6})/g;
 const reCwd = /"cwd":"((?:[^"\\]|\\.)*)"/g;
-// wait-answer.cjs: a lock older than its 50-minute window plus a minute is stale.
-const waiterWindowMs = 51 * 60 * 1000;
+// wait-answer.cjs: a lock older than its holder's window plus a minute is stale; 50 minutes
+// for a lock that does not say.
+const waiterWindowMs = 50 * 60 * 1000;
 const stepNames = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation', 'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description'];
 
 function readJson(file) {
@@ -116,9 +119,18 @@ function skillSections(skillFile = path.join(skillDir, 'SKILL.md')) {
   return { path: skillFile.replace(/\\/g, '/'), cutLine, headLimit: firstStep ? firstStep.line - 1 : cutLine, sections };
 }
 
-function waiterOf(port, env) {
-  const lock = readJson(path.join(env.DOH_WAITER_LOCK_DIR || os.tmpdir(), `doh-answer-waiter-${port}.json`));
-  return lock && Number.isInteger(lock.pid) && isAlive(lock.pid) && Date.now() - lock.startedAt < waiterWindowMs ? lock.pid : null;
+// A task's waiter, by the lock wait-answer.cjs keeps for its port and task.
+function waiterOf(port, taskId, env) {
+  const lock = readJson(path.join(env.DOH_WAITER_LOCK_DIR || os.tmpdir(), `doh-answer-waiter-${port}-${taskId}.json`));
+  const windowMs = lock && Number.isFinite(lock.windowMs) ? lock.windowMs : waiterWindowMs;
+  return lock && Number.isInteger(lock.pid) && isAlive(lock.pid) && Date.now() - lock.startedAt < windowMs + 60000 ? lock.pid : null;
+}
+
+// The tasks whose orchestrator this session is: its one task. A run from before the server
+// recorded orchestrators names none, and its one session drives every task.
+function ownTasks(tasks, sessionId) {
+  const own = tasks.filter((t) => t.orchestrator && t.orchestrator.session && t.orchestrator.session === sessionId);
+  return own.length ? own : tasks;
 }
 
 const stepOf = (task, id) => (task.steps || []).find((s) => s.id === id) || null;
@@ -135,25 +147,30 @@ function taskLine(task) {
   return line;
 }
 
-// SKILL.md "E2E_LOCK", read from the state rather than remembered.
-function e2eLine(tasks) {
-  const holders = tasks.filter((t) => {
-    const s = stepOf(t, 5);
-    return s && (s.status === 'in_progress' || s.status === 'failed');
-  });
-  const queued = tasks.filter((t) => {
-    const s = stepOf(t, 5);
-    return s && s.status === 'waiting' && s.currentOperation === 'Waiting for the E2E slot';
-  });
-  if (!holders.length && !queued.length) return '- E2E_LOCK: free';
-  return `- E2E_LOCK: ${holders.length ? `held by ${holders.map((t) => t.id).join(', ')}` : 'free'}${queued.length ? `; queued: ${queued.map((t) => t.id).join(', ')} (FIFO by their "Queued for the E2E slot" log time)` : ''}`;
+// SKILL.md "E2E slot", as the server keeps it - every task's, not only this session's. A run from
+// before the server kept it is read off the steps, as server.cjs's e2eFromSteps reads it.
+function e2eLine(tasks, e2e) {
+  let holder = e2e ? e2e.holder : null;
+  let queue = e2e && Array.isArray(e2e.queue) ? e2e.queue : [];
+  if (!e2e) {
+    const held = tasks.find((t) => ['in_progress', 'failed'].includes((stepOf(t, 5) || {}).status));
+    const queuedAt = (t) => (((stepOf(t, 5) || {}).log || []).filter((e) => e.text === 'Queued for the E2E slot').at(-1) || {}).time || '';
+    holder = held ? held.id : null;
+    queue = tasks.filter((t) => {
+      const s = stepOf(t, 5);
+      return s && s.status === 'waiting' && s.currentOperation === 'Waiting for the E2E slot';
+    }).sort((a, b) => queuedAt(a).localeCompare(queuedAt(b))).map((t) => t.id);
+  }
+  if (!holder && !queue.length) return '- E2E slot: free';
+  return `- E2E slot: ${holder ? `held by ${holder}` : 'free'}${queue.length ? `; queued: ${queue.join(', ')} (the server hands it on in this order)` : ''}`;
 }
 
-// The sections a task's next event needs: Server helpers always (the cut runs through it), the
-// step each task stands at, and the protocols its state calls for.
+// The sections a task's next event needs: every section of the head the cut reached - it now
+// runs through "Talking to a running agent", so the Stop and delete protocols and Server helpers
+// come back only this way - the step each task stands at, and the protocols its state calls for.
 function sectionsFor(tasks, skill) {
   const wanted = (title) => skill.sections.find((s) => s.title.startsWith(title));
-  const picked = [wanted('Server helpers')];
+  const picked = skill.sections.filter((s) => s.line <= skill.headLimit);
   const steps = new Set();
   for (const task of tasks) {
     const n = Number(task.activeStep) || 1;
@@ -184,18 +201,24 @@ function compactLines(input, env = process.env, skillFile = path.join(skillDir, 
   const run = findRun(input, env);
   if (!run) return null;
   const state = readJson(path.join(run.dir, 'pipeline-state.json'));
-  const tasks = state && Array.isArray(state.tasks) ? state.tasks : [];
+  const all = state && Array.isArray(state.tasks) ? state.tasks : [];
+  const tasks = ownTasks(all, input.session_id);
   const dir = run.dir.replace(/\\/g, '/');
   const out = [
     'implementNewFeature: this session was compacted while it drives a run. The run\'s state lives in the server, not in your memory - continue from it.',
     `- session: ${dir}, server on port ${run.port} (pid ${run.pid}); state: ${dir}/pipeline-state.json, read through \`/api/state\``,
   ];
-  if (tasks.length) out.push(...tasks.map(taskLine), e2eLine(tasks));
+  if (tasks.length < all.length) {
+    out.push(`- you orchestrate ${tasks.map((t) => t.id).join(', ')} only: every other task has an orchestrator of its own`);
+  }
+  if (tasks.length) out.push(...tasks.map(taskLine), e2eLine(all, state.e2e));
   else out.push('- no task state on disk yet: the run is still at Setup or step 1');
-  const waiter = waiterOf(run.port, env);
-  out.push(waiter
-    ? `- waiter: listening (pid ${waiter}) - do not start a second one`
-    : '- waiter: none is listening - start one (loop card point 1) before you end this turn');
+  for (const task of tasks.length ? tasks : [{ id: 't1' }]) {
+    const waiter = waiterOf(run.port, task.id, env);
+    out.push(waiter
+      ? `- waiter for ${task.id}: listening (pid ${waiter}) - do not start a second one`
+      : `- waiter for ${task.id}: none is listening - start one (loop card point 1) before you end this turn`);
+  }
   out.push('- agentIds are not in the server state: only the summary above carries them');
   const skill = skillSections(skillFile);
   if (skill) {
@@ -212,4 +235,4 @@ function onCompact(input, env = process.env) {
   return lines ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: lines.join('\n') } } : null;
 }
 
-module.exports = { findRun, skillSections, sectionsFor, taskLine, e2eLine, loopCard, compactLines, onCompact, reattachedChars };
+module.exports = { findRun, skillSections, sectionsFor, taskLine, e2eLine, ownTasks, loopCard, compactLines, onCompact, reattachedChars };
