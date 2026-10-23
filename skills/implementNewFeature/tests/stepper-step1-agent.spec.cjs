@@ -110,7 +110,7 @@ test('sama zmiana modelu otwiera ponowne zgłoszenie wymagań', async ({ page })
   await expect(page.locator('#next')).toBeDisabled();
 });
 
-test('po starcie implementacji ustawienia agenta są zamrożone', async ({ page }) => {
+test('po starcie implementacji ustawienia agenta nadal się zapisują', async ({ page }) => {
   await post('/api/answer', { taskId: 't1', kind: 'step1',
     taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
@@ -124,8 +124,15 @@ test('po starcie implementacji ustawienia agenta są zamrożone', async ({ page 
   await page.locator('.step[data-step="1"]').click();
   await page.waitForSelector('#agentModel');
   await expect(page.locator('#agentModel')).toHaveValue('opus');
-  await expect(page.locator('#agentModel')).toBeDisabled();
-  await expect(page.locator('#agentEffort')).toBeDisabled();
+  await expect(page.locator('#task')).toBeDisabled();
+  // Agentów czytają dopiero kroki, które jeszcze nie ruszyły, więc zmiana nic nie powtarza.
+  await expect(page.locator('#agentModel')).toBeEnabled();
+  await page.selectOption('#agentEffort', 'max');
+  await page.click('#next');
+  await page.click('#confirmOk');
+  const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
+  expect(answer.agents).toMatchObject({ model: 'opus', effort: 'max' });
+  expect(answer.revision).toMatchObject({ changed: ['agents'], restartAt: null });
 });
 
 // Zgłoszony formularz trzyma ustawienia zagnieżdżone (agents), a szkic — płasko.

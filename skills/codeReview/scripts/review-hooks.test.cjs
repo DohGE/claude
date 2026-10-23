@@ -189,6 +189,23 @@ test('read under --dedup-items: an item another bundle showed since the last com
   assert.strictEqual(read(f, b), null);
 });
 
+test('subagent: a sub-agent starting or stopping empties what was shown, so the next bundle is read whole', (t) => {
+  const f = fixture(t, { dedupItems: true });
+  const [a, b] = f.target.files.map((file) => file.bundlePath);
+  const subagent = (session = 's1') => hooks.onSubagent({ session_id: session, hook_event_name: 'SubagentStart', agent_id: 'w1' }, f.env);
+  // No run tied to the session: nothing to forget, nothing written.
+  assert.strictEqual(subagent(), null);
+  assert.strictEqual(subagent('../s2'), null);
+  assert.ok(!fs.existsSync(f.stateDir));
+  assert.strictEqual(read(f, a), null);
+  assert.ok(read(f, b), 'b shows a reference to a');
+  assert.notDeepStrictEqual(stateOf(f).shown, {});
+  assert.strictEqual(subagent(), null);
+  assert.deepStrictEqual(stateOf(f), { contextPath: f.contextPath, shown: {} });
+  assert.strictEqual(read(f, b), null);
+  assert.deepStrictEqual(fs.readdirSync(f.workDir).filter((name) => name.endsWith('.dedup.md')), ['02-b.ts.bundle.dedup.md']);
+});
+
 test('read without --dedup-items: every bundle is read as written', (t) => {
   const f = fixture(t);
   for (const file of f.target.files) assert.strictEqual(read(f, file.bundlePath), null);
@@ -252,6 +269,43 @@ test('skillLines: the shipped SKILL.md sends a compacted session back for the re
   assert.strictEqual(text.join('\n').split(hooks.oneTimeMarker).length, 2, 'the marker stands once');
 });
 
+test('walkLines: from the Step 3 heading to the one-time part, the lines a window\'s walker reads', (t) => {
+  const dir = tempDir(t, 'review-hooks-walk-');
+  const file = path.join(dir, 'SKILL.md');
+  fs.writeFileSync(file, `---\nname: x\n---\n# head\n\nrule\n\n## Step 3 — Analyze\n\nwalk\n\n## Step 4 — Report\n\n${hooks.oneTimeMarker}\n## Step 1\n`);
+  assert.deepStrictEqual(hooks.walkLines(file), { path: file, from: 8, limit: 6 });
+  fs.writeFileSync(file, `---\nname: x\n---\n## Step 3\n`);
+  assert.strictEqual(hooks.walkLines(file), null, 'no one-time marker, no range');
+  fs.writeFileSync(file, `---\nname: x\n---\n${hooks.oneTimeMarker}\n## Step 3\n`);
+  assert.strictEqual(hooks.walkLines(file), null, 'a marker before the heading, no range');
+  assert.strictEqual(hooks.walkLines(path.join(dir, 'missing.md')), null);
+});
+
+test('walkLines: the shipped SKILL.md hands a walker Step 3 and Step 4, and neither Steps 1-2 nor the head', () => {
+  const file = path.join(__dirname, '..', 'SKILL.md');
+  const lines = hooks.walkLines(file);
+  assert.ok(lines, 'SKILL.md has a Step 3 heading before the one-time marker');
+  const text = fs.readFileSync(file, 'utf8').split('\n');
+  const read = text.slice(lines.from - 1, lines.from - 1 + lines.limit).join('\n');
+  assert.match(read, /^## Step 3 /m);
+  assert.match(read, /^## Step 4 /m, 'the walker reaches the report format');
+  assert.match(read, /^\*\*Windows\.\*\*/m, 'and the rule that makes it a walker');
+  assert.doesNotMatch(read, /^## Step [12] /m, 'and stops before the steps run once');
+  assert.ok(text[lines.from - 1].startsWith('## Step 3'), 'it starts on the heading');
+});
+
+test('compact: a run with windows sends its walker again, and the batch Reads stay for a session that cannot dispatch', (t) => {
+  const f = fixture(t, { batches: [[1, 2]] });
+  f.target.windows = [{ files: [1, 2], brief: `${f.dir}/window01.md` }];
+  const lines = hooks.position(f.context, f.contextPath, path.join(f.dir, 'SKILL.md'));
+  const at = lines.findIndex((line) => line.startsWith('- okno 1/1: pliki 1-2'));
+  assert.ok(at > 0, lines.join('\n'));
+  assert.ok(lines[at].includes('`doh:codereview-walker`'));
+  assert.ok(lines[at].includes(`\`Read ${f.dir}/window01.md and follow it\``));
+  assert.ok(lines[at].includes('`WINDOW DONE 1-2`'));
+  assert.ok(lines[at + 1].startsWith('- partia: pliki 1-2'), 'the Reads of the batch follow, for a session with no Agent tool');
+});
+
 test('compact: where the run stands - the next file or batch with its Reads, the cross pass, the assembly', (t) => {
   const f = fixture(t, { batches: [[1, 2]] });
   const skillFile = path.join(f.dir, 'SKILL.md');
@@ -264,12 +318,14 @@ test('compact: where the run stands - the next file or batch with its Reads, the
     `- rulebook (Step 2) wraca tylko z pliku: przeczytaj (Read) ${f.context.rulebookNotesPath}`,
   ];
   const skill = `- SKILL.md wrócił po kompaktowaniu tylko do około linii 194 (po wznowieniu sesji - wcale): przeczytaj (Read) ${skillFile} z offset 194 i limit 10 - reszta kroku 3 i format raportu.`;
+  // What was read before the compaction is gone from the conversation: the batch is read again, whole.
+  const readAgain = '- przeczytaj (Read) w jednej odpowiedzi, także to, co czytałeś przed kompaktowaniem - tego tekstu nie ma już w rozmowie, a kilka Grep po pozycjach to kilka odpowiedzi:';
   const [a, b] = f.target.files;
   assert.deepStrictEqual(at(), [
     ...head,
     `- zapisane części plików: 0/2; następny plik 1/2: src/a.ts, część ${f.part(1)}`,
     '- partia: pliki 1-2, ich części razem w jednej odpowiedzi',
-    '- przeczytaj (Read) w jednej odpowiedzi:',
+    readAgain,
     ...[a.bundlePath, a.contentPath, a.diffPath, b.bundlePath, b.contentPath, b.diffPath].map((p) => `  - ${p}`),
     skill,
   ]);
@@ -278,7 +334,7 @@ test('compact: where the run stands - the next file or batch with its Reads, the
   fs.writeFileSync(f.draft(2), partB);
   assert.deepStrictEqual(at().slice(head.length), [
     `- zapisane części plików: 1/2; następny plik 2/2: src/b.ts, część ${f.part(2)}`,
-    '- przeczytaj (Read) w jednej odpowiedzi:',
+    readAgain,
     ...[b.bundlePath, b.contentPath, b.diffPath].map((p) => `  - ${p}`),
     `- szkice odrzuconych części czekają na Edit (hook przenosi szkic po Edit): ${f.draft(2)}`,
     skill,
@@ -347,7 +403,11 @@ test('registration: the plugin runs every codeReview hook, SKILL.md none of them
     { matcher: 'Read', ...run('review-hooks.cjs', ['--event=read'], 30) },
   ]);
   assert.deepStrictEqual(config.hooks.PostToolUse, [{ matcher: 'Write|Edit', ...run('review-hooks.cjs', ['--event=draft'], 30) }]);
-  for (const event of ['read', 'draft', 'compact']) assert.strictEqual(hooks.parseArgs([`--event=${event}`]).event, event);
+  // A sub-agent starts and ends with a conversation of its own: what was shown is forgotten both times.
+  const forgets = run('review-hooks.cjs', ['--event=subagent'], 10).hooks[0];
+  assert.deepStrictEqual(config.hooks.SubagentStart.flatMap((group) => group.hooks).filter((h) => h.args.some((a) => a.endsWith('review-hooks.cjs'))), [forgets]);
+  assert.deepStrictEqual(config.hooks.SubagentStop, [{ hooks: [forgets] }]);
+  for (const event of ['read', 'draft', 'compact', 'subagent']) assert.strictEqual(hooks.parseArgs([`--event=${event}`]).event, event);
 });
 
 test('CLI: prints the hook\'s JSON; a bad input is exit 0 with no output, a bad argument exit 1', (t) => {

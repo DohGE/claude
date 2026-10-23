@@ -19,7 +19,10 @@
         {
           "id": "models#7",
           "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel.",
-          "severity": "low"
+          "severity": "low",
+          "facts": [
+            "barrel-bypass"
+          ]
         }
       ]
     },

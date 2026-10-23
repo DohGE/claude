@@ -29,6 +29,7 @@ const factKinds = [
   'area-routes-twice',
   'spec-zone-based', 'stub-under-multiple-tokens', 'enum-variant-untested', 'snapshot-field-drift',
   'projector-inputs', 'projector-argument-order', 'action-unconsumed', 'template-symbol-not-imported',
+  'barrel-bypass', 'dto-casing-mixed', 'component-injects-data-access', 'state-key-literal', 'input-binding-missing',
 ];
 // Kinds that only point at a line: another reading of the code is as likely as the defect.
 const hintKinds = new Set(['export-single-importer', 'pipe-single-template', 'snapshot-missing', 'projector-inputs']);
@@ -36,7 +37,7 @@ const hintKinds = new Set(['export-single-importer', 'pipe-single-template', 'sn
 const builtinProbes = ['for-without-empty', 'signal-reads-without-let', 'markup-repeat', 'area-root-file', 'hover-without-focus', 'action-label-mismatch'];
 // And an item's `answer` names one of these: a second question the script answers from
 // the whole repository (collectFacts' `answers`), printed under the item in the bundle.
-const builtinAnswers = ['repo-search', 'input-binding'];
+const builtinAnswers = ['repo-search', 'input-binding', 'area-layout'];
 // A duplication is a finding from its third copy: two may still diverge, three are a pattern.
 const minCopies = 3;
 
@@ -902,28 +903,93 @@ function distinctive(value) {
 
 const normLiteral = (v) => v.trim().toLowerCase().replace(/\s+/g, ' ');
 
-function literalFacts(index, add, cross, locales, record) {
+// Skipped in front of a literal: an import path, Angular metadata and a pipe name repeat by design.
+const reSkipBefore = /(?:\bfrom|\bimport|\brequire\s*\(|\bimport\s*\(|\b(?:selector|templateUrl|styleUrls?|styleUrl|providedIn|source)\s*:\s*\[?|@Pipe\s*\(\s*\{[^}]*\bname\s*:)\s*$/;
+
+// A test title names a case (`it('shows the table')`); it is no value the test shares with the code.
+const reTestTitleBefore = /\b(?:describe|it|test|xit|xtest|fit|xdescribe|fdescribe)(?:\.(?:only|skip|todo|concurrent))?\s*\(\s*$/;
+// The title of a table-driven case (`it.each(rows)('renders %s', ...)`) is told by its placeholder.
+const reEachPlaceholder = /%[sdifjoOp#]/;
+
+// The literals of one script worth comparing: [{ norm, line, shown }]. `tests`: of a spec file.
+function scriptLiterals(scan, { tests = false } = {}) {
+  const out = [];
+  for (const s of scan.strings) {
+    if (s.interpolated || !distinctive(s.value)) continue;
+    const before = scan.code.slice(Math.max(0, s.start - 80), s.start);
+    if (reSkipBefore.test(before) || (tests && (reTestTitleBefore.test(before) || reEachPlaceholder.test(s.value)))) continue;
+    // An object key (`'Load users': props()`) names, it does not repeat a value.
+    if (/^\s*:/.test(scan.code.slice(s.end, s.end + 3)) && /[{,]\s*$/.test(before)) continue;
+    out.push({ norm: normLiteral(s.value), line: lineAt(scan.starts, s.start), shown: s.value.trim() });
+  }
+  // Arrays of string literals (`['name', 'email', 'status']`) repeat as a whole.
+  for (const m of scan.code.matchAll(/\[\s*(['"])[^'"\n]*\1(?:\s*,\s*(['"])[^'"\n]*\2)+\s*,?\s*\]/g)) {
+    const values = [...m[0].matchAll(/(['"])([^'"\n]*)\1/g)].map((v) => v[2].trim().toLowerCase());
+    out.push({ norm: `[${values.join(',')}]`, line: lineAt(scan.starts, m.index), shown: m[0].replace(/\s+/g, ' ') });
+  }
+  return out;
+}
+
+// Object keys whose value repeats by design: Angular metadata and route configuration.
+const ignoredPairKeys = new Set([
+  'selector', 'template', 'templateUrl', 'styles', 'styleUrl', 'styleUrls', 'providedIn', 'changeDetection', 'encapsulation',
+  'path', 'component', 'loadComponent', 'loadChildren', 'pathMatch', 'redirectTo', 'outlet', 'type',
+]);
+
+// The `key: value` pairs of a script worth comparing - `pageSize: 10`, `firstName: 'Ann'`: one setting
+// or fixture field written in several files: [{ norm, line, shown }]. Numbers of one digit, texts
+// of under three characters or two letters, paths and translation keys are left out.
+function scriptPairs(scan) {
+  const bare = scan.bare || scan.code;
+  const strings = new Map(scan.strings.map((s) => [s.start, s]));
+  const out = [];
+  for (const m of bare.matchAll(/(?<=[{,]\s*|^[ \t]*)([A-Za-z_$][\w$]*)[ \t]*:[ \t]*(?=['"`\d-])/gm)) {
+    if (m[1].length < 3 || ignoredPairKeys.has(m[1])) continue;
+    const at = m.index + m[0].length;
+    const s = strings.get(at);
+    let norm;
+    let shown;
+    let end;
+    if (s) {
+      const v = s.value.trim();
+      if (s.interpolated || v.length < 3 || (v.match(/\p{L}/gu) || []).length < 2 || reKeyShaped.test(v) || /^[./@~]/.test(v)) continue;
+      norm = `${m[1]}: '${normLiteral(s.value)}'`;
+      shown = `${m[1]}: '${v}'`;
+      end = s.end;
+    } else {
+      const number = scan.code.slice(at, at + 24).match(/^-?\d+(?:\.\d+)?(?![\w.$])/);
+      if (!number || number[0].replace(/\D/g, '').length < 2) continue;
+      norm = shown = `${m[1]}: ${number[0]}`;
+      end = at + number[0].length;
+    }
+    // A pair ends at a comma, a brace, a bracket or its line; `a ? b : 10 + c` does not.
+    if (!/^[ \t]*(?:[,})\]]|;|\r?\n|$)/.test(scan.code.slice(end, end + 8))) continue;
+    out.push({ norm, line: lineAt(scan.starts, m.index), shown });
+  }
+  return out;
+}
+
+// norm -> every place the given scripts hold the pair.
+function pairOccurrences(index, paths) {
+  const out = new Map();
+  for (const p of paths) {
+    for (const pair of scriptPairs(index.scans.get(p))) {
+      if (!out.has(pair.norm)) out.set(pair.norm, []);
+      out.get(pair.norm).push({ path: p, line: pair.line, shown: pair.shown });
+    }
+  }
+  return out;
+}
+
+// norm -> every place the production sources (scripts, templates, the base translation file) hold the literal.
+function literalOccurrences(index, locales) {
   const occurrences = new Map();
   const note = (norm, occurrence) => {
     if (!occurrences.has(norm)) occurrences.set(norm, []);
     occurrences.get(norm).push(occurrence);
   };
-  const reSkipBefore = /(?:\bfrom|\bimport|\brequire\s*\(|\bimport\s*\(|\b(?:selector|templateUrl|styleUrls?|styleUrl|providedIn|source)\s*:\s*\[?|@Pipe\s*\(\s*\{[^}]*\bname\s*:)\s*$/;
   for (const p of index.sourceScripts) {
-    const scan = index.scans.get(p);
-    for (const s of scan.strings) {
-      if (s.interpolated || !distinctive(s.value)) continue;
-      const before = scan.code.slice(Math.max(0, s.start - 80), s.start);
-      if (reSkipBefore.test(before)) continue;
-      // An object key (`'Load users': props()`) names, it does not repeat a value.
-      if (/^\s*:/.test(scan.code.slice(s.end, s.end + 3)) && /[{,]\s*$/.test(before)) continue;
-      note(normLiteral(s.value), { path: p, line: lineAt(scan.starts, s.start), shown: s.value.trim() });
-    }
-    // Arrays of string literals (`['name', 'email', 'status']`) repeat as a whole.
-    for (const m of scan.code.matchAll(/\[\s*(['"])[^'"\n]*\1(?:\s*,\s*(['"])[^'"\n]*\2)+\s*,?\s*\]/g)) {
-      const values = [...m[0].matchAll(/(['"])([^'"\n]*)\1/g)].map((v) => v[2].trim().toLowerCase());
-      note(`[${values.join(',')}]`, { path: p, line: lineAt(scan.starts, m.index), shown: m[0].replace(/\s+/g, ' ') });
-    }
+    for (const l of scriptLiterals(index.scans.get(p))) note(l.norm, { path: p, line: l.line, shown: l.shown });
   }
   const reTextNode = />([^<>]+)</g;
   const reTextAttribute = /\s(?:title|placeholder|aria-label|alt|label)\s*=\s*"([^"{}]+)"/g;
@@ -946,6 +1012,10 @@ function literalFacts(index, add, cross, locales, record) {
       note(normLiteral(e.value), { path: locales.base, line: e.line, shown: e.value, key: e.key });
     }
   }
+  return occurrences;
+}
+
+function literalFacts(index, add, cross, occurrences, record) {
   const groups = [];
   for (const [, list_] of occurrences) {
     const files = new Set(list_.map((o) => o.path));
@@ -1111,9 +1181,9 @@ function mappingFacts(index, add, cross, record) {
   }
 }
 
-// Interfaces and object-literal consts of every script, with their members' lines.
-function interfaces(index) {
-  const out = new Map();
+// The interfaces of every script, with their members' lines: [{ name, path, line, fields }].
+function interfaceList(index) {
+  const out = [];
   for (const p of index.modules.keys()) {
     if (reSpec.test(p)) continue;
     const scan = index.scans.get(p);
@@ -1128,10 +1198,15 @@ function interfaces(index) {
         if (!member) continue;
         fields.set(member[2], { optional: !!member[3], type: member[4].trim(), line: lineAt(scan.starts, open + 1 + part.at + part.text.search(/\S/)) });
       }
-      out.set(m[1], { path: p, line: lineAt(scan.starts, m.index), fields });
+      out.push({ name: m[1], path: p, line: lineAt(scan.starts, m.index), fields });
     }
   }
   return out;
+}
+
+// The same by name: of two interfaces sharing one, the later one stays.
+function interfaces(index) {
+  return new Map(interfaceList(index).map((item) => [item.name, { path: item.path, line: item.line, fields: item.fields }]));
 }
 
 function stateFacts(index, add) {
@@ -1854,22 +1929,336 @@ function layoutFacts(index, add, cross) {
   }
 }
 
-// `repo-search`: what the literal, condition and mapping passes compared of one file with
-// the others, repeated or not - `nigdzie indziej` is the search a review need not run again.
-function repoSearchAnswer(entries) {
+// `models/index.ts` is the one door into a models folder: a file outside it that imports one
+// of its modules directly leaves the barrel with a consumer it does not serve. The fact stands
+// on the barrel, on its own line for each bypassed module (line 1 for a module it forgot).
+function barrelBypassFacts(index, add, cross) {
+  const found = [];
+  for (const [barrel, mod] of index.modules) {
+    if (!mod.isBarrel || reSpec.test(barrel) || !/(?:^|\/)models\/index\.[cm]?[jt]s$/.test(barrel)) continue;
+    const dir = path.posix.dirname(barrel);
+    const inside = (p) => p.startsWith(`${dir}/`);
+    const exported = new Map();
+    for (const edge of mod.reexports) if (edge.target && !exported.has(edge.target)) exported.set(edge.target, edge.line);
+    const bypass = [];
+    for (const [p, importer] of index.modules) {
+      if (inside(p)) continue;
+      for (const edge of importer.imports) {
+        if (edge.target && edge.target !== barrel && inside(edge.target)) bypass.push({ path: p, line: edge.line, spec: edge.spec, target: edge.target });
+      }
+    }
+    if (bypass.length === 0) continue;
+    const rows = bypass.map((b) => `${short(b.path, index.root)}:${b.line} "${b.spec}"${exported.has(b.target) ? '' : ' (barrel nie re-eksportuje tego modułu)'}`);
+    add(barrel, 'barrel-bypass', bypass.map((b) => exported.get(b.target) || 1),
+      `pliki spoza ${short(dir, index.root)}/ importują moduły modeli z pominięciem tego barrela: ${list(rows, 8)}.`);
+    found.push(...rows);
+  }
+  if (found.length > 0) cross(`Importy z pominięciem barrela modeli: ${list(found, 12)}`);
+}
+
+const reSnakeName = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
+const reCamelName = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+$/;
+// The interfaces that mirror one API endpoint: `<endpoint>-(request|response|payload|dto).interface.ts`.
+const reApiInterfaceFile = /(?:^|\/)models\/interfaces\/[^/]+-(?:request|response|payload|dto)\.interface\.[cm]?ts$/;
+
+// An API interface keeps the casing the API sends: one that spells some fields camelCase and
+// others snake_case has re-spelled part of the contract. The odd side is the style fewer
+// fields use (camelCase on a tie); single-word names belong to both styles.
+function dtoCasingFacts(index, add, cross) {
+  const found = [];
+  for (const item of interfaceList(index)) {
+    if (!reApiInterfaceFile.test(item.path)) continue;
+    const named = (re) => [...item.fields].filter(([name]) => re.test(name)).map(([name, field]) => ({ name, line: field.line }));
+    const camel = named(reCamelName);
+    const snake = named(reSnakeName);
+    if (camel.length === 0 || snake.length === 0) continue;
+    const [odd, major] = camel.length <= snake.length ? [camel, snake] : [snake, camel];
+    const show = (fields) => fields.map((f) => `${f.name} L${f.line}`).join(', ');
+    add(item.path, 'dto-casing-mixed', [...odd.map((f) => f.line), major[0].line],
+      `interfejs ${item.name} (L${item.line}) miesza style nazw pól: camelCase (${show(camel)}) i snake_case (${show(snake)}) - interfejs API odwzorowuje kontrakt w jednym stylu.`);
+    found.push(`${short(item.path, index.root)} ${item.name}`);
+  }
+  if (found.length > 0) cross(`Interfejsy API z mieszanymi stylami nazw pól: ${list(found, 12)}`);
+}
+
+// The classes a script injects, through `inject(Type)` or a constructor parameter of that type.
+function injectedTypes(scan) {
+  const bare = scan.bare || scan.code;
+  const out = [];
+  for (const m of bare.matchAll(/\binject\s*(?:<[^>()]*>)?\s*\(\s*([A-Z][\w$]*)\b/g)) out.push({ name: m[1], line: lineAt(scan.starts, m.index) });
+  const ctor = /\bconstructor\s*\(/.exec(bare);
+  const open = ctor ? ctor.index + ctor[0].length - 1 : -1;
+  const close = open < 0 ? -1 : matchBracket(bare, open);
+  if (close > open) {
+    for (const part of splitTopLevel(bare.slice(open + 1, close), [','])) {
+      const param = part.text.match(/^\s*(?:@[\w$]+\s*\([^)]*\)\s*)*(?:(?:private|protected|public|readonly)\s+)*[\w$]+\??\s*:\s*([A-Z][\w$]*)\b/);
+      if (param) out.push({ name: param[1], line: lineAt(scan.starts, open + 1 + part.at + part.text.search(/\S/)) });
+    }
+  }
+  return out;
+}
+
+// Components, directives and pipes reach state and data through the area's facade: one that
+// injects the `Store` or a class of a `data-access/` folder that is no facade has skipped a
+// layer. The fact stands on the injecting file and on each class it injects.
+function injectionFacts(index, add, cross) {
+  const users = new Map();
+  const found = [];
+  for (const p of index.sourceScripts) {
+    const scan = index.scans.get(p);
+    if (!/@(?:Component|Directive|Pipe)\s*\(/.test(scan.bare || scan.code)) continue;
+    const mod = index.modules.get(p);
+    const direct = [];
+    for (const injected of injectedTypes(scan)) {
+      const edge = mod.imports.find((e) => e.names.some((s) => s.local === injected.name));
+      if (!edge) continue;
+      const imported = edge.names.find((s) => s.local === injected.name).imported;
+      if (edge.spec === '@ngrx/store' && imported === 'Store') {
+        direct.push({ ...injected, label: 'Store (@ngrx/store)' });
+        continue;
+      }
+      if (!edge.target) continue;
+      for (const origin of index.originsOf(edge.target, imported)) {
+        if (!/(?:^|\/)data-access\//.test(origin.path) || /\.facade\.[cm]?[jt]s$/.test(origin.path)) continue;
+        direct.push({ ...injected, label: `${origin.name} (${short(origin.path, index.root)})` });
+        const key = `${origin.path}\0${origin.name}`;
+        if (!users.has(key)) users.set(key, { origin, by: [] });
+        users.get(key).by.push({ path: p, line: injected.line });
+      }
+    }
+    if (direct.length === 0) continue;
+    add(p, 'component-injects-data-access', direct.map((d) => d.line),
+      `wstrzykuje warstwę danych z pominięciem fasady: ${list(direct.map((d) => `${d.label} L${d.line}`), 6)} - komponent, dyrektywa i pipe sięgają do stanu i danych przez fasadę obszaru.`);
+    found.push(...direct.map((d) => `${short(p, index.root)}:${d.line} ${d.label.replace(/ \(.*$/, '')}`));
+  }
+  for (const { origin, by } of users.values()) {
+    const exported = index.modules.get(origin.path).exports.find((e) => e.name === origin.name);
+    const line = exported ? exported.line : 1;
+    add(origin.path, 'component-injects-data-access', [line],
+      `${origin.name} (L${line}) jest wstrzykiwana bezpośrednio przez ${list(by.map((b) => `${short(b.path, index.root)}:${b.line}`), 6)} - komponent, dyrektywa i pipe sięgają do niej z pominięciem fasady.`);
+  }
+  if (found.length > 0) cross(`Komponenty, dyrektywy i pipe wstrzykujące Store lub klasę data-access z pominięciem fasady: ${list(found, 12)}`);
+}
+
+// `provideState('x', reducer)` registers the slice under a string of its own, while the
+// selectors read it by the exported feature key: the two can drift apart. With such a
+// constant in the repository the fact is certain; without one it only points at the line.
+function stateKeyFacts(index, add) {
+  const consts = new Map();
+  for (const p of index.sourceScripts) {
+    const scan = index.scans.get(p);
+    for (const m of scan.code.matchAll(/\bexport\s+const\s+([A-Za-z_$][\w$]*)\s*(?::\s*[\w$'"| ]+)?=\s*(['"])([^'"\n]+)\2\s*(?:as\s+const\s*)?[;\n]/g)) {
+      if (!consts.has(m[3])) consts.set(m[3], []);
+      consts.get(m[3]).push({ name: m[1], path: p, line: lineAt(scan.starts, m.index) });
+    }
+  }
+  const re = /\b(?:provideState|StoreModule\s*\.\s*forFeature)\s*\(\s*(?:\{\s*name\s*:\s*)?(['"])([^'"\n]+)\1/g;
+  const named = (cs) => list(cs.map((c) => `${c.name} (${short(c.path, index.root)}:${c.line})`), 3);
+  for (const p of index.sourceScripts) {
+    const scan = index.scans.get(p);
+    for (const m of scan.code.matchAll(re)) {
+      const line = lineAt(scan.starts, m.index);
+      const same = consts.get(m[2]) || [];
+      const keys = same.filter((c) => /feature|key|slice|state|store/i.test(c.name));
+      if (keys.length > 0) {
+        add(p, 'state-key-literal', [line], `wycinek stanu rejestrowany pod literałem '${m[2]}' (L${line}), a ta sama wartość jest wyeksportowana jako ${named(keys)} - rejestruj pod stałą, inaczej klucz może rozjechać się z kluczem selektora.`);
+      } else {
+        add(p, 'state-key-literal', [line], `wycinek stanu rejestrowany pod literałem '${m[2]}' (L${line})${same.length > 0 ? `; ta sama wartość jest też stałą ${named(same)}` : '; żadna wyeksportowana stała nie ma tej wartości'} - klucz wycinka to stała, z której korzysta też selektor.`, { hint: true });
+      }
+    }
+  }
+}
+
+// An area whose files read route parameters by hand (`location.search`, `ActivatedRoute`) is
+// routing without `withComponentInputBinding()`'s `input()`s: the fact stands on one routing
+// file of the area - `shared/routes/` before `shell/` - at its `Routes` declaration. Certain
+// when no file of the repository turns the binding on, a hint when one does.
+function inputBindingFacts(index, add) {
+  const reads = new Map();
+  for (const p of index.sourceScripts) {
+    const area = areaOf(p);
+    if (!area) continue;
+    const scan = index.scans.get(p);
+    const bare = scan.bare || scan.code;
+    const at = [...bare.matchAll(/\blocation\.search\b/g)].map((m) => m.index);
+    if (/\bActivatedRoute\b/.test(bare)) at.push(...[...bare.matchAll(/\.(?:paramMap|queryParamMap|queryParams|params)\b/g)].map((m) => m.index));
+    if (at.length === 0) continue;
+    if (!reads.has(area)) reads.set(area, []);
+    reads.get(area).push(...at.map((i) => ({ path: p, line: lineAt(scan.starts, i) })));
+  }
+  if (reads.size === 0) return;
+  const places = (re) => index.sourceScripts.flatMap((p) => {
+    const scan = index.scans.get(p);
+    return [...(scan.bare || scan.code).matchAll(re)].map((m) => `${short(p, index.root)}:${lineAt(scan.starts, m.index)}`);
+  });
+  const on = places(/\bwithComponentInputBinding\s*\(/g);
+  const routing = new Map();
+  for (const p of [...index.sourceScripts].sort()) {
+    const split = /\.routes\.[cm]?[jt]s$/.test(p) ? areaSplit(p) : null;
+    if (!split) continue;
+    const side = split.rest.join('/');
+    const rank = side === 'shared/routes' ? 0 : side === 'shell' ? 1 : 2;
+    if (!routing.has(split.area) || rank < routing.get(split.area).rank) routing.set(split.area, { path: p, rank });
+  }
+  for (const [area, found] of reads) {
+    if (!routing.has(area)) continue;
+    const file = routing.get(area).path;
+    const scan = index.scans.get(file);
+    const declaration = (scan.bare || scan.code).match(/\b(?:const|let)\s+[\w$]+\s*:\s*Routes\b/);
+    const line = declaration ? lineAt(scan.starts, declaration.index) : 1;
+    const where = list([...new Set(found.map((r) => `${short(r.path, index.root)}:${r.line}`))], 6);
+    add(file, 'input-binding-missing', [line],
+      `pliki obszaru ${area} czytają parametry trasy ręcznie (${where}); withComponentInputBinding() ${on.length > 0 ? `jest włączone w ${list(on, 4)}` : 'nie jest włączone w żadnym pliku repozytorium'} - parametry nie docierają do komponentu jako input().`,
+      { hint: on.length > 0 });
+  }
+}
+
+// The folders of the canonical layout, relative to the area (rulebook: architecture#1).
+const reCanonicalFolder = /^(?:data-access\/(?:\+state|services)|models\/(?:consts|enums|interfaces|types)|shared\/(?:utils|guards|pipes|directives|routes)|shell|components-[^/]+\/(?:feature|ui)(?:\/[^/]+)?)(?:\/tests)?$/;
+
+// `area-layout`: which folder of its area's layout holds a file, and what else the area keeps -
+// the folders with their file counts, what lies outside the layout, barrels beyond `models/`,
+// interceptors and the routing files. A folder outside the layout is an area of its own to
+// `areaSplit`; it is counted back to the feature area it lies in.
+function areaLayoutAnswer(index) {
+  const areas = new Map();
+  for (const p of index.files.keys()) {
+    const split = isFactSource(p) ? areaSplit(p) : null;
+    if (!split) continue;
+    if (!areas.has(split.area)) areas.set(split.area, []);
+    areas.get(split.area).push({ path: p, rest: split.rest });
+  }
+  const features = new Set([...areas].filter(([, entries]) => entries.some((e) => e.rest.length > 0)).map(([area]) => area));
+  const place = (p) => {
+    const split = areaSplit(p);
+    if (!split) return null;
+    if (features.has(split.area)) return split;
+    const parent = [...features].filter((f) => split.area.startsWith(`${f}/`)).sort((a, b) => b.length - a.length)[0];
+    return parent ? { area: parent, rest: split.area.slice(parent.length + 1).split('/') } : null;
+  };
+  const members = new Map([...features].map((area) => [area, []]));
+  for (const entries of areas.values()) {
+    for (const e of entries) {
+      const at = place(e.path);
+      if (at) members.get(at.area).push({ path: e.path, rest: at.rest });
+    }
+  }
+  const inLayout = (p, folder) => (folder === 'models' ? /^index\.[cm]?[jt]s$/.test(path.posix.basename(p)) : reCanonicalFolder.test(folder));
+  const summary = new Map();
+  for (const [area, entries] of members) {
+    const folders = new Map();
+    const outside = [];
+    const barrels = [];
+    const interceptors = [];
+    const routes = { 'shared/routes': [], shell: [] };
+    const relative = (p) => p.slice(p.indexOf(`src/app/${area}/`) + `src/app/${area}/`.length);
+    for (const { path: p, rest } of [...entries].sort((a, b) => (a.path < b.path ? -1 : 1))) {
+      const folder = rest.join('/');
+      if (!inLayout(p, folder)) outside.push(relative(p));
+      const key = rest[0] === 'shell' ? 'shell' : rest.slice(0, 2).join('/') || '(korzeń)';
+      folders.set(key, (folders.get(key) || 0) + 1);
+      if (reSpec.test(p) || !index.modules.has(p)) continue;
+      if (index.modules.get(p).isBarrel && folder !== 'models') barrels.push(relative(p));
+      if (/\.interceptor\.[cm]?[jt]s$/.test(p)) interceptors.push(relative(p));
+      if (/\.routes\.[cm]?[jt]s$/.test(p) && (folder === 'shared/routes' || folder === 'shell')) routes[folder].push(path.posix.basename(p));
+    }
+    const both = routes['shared/routes'].length > 0 && routes.shell.length > 0;
+    const routing = [
+      routes['shared/routes'].length > 0 && `w shared/routes/ (${routes['shared/routes'].join(', ')})`,
+      routes.shell.length > 0 && `w shell/ (${routes.shell.join(', ')})`,
+    ].filter(Boolean).join(' i ');
+    summary.set(area, `Foldery obszaru (liczba plików): ${[...folders].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, n]) => `${k} ${n}`).join(', ')}. `
+      + `Poza układem: ${outside.length > 0 ? list(outside, 6) : 'nic'}. Barrele poza models/: ${barrels.length > 0 ? list(barrels, 4) : 'nic'}. `
+      + `Interceptory w obszarze: ${interceptors.length > 0 ? list(interceptors, 4) : 'nic'}. `
+      + `Trasy: ${routing ? `${routing}${both ? ' - obszar ma tylko jedno z nich' : ''}` : 'brak plików tras'}. `
+      + 'Liczone są tylko skrypty, szablony, JSON i migawki - bez stylów i obrazów.');
+  }
+  const listed = list([...features].sort(), 8);
+  return (p) => {
+    const here = place(p);
+    if (here) {
+      const folder = here.rest.join('/');
+      const where = folder === '' ? 'korzeniu obszaru' : `\`${folder}\``;
+      return `obszar \`${here.area}\`; ten plik leży w ${where}${inLayout(p, folder) ? '' : ' - poza kanonicznym układem'}. ${summary.get(here.area)}`;
+    }
+    return `plik leży poza obszarem o kanonicznym układzie (\`src/app/<obszar>/{data-access,models,shared,shell,components-*}\`); obszary repozytorium: ${listed || 'żadnego'}.`;
+  };
+}
+
+// What the repo-search answer adds to the literal, condition and mapping passes: the
+// `key: value` pairs of the scripts and, of a test file, its literals and pairs against the
+// other tests and the code - the cross-references a spec review otherwise searches for one by one.
+function searchRecords(index, occurrences, record, reviewed) {
+  const specs = [...index.modules.keys()].filter((p) => reSpec.test(p) && !reDeclaration.test(p));
+  const codePairs = pairOccurrences(index, index.sourceScripts);
+  for (const all of codePairs.values()) {
+    const files = new Set(all.map((o) => o.path));
+    for (const p of files) {
+      const own = all.filter((o) => o.path === p);
+      record(p, 'para', own.map((o) => o.line), own[0].shown, files.size - 1);
+    }
+  }
+  const mine = specs.filter((p) => reviewed.has(p));
+  if (mine.length === 0) return;
+  const testLiterals = new Map();
+  for (const p of specs) {
+    for (const l of scriptLiterals(index.scans.get(p), { tests: true })) {
+      if (!testLiterals.has(l.norm)) testLiterals.set(l.norm, []);
+      testLiterals.get(l.norm).push({ path: p, line: l.line, shown: l.shown });
+    }
+  }
+  const testPairs = pairOccurrences(index, specs);
+  const others = (map, norm, p) => new Set((map.get(norm) || []).filter((o) => o.path !== p).map((o) => o.path)).size;
+  const grouped = (items) => {
+    const out = new Map();
+    for (const item of items) {
+      if (!out.has(item.norm)) out.set(item.norm, []);
+      out.get(item.norm).push(item);
+    }
+    return out;
+  };
+  for (const p of mine) {
+    const scan = index.scans.get(p);
+    for (const [norm, own] of grouped(scriptLiterals(scan, { tests: true }))) {
+      const tests = others(testLiterals, norm, p);
+      const code = others(occurrences, norm, p);
+      record(p, 'literał', own.map((o) => o.line), own[0].shown.startsWith('[') ? own[0].shown : `"${own[0].shown}"`, tests + code, { tests, code });
+    }
+    for (const [norm, own] of grouped(scriptPairs(scan))) {
+      const tests = others(testPairs, norm, p);
+      const code = others(codePairs, norm, p);
+      record(p, 'para', own.map((o) => o.line), own[0].shown, tests + code, { tests, code });
+    }
+  }
+}
+
+// `repo-search`: what the literal, condition, mapping and pair passes compared of one file
+// with the others, repeated or not - `nigdzie indziej` is the search a review need not run
+// again. A test file is compared with the other tests as well as with the code (`tests`).
+function repoSearchAnswer(entries, { tests = false } = {}) {
   // What `distinctive` and the passes leave out: an answer read as complete would hide them.
-  const limits = 'Skrypt nie porównuje pojedynczych krótkich słów (`\'active\'`), ścieżek i adresów (`\'/api/…\'`), kluczy z kropką, literałów z `${}` ani pól, wywołań i wyrażeń bez literału - te wyszukaj sam.';
-  if (entries.length === 0) return `w pliku nie ma literału, warunku z wartością ani mapy etykiet do porównania. ${limits}`;
+  const limits = 'Skrypt nie porównuje pojedynczych krótkich słów (`\'active\'`), ścieżek i adresów (`\'/api/…\'`), kluczy z kropką, literałów z `${}` ani pól, wywołań i wyrażeń bez literału - te wyszukaj sam.'
+    + (entries.some((e) => e.what === 'para') ? ' Para `klucz: wartość` to ten sam zapis w obiekcie (liczba od dwóch cyfr, tekst od trzech znaków), nie ta sama wartość pod inną nazwą.' : '');
+  if (entries.length === 0) return `${tests ? 'w pliku nie ma literału ani pary `klucz: wartość` do porównania z innymi testami i kodem' : 'w pliku nie ma literału, warunku z wartością ani mapy etykiet do porównania'}. ${limits}`;
   const cut = (text) => (text.length > 60 ? `${text.slice(0, 57)}...` : text);
   const elsewhere = (n) => (n === 0 ? 'nigdzie indziej' : n === 1 ? 'w 1 innym pliku' : `w ${n} innych plikach`);
+  const elsewhereTests = (e) => (e.elsewhere === 0 ? 'nigdzie indziej' : [
+    e.tests > 0 && `w ${e.tests} ${e.tests === 1 ? 'innym pliku testowym' : 'innych plikach testowych'}`,
+    e.code > 0 && `w ${e.code} ${e.code === 1 ? 'pliku kodu' : 'plikach kodu'}`,
+  ].filter(Boolean).join(' i '));
   // A label mapping is the same as another when the two share two labels (mappingFacts).
-  const same = (e) => (e.what !== 'mapa etykiet' ? elsewhere(e.elsewhere)
+  const same = (e) => (e.what !== 'mapa etykiet' ? (tests ? elsewhereTests(e) : elsewhere(e.elsewhere))
     : e.elsewhere === 0 ? 'żadna funkcja innego pliku nie ma dwóch z jej etykiet' : `dwie z jej etykiet ma też funkcja ${elsewhere(e.elsewhere)}`);
-  const shown = [...entries].sort((a, b) => a.lines[0] - b.lines[0])
-    .map((e) => `${e.what} ${cut(e.shown)} L${e.lines.join(', L')} - ${e.count > 1 ? `${e.count}× w tym pliku, ` : ''}${same(e)}`);
   const limit = 40;
-  const listed = shown.length > limit ? `${shown.slice(0, limit).join('; ')} (+${shown.length - limit} dalszych - te wyszukaj sam)` : shown.join('; ');
-  return `porównane ze skryptami (bez testów), szablonami i bazowym plikiem tłumaczeń repozytorium: ${listed}. ${limits}`;
+  // Past the limit what is repeated goes first: of a literal found nowhere else the reviewer
+  // learns no more from the answer than from the search it saves.
+  const hit = (e) => Number(e.elsewhere > 0 || e.count > 1);
+  const kept = entries.length > limit ? [...entries].sort((a, b) => hit(b) - hit(a)).slice(0, limit) : entries;
+  const shown = [...kept].sort((a, b) => a.lines[0] - b.lines[0])
+    .map((e) => `${e.what} ${cut(e.shown)} L${e.lines.join(', L')} - ${e.count > 1 ? `${e.count}× w tym pliku, ` : ''}${same(e)}`);
+  const listed = entries.length > limit ? `${shown.join('; ')} (+${entries.length - limit} dalszych - te wyszukaj sam)` : shown.join('; ');
+  const against = tests ? 'z innymi testami oraz ze skryptami (bez testów)' : 'ze skryptami (bez testów)';
+  return `porównane ${against}, szablonami i bazowym plikiem tłumaczeń repozytorium: ${listed}. ${limits}`;
 }
 
 // `input-binding`: where the routing setup turns on `withComponentInputBinding()`, and
@@ -1906,20 +2295,28 @@ function collectFacts({ files, reviewed, root = '' }) {
   const cross = (text) => crossLines.push(text);
   // Everything the literal, condition and mapping passes compared, per reviewed file.
   const searched = new Map();
-  const record = (p, what, lines, shown, elsewhere) => {
+  // `detail` splits `elsewhere` for a test file: { tests, code }.
+  const record = (p, what, lines, shown, elsewhere, detail) => {
     if (!reviewed.has(p)) return;
     if (!searched.has(p)) searched.set(p, []);
-    searched.get(p).push({ what, lines: [...new Set(lines)].sort((a, b) => a - b), count: lines.length, shown, elsewhere });
+    searched.get(p).push({ what, lines: [...new Set(lines)].sort((a, b) => a - b), count: lines.length, shown, elsewhere, ...detail });
   };
   const list_ = localeFiles(index);
   const locales = { list: list_, base: localeBase(index, list_) };
   const exportsByFile = exportFacts(index, add, cross);
   i18nFacts(index, add, cross, locales);
   crossAreaFacts(index, add, cross);
-  literalFacts(index, add, cross, locales, record);
+  const occurrences = literalOccurrences(index, locales);
+  literalFacts(index, add, cross, occurrences, record);
   conditionFacts(index, add, cross, record);
   mappingFacts(index, add, cross, record);
   layoutFacts(index, add, cross);
+  barrelBypassFacts(index, add, cross);
+  dtoCasingFacts(index, add, cross);
+  injectionFacts(index, add, cross);
+  stateKeyFacts(index, add);
+  inputBindingFacts(index, add);
+  searchRecords(index, occurrences, record, reviewed);
   stateFacts(index, add);
   actionFacts(index, add);
   specFacts(index, add);
@@ -1931,13 +2328,19 @@ function collectFacts({ files, reviewed, root = '' }) {
   unconsumedActionFacts(index, add);
   importFacts(index, add);
   // Per reviewed file, the `builtinAnswers` texts: `repo-search` only for a file the literal
-  // passes read (a script, a template, the base locale) - of any other it would claim a
-  // search that never ran.
+  // passes read (a script, a template, the base locale) or, against the other tests and the
+  // code, a spec - of any other it would claim a search that never ran.
   const read = new Set([...index.sourceScripts, ...index.templates, locales.base].filter(Boolean));
   const binding = inputBindingAnswer(index);
+  const layout = areaLayoutAnswer(index);
   const answers = new Map();
   for (const p of reviewed) {
-    answers.set(p, read.has(p) ? { 'repo-search': repoSearchAnswer(searched.get(p) || []), 'input-binding': binding } : { 'input-binding': binding });
+    const own = {};
+    if (read.has(p)) own['repo-search'] = repoSearchAnswer(searched.get(p) || []);
+    else if (index.modules.has(p) && reSpec.test(p) && !reDeclaration.test(p)) own['repo-search'] = repoSearchAnswer(searched.get(p) || [], { tests: true });
+    own['input-binding'] = binding;
+    own['area-layout'] = layout(p);
+    answers.set(p, own);
   }
   return {
     facts, exportsByFile, membersByFile: memberFacts(index, reviewed), specsByFile: specCases(index, reviewed),

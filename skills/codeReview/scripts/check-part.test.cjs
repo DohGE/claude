@@ -315,6 +315,17 @@ test('cited lines exist in the reviewed content', (t) => {
   has(problems, 'NARUSZENIE wskazuje linie 99');
 });
 
+test('a NARUSZENIE names its lines up front, and a note after them is no list of lines', (t) => {
+  const f = fixture(t);
+  const note = (text) => partA().replace('[x] component#1 OnPush — NARUSZENIE (4, 9)', `[x] component#1 OnPush — NARUSZENIE (${text})`);
+  // Other files' lines, counts and parentheses of the note are not this file's lines (src/a.ts has 20).
+  assert.deepStrictEqual(check(f, 1, note('4, 9; drugie pytanie: literał stoi w b.ts:63 i c.ts L125, 140 razy')), []);
+  assert.deepStrictEqual(check(f, 1, note('4, 9; SONDA L4: user() czytane w L4 i L9 (2 razy)')), []);
+  assert.deepStrictEqual(check(f, 1, note('4, 9 drugie pytanie: b.ts L63')), []);
+  has(check(f, 1, note('drugie pytanie: b.ts L63')), 'component#1: NARUSZENIE bez linii');
+  has(check(f, 1, note('4, 99; drugie pytanie: b.ts L63')), 'component#1: NARUSZENIE wskazuje linie 99');
+});
+
 test('the output format decides whether the PR fields are required', (t) => {
   assert.deepStrictEqual(check(fixture(t), 1, partA()), []);
   has(check(fixture(t, { outputFormat: 'html' }), 1, partA()), 'znalezisko bez pola "PR Problem"');

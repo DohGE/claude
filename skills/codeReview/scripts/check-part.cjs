@@ -385,10 +385,28 @@ function checkReason(at, reason, finder) {
   const token = leadingPath(rest);
   const found = token ? finder.outside(token) : null;
   if (!found) {
-    return [`${at}: "${prefix} ${token || rest}" - nie ma takiej ścieżki (szukana od folderu pliku, od korzenia faktów i od korzenia projektu); ścieżka pliku spoza recenzji stoi zaraz po "${prefix}".`];
+    return [`${at}: "${prefix} ${token || rest}" - nie ma takiej ścieżki (szukana od folderu pliku, od korzenia faktów i od korzenia projektu); ścieżka pliku spoza recenzji stoi zaraz po "${prefix}". Czego nie ma w repozytorium (kontrakt backendu, dane serwera), tego brakuje jako "${unverifiedReasons[2]} <czego zabrakło>".`];
   }
   if (found.reviewed) return [`${at}: "${prefix} ${found.path}" - ta ścieżka należy do recenzji (sama albo pliki w niej): przeczytaj ją i daj pozycji werdykt.`];
   return [];
+}
+
+// The lines of this file a NARUSZENIE names: the list that opens its parenthesis. What follows
+// (a second question's answer, a probe's note) cites other files' lines and counts, and holds
+// parentheses of its own (`user()`), so it is cut off before the numbers are read.
+function violationLines(after) {
+  if (!after.startsWith('(')) return [];
+  let depth = 0;
+  let end = after.length;
+  for (let i = 0; i < after.length; i++) {
+    if (after[i] === '(') depth++;
+    else if (after[i] === ')' && --depth === 0) {
+      end = i;
+      break;
+    }
+  }
+  const listed = after.slice(1, end).split(new RegExp(`;|${bundle.linePrefix.second}|${bundle.linePrefix.probe}|${bundle.linePrefix.strong}|${bundle.linePrefix.hint}`))[0];
+  return numbersIn(listed);
 }
 
 function checkTickLine(line, gates, count, finder = null) {
@@ -422,7 +440,7 @@ function checkTickLine(line, gates, count, finder = null) {
     if (!inner) {
       problems.push(`${at}: OK bez dowodu - zapis to "— OK (L12, L18)" z liniami tego pliku, "— OK (tests/a.spec.ts)" ze ścieżką pliku, który spełnia wymaganie, albo "— OK (${noOccurrence})".`);
     } else if (deferred) {
-      problems.push(`${at}: OK odsyła do ${deferred[0]} - kod, który łamie pozycję, nigdy jej nie spełnia: dostaje własne NARUSZENIE, a nie OK z innym uzasadnieniem. Jej adres dochodzi do pola Reguła znaleziska ${deferred[0]} (najbardziej szczegółowy pierwszy), gdy to to samo wymaganie w innej instrukcji albo obie są pozycjami instrukcji z findings: per-file; inna pozycja tej samej instrukcji to inne wymaganie i własne znalezisko.`);
+      problems.push(`${at}: OK odsyła do ${deferred[0]} - kod, który łamie pozycję, nigdy jej nie spełnia: dostaje własne "— NARUSZENIE (<linie>)", a nie OK z innym uzasadnieniem, a OK ma w nawiasie tylko linie tego pliku. Adres ${at} dochodzi do pola Reguła znaleziska ${deferred[0]} (najbardziej szczegółowy pierwszy), gdy to to samo wymaganie w innej instrukcji albo obie są pozycjami instrukcji z findings: per-file; inna pozycja tej samej instrukcji to inne wymaganie i własne znalezisko.`);
     } else if (items > 1 && (numbered || elsewhere || !absent)) {
       problems.push(`${at}: jedno OK na ${items} pozycji z dowodem "(${inner})" - linie i pliki są dowodem jednej pozycji. Każda pozycja, której przedmiot występuje w pliku, ma własną linię z liniami, z których odczytano jej werdykt; w jedną linię zwijają się tylko pozycje, których przedmiotu plik nie zawiera: "— OK (${noOccurrence})".`);
     } else if (!absent && !numbered && !elsewhere) {
@@ -440,9 +458,8 @@ function checkTickLine(line, gates, count, finder = null) {
     }
   }
   if (word === 'NARUSZENIE') {
-    const evidence = after.match(/^\(([^()]*)\)/);
-    const numbers = evidence ? numbersIn(evidence[1]) : [];
-    if (numbers.length === 0) problems.push(`${at}: NARUSZENIE bez linii - zapis to "— NARUSZENIE (<linie z pola Linia znaleziska>)".`);
+    const numbers = violationLines(after);
+    if (numbers.length === 0) problems.push(`${at}: NARUSZENIE bez linii - zapis to "— NARUSZENIE (<linie z pola Linia znaleziska>)", linie stoją na początku nawiasu.`);
     const beyond = count ? numbers.filter((k) => k > count) : [];
     if (beyond.length) problems.push(`${at}: NARUSZENIE wskazuje linie ${beyond.join(', ')}, a plik ma ${count} linii.`);
   }

@@ -5,7 +5,7 @@ Reviews git changes against instruction checklists and writes one concise report
 The report carries the findings; the checklists every file was walked against stay in it only with `--with-checklist`.
 Reports are always written in Polish.
 Report-only: the skill writes no code and makes no commits; the sole repo side effect is `git add .` in staged mode, which stages every pending change before reviewing it.
-Single-agent: the invoking agent performs every step itself and never dispatches sub-agents, even for multiple branches or large diffs.
+One conversation runs the review and performs every step itself, targets one after another; the only thing it hands to a sub-agent is the walk of a window of files of a large target (see [Token cost](#token-cost)), never a branch or a single file.
 Full coverage: every file in the diff and every checklist item of every instruction in that file’s plan is evaluated on every run — the reviewer never skips files or rules; only the context script excludes generated, binary and prose files.
 Reporting scope is narrower than coverage: only violations carried by the lines the diff touched are reported (see [Review scope](#review-scope)).
 
@@ -22,6 +22,7 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview [target] --with-rule-text` | `--with-checklist`, plus the full text of its rule under every checklist item (on the page) or after ` — Reguła: ` on the item's line (in an `--only-md` Markdown) |
 | `/codeReview [target] --light` | any of the above, but no checklist walks an item of severity `low`, the report keeps no ⚪ Low finding, and the page shows no code snippet (see [Light runs](#light-runs)) |
 | `/codeReview [target] --no-batch` | any of the above, but every file is walked in a message of its own instead of small files together (see [Token cost](#token-cost)) |
+| `/codeReview [target] --no-windows` | any of the above, but no sub-agent walks a window of files: the invoking conversation walks every file itself (for a session that cannot dispatch one; see [Token cost](#token-cost)) |
 | `/codeReview [target] --no-dedup-items` | any of the above, but every bundle shows every item in full, instead of an item an earlier bundle already showed arriving as a reference to that bundle (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
 
@@ -30,7 +31,7 @@ literally called `feature/a,b` cannot be named in that list — it would be read
 reported as two "Branch not found" errors for names you never typed. Check that branch out and run
 `/codeReview` with no arguments instead: auto mode reviews the current branch without naming it.
 
-`--only-md`, `--with-checklist`, `--with-rule-text`, `--light`, `--no-batch` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
+`--only-md`, `--with-checklist`, `--with-rule-text`, `--light`, `--no-batch`, `--no-windows` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
 The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
 `--with-checklist` changes only what the finished report keeps: every file is walked, written and checked with its checklist either way, and without the flag the renderer cuts the checklists, the coverage markers and the cross-file `<!-- unverified:` block from it — from the page and from an `--only-md` Markdown alike.
 The run's summary still states the coverage, read off the line the assembly prints.
@@ -86,12 +87,20 @@ The third group is the one to know about: a documentation-only change is never r
 ## Token cost
 
 Small files are walked in batches.
-Consecutive files of at most 60 lines and 60 checklist items each form one, up to 6 files, 150 lines, 120 items and 50,000 characters of Reads (bundles, contents and diffs) in all; any other file is a batch of its own.
+Consecutive files of at most 60 lines and 60 checklist items each form one, up to 3 files, 150 lines, 120 items and 50,000 characters of Reads (bundles, contents and diffs) in all; any other file is a batch of its own.
 The size cap matters because a small file's bundle is most of what its batch reads: on the 61-file test target, a const file of 2 lines comes with a 15 KB bundle.
 One message reads a whole batch — every file's bundle, content and diff — and one message writes its parts, together with the Reads of the next batch, which the batch's last bundle names under `## Dalej`.
 Inside a batch every file is still walked on its own, one after another, against its own checklist, and every part is checked as before.
 The context lists the batches in `target.batches`, and a bundle's `partia:` line names the files of its batch.
 `--no-batch` makes every file a batch of its own.
+
+A large target is walked in windows: runs of whole batches that one `doh:codereview-walker` sub-agent walks, one window after another, never two at once.
+A file's walk adds about 14,000 tokens to a conversation — the thinking blocks of a response stay in it until the run ends — plus a third of the characters its Reads bring, and a conversation that grows past about 165,000 tokens is compacted: it loses every bundle it read, and every response re-reads all of it.
+A window holds at most 100,000 tokens of walk and 6 files, the cuts falling so that the windows come out even; a target whose whole walk fits one window is walked in the invoking conversation, which then dispatches nothing.
+The walker is sent the path of its brief (`<workDir>/windowNN.md`) and nothing else: the brief names the lines of `SKILL.md` to read (Step 3 up to the one-time part), the target settings the steps name, and every batch of the window with its parts and Reads.
+The last bundle of a window ends its `## Dalej` with an instruction to stop: the walker replies with one line, `WINDOW DONE <first>-<last>`, and the invoking conversation goes on with the cross-file pass and the assembly.
+A window that does not come back done — a refused dispatch, a refused Write, `WINDOW STOPPED` — is walked by the invoking conversation from its first missing part, and a session with no Agent tool passes `--no-windows`.
+The context lists the windows in `target.windows`, as `{ files: [first, last], brief }`; the resume of an interrupted run builds them from the files still to walk, and a resume that carries drafts of refused parts has none.
 
 Item dedup shortens every bundle read after the first: an item an earlier bundle of the run already showed arrives as a reference to that bundle, while the facts and probe hits under it stay this file's own.
 A compaction resets it, so the bundles read after one show every item in full again.
@@ -151,8 +160,8 @@ An item may carry seven more keys, each checked when the rulebook loads, so a ty
   A hit is a `SONDA` line of the bundle: it never makes a finding by itself, it names a line the item's verdict must answer.
 - `secondQuestion` — one question an OK on the item must also answer (`drugie pytanie: <answer>`).
   It is kept for the items the scorer's false-OK list (`scripts/score-review.cjs`) shows ticked OK where the answer key has them broken and the entry went unreported, and which no `facts` or `probe` of the item would have contradicted.
-- `answer` — the script's answer to that question, computed from the whole repository: `repo-search` (every literal, condition with a value and label mapping of the file, with how many other files hold it) or `input-binding` (where `withComponentInputBinding()` is on, and where route parameters are read by hand).
-  The bundle prints it under the question as `odpowiedź skryptu:`, so the review cites it instead of running that search again; a file the literal passes do not read (a spec, a stylesheet) gets no `repo-search` answer, and facts read from part of the repository give none at all.
+- `answer` — the script's answer to that question, computed from the whole repository: `repo-search` (every literal, condition with a value and label mapping of the file, and every `key: value` pair of a script, with how many other files hold it; of a spec its literals and pairs against the other specs and the code, test titles left out), `input-binding` (where `withComponentInputBinding()` is on, and where route parameters are read by hand) or `area-layout` (the folder of the file in its area's canonical layout, the area's folders with their file counts, what lies outside the layout, barrels beyond `models/`, interceptors and the routing files).
+  The bundle prints it under the question as `odpowiedź skryptu:`, so the review cites it instead of running that search again; a file the literal passes do not read (a stylesheet) gets no `repo-search` answer, and facts read from part of the repository give none at all.
 - `severity` — the severity every finding naming the item is reported with (`critical`, `high`, `medium`, `low` or `missing-unit-test`), in place of its instruction's (see below); the bundle prints it under the item as `ważność stała:`.
 - `sameAs` — the items one defect breaks together with this one, each naming this one back.
   A bundle whose plan holds both prints `ta sama wada:` under the item, and such a defect is ONE finding naming both addresses.
@@ -400,13 +409,14 @@ It writes the full context to `cache/<branch>/.review-context-<kind>.json`, in t
 It also writes each target's import ledger (`<report>.imports.txt`, one `<file>:<line> → <specifier>` edge per line, read from the reviewed revision) for the cross-file layering question; files in a language it has no extractor for are named on a `# not parsed` line.
 It writes each target's work folder (`<report>.work/`, the context's `workDir`): every reviewed file's content in the reviewed revision (`contentPath`) and its own section of the target's diff (`diffPath`), both taken from git once and Read by the reviewer file by file.
 Next to them sits each file's bundle (`bundlePath`, `NN-<name>.bundle.md`): its plan with every item's text under its address — so the reviewer takes every address from the bundle instead of numbering anything itself — the facts and probe hits bound to those items, the consumers of its exports and its jscpd candidates.
-The cross-file pass has a bundle of its own (`crossBundlePath`): the facts that span files, the items that pass reports under, the candidates.
+The cross-file pass has a bundle of its own (`crossBundlePath`): the facts that span files, the target's files with the names of their content and diff (the pass follows a walk it did not make when windows walked the files, so it opens what a question needs from this list), the items that pass reports under, the candidates.
+The pass gathers everything it needs in one message of parallel reads and searches, and a second round only follows a lead the first opened.
 The facts behind the bundles are in `facts.json` (`factsPath`), which the part check reads.
 A folder review reads the working tree, so its `contentPath` is the file itself and it has no diff.
 `target.commands.grep` searches the reviewed revision into a file of that folder and prints only the match count and the file's path.
 A resumed run rewrites the work folder but keeps the drafts of parts the check refused and the run never wrote, listed in `target.resume.drafts`.
 Next to the context it writes `checklists/<kind>/<id>.md` (the catalog entry's `numberedPath`), a copy of every instruction the run walks with the items its plans walk, kept for a lookup of one item, and `rulebook-notes.md` (`rulebookNotesPath`), the preambles the reviewer reads before the first file.
-`scripts/rulebook.cjs` loads the kinds and their item keys, `scripts/repo-facts.cjs` computes the facts from the whole reviewed revision (export consumers, a barrel nobody imports through, a guard no route uses, a pipe used in one template or none, i18n keys missing, unused or duplicated, relative imports that leave their area, repeated literals and conditions, one label mapping implemented twice, NgRx action trios and loading flags, spec inputs and outputs, snapshot placement, an area routed from both `shared/routes/` and `shell/`) and the answers to second questions (`answer`), and runs the probes, and `scripts/review-bundle.cjs` binds both to plan items and renders the bundles.
+`scripts/rulebook.cjs` loads the kinds and their item keys, `scripts/repo-facts.cjs` computes the facts from the whole reviewed revision (export consumers, a barrel nobody imports through, a guard no route uses, a pipe used in one template or none, i18n keys missing, unused or duplicated, relative imports that leave their area, repeated literals and conditions, one label mapping implemented twice, NgRx action trios and loading flags, spec inputs and outputs, snapshot placement, an area routed from both `shared/routes/` and `shell/`, a models module imported past its barrel, an API interface that mixes camelCase and snake_case fields, a component, directive or pipe that injects the `Store` or a data-access class, a state slice registered under a string literal, route parameters read by hand without `withComponentInputBinding()`) and the answers to second questions (`answer`), and runs the probes, and `scripts/review-bundle.cjs` binds both to plan items and renders the bundles.
 A fact binds to the first item of the file's plan whose `facts` names its kind; one no item names is listed under `## Fakty spoza planu (bez wymogu)` and requires nothing.
 When the facts could be drawn from part of the repository only (a size limit, a git failure), every fact merely points, like a probe hit.
 A write failure there drops the targets it concerns, and a run with no target left exits 1.

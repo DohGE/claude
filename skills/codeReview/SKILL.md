@@ -17,9 +17,11 @@ You produce review REPORTS only: never fix code, commit, checkout or edit the re
 files. Staged mode is the single exception — its context script runs `git add .` to stage every
 pending change before reviewing, the index only.
 
-Execute EVERY step yourself, in the current conversation, targets sequentially — never dispatch
-sub-agents (Agent/Task/Explore) for any part of a run: not per branch, not per file, not for a large
-diff, not to save context or time.
+Execute every step in the current conversation, targets sequentially. The one thing you may hand to a
+sub-agent is the walk of a window of files (Step 3, Windows): the `doh:codereview-walker`, one window
+at a time, with the brief the script wrote, so that no conversation grows until it is compacted.
+Never dispatch any other sub-agent (Agent/Task/Explore) for any part of a run: not per branch, not per
+file, not for a large diff, not to save time.
 
 Coverage is non-negotiable: every file of every target, every checklist item of every applicable
 instruction, on every run — violating the letter of these steps violates their spirit. Coverage and
@@ -28,7 +30,7 @@ scope gate).
 
 **Run order.** This file is not in run order: what the walk of every file needs comes first, because a compaction of the session re-attaches only the head of this file.
 1. Steps 1–2 run once per run, before anything else, and stand at the end of this file, after the one-time marker.
-2. Step 3 walks each target's files batch by batch and writes every file's part in the Step 4 format.
+2. Step 3 walks each target's files batch by batch and writes every file's part in the Step 4 format — in this conversation, or window by window through `doh:codereview-walker` sub-agents when `target.windows` lists windows.
 3. The cross-file pass follows the last file: `references/cross-file.md` in this skill's directory, which the last bundle's `## Dalej` names.
 4. The assembly, then the next target, and after the last target Step 5: `references/assembly.md`, which the cross-file reference names.
 
@@ -204,6 +206,17 @@ its plan and the universal points, and a file no kind describes (the script surf
 `warnings[]`) still gets `CLAUDE.md` and the universal points — neither may be skimmed.
 The walk opens with the Reads `target.start` lists (a FIXED IDENTIFIER, like every key of the context JSON), issued as parallel calls in ONE message: the first batch's bundles, contents and diffs, or — when every file's part is already on disk — the cross-file bundle and its reference.
 A target with an empty diff (`files` empty) lists none: it has no per-file parts and no cross-file pass, its `part01` holds the single line `Nie wykryto zmian do analizy.`, and the assembly (`references/assembly.md`) follows.
+
+**Windows.** `target.windows` (a FIXED IDENTIFIER) cuts the files into runs of whole batches, `{ files: [first, last], brief }` each, sized so that one conversation walks a window without being compacted: a compaction drops every bundle read before it, and a conversation that keeps growing re-reads all of it with every response.
+It is empty for a target small enough to walk here, under `--no-windows` (Step 1) and for a resume with `resume.drafts`.
+With windows you do not walk the files yourself.
+After the `rm` and the header's Write, dispatch the windows in order, ONE AT A TIME — the parts must come in file order, so two walkers never run at once:
+`Agent(subagent_type: "doh:codereview-walker", description: "window <k>/<n>", prompt: "Read <brief> and follow it.")`, with the window's `brief` path; its reply is the one line `WINDOW DONE <first>-<last>` (FIXED IDENTIFIERS: `WINDOW DONE`, `WINDOW STOPPED`).
+Any other reply, a refused dispatch, or no Agent tool in this session means the window is NOT done: walk it yourself from the first file of the window whose part is not on disk, exactly as the rest of this step says (each bundle's `## Dalej` lists what you read next), then dispatch the later windows as before.
+A session that cannot dispatch at all passes `--no-windows` in Step 1 instead.
+You are the walker when your prompt names a brief: the rest of this step is yours, for the files of that window only, and your reply is the one line.
+The cross-file pass and the assembly are always the main conversation's, after the last window.
+
 For each file:
 
 1. Open the file from `target.workDir`, the folder the script filled with what this target reviews
@@ -241,6 +254,7 @@ For each file:
    It prints only `<count> match(es) -> <file>`: Read that file for the matches themselves.
    Use it, never a search of the checkout, whenever a rule asks whether something already exists
    elsewhere in the project.
+   The searches one file needs do not depend on one another: issue them all as parallel Bash calls in ONE message, or join them in one call (`a; b; c`), because every message is one more request that carries the whole conversation again.
    `changedLines` (precomputed by the script from `git diff -U0`) is the authoritative list of the
    lines this diff touched, numbered exactly like the Read of `contentPath`, e.g. `"7, 12-15"`;
    `""` means the diff only deleted lines, `null` means an added/deleted file. Never re-derive
@@ -792,6 +806,8 @@ After a compaction, the hook names what of them to read again.
      Every checklist leaves out the items whose fixed severity is low (the item's own `severity`, else its instruction's), so the review walks every other rule.
      The renderer cuts every ⚪ **Low** finding from the finished report, and the HTML page shows no code snippet.
    - `--no-batch` → pass it through to the context script: every file is walked alone, its part in a message of its own (`target.batches` stays empty).
+   - `--no-windows` → pass it through to the context script: `target.windows` stays empty and this conversation walks every file.
+     Pass it only when this session cannot dispatch a sub-agent (it has no Agent tool), e.g. when it is itself a sub-agent.
    - `--no-dedup-items` → pass it through to the context script: every bundle shows every item in full.
      Without it `target.dedupItems` is true, and an item an earlier bundle of the run already showed is shown again only by reference (Step 3 point 1).
    - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read

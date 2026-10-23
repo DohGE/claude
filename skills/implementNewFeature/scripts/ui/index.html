@@ -43,7 +43,7 @@
        background:linear-gradient(90deg,var(--accent),var(--accent-2));
        -webkit-background-clip:text; background-clip:text; color:transparent; }
   /* Task tabs appear only from the second task on — one task looks like it always did. */
-  .tabs-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .tabs-bar { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
   .tabs-bar[hidden], .viewbar[hidden] { display:none; }
   .tabs-bar .tab { display:inline-flex; align-items:center; gap:8px; margin:0; padding:8px 12px;
           max-width:100%; font-size:12.5px; font-weight:600; background:var(--card);
@@ -201,6 +201,30 @@
           font-size:15px; line-height:1; border-radius:6px; }
   ul.files .rm:hover:not(:disabled) { color:var(--failed); background:var(--card);
           transform:none; filter:none; }
+  /* Picked but not uploaded yet: they go up with the next submit. */
+  ul.files.picked li { border-style:dashed; }
+  ul.files:empty { display:none; }
+  ul.files .file { display:flex; align-items:center; gap:10px; min-width:0; }
+  ul.files .file span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* An image shows what it is; a click opens it full size in a new tab. */
+  .thumb { flex:none; display:block; width:56px; height:42px; overflow:hidden;
+          border:1px solid var(--border); border-radius:6px; background:var(--card); }
+  .thumb img { display:block; width:100%; height:100%; object-fit:cover; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
+  .thumbs:empty { display:none; }
+  .thumbs .att { position:relative; }
+  .thumbs .thumb { width:72px; height:54px; }
+  .thumbs .rm { position:absolute; top:-7px; right:-7px; margin:0; padding:0; width:20px;
+          height:20px; font-size:13px; line-height:1; border-radius:50%; color:var(--muted);
+          background:var(--card-2); border:1px solid var(--border); }
+  .thumbs .rm:hover:not(:disabled) { color:var(--failed); transform:none; filter:none; }
+  button.attach-btn { padding:10px 12px; line-height:0; }
+  .attach-row { display:flex; align-items:center; gap:10px; margin-top:8px; }
+  /* The Stop button rides the step's title, out of the way of the gate's own buttons. */
+  .panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+          margin-bottom:14px; }
+  .panel .panel-head h2 { margin:0; }
+  .panel-head button { margin:0; padding:6px 14px; font-size:12.5px; }
   .mockup-bar { display:flex; justify-content:space-between; align-items:center; gap:12px;
           flex-wrap:wrap; margin:18px 0 10px; }
   .tabs { display:flex; gap:6px; flex-wrap:wrap; }
@@ -210,6 +234,10 @@
           transform:none; filter:none; }
   .tabs button.selected { color:var(--text); border-color:var(--accent);
           background:rgba(124,140,248,.14); }
+  /* The cases of the view picked above: a second, quieter row. */
+  .tabs.cases { margin:0 0 10px; }
+  .tabs.cases:empty { display:none; }
+  .tabs.cases button { padding:4px 10px; font-size:12px; font-weight:500; }
   .frame { overflow:hidden; border:1px solid var(--border); border-radius:12px;
           background:var(--card-2); }
   .frame iframe { border:0; display:block; transform-origin:top left; }
@@ -224,9 +252,11 @@
   .gate-actions { display:flex; gap:10px; flex-wrap:wrap; }
   /* The composer rides the bottom of the viewport, so a long mockup page never
      scrolls the field to answer with off the screen. */
-  .composer { position:sticky; bottom:0; z-index:2; display:flex; gap:10px; align-items:flex-end;
-          margin:16px -24px -24px; padding:14px 24px 16px; background:var(--card);
-          border-top:1px solid var(--border); border-radius:0 0 16px 16px; }
+  .composer { position:sticky; bottom:0; z-index:2; display:flex; flex-wrap:wrap; gap:10px;
+          align-items:flex-end; margin:16px -24px -24px; padding:14px 24px 16px;
+          background:var(--card); border-top:1px solid var(--border); border-radius:0 0 16px 16px; }
+  /* The pictures waiting to go with the message sit on a row of their own above it. */
+  .composer .thumbs { flex:1 0 100%; margin:0; }
   .composer textarea { flex:1; min-height:44px; }
   .composer .copy-wrap { flex:1; }
   .composer button { margin:0; flex:none; }
@@ -318,6 +348,16 @@ const STEP_ORDER = [1, 2, 3, 8, 4, 5, 6, 7];
 const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
   completed: 'Completed', failed: 'Failed' };
 const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
+// The server's IMAGE_TYPES: what it previews under /uploads and takes as an attachment.
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+// The steps whose agents can be sent pictures with a message: the three before implementation.
+const ATTACH_STEPS = [2, 3, STORY_STEP];
+const MAX_ATTACHMENTS = 20;
+const ATTACHMENTS = 'attachments';
+// What the server writes as the report of a step the user stopped.
+const STOPPED_REPORT = 'Stopped by the user.';
+// Where the orchestrator puts the PNGs of every mockup round, next to the mockups.
+const SCREENSHOT_DIR = 'mockup-screenshots';
 // Step 1 has no agent of its own - the form IS step 1 - so the overrides start at 2.
 const AGENT_STEPS = STEP_ORDER.slice(1);
 // '' is "inherit": no model override on the spawn, no thinking directive in the prompt.
@@ -348,6 +388,10 @@ const CHEVRON_LEFT = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none
 const CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none"'
   + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
   + '<path d="M9 18l6-6-6-6"/></svg>';
+const CLIP_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none"'
+  + ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2'
+  + 'a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>';
 let lastSig = null;
 let serverDown = false; // set when the user shuts the server down from the summary
 // Which tab is open is page state, never server state: parallel pipelines write
@@ -370,7 +414,14 @@ let reviewRunsDefault = [{ flags: [] }, { flags: ['--since-last'] }];
 let refreshRuns = null;
 
 // The step-1 file inputs, in the order the form shows them.
-const STEP1_FILES = ['hints', 'mockups', 'contracts'];
+// `images` are the pictures attached to the task description, images only.
+const STEP1_FILES = ['images', 'hints', 'mockups', 'contracts'];
+// The fields that say what the task IS: after the first submit a change to one of them
+// (or to the files) sends the pipeline back over what it touches, and implementation
+// freezes them. The rest - code review, agents, credentials - are settings the steps
+// read when they start, open until the summary is written.
+const STEP1_FLOW = ['taskDescription', 'branch', 'contractsText', 'hintsNote',
+  'refinement', 'generateMockups', 'storyDescription'];
 // Everything else the step-1 form holds, as one list: the draft below and the copy
 // that seeds a new task both carry exactly these, so neither can quietly drift from
 // the form. Credentials are among them — which is why the copy is a page-side affair.
@@ -494,10 +545,8 @@ function snapshotStep1() {
     v.draft[key] = el.type === 'checkbox' ? el.checked : el.value;
   }
   v.draft.codeReview = runsOnScreen();
-  // Files are picked long before they are uploaded — that happens on submit — and a
-  // FileList cannot be rebuilt from markup, so the File objects themselves are kept.
-  v.picked = {};
-  for (const cat of STEP1_FILES) v.picked[cat] = [...$(`#${cat}`).files];
+  // The files picked but not uploaded yet are not read here: the picker adds them to
+  // v.picked the moment they are chosen, and empties itself for the next pick.
 }
 
 // What step 1 of a task says right now, whatever step the task is actually on: its
@@ -525,7 +574,14 @@ function step1Of(task) {
 // so which of the two screens is visible is the user's choice, not a pipeline state.
 const view = {};
 const viewOf = id => (view[id] || (view[id] = {
-  showSummary: false, mockupScreen: 0, mockupViewport: 'Desktop',
+  // The mockup on screen, by id, so a new round keeps it when it still has that screen.
+  showSummary: false, mockupScreen: null, mockupViewport: 'Desktop',
+  // Files picked in the step-1 form, { category: [File] }: uploaded only on submit, and
+  // a FileList cannot be rebuilt from markup, so the File objects themselves are kept.
+  picked: null,
+  // Pictures waiting to go out with a message, per composer: 'answer' for the panel's
+  // own field, 'mockup', and `msg<step>` for a step's chat.
+  attach: {},
   // Which step the user is looking at. null means "whatever the pipeline is on";
   // anything else is their own pick, and the pipeline moving must not steal it.
   viewStep: null,
@@ -563,6 +619,24 @@ function toB64(file) {
     r.onerror = reject;
     r.readAsDataURL(file);
   });
+}
+
+// An image shown as well as named; a click opens it full size in a new tab.
+const thumbHtml = (src, name) => `<a class="thumb" href="${esc(src)}" target="_blank"
+  rel="noopener" title="${esc(name)}"><img src="${esc(src)}" alt="${esc(name)}"></a>`;
+// An image the server holds for the open task: a form upload or a message's attachment.
+const uploadUrl = (cat, name) => `/uploads/${encodeURIComponent(activeTask)}/${
+  encodeURIComponent(cat)}/${encodeURIComponent(name)}`;
+// One preview per picked File, made the first time it is drawn and let go when the file
+// leaves the page - picked away, or uploaded.
+const fileUrls = new WeakMap();
+function fileUrl(f) {
+  if (!fileUrls.has(f)) fileUrls.set(f, URL.createObjectURL(f));
+  return fileUrls.get(f);
+}
+function dropFileUrl(f) {
+  if (f && fileUrls.has(f)) URL.revokeObjectURL(fileUrls.get(f));
+  fileUrls.delete(f);
 }
 // A write that never reached the server must never look like one that did: the
 // orchestrator is waiting on a long poll, so a dropped answer leaves the run
@@ -994,7 +1068,11 @@ function renderActive(task, step) {
   // A question carries no step of its own — it belongs to whatever step is running.
   if (task.question && live) return renderQuestion(task.question, step);
   if (step.id === 1) return renderStep1(task);
-  if (step.id === 2 && task.reviewSummary) return renderReview(task.reviewSummary);
+  // The plan and the story are approved at the same gate, on whichever of the two steps
+  // the pipeline is on - a story gate must not show up on the finished refinement.
+  if ((step.id === 2 || step.id === STORY_STEP) && task.reviewSummary && live) {
+    return renderReview(task.reviewSummary, step);
+  }
   if (step.id === 3 && task.mockupReview) return renderMockupReview(task.mockupReview, step);
   if (step.id === STORY_STEP && step.status === 'completed') return renderStory(task, step);
   renderProgress(task, step);
@@ -1025,16 +1103,28 @@ function renderStep1(task) {
   // the draft holds. Without that, unticking would spring back on the next redraw and
   // the following submit would store the password they had just refused to store.
   const remember = d.rememberAuth !== undefined ? !!d.rememberAuth : (stored ? true : !revisit);
-  // Implementation is the point of no return: from there the form is the record of
-  // what was asked for, not something the pipeline can still be sent back over.
+  // Implementation is the point of no return for what the task is: from there the
+  // description, branch, steps and files are the record of what was asked for, not
+  // something the pipeline can still be sent back over. The settings stay open until
+  // the summary, because the steps still ahead read them when they start.
   const frozen = revisit
     && ((task.steps.find(s => s.id === 4) || {}).status !== 'waiting' || !!task.summary);
+  const finished = revisit && !!task.summary;
+  // A draft typed before the freeze would put text on screen that can no longer be sent,
+  // and make a settings-only form look as if it changed the task.
+  if (frozen) {
+    for (const key of STEP1_FLOW) d[key] = (task.step1 || {})[key];
+    v.picked = null;
+    v.filesDirty = false;
+  }
+  const pickedOf = cat => (v.picked || {})[cat] || [];
   // Files already on disk cannot be put back into a file input, so they are listed
   // separately and removed through the server.
   const fileList = cat => {
     const names = d[cat] || [];
     return names.length ? `<ul class="files" id="files-${cat}">${names.map(n =>
-      `<li><span>${esc(n)}</span><button type="button" class="rm" data-cat="${esc(cat)}"
+      `<li><span class="file">${IMAGE_RE.test(n) ? thumbHtml(uploadUrl(cat, n), n) : ''}<span>${
+        esc(n)}</span></span><button type="button" class="rm" data-cat="${esc(cat)}"
         data-name="${esc(n)}" aria-label="Remove ${esc(n)}" title="Remove">×</button></li>`)
       .join('')}</ul>` : '';
   };
@@ -1052,6 +1142,15 @@ function renderStep1(task) {
     <label>Task description <span class="req">*</span></label>
     <textarea id="task" placeholder="What to build and why: the feature, the business requirements behind it, any constraints">${
   esc(d.taskDescription || '')}</textarea>
+    ${fileList('images')}
+    <ul class="files picked" id="picked-images"></ul>
+    <div class="attach-row">
+      <button type="button" id="attachImages" class="secondary attach-btn"
+        aria-label="Attach images" title="Attach images">${CLIP_ICON}</button>
+      <span class="muted">Screenshots or sketches that show what the description means — every
+        agent that reads the description sees them too.</span>
+      <input type="file" id="images" multiple accept="image/*" hidden>
+    </div>
     <label>Branch <span class="req">*</span></label>
     <input type="text" id="branch" placeholder="feature/my-feature" autocomplete="off"
       value="${esc(d.branch || '')}">
@@ -1098,6 +1197,7 @@ function renderStep1(task) {
       anything that should guide the refinement questions and the mockup design.</p>
     <label>Files</label>
     ${fileList('hints')}
+    <ul class="files picked" id="picked-hints"></ul>
     <input type="file" id="hints" multiple>
     <div id="hintsNoteBox"${(d.hints || []).length ? '' : ' hidden'}>
       <label>What should we take from these files?</label>
@@ -1107,9 +1207,11 @@ function renderStep1(task) {
     </div>
     <label>Mockups (optional)</label>
     ${fileList('mockups')}
+    <ul class="files picked" id="picked-mockups"></ul>
     <input type="file" id="mockups" multiple accept="image/*,.pdf">
     <label>API contracts / specs (optional — files or pasted text)</label>
     ${fileList('contracts')}
+    <ul class="files picked" id="picked-contracts"></ul>
     <input type="file" id="contracts" multiple>
     <textarea id="contractsText" placeholder="…or paste contracts here">${
   esc(d.contractsText || '')}</textarea>
@@ -1132,11 +1234,17 @@ function renderStep1(task) {
     <p class="hint">Kept in this browser's storage for this project only, so the next task and
       the next run start with them filled in. Unticking this deletes them right away; the
       run's own copy still dies with the pipeline.</p>
-    ${frozen ? '<p class="hint">Implementation has started — the requirements are frozen for'
-      + ' this task. Copy it from the sidebar to take the feature in another direction.</p>'
-      : `<button id="next" disabled>${revisit ? 'Resubmit' : 'Next'}</button>
-    <p class="hint" id="changeHint" hidden>Nothing changed yet — edit a field, add or remove a
-      file, or fill in credentials to resubmit.</p>`}`;
+    ${finished ? '<p class="hint">The pipeline has finished — the requirements are the record of'
+      + ' this task now. Copy it from the sidebar to take the feature in another direction.</p>'
+      : `${frozen ? `<p class="hint" id="frozenHint">Implementation has started — the description,
+      branch, steps and files are frozen for this task; copy it from the sidebar to take the
+      feature in another direction. The code review, agent and authorization settings can still
+      change: the steps that have not started yet pick them up.</p>` : ''}
+    <button id="next" disabled>${frozen ? 'Save settings' : revisit ? 'Resubmit' : 'Next'}</button>
+    <p class="hint" id="changeHint" hidden>${frozen
+    ? 'Nothing changed yet — edit the code review, agent or authorization settings to save them.'
+    : `Nothing changed yet — edit a field, add or remove a file, or fill in credentials to
+      resubmit.`}</p>`}`;
   // What the markup above cannot carry: credentials are deliberately absent from the
   // state document, and a FileList cannot be written as an attribute. Both are what a
   // redraw used to drop, so both are put back by hand.
@@ -1145,14 +1253,45 @@ function renderStep1(task) {
     : (savedAuth && savedAuth.login) || '';
   $('#authPassword').value = d.authPassword !== undefined ? d.authPassword
     : (savedAuth && savedAuth.password) || '';
+  // The files picked since the last submit, each with its own ×. The input is only the
+  // picker: a pick is added to the ones before it, so a second trip never loses the first.
+  const drawPicked = cat => {
+    $(`#picked-${cat}`).innerHTML = pickedOf(cat).map((f, i) =>
+      `<li title="Uploaded when you submit"><span class="file">${
+        IMAGE_RE.test(f.name) ? thumbHtml(fileUrl(f), f.name) : ''}<span>${esc(f.name)}</span></span>
+      <button type="button" class="rm" data-unpick="${i}" aria-label="Remove ${esc(f.name)}"
+        title="Remove">×</button></li>`).join('');
+    $(`#picked-${cat}`).querySelectorAll('[data-unpick]').forEach(btn =>
+      btn.addEventListener('click', () => {
+        const list = pickedOf(cat);
+        dropFileUrl(list[+btn.dataset.unpick]);
+        v.picked = { ...v.picked, [cat]: list.filter((_, j) => j !== +btn.dataset.unpick) };
+        drawPicked(cat);
+        onEdit();
+      }));
+    // The note only makes sense once there is something to describe, so it stays hidden
+    // until the first file is picked, and goes again when the last one is removed.
+    $('#hintsNoteBox').hidden = !(pickedOf('hints').length || (d.hints || []).length);
+  };
   for (const cat of STEP1_FILES) {
-    const files = (v.picked || {})[cat] || [];
-    if (!files.length) continue;
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(f);
-    $(`#${cat}`).files = dt.files;
+    drawPicked(cat);
+    $(`#${cat}`).addEventListener('change', () => {
+      const input = $(`#${cat}`);
+      // The description takes pictures only, whatever the picker was switched to.
+      const fresh = [...input.files].filter(f => cat !== 'images' || IMAGE_RE.test(f.name));
+      // The same name picked again replaces the earlier pick, as the upload would on disk.
+      const replaced = pickedOf(cat).filter(f => fresh.some(n => n.name === f.name));
+      replaced.forEach(dropFileUrl);
+      v.picked = { ...(v.picked || {}),
+        [cat]: [...pickedOf(cat).filter(f => !replaced.includes(f)), ...fresh] };
+      input.value = '';
+      drawPicked(cat);
+      onEdit();
+      wireCopyButtons();
+      wireTextareas();
+    });
   }
-  $('#hintsNoteBox').hidden = !($('#hints').files.length || (d.hints || []).length);
+  $('#attachImages').addEventListener('click', () => $('#images').click());
   $('#togglePassword').addEventListener('click', () => {
     const input = $('#authPassword');
     const btn = $('#togglePassword');
@@ -1164,15 +1303,8 @@ function renderStep1(task) {
     btn.setAttribute('title', reveal ? 'Hide password' : 'Show password');
     input.focus();
   });
-  // The note only makes sense once there is something to describe, so it stays
-  // hidden until the first file is picked (and disappears again if all are removed).
-  $('#hints').addEventListener('change', () => {
-    $('#hintsNoteBox').hidden = $('#hints').files.length === 0 && !(d.hints || []).length;
-    wireCopyButtons();
-    wireTextareas();
-  });
   // The server owns the file lists, so a removal re-renders from the new state.
-  document.querySelectorAll('#panel .rm').forEach(btn =>
+  document.querySelectorAll('#panel .rm[data-cat]').forEach(btn =>
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       await postJson('/api/upload/remove',
@@ -1188,8 +1320,8 @@ function renderStep1(task) {
     wireRuns();
   };
   const wireRuns = () => {
-    $('#addRun').disabled = frozen || runsOnScreen().length >= reviewRunsMax;
-    if (frozen) {
+    $('#addRun').disabled = finished || runsOnScreen().length >= reviewRunsMax;
+    if (finished) {
       document.querySelectorAll('#reviewRuns input, #reviewRuns button')
         .forEach(el => { el.disabled = true; });
       return;
@@ -1206,10 +1338,17 @@ function renderStep1(task) {
   };
   wireRuns();
   refreshRuns = () => drawRuns(runsOnScreen());
-  if (frozen) {
-    document.querySelectorAll('#panel textarea, #panel input, #panel select, #panel .rm')
+  if (finished) {
+    document.querySelectorAll('#panel textarea, #panel input, #panel select, #panel .rm, #attachImages')
       .forEach(el => { el.disabled = true; });
     return;
+  }
+  // After implementation has started only the settings are live; the server refuses
+  // anything else with a 409, so the form does not offer it.
+  if (frozen) {
+    ['#task', '#branch', '#refinement', '#genMockups', '#storyDesc', '#contractsText', '#hintsNote',
+      '#attachImages', ...STEP1_FILES.map(cat => `#${cat}`)].forEach(sel => { $(sel).disabled = true; });
+    document.querySelectorAll('#panel .rm').forEach(el => { el.disabled = true; });
   }
   $('#addRun').addEventListener('click', () => {
     const list = runsOnScreen();
@@ -1225,24 +1364,27 @@ function renderStep1(task) {
     return { login, password, complete: !!(login && password.trim()) };
   };
   // Walking back to the form to re-read it is free; re-running refinement is not,
-  // so a resubmission has to carry something the agents have not seen.
-  const changed = () => {
-    if (v.filesDirty) return true;
-    if (['#mockups', '#contracts', '#hints'].some(sel => $(sel).files.length)) return true;
-    const a = auth();
-    if (a.login || a.password) return true;
+  // so a resubmission has to carry something the agents have not seen. What the task
+  // is and how it is run are told apart, because only the first repeats anything.
+  const flowEdited = () => {
+    if (v.filesDirty || STEP1_FILES.some(cat => pickedOf(cat).length)) return true;
     const prev = task.step1 || {};
     const same = (sel, key) => $(sel).value.trim() === String(prev[key] || '').trim();
-    const agentsNow = JSON.stringify(agentsOnScreen());
     return !(same('#task', 'taskDescription')
       && same('#branch', 'branch') && same('#contractsText', 'contractsText')
       && same('#hintsNote', 'hintsNote')
       && $('#refinement').checked === (prev.refinement !== false)
       && $('#genMockups').checked === !!prev.generateMockups
-      && $('#storyDesc').checked === !!prev.storyDescription
-      && JSON.stringify(runsOnScreen()) === JSON.stringify(prev.codeReview || reviewRunsDefault)
-      && agentsNow === JSON.stringify(agentsOf({ agents: prev.agents })));
+      && $('#storyDesc').checked === !!prev.storyDescription);
   };
+  const settingsEdited = () => {
+    const a = auth();
+    if (a.login || a.password) return true;
+    const prev = task.step1 || {};
+    return JSON.stringify(runsOnScreen()) !== JSON.stringify(prev.codeReview || reviewRunsDefault)
+      || JSON.stringify(agentsOnScreen()) !== JSON.stringify(agentsOf({ agents: prev.agents }));
+  };
+  const changed = () => flowEdited() || settingsEdited();
   const gate = () => {
     const a = auth();
     const branch = $('#branch').value.trim();
@@ -1269,7 +1411,7 @@ function renderStep1(task) {
   const onEdit = () => { snapshotStep1(); gate(); };
   ['#task', '#branch', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
     .forEach(sel => $(sel).addEventListener('input', onEdit));
-  ['#refinement', '#genMockups', '#storyDesc', '#mockups', '#contracts', '#hints']
+  ['#refinement', '#genMockups', '#storyDesc']
     .forEach(sel => $(sel).addEventListener('change', onEdit));
   document.querySelectorAll('#panel select').forEach(el => el.addEventListener('change', () => {
     onEdit();
@@ -1298,32 +1440,50 @@ function renderStep1(task) {
       ? 'Refinement starts: its agent reads this form and begins asking questions.'
       : $('#genMockups').checked ? 'Mockups start: an agent designs the screens from this form.'
         : $('#storyDesc').checked ? 'The story starts: an agent writes it from this form.' : '';
-    const ok = await askConfirm({
+    // A resubmission that only touches the settings repeats nothing, so it is not
+    // dressed up as one that sends the pipeline back.
+    const settingsOnly = revisit && !flowEdited();
+    const ok = await askConfirm(settingsOnly ? {
+      title: 'Save the new settings?',
+      text: 'Nothing is repeated. The steps that have not started yet use them; a code review '
+        + 'already under way finishes the run it is on, and the runs after it follow the new list.',
+      confirmLabel: 'Save settings' } : {
       title: revisit ? 'Resubmit the requirements?' : 'Submit requirements?',
       text: !next ? 'Implementation starts right away, and the requirements are frozen from then on.'
         : revisit
-          ? 'The steps before implementation that are on re-run on what you changed. '
-            + 'You can come back here again until implementation starts.'
+          ? 'Only what the change touches is repeated: the pipeline goes back to the first step '
+            + 'that has to see it, and that step and the ones after it run again. A change no step '
+            + 'before implementation reads repeats nothing. You can come back here again until '
+            + 'implementation starts.'
           : `${next} You can come back and edit it until implementation starts.`,
       confirmLabel: revisit ? 'Resubmit and continue' : 'Submit and continue' });
     if (!ok) return;
     lockPanel('Uploading and submitting…');
-    const upload = async (cat, input) => {
+    // Refused or unreachable: the form comes back as it was, the draft and the picks with
+    // it, and the error bar says why.
+    const giveBack = () => {
+      v.locked = null;
+      v.lockedSig = null;
+      lastSig = null;
+      tick();
+    };
+    const upload = async cat => {
       const names = [];
-      for (const f of input.files) {
-        await postJson('/api/upload',
+      for (const f of pickedOf(cat)) {
+        const res = await postJson('/api/upload',
           { taskId: activeTask, category: cat, filename: f.name, dataBase64: await toB64(f) });
-        names.push(f.name);
+        if (!res.ok) return null;
+        names.push(res.name || f.name);
       }
       return names;
     };
     // Files kept from the previous submission plus the ones just picked; a
     // re-upload of the same name overwrites on disk, so the list is deduped.
-    const uploaded = {
-      mockups: await upload('mockups', $('#mockups')),
-      contracts: await upload('contracts', $('#contracts')),
-      hints: await upload('hints', $('#hints'))
-    };
+    const uploaded = {};
+    for (const cat of STEP1_FILES) {
+      uploaded[cat] = await upload(cat);
+      if (!uploaded[cat]) return giveBack();
+    }
     const keep = cat => [...new Set([...(d[cat] || []), ...uploaded[cat]])];
     // Credentials go straight to the server (auth.json); the step1 answer
     // only carries a flag so they never reach the orchestrator's context.
@@ -1337,29 +1497,37 @@ function renderStep1(task) {
     if ($('#rememberAuth').checked && a.complete) {
       writeStore(authKey(), { login: a.login, password: a.password });
     }
-    await sendAnswer({ kind: 'step1',
+    const sent = await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
       branch: $('#branch').value.trim(),
       contractsText: $('#contractsText').value.trim(),
       hintsNote: $('#hintsNote').value.trim(),
       mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
+      images: keep('images'),
       authProvided: a.complete || task.authSaved,
       refinement: $('#refinement').checked,
       generateMockups: $('#genMockups').checked,
       storyDescription: $('#storyDesc').checked,
       codeReview: runsOnScreen(),
       agents: agentsOnScreen() });
+    if (!sent.ok) return giveBack();
     // The form is the server's now, credentials included — nothing of it stays on
     // the page, or the next redraw would hand back files that were already uploaded.
+    STEP1_FILES.forEach(cat => pickedOf(cat).forEach(dropFileUrl));
     v.draft = null;
     v.picked = null;
     v.filesDirty = false;
-    // Submitting means "go", so the view rejoins the pipeline wherever it now is.
+    // Submitting means "go", so the view rejoins the pipeline wherever it now is. On a
+    // resubmission the server has already moved it - back to the first step that repeats,
+    // the ones after it waiting again, or nowhere when nothing does - so the page follows
+    // at once instead of on the next poll.
     v.viewStep = null;
+    lastSig = null;
+    tick();
   });
 }
 
-// A shortcut to the stepper's own first tile, offered on the three interactive
+// A shortcut to the stepper's own first tile, offered on the interactive
 // gates. It only changes what is on screen: the gate stays open, the agents hear
 // nothing, and the switched-on steps before implementation re-run only if the form
 // comes back actually changed.
@@ -1371,9 +1539,88 @@ function wireBackButton() {
   btn.addEventListener('click', () => gotoStep(1));
 }
 
-const msgHtml = (role, text) =>
+// A line of a conversation, with the pictures that went with it.
+const msgHtml = (role, text, attachments) =>
   `<div class="msg ${role === 'user' ? 'user' : 'agent'}">
-    <span class="who">${role === 'user' ? 'You' : 'Agent'}</span>${esc(text)}</div>`;
+    <span class="who">${role === 'user' ? 'You' : 'Agent'}</span>${esc(text)}${
+  (attachments || []).length ? `<div class="thumbs">${attachments.map(n =>
+    thumbHtml(uploadUrl(ATTACHMENTS, n), n)).join('')}</div>` : ''}</div>`;
+
+// The pictures that go with a message, on the three steps before implementation: picked
+// into a tray above the field, kept with the draft so a redraw hands them back, and
+// uploaded only when the message goes out.
+const attachButton = key => `<button type="button" class="secondary attach-btn"
+    data-attach="${key}" aria-label="Attach images" title="Attach images">${CLIP_ICON}</button>
+  <input type="file" accept="image/*" multiple hidden data-attach-input="${key}">`;
+const attachTray = key => `<div class="thumbs" data-attach-tray="${key}"></div>`;
+const attachedOf = key => viewOf(activeTask).attach[key] || [];
+
+// Wires one picker and its tray. Returns what a send calls first: it uploads the tray
+// and resolves to the stored names - or to null when an upload failed, and then the
+// message is not sent at all, so its text and pictures stay where they are.
+function wireAttach(key) {
+  const btn = document.querySelector(`[data-attach="${key}"]`);
+  if (!btn) return async () => [];
+  const v = viewOf(activeTask);
+  const input = document.querySelector(`[data-attach-input="${key}"]`);
+  const tray = document.querySelector(`[data-attach-tray="${key}"]`);
+  const draw = () => {
+    tray.innerHTML = attachedOf(key).map((f, i) => `<span class="att">${thumbHtml(fileUrl(f), f.name)}
+      <button type="button" class="rm" data-detach="${i}" aria-label="Remove ${esc(f.name)}"
+        title="Remove">×</button></span>`).join('');
+    tray.querySelectorAll('[data-detach]').forEach(x => x.addEventListener('click', () => {
+      dropFileUrl(attachedOf(key)[+x.dataset.detach]);
+      v.attach[key] = attachedOf(key).filter((_, j) => j !== +x.dataset.detach);
+      draw();
+    }));
+    btn.disabled = attachedOf(key).length >= MAX_ATTACHMENTS;
+  };
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const images = [...input.files].filter(f => IMAGE_RE.test(f.name));
+    v.attach[key] = [...attachedOf(key), ...images].slice(0, MAX_ATTACHMENTS);
+    input.value = '';
+    draw();
+  });
+  draw();
+  return async () => {
+    const names = [];
+    for (const f of attachedOf(key)) {
+      const res = await postJson('/api/upload', { taskId: activeTask, category: ATTACHMENTS,
+        filename: f.name, dataBase64: await toB64(f) });
+      if (!res.ok) return null;
+      names.push(res.name);
+    }
+    attachedOf(key).forEach(dropFileUrl);
+    v.attach[key] = [];
+    draw();
+    return names;
+  };
+}
+
+// Every agent step can be stopped while it runs. The server fails it on the spot, so the
+// failure gate - Retry or Finish - is on screen before the orchestrator has even heard.
+const stoppable = step => {
+  const task = currentTask();
+  return !!task && step.id !== 1 && step.status === 'in_progress' && liveOf(task, step);
+};
+// The step's title, with the Stop button beside it while there is something to stop.
+const panelHead = (title, step) => `<div class="panel-head"><h2>${title}</h2>${
+  stoppable(step) ? '<button type="button" id="stopStep" class="danger">Stop</button>' : ''}</div>`;
+function wireStop(step) {
+  const btn = $('#stopStep');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const ok = await askConfirm({ title: 'Stop this step?',
+      text: 'Its agent is interrupted at once and the step is marked as stopped. Retry runs it '
+        + 'again; Finish ends the pipeline there.',
+      confirmLabel: 'Stop the step' });
+    if (!ok) return;
+    lockPanel('Stopping the step…');
+    await sendAnswer({ kind: 'stop', step: step.id });
+    tick();
+  });
+}
 
 // What belongs to the panel on screen rather than to the task: the messages already
 // sent from it and the one still half-typed in it. A tab switch, a walk back to the
@@ -1385,6 +1632,8 @@ function panelView() {
   if (v.sentSig !== lastSig) {
     v.sent = [];
     v.answerDraft = '';
+    (v.attach.answer || []).forEach(dropFileUrl);
+    v.attach.answer = [];
     v.sentSig = lastSig;
   }
   return v;
@@ -1396,11 +1645,11 @@ function panelView() {
 function renderSentTrail() {
   const box = $('#sentTrail');
   if (!box) return;
-  box.innerHTML = panelView().sent.map(t => msgHtml('user', t)).join('');
+  box.innerHTML = panelView().sent.map(m => msgHtml('user', m.text, m.attachments)).join('');
 }
 
-function pushSent(text) {
-  panelView().sent.push(text);
+function pushSent(text, attachments) {
+  panelView().sent.push({ text, attachments });
   renderSentTrail();
 }
 
@@ -1423,68 +1672,99 @@ function renderQuestion(q, step) {
   // Steps 1-3 are the interactive ones — there an answer is confirmed before it is sent.
   // Step 5 only asks to retry the Chrome extension, which needs no gate.
   const confirmFirst = step.id <= 3;
+  const pictures = ATTACH_STEPS.includes(step.id);
   // An answer never locks the panel: the user may follow it with a correction or
   // an afterthought while the agent is still reading the first one.
   const submit = async (value, after) => {
-    if (confirmFirst && !await askConfirm({ title: 'Send this answer?', text: value,
+    const count = attachedOf('answer').length;
+    if (confirmFirst && !await askConfirm({ title: 'Send this answer?',
+      text: [value, count ? `+ ${count} attached image${count > 1 ? 's' : ''}` : '']
+        .filter(Boolean).join('\n\n'),
       confirmLabel: 'Send answer' })) return;
+    const attachments = await takeAttachments();
+    if (!attachments) return;
     if (after) after();
-    pushSent(value);
-    sendAnswer({ kind: 'answer', questionId: q.id, value });
+    pushSent(value, attachments);
+    sendAnswer({ kind: 'answer', questionId: q.id, value, attachments });
   };
   const opts = (q.options || []).map((o, i) =>
     `<button data-opt="${i}">${esc(o)}</button>`).join('');
   $('#panel').innerHTML = `
-    <h2>${esc(step.name || STEP_NAMES[step.id - 1])}</h2>
+    ${panelHead(esc(step.name || STEP_NAMES[step.id - 1]), step)}
     <p>${esc(q.text)}</p>
     <div class="options">${opts}</div>
     <div class="sent" id="sentTrail"></div>
     <label>…or type your own answer</label>
     <textarea id="freeAnswer"></textarea>
-    <button id="send">Send answer</button>
-    ${step.id === 2 ? backButton() : ''}`;
+    ${pictures ? attachTray('answer') : ''}
+    <div class="gate-actions">
+      <button id="send">Send answer</button>
+      ${pictures ? attachButton('answer') : ''}
+      ${step.id === 2 ? backButton() : ''}
+    </div>`;
+  // The composer first: it is what starts a new panel with an empty tray.
   const clearAnswer = wireComposer('#freeAnswer');
+  const takeAttachments = wireAttach('answer');
   document.querySelectorAll('[data-opt]').forEach(btn =>
     btn.addEventListener('click', () =>
       submit(q.options[+btn.dataset.opt], () => btn.classList.add('selected'))));
   $('#send').addEventListener('click', () => {
     const value = $('#freeAnswer').value.trim();
-    if (!value) return;
+    if (!value && !attachedOf('answer').length) return;
     submit(value, clearAnswer);
   });
   renderSentTrail();
   wireBackButton();
+  wireStop(step);
 }
 
-function renderReview(review) {
+// The plan gate shows the refinement's summary; the story gate shows the story itself,
+// read from the task dir, with the agent's summary above it.
+function renderReview(review, step) {
+  const story = step.id === STORY_STEP;
   $('#panel').innerHTML = `
-    <h2>Plan review</h2>
-    <pre class="summary-text">${esc(review.text)}</pre>
-    <button id="approve">Approve</button>
+    ${panelHead(story ? 'Story review' : 'Plan review', step)}
+    ${story ? `<p class="muted">${esc(review.text)}</p>
+    <pre class="report" id="storyText">Loading…</pre>
+    <div class="gate-actions">
+      <button id="approve">Approve</button>
+      <button id="copyStory" class="secondary" disabled>Copy story</button>
+    </div>` : `<pre class="summary-text">${esc(review.text)}</pre>
+    <button id="approve">Approve</button>`}
     <div class="sent" id="sentTrail"></div>
     <label>…or request changes</label>
     <textarea id="feedback"></textarea>
-    <button id="sendFeedback" class="secondary">Send feedback</button>
-    ${backButton()}`;
+    ${attachTray('answer')}
+    <div class="gate-actions">
+      <button id="sendFeedback" class="secondary">Send feedback</button>
+      ${attachButton('answer')}
+      ${backButton()}
+    </div>`;
   const clearFeedback = wireComposer('#feedback');
+  const takeAttachments = wireAttach('answer');
+  wireStop(step);
   $('#approve').addEventListener('click', async () => {
     const ok = await askConfirm({
-      title: 'Approve the plan?',
-      text: 'The next step starts right away and agents begin changing files in your project.',
+      title: story ? 'Approve the story?' : 'Approve the plan?',
+      text: story ? 'Implementation starts right away and agents begin changing files in your project.'
+        : 'The next step starts right away and agents begin changing files in your project.',
       confirmLabel: 'Approve and continue' });
     if (!ok) return;
     lockPanel('Approved — starting implementation…');
     sendAnswer({ kind: 'decision', decision: 'approve' });
   });
-  $('#sendFeedback').addEventListener('click', () => {
+  $('#sendFeedback').addEventListener('click', async () => {
     const t = $('#feedback').value.trim();
-    if (!t) return;
+    if (!t && !attachedOf('answer').length) return;
+    const attachments = await takeAttachments();
+    if (!attachments) return;
     clearFeedback();
-    pushSent(t);
-    sendAnswer({ kind: 'decision', decision: 'feedback', text: t });
+    pushSent(t, attachments);
+    sendAnswer({ kind: 'decision', decision: 'feedback', text: t, attachments });
   });
   renderSentTrail();
   wireBackButton();
+  if (story) loadStory();
 }
 
 function mockupUrl(review, screen) {
@@ -1492,11 +1772,41 @@ function mockupUrl(review, screen) {
     encodeURIComponent(screen.file)}?rev=${review.rev || 0}`;
 }
 
+// Screens numbered <view>.<case> - 1.0, 1.1, 2.0 - are grouped by view, so a dozen states
+// of three screens read as three tabs and a row of cases. A screen from a manifest
+// without the numbering is a view of its own.
+const screenKey = s => String(s.id || s.file);
+function mockupViews(screens) {
+  const views = [];
+  screens.forEach((s, i) => {
+    const m = /^(\d+)\.\d+$/.exec(String(s.id || ''));
+    const key = m ? m[1] : `#${i}`;
+    let view = views.find(g => g.key === key);
+    if (!view) {
+      view = { key, numbered: !!m, screens: [],
+        label: [m && m[1], s.view || s.title || s.id || `Screen ${i + 1}`].filter(Boolean).join(' ') };
+      views.push(view);
+    }
+    view.screens.push(s);
+  });
+  return views;
+}
+
+// The screen picked last, else - when the new round dropped it - the first case of its
+// view, else the first screen.
+function shownScreen(screens) {
+  const picked = viewOf(activeTask).mockupScreen;
+  const view = String(picked || '').split('.')[0];
+  return screens.find(s => screenKey(s) === picked)
+    || (picked && screens.find(s => String(s.id || '').split('.')[0] === view))
+    || screens[0] || null;
+}
+
 // The panel is ~930 px wide, so a 1280 px mockup is scaled down rather than
 // letterboxed — otherwise the preview would misreport the layout.
 function drawPreview(review) {
   const box = $('#preview');
-  const screen = (review.screens || [])[viewOf(activeTask).mockupScreen];
+  const screen = shownScreen(review.screens || []);
   if (!box) return;
   if (!screen) {
     box.innerHTML = '<p class="muted">No screen to preview yet.</p>';
@@ -1516,53 +1826,78 @@ function drawPreview(review) {
 function renderMockupReview(review, step) {
   const screens = review.screens || [];
   const v = viewOf(activeTask);
-  if (v.mockupScreen >= screens.length) v.mockupScreen = 0;
-  const tabs = screens.map((s, i) =>
-    `<button data-screen="${i}"${i === v.mockupScreen ? ' class="selected"' : ''}>${
-      esc(s.title || s.id)}</button>`).join('');
+  const views = mockupViews(screens);
   const viewports = Object.keys(MOCKUP_VIEWPORTS).map(vp =>
     `<button data-viewport="${vp}"${vp === v.mockupViewport ? ' class="selected"' : ''}>${
       vp}</button>`).join('');
   $('#panel').innerHTML = `
-    <h2>Mockups</h2>
+    ${panelHead('Mockups', step)}
     ${review.text ? `<pre class="summary-text">${esc(review.text)}</pre>` : ''}
     <div class="mockup-bar">
-      <div class="tabs">${tabs || '<span class="muted">No screens yet</span>'}</div>
+      <div class="tabs" id="viewTabs"></div>
       <div class="tabs">${viewports}</div>
     </div>
+    <div class="tabs cases" id="caseTabs"></div>
     <div id="preview"></div>
     <div class="chat" id="stepChat">${chatHtml(step.chat || [])}</div>
     <div class="gate-actions">
       <button id="approveMockup">Approve mockups</button>
+      ${screenshotsButton()}
       ${backButton()}
     </div>
+    <p class="hint" id="shotsHint" hidden></p>
     <div class="composer">
+      ${attachTray('mockup')}
       <textarea id="mockupFeedback" data-max-vh="30" rows="1"
         placeholder="Describe what to change — Ctrl+Enter sends"></textarea>
+      ${attachButton('mockup')}
       <button id="sendMockup" class="secondary">Send</button>
     </div>`;
   // Whatever was half-typed when the agent's next round landed.
   $('#mockupFeedback').value = v.mockupDraft || '';
-  const select = (attr, apply) => document.querySelectorAll(`[data-${attr}]`).forEach(btn =>
+  // A row of views, and under it the cases of the view on screen. Picking a view opens
+  // its first case.
+  const drawTabs = () => {
+    const shown = shownScreen(screens);
+    const open = views.find(g => g.screens.includes(shown));
+    $('#viewTabs').innerHTML = views.map(g => `<button data-view="${esc(g.key)}"${
+      g === open ? ' class="selected"' : ''}>${esc(g.label)}</button>`).join('')
+      || '<span class="muted">No screens yet</span>';
+    $('#caseTabs').innerHTML = open && open.numbered ? open.screens.map(s =>
+      `<button data-screen="${esc(screenKey(s))}"${s === shown ? ' class="selected"' : ''}>${
+        esc([s.id, s.title].filter(Boolean).join(' '))}</button>`).join('') : '';
+    const pick = key => {
+      v.mockupScreen = key;
+      drawTabs();
+      drawPreview(review);
+    };
+    document.querySelectorAll('#viewTabs [data-view]').forEach(btn => btn.addEventListener('click',
+      () => pick(screenKey(views.find(g => g.key === btn.dataset.view).screens[0]))));
+    document.querySelectorAll('#caseTabs [data-screen]').forEach(btn =>
+      btn.addEventListener('click', () => pick(btn.dataset.screen)));
+  };
+  drawTabs();
+  document.querySelectorAll('[data-viewport]').forEach(btn =>
     btn.addEventListener('click', () => {
-      document.querySelectorAll(`[data-${attr}]`)
+      document.querySelectorAll('[data-viewport]')
         .forEach(other => other.classList.toggle('selected', other === btn));
-      apply(btn.dataset[attr]);
+      v.mockupViewport = btn.dataset.viewport;
       drawPreview(review);
     }));
-  select('screen', val => { v.mockupScreen = +val; });
-  select('viewport', val => { v.mockupViewport = val; });
+  const takeAttachments = wireAttach('mockup');
   // Sending does not lock: the user may add a second thought before the agent has
   // even read the first. The server records each message as it arrives, so the chat
   // shows it without waiting for the orchestrator to come back round.
   const send = async () => {
     const el = $('#mockupFeedback');
     const t = el.value.trim();
-    if (!t) return;
+    if (!t && !attachedOf('mockup').length) return;
+    const attachments = await takeAttachments();
+    if (!attachments) return;
     el.value = '';
     v.mockupDraft = '';
     autoGrow(el);
-    await sendAnswer({ kind: 'mockup', decision: 'feedback', text: t });
+    await sendAnswer({ kind: 'mockup', decision: 'feedback', text: t, attachments });
     tick();
   };
   $('#mockupFeedback').addEventListener('input', () => {
@@ -1585,22 +1920,57 @@ function renderMockupReview(review, step) {
     sendAnswer({ kind: 'mockup', decision: 'approve' });
   });
   wireBackButton();
+  wireStop(step);
+  wireScreenshots();
   drawPreview(review);
 }
 
-const chatHtml = msgs => msgs.map(m => msgHtml(m.role, m.text)).join('');
+// The PNGs of every mockup round sit on disk next to the mockups, and a page cannot open
+// a local folder - the server does, in the system's file manager. Not through postJson:
+// "no screenshots yet" is an answer here, not a send that failed.
+const screenshotsButton = () =>
+  '<button type="button" id="openShots" class="secondary">Open screenshots folder</button>';
+function wireScreenshots() {
+  const btn = $('#openShots');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    let res = null;
+    let data = {};
+    try {
+      res = await fetch('/api/open-folder', { method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ taskId: activeTask, folder: SCREENSHOT_DIR }) });
+      data = await res.json().catch(() => ({}));
+    } catch (_e) { /* said below */ }
+    const hint = $('#shotsHint');
+    if (!hint) return;
+    hint.classList.toggle('error', !res || (!res.ok && res.status !== 404));
+    hint.textContent = !res ? 'Could not reach the server.'
+      : res.status === 404 ? 'No screenshots yet — they are taken after every round of mockups.'
+        : res.ok ? `Opened ${data.path || 'the folder'} in the file manager.`
+          : `Could not open the folder (${data.error || res.status}).`;
+    hint.hidden = false;
+  });
+}
+
+const chatHtml = msgs => msgs.map(m => msgHtml(m.role, m.text, m.attachments)).join('');
 
 // Every step's panel carries the conversation with that step's agent. The steps that
 // ask something of their own (a question, a plan gate, the mockup review) bring their
 // own field and are given the transcript alone; the rest get the composer too — that
 // is the only way to say anything to an agent that is already running.
-const chatBlock = (step, live) => `
+const chatBlock = (step, live) => {
+  const pictures = ATTACH_STEPS.includes(step.id);
+  return `
   <div class="chat" id="stepChat">${chatHtml(step.chat || [])}</div>
   ${live ? `<div class="composer">
+    ${pictures ? attachTray(`msg${step.id}`) : ''}
     <textarea id="stepMessage" data-max-vh="30" rows="1"
       placeholder="Write to the agent — Ctrl+Enter sends"></textarea>
+    ${pictures ? attachButton(`msg${step.id}`) : ''}
     <button id="sendStepMessage" class="secondary">Send</button>
   </div>` : ''}`;
+};
 
 // Sending does not lock the panel and does not move the step: the agent keeps working
 // and answers in the same transcript, so a second thought can follow the first.
@@ -1610,15 +1980,18 @@ function wireChat(step) {
   const drafts = viewOf(activeTask).msgDrafts;
   el.value = drafts[step.id] || '';
   el.addEventListener('input', () => { drafts[step.id] = el.value; });
+  const takeAttachments = wireAttach(`msg${step.id}`);
   const send = async () => {
     const t = el.value.trim();
-    if (!t) return;
+    if (!t && !attachedOf(`msg${step.id}`).length) return;
+    const attachments = await takeAttachments();
+    if (!attachments) return;
     el.value = '';
     drafts[step.id] = '';
     autoGrow(el);
     // The server records the line as it arrives, so it shows without waiting for
     // the orchestrator to come back round the poll.
-    await sendAnswer({ kind: 'message', step: step.id, text: t });
+    await sendAnswer({ kind: 'message', step: step.id, text: t, attachments });
     tick();
   };
   el.addEventListener('keydown', e => {
@@ -1646,13 +2019,19 @@ function updateChat(step) {
 
 function renderProgress(task, step) {
   const live = liveOf(task, step);
+  // The mockups step offers its screenshots from the first round on, and after approval.
+  const shots = step.id === 3 && step.status !== 'waiting';
   $('#panel').innerHTML = `
-    <h2>${esc(step.name)}</h2>
+    ${panelHead(esc(step.name), step)}
     <div class="bar"><div id="barFill"></div></div>
     <div class="op" id="op"></div>
+    ${shots ? `<div class="gate-actions">${screenshotsButton()}</div>
+    <p class="hint" id="shotsHint" hidden></p>` : ''}
     <ul class="log" id="log"></ul>
     ${chatBlock(step, live)}`;
   wireChat(step);
+  wireStop(step);
+  wireScreenshots();
   updateDynamic(task, step);
 }
 
@@ -1685,11 +2064,13 @@ function renderFailed(step, live) {
   // Step 7 runs after the pipeline is already finished, so declining its retry drops
   // the user back on the summary instead of ending the run.
   const isMockoon = step.id === MOCKOON_STEP;
+  // The server's own report for a Stop: the same gate, but nothing went wrong.
+  const outcome = step.report === STOPPED_REPORT ? 'stopped' : 'failed';
   // Nobody is waiting on this one any more, so Retry and Finish would send a
   // decision into an empty queue for a later gate to mistake for its own.
   if (!live) {
     $('#panel').innerHTML = `
-      <h2>${esc(step.name)} — failed</h2>
+      <h2>${esc(step.name)} — ${outcome}</h2>
       <pre class="report">${esc(step.report || 'No report provided.')}</pre>
       <p class="muted">The pipeline is no longer waiting on this step.</p>
       ${chatBlock(step, false)}`;
@@ -1698,7 +2079,7 @@ function renderFailed(step, live) {
   // The agent that failed is gone, so what is typed here is not for it: the
   // orchestrator holds it and hands it to the fresh agent a retry spawns.
   $('#panel').innerHTML = `
-    <h2>${esc(step.name)} — failed</h2>
+    <h2>${esc(step.name)} — ${outcome}</h2>
     <pre class="report">${esc(step.report || 'No report provided.')}</pre>
     <button id="retry" class="danger">Retry step</button>
     <button id="${isMockoon ? 'backToSummary' : 'finish'}" class="secondary">${

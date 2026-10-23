@@ -19,6 +19,11 @@
 //                    cannot register it). A compaction brings back only the head of
 //                    SKILL.md; this names where the run stands, the Reads that resume it and the
 //                    lines of SKILL.md to read again.
+//   --event=subagent SubagentStart and SubagentStop (hooks/hooks.json). A sub-agent begins with an
+//                    empty conversation and the one that started it holds none of what the
+//                    sub-agent read, so no item text counts as shown to whoever reads next:
+//                    the next file bundle is whole, never a reference to a bundle the reader
+//                    has not got.
 //
 // The session's state is one small JSON file per session id: the run's context and, under
 // --dedup-items, the bundle that showed each item first. A hook never breaks a session: every
@@ -49,10 +54,10 @@ function parseArgs(argv) {
   const args = { event: null };
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
-    if (m && m[1] === 'event' && ['read', 'draft', 'compact'].includes(m[2])) args.event = m[2];
-    else throw new Error(`Nieznany argument: ${arg} (oczekiwano --event=read|draft|compact).`);
+    if (m && m[1] === 'event' && ['read', 'draft', 'compact', 'subagent'].includes(m[2])) args.event = m[2];
+    else throw new Error(`Nieznany argument: ${arg} (oczekiwano --event=read|draft|compact|subagent).`);
   }
-  if (!args.event) throw new Error('Brak --event=read|draft|compact.');
+  if (!args.event) throw new Error('Brak --event=read|draft|compact|subagent.');
   return args;
 }
 
@@ -291,6 +296,24 @@ function skillLines(file = `${skillDir}/SKILL.md`) {
   return { path: file, from, limit: lineAt(end) - from };
 }
 
+// The lines of SKILL.md a window's walker reads: Step 3, the report format and what follows it, up
+// to the one-time part. `## Step 3` is a FIXED IDENTIFIER: a heading renamed sends the walker to
+// the head of the file instead (null here makes the brief say so in words).
+function walkLines(file = `${skillDir}/SKILL.md`) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  const start = text.search(/^## Step 3\b/m);
+  const end = text.indexOf(oneTimeMarker);
+  if (start === -1 || end <= start) return null;
+  const lineAt = (offset) => text.slice(0, offset).split('\n').length;
+  const from = lineAt(start);
+  return { path: file, from, limit: lineAt(end) - from };
+}
+
 // references/walk-card.md next to SKILL.md: the per-file procedure in a few lines.
 function walkCard(skillFile = `${skillDir}/SKILL.md`) {
   try {
@@ -337,11 +360,17 @@ function position(context, contextPath, skillFile) {
     out.push(`- następne: ${partOf(1)} z jedyną linią \`Nie wykryto zmian do analizy.\`, potem złożenie (${skillDir}/references/assembly.md)`);
   } else if (missing.length > 0) {
     const k = missing[0];
+    const windows = target.windows || [];
+    const window = windows.find((w) => k >= w.files[0] && k <= w.files[1]);
+    out.push(`- zapisane części plików: ${n - missing.length}/${n}; następny plik ${k}/${n}: ${files[k - 1].path}, część ${partOf(k)}`);
+    if (window) {
+      // Whoever sent the walkers is the conversation that was compacted: the walk is theirs, not its own.
+      out.push(`- okno ${windows.indexOf(window) + 1}/${windows.length}: pliki ${window.files[0]}-${window.files[1]}; jeśli możesz wysłać sub-agenta, wyślij \`doh:codereview-walker\` z promptem \`Read ${window.brief} and follow it\` (części na dysku pomija) i czekaj na jedną linię \`${bundle.windowReplies.done} ${window.files[0]}-${window.files[1]}\`; bez Agent albo po odmowie przejdź plik ${k} sam, tak:`);
+    }
     const range = (target.batches || []).find(([first, last]) => k >= first && k <= last);
     const walk = files.slice(k - 1, range ? range[1] : k);
-    out.push(`- zapisane części plików: ${n - missing.length}/${n}; następny plik ${k}/${n}: ${files[k - 1].path}, część ${partOf(k)}`);
     if (walk.length > 1) out.push(`- partia: pliki ${k}-${k + walk.length - 1}, ich części razem w jednej odpowiedzi`);
-    out.push('- przeczytaj (Read) w jednej odpowiedzi:', ...bundle.readsOf(walk).map((p) => `  - ${p}`));
+    out.push('- przeczytaj (Read) w jednej odpowiedzi, także to, co czytałeś przed kompaktowaniem - tego tekstu nie ma już w rozmowie, a kilka Grep po pozycjach to kilka odpowiedzi:', ...bundle.readsOf(walk).map((p) => `  - ${p}`));
   } else if (n > 0 && !exists(n + 1)) {
     out.push(`- części plików zapisane (${n}/${n}); następne: przejście międzyplikowe, część ${partOf(n + 1)}`);
     out.push('- przeczytaj (Read) w jednej odpowiedzi:', `  - ${target.crossBundlePath}`, `  - ${skillDir}/references/cross-file.md`);
@@ -372,11 +401,23 @@ function onCompact(input, env = process.env) {
     return null;
   }
   // The item texts shown before the compaction are gone from the conversation.
-  withLock(stateFile, () => writeAtomic(stateFile, JSON.stringify({ contextPath: state.contextPath, shown: {} })));
+  forget(stateFile, state.contextPath);
   return note('SessionStart', lines.join('\n'));
 }
 
-const handlers = { read: onRead, draft: onDraft, compact: onCompact };
+// The item texts shown so far are not in the conversation of whoever reads next.
+function forget(stateFile, contextPath) {
+  withLock(stateFile, () => writeAtomic(stateFile, JSON.stringify({ contextPath, shown: {} })));
+}
+
+function onSubagent(input, env = process.env) {
+  const stateFile = statePath(input && input.session_id, env);
+  const state = stateFile ? readState(stateFile) : null;
+  if (state) forget(stateFile, state.contextPath);
+  return null;
+}
+
+const handlers = { read: onRead, draft: onDraft, compact: onCompact, subagent: onSubagent };
 
 function readStdin(deadlineMs) {
   return new Promise((resolve) => {
@@ -408,8 +449,8 @@ async function main() {
 }
 
 module.exports = {
-  parseArgs, stateDir, statePath, readState, dedupItems, skillLines, walkCard, position, onRead, onDraft, onCompact,
-  reattachedChars, oneTimeMarker,
+  parseArgs, stateDir, statePath, readState, dedupItems, skillLines, walkLines, walkCard, position, onRead, onDraft, onCompact,
+  onSubagent, reattachedChars, oneTimeMarker,
 };
 
 if (require.main === module) main();

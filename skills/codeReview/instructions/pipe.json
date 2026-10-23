@@ -102,12 +102,16 @@
           "facts": [
             "area-routes-twice"
           ],
-          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
+          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?",
+          "answer": "area-layout"
         },
         {
           "id": "architecture#4",
           "text": "Layering is strict: components touch state only through a facade; selectors compute every derived value; effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
-          "severity": "low"
+          "severity": "low",
+          "facts": [
+            "component-injects-data-access"
+          ]
         },
         {
           "id": "architecture#6",

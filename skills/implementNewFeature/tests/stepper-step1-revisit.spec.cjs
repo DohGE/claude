@@ -71,7 +71,42 @@ test('ponowne zgłoszenie zapowiada zawężony re-run', async ({ page }) => {
   await page.fill('#task', 'Zaproszenia od admina i menedżera');
   await page.click('#next');
   await expect(page.locator('#confirmTitle')).toHaveText('Resubmit the requirements?');
-  await expect(page.locator('#confirmText')).toContainText('re-run on what you changed');
+  await expect(page.locator('#confirmText')).toContainText('Only what the change touches is repeated');
+});
+
+test('ponowne zgłoszenie od razu przenosi na krok, który się powtarza, a dalsze są zablokowane',
+  async ({ page }) => {
+    await state({ step: 1, status: 'completed' });
+    await state({ step: 2, status: 'completed' });
+    await state({ step: 3, status: 'in_progress', activeStep: 3 });
+    await page.goto(base);
+    await page.waitForSelector('.step[data-step="1"]');
+    await page.click('.step[data-step="1"]');
+    await page.fill('#task', 'Zaproszenia od admina i menedżera');
+    await page.click('#next');
+    await page.click('#confirmOk');
+    // Bez czekania na orkiestratora: serwer już cofnął przebieg do refinementu.
+    await expect(page.locator('#panel h2')).toContainText('Feature Refinement');
+    await expect(page.locator('.step[data-step="2"]')).toHaveClass(/in_progress/);
+    await expect(page.locator('.step[data-step="3"]')).toHaveClass(/waiting/);
+    await expect(page.locator('.step[data-step="3"]')).not.toHaveClass(/clickable/);
+    const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
+    expect(answer.revision).toMatchObject({ changed: ['description'], restartAt: 2 });
+  });
+
+test('zmiana samej gałęzi niczego nie powtarza', async ({ page }) => {
+  await state({ step: 1, status: 'completed' });
+  await state({ step: 2, status: 'in_progress', activeStep: 2 });
+  await page.goto(base);
+  await page.waitForSelector('.step[data-step="1"]');
+  await page.click('.step[data-step="1"]');
+  await page.fill('#branch', 'feature/zaproszenia-v2');
+  await page.click('#next');
+  await page.click('#confirmOk');
+  // Nic się nie powtarza, więc strona wraca na krok, który właśnie pracuje.
+  await expect(page.locator('#panel h2')).toContainText('Feature Refinement');
+  const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
+  expect(answer.revision).toMatchObject({ changed: ['branch'], restartAt: null });
 });
 
 test('wgrany plik da się usunąć i znika z kolejnego zgłoszenia', async ({ page }) => {
@@ -157,16 +192,51 @@ test('przebiegi review: dodanie, flagi z listy skilla, limit trzech i usunięcie
   expect(answer.codeReview).toEqual([{ flags: ['--since-last'] }, { flags: ['--light', '--since-last'] }]);
 });
 
-test('po starcie implementacji formularz jest tylko do odczytu', async ({ page }) => {
+test('po starcie implementacji przebieg jest zamrożony, a ustawienia nadal się zapisują',
+  async ({ page }) => {
+    await state({ step: 1, status: 'completed' });
+    await state({ step: 4, status: 'in_progress', activeStep: 4 });
+    await page.goto(base);
+    await page.waitForSelector('.step[data-step="1"]');
+    await page.click('.step[data-step="1"]');
+    await expect(page.locator('#task')).toBeDisabled();
+    await expect(page.locator('#branch')).toBeDisabled();
+    await expect(page.locator('#refinement')).toBeDisabled();
+    await expect(page.locator('#files-hints .rm').first()).toBeDisabled();
+    await expect(page.locator('#frozenHint')).toBeVisible();
+    // Review, agenci i logowanie są czytane dopiero przez późniejsze kroki — zostają żywe.
+    await expect(page.locator('#authLogin')).toBeEnabled();
+    await expect(page.locator('#next')).toHaveText('Save settings');
+    await expect(page.locator('#next')).toBeDisabled();
+    await page.click('#addRun');
+    await expect(page.locator('#next')).toBeEnabled();
+    await page.click('#next');
+    await expect(page.locator('#confirmTitle')).toHaveText('Save the new settings?');
+    await page.click('#confirmOk');
+    const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
+    expect(answer.codeReview).toHaveLength(3);
+    expect(answer.revision).toMatchObject({ changed: ['codeReview'], restartAt: null });
+    // Nic się nie powtarza: implementacja pracuje dalej i strona na nią wraca.
+    await expect(page.locator('#panel h2')).toContainText('Implementation');
+    const task = (await (await fetch(`${base}/api/state`)).json()).tasks[0];
+    expect(task.steps.find(s => s.id === 4).status).toBe('in_progress');
+    // Inny kierunek funkcji to nowe zadanie, więc to wyjście musi zostać dostępne.
+    await expect(page.locator('#createTask')).toBeEnabled();
+  });
+
+test('po podsumowaniu formularz jest tylko do odczytu', async ({ page }) => {
   await state({ step: 1, status: 'completed' });
-  await state({ step: 4, status: 'in_progress', activeStep: 4 });
+  await state({ step: 4, status: 'completed' });
+  await state({ step: 6, status: 'completed', activeStep: 6,
+    summary: { finalStatus: 'Gotowe', changes: [], features: [] } });
   await page.goto(base);
   await page.waitForSelector('.step[data-step="1"]');
   await page.click('.step[data-step="1"]');
   await expect(page.locator('#task')).toBeDisabled();
-  await expect(page.locator('#panel')).toContainText('requirements are frozen');
+  await expect(page.locator('#addRun')).toBeDisabled();
+  await expect(page.locator('#authLogin')).toBeDisabled();
+  await expect(page.locator('#panel')).toContainText('The pipeline has finished');
   await expect(page.locator('#next')).toHaveCount(0);
-  // Nowe zadanie to jedyne wyjście i musi zostać dostępne.
   await expect(page.locator('#createTask')).toBeEnabled();
 });
 

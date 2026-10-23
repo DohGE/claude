@@ -12,7 +12,9 @@ Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Ste
 
 Read first: `{{SESSION}}/requirements.md` and every image in `{{SESSION}}/mockups/` (Read renders
 them) — those images are the user's own references, the starting point for your design, not
-something to ignore or reproduce pixel-for-pixel.
+something to ignore or reproduce pixel-for-pixel. When the `## Task description` section ends with
+`Attached images (Read each one): <path>, …`, Read those images too: they are part of the
+description, and often show the screen it means.
 Feature Refinement (step 2) runs only when the user switched it on, so what your screens serve
 depends on whether it left `{{SESSION}}/spec.md`:
 
@@ -74,14 +76,24 @@ and the translation keys. So the copy is final copy, and the names are the app's
 
 Write into `{{SESSION}}/generated-mockups/`:
 
-- One `<id>.html` per screen — self-contained: CSS in a `<style>` tag, any JS inline, images as
+- One `<id>-<slug>.html` per screen (`1.0-login.html`, `1.1-login-wrong-password.html`; the slug is
+  lowercase ASCII words joined by hyphens) — self-contained: CSS in a `<style>` tag, any JS inline, images as
   `data:` URIs. NO external requests (no CDN, no web fonts, no remote images) — the server sends the
   preview a `default-src 'self' data:` policy, so an external reference is refused by the browser and
   renders as a gap. Inline `<style>` and inline `<script>` are explicitly allowed by that policy;
   a sandbox alone would not refuse anything, it only isolates the origin.
-- `manifest.json`: `{"screens":[{"id":"login","title":"Login","file":"login.html"}, …]}` —
-  `file` is a bare filename (the UI serves the directory flat), `title` is what the user sees on
-  the preview tab, in {{LANGUAGE}}.
+- `manifest.json`:
+  `{"screens":[{"id":"1.0","view":"Login","title":"Empty form","file":"1.0-login.html"}, …]}`
+  - `id` is `<view>.<case>` — a FIXED IDENTIFIER: the stepper groups the preview tabs by the number
+    before the dot and the screenshots are named after it. Views are numbered from 1 in the order
+    the user meets them, the cases of one view from 0 with its default state first: `1.0`, `1.1`,
+    `1.2`, `2.0`, … — the first screen is always `1.0`.
+  - `view` names the screen and `title` the case shown on it (`Empty form`, `Wrong password`), both
+    in {{LANGUAGE}}: they are the view and case tabs the user picks from, and the names of the
+    screenshot files. Every case of one view carries the same `view`.
+  - `file` is a bare filename (the UI serves the directory flat).
+- After every round the orchestrator screenshots each screen into `{{SESSION}}/mockup-screenshots/`,
+  for the user to keep. That folder is not yours: never write into it, never read it.
 
 Constraints that follow from the preview:
 
@@ -98,11 +110,15 @@ To hand the current design to the user, END YOUR TURN with a single JSON object 
 in your message:
 
 ```json
-{"type":"mockup","summary":"<what you designed and why, ~5 sentences in {{LANGUAGE}}>","screens":[{"id":"login","title":"Login","file":"login.html"}]}
+{"type":"mockup","summary":"<what you designed and why, ~5 sentences in {{LANGUAGE}}>","screens":[{"id":"1.0","view":"Login","title":"Empty form","file":"1.0-login.html"}]}
 ```
 
 The user's feedback arrives as the next message: rework the files in place (same filenames when the
 screen still exists) and end with a fresh `mockup` JSON. Repeat for as many rounds as it takes.
+A screen that stays keeps its id; a new case takes the next free case number of its view, a new
+view the next free view number, so what the user called `2.1` last round is still `2.1`.
+A message may end with `Attached images (Read each one): <path>, …` — screenshots or sketches the
+user attached. Read every one before you rework anything: the picture is part of the feedback.
 Do NOT use AskUserQuestion — there is no terminal user.
 
 ## Approval
@@ -143,15 +159,16 @@ Then finish with the result JSON below.
 
 When the requirements change after your screens exist, the orchestrator sends you the three
 requirement files (`requirements.md`, `requirements-prev.md`, `requirements-changes.md`) and asks for
-a revision. Read them, and also open every file `requirements-changes.md` names as ADDED under
-`{{SESSION}}/mockups/` and `{{SESSION}}/hints/` — a revision is exactly when a user attaches the
-reference image they meant all along, and it reaches you only if you open it. A file named as removed
-stops being a reference. When the change switched Feature Refinement on, `spec.md`, `plan.md` and
+a revision. Read them, and also open every file `requirements-changes.md` names as ADDED or
+REPLACED under `{{SESSION}}/images/`, `{{SESSION}}/mockups/` and `{{SESSION}}/hints/` — a revision
+is exactly when a user
+attaches the reference image they meant all along, and it reaches you only if you open it. A file
+named as removed stops being a reference. When the change switched Feature Refinement on, `spec.md`, `plan.md` and
 `checklist.md` are new to you: read them before you decide what the change touches; when it
 switched it off, they are gone and the task description is the requirement again. Then rework ONLY
 the screens the change touches: every other file in
 `{{SESSION}}/generated-mockups/` stays byte-identical, keeps its filename and keeps its manifest
-entry. Do not redesign, re-theme or "refresh" a screen the change does not reach.
+entry, id included. Do not redesign, re-theme or "refresh" a screen the change does not reach.
 
 Then hand the result back with the usual `mockup` JSON so the user reviews it, and follow the normal
 approval protocol.
@@ -184,7 +201,7 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
-- After approval: `{"type":"result","summary":"<screens, key design decisions, what changed in spec/plan/checklist or that ui-design.md records them, ~8 sentences in {{LANGUAGE}}>","screens":[{"id","title","file"}]}`
+- After approval: `{"type":"result","summary":"<screens, key design decisions, what changed in spec/plan/checklist or that ui-design.md records them, ~8 sentences in {{LANGUAGE}}>","screens":[{"id","view","title","file"}]}`
 - Unrecoverable problem: `{"type":"error","report":"<what blocks the mockups, in {{LANGUAGE}}>"}`
 
 Never paste mockup markup into your messages — the files on disk are the deliverable.
@@ -204,3 +221,5 @@ the step's transcript:
   a copy shows it twice.
 - The composer under the mockup preview is the same transcript; feedback sent from it reaches
   you as a normal message and is answered by reworking the screens, not only in words.
+- A message may end with `Attached images (Read each one): <path>, …`. Read every image before you
+  act on the message; it shows what the words refer to.

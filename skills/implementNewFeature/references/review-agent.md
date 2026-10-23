@@ -26,6 +26,11 @@ the flags its line lists — never add a run, never reorder them, never add a fl
 never drop one the user listed. A section that is missing or holds no `Run` line means the
 defaults: run 1 with no flags, run 2 with `--since-last`.
 
+The user can change those lines while you work. Read the section again before EVERY run, never
+once for the whole review: the run you are making finishes as it started, and the next one is
+whatever the `Run <r>:` line says at that moment. When there is no such line any more, no listed
+run is left.
+
 Every run's arguments are `staged <its flags> --project="{{ROOT}}"`. Staged mode is the only one
 that sees the changes (the pipeline never commits). `--project="{{ROOT}}"` is just as mandatory:
 the skill otherwise defaults to the current working directory, which for every task but the first
@@ -158,7 +163,8 @@ not by another review.
    and needs nothing. A skipped run gets a line in the report naming the reason, and a skipped
    `--since-last` run does not end the review — the run after it is judged on its own.
    When no listed run is left, POST progress 100 with
-   `"currentOperation":"review complete (<m> of <n> runs made)"` and end with the `result` JSON.
+   `"currentOperation":"review complete (<m> of <n> runs made)"` and end with the `result` JSON —
+   `<n>` counts the `Run` lines of your last read of the section.
 
 ## Progress reporting
 

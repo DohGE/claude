@@ -311,12 +311,11 @@ test('every SKILL.md registers the activation hook in its frontmatter', () => {
   assert.strictEqual(lm.parseArgs(['--event=activate']).event, 'activate');
 });
 
-test('the plugin registers one SubagentStart hook, pointing at this script', () => {
+test('the plugin registers one SubagentStart hook pointing at this script, next to other skills\' own', () => {
   const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
-  const groups = config.hooks.SubagentStart;
-  assert.strictEqual(groups.length, 1);
-  assert.strictEqual(groups[0].hooks.length, 1);
-  const hook = groups[0].hooks[0];
+  const own = config.hooks.SubagentStart.flatMap((group) => group.hooks).filter((h) => h.args.some((a) => a.endsWith('/lean-mode.cjs')));
+  assert.strictEqual(own.length, 1);
+  const hook = own[0];
   assert.strictEqual(hook.type, 'command');
   assert.strictEqual(hook.command, 'node');
   assert.deepStrictEqual(hook.args, ['${CLAUDE_PLUGIN_ROOT}/scripts/lean-mode.cjs', '--event=subagent']);

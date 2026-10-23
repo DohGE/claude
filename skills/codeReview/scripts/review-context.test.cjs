@@ -15,8 +15,9 @@ const { tempDir, run, commitFile, initRepo } = require('./test-helpers.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, dedupItems: true },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true },
   );
+  assert.strictEqual(rc.parseArgs(['--no-windows']).windows, false, 'windows are on unless turned off');
   assert.deepStrictEqual(
     [rc.parseArgs(['--with-rule-text']).withRuleText, rc.parseArgs(['--with-rule-text']).withChecklist],
     [true, true],
@@ -720,11 +721,62 @@ test('light files share a batch: their bundles name the batch and the part, the 
   const cross = fs.readFileSync(t0.crossBundlePath, 'utf8');
   assert.ok(cross.includes(`- część: ${report}.part04.md\n`) && cross.includes(`${report}.part05.md`));
   assert.ok(cross.includes('PR Problem'), 'an HTML run writes the PR fields');
+  assert.ok(cross.includes(`## Pliki celu\n\nTreść i diff pliku, w \`${t0.workDir}/\`, o ile nazwa nie zaczyna się od \`/\` albo litery dysku:\n- 1 src/a.ts: ${a.contentPath}\n- 2 src/b.ts: ${b.contentPath}\n- 3 src/c.ts: ${c.contentPath}\n`), 'the cross pass opens the files from this list');
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(t0.factsPath, 'utf8')).rules, { severity: {}, sameAs: {}, prepared: {}, noSpec: [] });
 
   const alone = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 13), batch: false });
   assert.deepStrictEqual(alone.targets[0].batches, []);
   assert.ok(fs.readFileSync(alone.targets[0].files[0].bundlePath, 'utf8').includes('## Dalej'), 'without batching every bundle points on');
+});
+
+test('a target too long for one conversation gets windows: a brief each, and a stop in the last bundle of each', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
+  for (let n = 1; n <= 8; n++) commitFile(dir, `src/f${n}.ts`, body(n), `f${n}`);
+  const skillDir = makeSkillDir(t, [FACT_KIND]);
+  const ctx = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const t0 = ctx.targets[0];
+  assert.deepStrictEqual(t0.batches, [], 'every 70-line file walks alone');
+  assert.deepStrictEqual(t0.windows.map((w) => w.files), [[1, 4], [5, 8]]);
+  assert.deepStrictEqual(t0.windows.map((w) => w.brief), [`${t0.workDir}/window01.md`, `${t0.workDir}/window02.md`]);
+  const bundle = (k) => fs.readFileSync(t0.files[k - 1].bundlePath, 'utf8');
+  assert.ok(!bundle(3).includes('Koniec okna'), 'a bundle inside a window points on as before');
+  assert.ok(bundle(3).includes('## Dalej\n\nZ zapisem części tej partii'));
+  assert.ok(bundle(4).includes('## Dalej\n\nKoniec okna (1-4):\n- walker okna: zapisz części tej partii, niczego więcej nie czytaj i odpowiedz jedną linią `WINDOW DONE 1-4`;\n'));
+  assert.ok(bundle(4).includes(`  - ${t0.files[4].bundlePath}\n`), 'the lines for a reviewer walking alone name the next window\'s first Reads');
+  assert.ok(bundle(8).includes('Koniec okna (5-8):') && bundle(8).includes(`  - ${t0.crossBundlePath}\n`), 'the last window ends at the cross-file pass, which stays the main conversation\'s');
+  const brief = fs.readFileSync(t0.windows[1].brief, 'utf8');
+  assert.ok(brief.startsWith('# Window 2 of 2: files 5-8\n'), brief);
+  assert.match(brief, /1\. Read \S*SKILL\.md with offset \d+ and limit \d+ - Step 3/);
+  const settings = JSON.parse(brief.slice(brief.indexOf('```json') + 7, brief.lastIndexOf('```')));
+  assert.strictEqual(settings.reportPath, t0.reportPath);
+  assert.strictEqual(settings.workDir, t0.workDir);
+  assert.strictEqual(settings.htmlReportPath, t0.htmlReportPath);
+  assert.strictEqual(settings.commands.grep, t0.commands.grep);
+  for (const k of [5, 6, 7, 8]) {
+    const file = t0.files[k - 1];
+    assert.ok(brief.includes(`- file ${k}: ${file.path}; part `), `file ${k} is listed`);
+    assert.ok(brief.includes(`- ${file.bundlePath}\n- ${file.contentPath}\n`), `the Reads of file ${k}`);
+  }
+  assert.ok(!brief.includes(t0.files[3].bundlePath), 'a file of another window is not in the brief');
+  assert.deepStrictEqual(t0.start, [t0.files[0].bundlePath, t0.files[0].contentPath], 'the first Reads stay those of the first batch');
+
+  const alone = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 13), windows: false });
+  assert.deepStrictEqual(alone.targets[0].windows, []);
+  assert.ok(!fs.readFileSync(alone.targets[0].files[3].bundlePath, 'utf8').includes('Koniec okna'), 'without windows nothing stops');
+  assert.ok(!fs.existsSync(`${alone.targets[0].workDir}/window01.md`));
+  assert.deepStrictEqual(rc.parseArgs(['--no-windows']).windows, false);
+  assert.deepStrictEqual(rc.parseArgs([]).windows, true);
+});
+
+test('a target that one conversation walks without a compaction has no windows', (t) => {
+  const dir = makeRepo(t);
+  for (let n = 1; n <= 4; n++) commitFile(dir, `src/f${n}.ts`, `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`, `f${n}`);
+  const ctx = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  assert.deepStrictEqual(ctx.targets[0].windows, []);
+  assert.ok(!fs.readFileSync(ctx.targets[0].files[3].bundlePath, 'utf8').includes('Koniec okna'));
 });
 
 test('a branch review takes its facts from the branch, not from the working tree', (t) => {

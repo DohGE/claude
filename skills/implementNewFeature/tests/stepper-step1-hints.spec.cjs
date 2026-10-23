@@ -47,8 +47,34 @@ test('opis pojawia się dopiero po wgraniu pliku i znika po jego usunięciu', as
   await expect(page.locator('#hintsNote')).toBeHidden();
   await page.setInputFiles('#hints', [file('inspiracja.png')]);
   await expect(page.locator('#hintsNote')).toBeVisible();
-  await page.setInputFiles('#hints', []);
+  await page.click('#picked-hints .rm');
   await expect(page.locator('#hintsNote')).toBeHidden();
+});
+
+test('kolejny wybór dokłada pliki, ta sama nazwa podmienia, a × usuwa', async ({ page }) => {
+  await page.setInputFiles('#hints', [file('ekran-a.png')]);
+  await page.setInputFiles('#hints', [file('ekran-b.png'), file('ekran-a.png')]);
+  // Jedna pozycja na nazwę, każdy obrazek z podglądem.
+  await expect(page.locator('#picked-hints li')).toHaveCount(2);
+  await expect(page.locator('#picked-hints img')).toHaveCount(2);
+  await expect.poll(() => page.locator('#picked-hints img').first()
+    .evaluate(img => img.naturalWidth)).toBe(1);
+  await page.click('#picked-hints .rm[aria-label="Remove ekran-b.png"]');
+  await expect(page.locator('#picked-hints li')).toHaveCount(1);
+  await submit(page);
+  expect((await takeAnswer()).hints).toEqual(['ekran-a.png']);
+  expect(fs.readdirSync(path.join(dir, 'tasks', 't1', 'hints'))).toEqual(['ekran-a.png']);
+});
+
+test('wgrany obrazek ma podgląd serwowany przez stepper', async ({ page }) => {
+  await page.setInputFiles('#hints', [file('ekran-a.png')]);
+  await submit(page);
+  await takeAnswer();
+  await page.click('.step[data-step="1"]');
+  await expect(page.locator('#files-hints img')).toHaveCount(1);
+  await expect.poll(() => page.locator('#files-hints img')
+    .evaluate(img => img.naturalWidth)).toBe(1);
+  await expect(page.locator('#picked-hints li')).toHaveCount(0);
 });
 
 test('pliki i opis trafiają do odpowiedzi kroku 1 oraz na dysk', async ({ page }) => {
