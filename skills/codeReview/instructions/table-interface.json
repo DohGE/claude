@@ -85,7 +85,8 @@
           "facts": [
             "area-routes-twice"
           ],
-          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
+          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?",
+          "answer": "area-layout"
         },
         {
           "id": "architecture#6",

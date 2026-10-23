@@ -64,7 +64,7 @@ function isSkippedPath(filePath) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, dedupItems: true };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true };
   const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
@@ -78,6 +78,9 @@ function parseArgs(argv) {
     if (arg === '--light') { args.light = true; continue; }
     // Every file walked in a response of its own, light ones included (review-bundle.cjs batches).
     if (arg === '--no-batch') { args.batch = false; continue; }
+    // The target is walked by the conversation that runs the review, not by a sub-agent per
+    // window (review-bundle.cjs planWindows): for a session that cannot dispatch one.
+    if (arg === '--no-windows') { args.windows = false; continue; }
     // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), by
     // default; `--dedup-items` is the old opt-in, kept so a caller that still passes it works.
     if (arg === '--dedup-items') { args.dedupItems = true; continue; }
@@ -96,7 +99,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --light, --no-batch, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --light, --no-batch, --no-windows, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -1510,15 +1513,22 @@ function buildContext(options) {
     const n = target.files.length;
     const done = new Set(target.resume ? target.resume.doneFiles : []);
     const pending = bundles.filter((b) => !done.has(b.file.path));
+    // The bundle as rendered below, less its `partia:` and `## Dalej` lines, and the Reads beside it.
+    const charsOf = new Map(pending.map((b) => [b.number, b.readChars + reviewBundle.renderBundle({ ...b.render, lineCount: b.lineCount }).length]));
     const batches = options.batch === false
       ? pending.map((b) => [b.number])
       : reviewBundle.planBatches(pending.map((b) => ({
         number: b.number,
         lines: b.lineCount,
         items: b.file.checklistTotal,
-        // The bundle as rendered below, less its `partia:` and `## Dalej` lines.
-        chars: b.readChars + reviewBundle.renderBundle({ ...b.render, lineCount: b.lineCount }).length,
+        chars: charsOf.get(b.number),
       })));
+    // The windows - runs of whole batches, one sub-agent each - and the first and last file of each.
+    // A resume with drafts of refused parts is walked by the conversation that promotes them.
+    const drafts = target.resume && Array.isArray(target.resume.drafts) && target.resume.drafts.length > 0;
+    const windows = options.windows === false || drafts ? [] : reviewBundle.planWindows(batches, (number) => reviewBundle.walkTokens(charsOf.get(number)));
+    const windowSpans = windows.map((window) => [window[0][0], window[window.length - 1][window[window.length - 1].length - 1]]);
+    const windowEnds = new Map(windowSpans.map(([first, last]) => [last, { first, last }]));
     const byNumber = new Map(bundles.map((b) => [b.number, b]));
     const crossPartPath = reviewBundle.partPathOf(target.reportPath, n + 1, n);
     const batchOf = new Map();
@@ -1534,9 +1544,35 @@ function buildContext(options) {
         lineCount: b.lineCount,
         partPath: reviewBundle.partPathOf(target.reportPath, b.number, n),
         batch: at && at.batch.length > 1 ? at.batch.map((number) => byNumber.get(number).file.path) : null,
-        next: last ? reviewBundle.renderNext({ nextFiles: at.next, crossBundlePath: target.crossBundlePath, crossPartPath }) : null,
+        next: last ? reviewBundle.renderNext({ nextFiles: at.next, crossBundlePath: target.crossBundlePath, crossPartPath, window: windowEnds.get(b.number) || null }) : null,
       })]);
     }
+    // A window's brief is the one thing its sub-agent is sent: the main conversation passes the path.
+    const walk = windows.length > 0 ? require('./review-hooks.cjs').walkLines() : null;
+    const settings = {
+      reportPath: target.reportPath,
+      htmlReportPath: target.htmlReportPath,
+      workDir: target.workDir,
+      withChecklist: target.withChecklist,
+      withRuleText: target.withRuleText,
+      light: target.light,
+      dedupItems: target.dedupItems,
+      commands: { grep: target.commands.grep },
+    };
+    target.windows = windows.map((window, k) => {
+      const brief = `${target.workDir}/${reviewBundle.windowBriefName(k + 1)}`;
+      writes.push([brief, reviewBundle.renderWindowBrief({
+        index: k + 1,
+        total: windows.length,
+        skill: walk,
+        target: settings,
+        batches: window.map((batch) => batch.map((number) => {
+          const { file } = byNumber.get(number);
+          return { number, path: file.path, partPath: reviewBundle.partPathOf(target.reportPath, number, n), reads: reviewBundle.readsOf([file]) };
+        })),
+      })]);
+      return { files: windowSpans[k], brief };
+    });
     target.batches = batches.filter((batch) => batch.length > 1).map((batch) => [batch[0], batch[batch.length - 1]]);
     target.start = batches.length > 0
       ? reviewBundle.readsOf(batches[0].map((number) => byNumber.get(number).file))
@@ -1548,6 +1584,8 @@ function buildContext(options) {
       crossPartPath,
       closingPartPath: reviewBundle.partPathOf(target.reportPath, n + 2, n),
       withPr: !!target.htmlReportPath,
+      files: target.files,
+      workDir: target.workDir,
     });
     pendingWork.set(target, writes);
   }
@@ -1756,6 +1794,7 @@ function writeContext(context) {
       workDir: t.workDir,
       crossBundlePath: t.crossBundlePath,
       batches: (t.batches || []).length,
+      windows: t.windows || [],
       withChecklist: t.withChecklist,
       withRuleText: t.withRuleText,
       light: t.light,

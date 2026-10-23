@@ -59,7 +59,10 @@
         },
         {
           "id": "models#13",
-          "text": "API request/response interfaces mirror the endpoint exactly: the field names and the casing the API really sends (`snake_case` stays `snake_case`, never re-spelled to match the project style); a payload, its response and item types for one endpoint may share a file; literal-type fields narrow unions; derived types (`Pick`/`Omit`/array aliases) of neighbouring API interfaces stay in the same `.interface.ts` file."
+          "text": "API request/response interfaces mirror the endpoint exactly: the field names and the casing the API really sends (`snake_case` stays `snake_case`, never re-spelled to match the project style); a payload, its response and item types for one endpoint may share a file; literal-type fields narrow unions; derived types (`Pick`/`Omit`/array aliases) of neighbouring API interfaces stay in the same `.interface.ts` file.",
+          "facts": [
+            "dto-casing-mixed"
+          ]
         },
         {
           "id": "models#14",
@@ -95,7 +98,8 @@
           "facts": [
             "area-routes-twice"
           ],
-          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
+          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?",
+          "answer": "area-layout"
         },
         {
           "id": "architecture#6",

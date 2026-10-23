@@ -63,7 +63,42 @@ const MAX_LOG = 20;
 // high enough that no real run reaches it, low enough that a looping agent cannot
 // grow the state document without bound.
 const MAX_CHAT = 200;
-const UPLOAD_CATEGORIES = ['mockups', 'contracts', 'hints'];
+// `images` are the pictures attached to the task description: images only, and read with
+// the description by every agent that reads it.
+const UPLOAD_CATEGORIES = ['mockups', 'contracts', 'hints', 'images'];
+const IMAGES = 'images';
+// Images the user attaches to a correction or an answer on steps 2, 3 and 8. Kept apart
+// from the form's own files: they belong to one message, never to the requirements, so
+// they neither reach requirements.md nor count as a change to the form.
+const ATTACHMENTS = 'attachments';
+const MAX_ATTACHMENTS = 20;
+// What the form and the composers preview as a thumbnail. An SVG can carry script; the
+// preview route sends every image under a policy that runs none.
+const IMAGE_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml'
+};
+const isImage = name => !!IMAGE_TYPES[path.extname(String(name)).toLowerCase()];
+// The mockup step's screenshots, written by scripts/screenshot-mockups.cjs next to the
+// mockups themselves. The only folder the page may ask the server to open.
+const SCREENSHOT_DIR = 'mockup-screenshots';
+const OPEN_FOLDERS = [SCREENSHOT_DIR];
+const IMPLEMENTATION_STEP = 4;
+// The route before implementation, in the order the stepper shows it. Ids are fixed, so
+// Story Description (8) runs before Implementation (4).
+const PRE_STEPS = [REFINEMENT_STEP, MOCKUP_STEP, STORY_STEP];
+// A resubmitted form is diffed in named groups. A FLOW group is something a step before
+// implementation reads, so changing it repeats that work; a SETTING is only read when a
+// later step starts or a review run begins, so changing it alone repeats nothing.
+// FIXED IDENTIFIERS: SKILL.md and the orchestrator read these names off `revision.changed`.
+const FLOW_GROUPS = ['description', 'branch', 'steps', 'materials', 'mockups', 'contracts'];
+const SETTING_GROUPS = ['codeReview', 'agents', 'authorization'];
+const FILE_GROUP = { hints: 'materials', mockups: 'mockups', contracts: 'contracts', images: 'description' };
+// What each pre-implementation step's output is read by. Approved mockups also write the
+// ## UI design section into the refinement's files, so a refinement that ran before them
+// reads them too - but only once they were approved.
+const READERS = { [REFINEMENT_STEP]: [MOCKUP_STEP, STORY_STEP], [MOCKUP_STEP]: [REFINEMENT_STEP, STORY_STEP],
+  [STORY_STEP]: [] };
 // Everything POST /api/state accepts. A body carrying anything else used to be
 // answered 200 with nothing applied: an agent that wrote `currentOperationn`
 // saw success, the panel stopped tracking its run, and the first sign of it was
@@ -88,7 +123,12 @@ function taskState(id) {
     })),
     activeStep: 1, question: null, questionSeq: 0, mockupSeq: 0, reviewSeq: 0,
     reviewSummary: null, mockupReview: null, summary: null,
-    step1: null, step1Submitted: false, authSaved: false
+    step1: null, step1Submitted: false, authSaved: false,
+    // What changed on disk since the last submission: { <category>: { <name>: added |
+    // replaced | removed }, auth: true }. A file is uploaded or removed before the form is
+    // sent, so by then the stored list already follows the disk and the diff alone would
+    // miss it.
+    step1Touched: {}
   };
 }
 
@@ -101,12 +141,21 @@ function pushChat(step, msg) {
   // retry, and its own memory is summarised away on a long run - so the line has to be
   // recoverable from here, and recovering it means knowing which side of the failure it
   // fell on. Log entries have carried a time all along; these now do too.
-  step.chat.push({
+  const line = {
     role: msg.role === 'user' ? 'user' : 'agent',
     text: text(msg.text, MAX_CHAT_TEXT),
     time: new Date().toISOString(),
-  });
+  };
+  // Bare names under tasks/<id>/attachments/; the page shows them as thumbnails.
+  if (Array.isArray(msg.attachments) && msg.attachments.length) line.attachments = msg.attachments;
+  step.chat.push(line);
   if (step.chat.length > MAX_CHAT) step.chat.splice(0, step.chat.length - MAX_CHAT);
+}
+
+function pushLog(step, entry) {
+  if (!Array.isArray(step.log)) step.log = [];
+  step.log.push({ time: new Date().toISOString(), text: text(entry) });
+  if (step.log.length > MAX_LOG) step.log.splice(0, step.log.length - MAX_LOG);
 }
 
 function initialState() {
@@ -261,6 +310,7 @@ function formOf(body, models, reviewFlags) {
     contractsText: text(body.contractsText),
     hintsNote: text(body.hintsNote),
     mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
+    images: names(body.images).filter(isImage),
     authProvided: !!body.authProvided,
     // A form from before the switch existed ran the refinement, so only an explicit
     // false turns it off.
@@ -281,6 +331,104 @@ function applySwitches(task) {
     const step = (task.steps || []).find(s => s.id === id);
     if (step) step.enabled = on;
   }
+}
+
+const SWITCHES = { [REFINEMENT_STEP]: 'refinement', [MOCKUP_STEP]: 'generateMockups',
+  [STORY_STEP]: 'storyDescription' };
+const ROUTE_ORDER = [...PRE_STEPS, IMPLEMENTATION_STEP];
+
+// What a resubmitted form changed against the last submitted one, and the earliest step
+// whose work that makes stale. `restartAt` is null when nothing that already ran read what
+// changed: a step the route has not reached yet reads the new form when it starts anyway.
+function revisionOf(task, before, after) {
+  const touched = task.step1Touched || {};
+  const files = [];
+  for (const cat of UPLOAD_CATEGORIES) {
+    const marks = { ...(touched[cat] || {}) };
+    // A form stored before a category existed has no list for it.
+    const was = before[cat] || [];
+    const now = after[cat] || [];
+    for (const n of now) if (!was.includes(n) && !marks[n]) marks[n] = 'added';
+    for (const n of was) if (!now.includes(n)) marks[n] = 'removed';
+    for (const [name, change] of Object.entries(marks)) files.push({ category: cat, name, change });
+  }
+  const on = (form, id) => !!form[SWITCHES[id]];
+  const switchedOn = PRE_STEPS.filter(id => on(after, id) && !on(before, id));
+  const switchedOff = PRE_STEPS.filter(id => !on(after, id) && on(before, id));
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const groups = new Set(files.map(f => FILE_GROUP[f.category]));
+  if (before.taskDescription !== after.taskDescription) groups.add('description');
+  if (before.branch !== after.branch) groups.add('branch');
+  if (switchedOn.length || switchedOff.length) groups.add('steps');
+  if (before.hintsNote !== after.hintsNote) groups.add('materials');
+  if (before.contractsText !== after.contractsText) groups.add('contracts');
+  if (!same(before.codeReview, after.codeReview)) groups.add('codeReview');
+  if (!same(before.agents, after.agents)) groups.add('agents');
+  if (before.authProvided !== after.authProvided || touched.auth) groups.add('authorization');
+  const changed = [...FLOW_GROUPS, ...SETTING_GROUPS].filter(g => groups.has(g));
+
+  const status = id => ((task.steps || []).find(s => s.id === id) || {}).status;
+  const started = id => !!status(id) && status(id) !== 'waiting';
+  const route = [...PRE_STEPS.filter(id => on(after, id)), IMPLEMENTATION_STEP];
+  const candidates = [];
+  // A change to what the steps read repeats the first of them that already ran. The branch
+  // is not among it: nothing before implementation reads it.
+  if (['description', 'materials', 'mockups', 'contracts'].some(g => groups.has(g))) {
+    const first = route.find(id => id !== IMPLEMENTATION_STEP && started(id));
+    if (first) candidates.push(first);
+  }
+  // A step switched on runs where the route reaches it - unless a step after it already
+  // ran without it, which then has to go round again behind it.
+  for (const id of switchedOn) {
+    if (route.slice(route.indexOf(id) + 1).some(started)) candidates.push(id);
+  }
+  // A step switched off takes its output with it, so whatever already read that output
+  // repeats. The one the pipeline is sitting on hands over to the next step of the route.
+  for (const id of switchedOff) {
+    candidates.push(...READERS[id].filter(r => route.includes(r) && started(r)
+      && (id !== MOCKUP_STEP || status(MOCKUP_STEP) === 'completed' || r !== REFINEMENT_STEP)));
+    if (task.activeStep === id) {
+      candidates.push(route.find(r => ROUTE_ORDER.indexOf(r) > ROUTE_ORDER.indexOf(id)));
+    }
+  }
+  const restartAt = ROUTE_ORDER.find(id => candidates.includes(id)) || null;
+  return { changed, restartAt, switchedOn, switchedOff, files };
+}
+
+// The pipeline goes back to `restartAt` the moment the form is accepted, before the
+// orchestrator has read the answer: the page sends the user there and has to find that
+// step working, and every step after it not yet reached, exactly as on the first run.
+function restartFrom(task, revision) {
+  const at = ROUTE_ORDER.indexOf(revision.restartAt);
+  for (const step of task.steps || []) {
+    const i = ROUTE_ORDER.indexOf(step.id);
+    if ((i > at && step.status !== 'waiting') || revision.switchedOff.includes(step.id)) {
+      Object.assign(step, { status: 'waiting', progress: null, currentOperation: '', report: null });
+    }
+  }
+  const step = (task.steps || []).find(s => s.id === revision.restartAt);
+  if (!step) return;
+  Object.assign(step, { status: 'in_progress', progress: 5, report: null,
+    currentOperation: step.id === IMPLEMENTATION_STEP ? 'Starting implementation'
+      : 'Requirements changed - repeating this step' });
+  pushLog(step, `Requirements changed (${revision.changed.join(', ')}) - the pipeline continues from here`);
+  task.activeStep = step.id;
+  // A question or a gate left standing would keep the old round on screen and take an
+  // answer for a round that no longer exists.
+  task.question = null;
+  task.questionSeq = (task.questionSeq || 0) + 1;
+  task.reviewSummary = null;
+  task.mockupReview = null;
+}
+
+// Best effort and detached: the folder opens in the user's file manager on this machine,
+// which is the machine the server runs on.
+function openInFileManager(dir) {
+  const [cmd, args] = process.platform === 'win32' ? ['explorer', [dir]]
+    : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
+  const child = require('child_process').spawn(cmd, args, { detached: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
 }
 
 // Clients are LLM sub-agents; despite instructions some post through
@@ -405,6 +553,40 @@ function createApp(sessionDir, opts = {}) {
   // send it to `undefined`. Both are silent - the agent sees 200 either way.
   const findStep = (task, id) => (task.steps || []).find(s => s.id === id);
   const taskDir = id => path.join(sessionDir, 'tasks', id);
+  const openFolder = opts.openFolder || openInFileManager;
+  // Once implementation has started, what it was built from stays put: only the settings
+  // a later step reads when it starts - the review runs, the agents, the E2E login - may
+  // still change. Once the summary exists, nothing does.
+  const implementing = task => {
+    const step = findStep(task, IMPLEMENTATION_STEP);
+    return !!step && step.status !== 'waiting';
+  };
+  const flowFrozen = task => !!task.summary || (task.step1Submitted && implementing(task));
+  const FROZEN = 'implementation has started - only the code review, agent and authorization '
+    + 'settings can still change';
+
+  // Uploads and removals happen before the form is sent, so they are recorded as they
+  // happen and read when it arrives. The first submission has nothing to differ from.
+  function touch(task, category, name, change) {
+    if (!task.step1Submitted) return;
+    const touched = task.step1Touched || (task.step1Touched = {});
+    const marks = touched[category] || (touched[category] = {});
+    const was = marks[name];
+    if (change === 'removed') {
+      if (was === 'added') delete marks[name];
+      else marks[name] = 'removed';
+    } else {
+      marks[name] = was === 'added' ? 'added' : was === 'removed' ? 'replaced' : change;
+    }
+  }
+
+  // The images a message names, as stored under tasks/<id>/attachments/: names the page
+  // never uploaded are dropped rather than passed on as paths to nothing.
+  function attachmentsOf(task, raw) {
+    const dir = path.join(taskDir(task.id), ATTACHMENTS);
+    return names(raw).filter(n => isImage(n) && fs.existsSync(path.join(dir, n)))
+      .slice(0, MAX_ATTACHMENTS);
+  }
 
   function copyCategory(fromId, toId, category) {
     const from = path.join(taskDir(fromId), category);
@@ -464,10 +646,7 @@ function createApp(sessionDir, opts = {}) {
       // turn that null into an empty string.
       if (body.report !== undefined) step.report = body.report == null ? null : text(body.report);
       if (body.chat) pushChat(step, body.chat);
-      if (body.logEntry) {
-        step.log.push({ time: new Date().toISOString(), text: text(body.logEntry) });
-        if (step.log.length > MAX_LOG) step.log.splice(0, step.log.length - MAX_LOG);
-      }
+      if (body.logEntry) pushLog(step, body.logEntry);
     }
     if (body.activeStep !== undefined) task.activeStep = body.activeStep;
     if (body.branch !== undefined) task.branch = String(body.branch);
@@ -615,26 +794,59 @@ function createApp(sessionDir, opts = {}) {
         const task = findTask(body.taskId);
         if (!task) return sendJson(res, 400, { error: 'unknown task' });
         if (body.kind === 'step1') {
+          if (task.summary) {
+            return sendJson(res, 409, { error: 'the task is finished - its requirements can no longer change' });
+          }
           // The form is re-rendered from this on a revisit. Only the form's own
           // fields are kept: the whole state document is persisted on every write
           // and re-sent to the browser once a second, so anything else a client
           // sends would be paid for on every tick. Credentials never pass through
           // here — they go to /api/auth and only a flag comes back in the answer.
-          task.step1 = form(body);
+          const next = form(body);
+          // A resubmission is a revision: what changed, and where the pipeline goes back to.
+          const revision = task.step1Submitted && task.step1 ? revisionOf(task, task.step1, next) : null;
+          const flow = revision ? revision.changed.filter(g => FLOW_GROUPS.includes(g)) : [];
+          if (flow.length && implementing(task)) {
+            return sendJson(res, 409, { error: `${FROZEN} (changed: ${flow.join(', ')})` });
+          }
+          task.step1 = next;
           task.step1Submitted = true;
-          task.branch = task.step1.branch;
+          task.step1Touched = {};
+          if (!revision || revision.changed.includes('branch')) task.branch = next.branch;
           applySwitches(task);
+          if (revision && revision.restartAt) restartFrom(task, revision);
           persist();
           // The orchestrator gets the form as stored, not as sent: requirements.md is
           // written from it, and only the stored one has the description merged and the
           // review flags checked against what codeReview takes.
-          pushAnswer({ kind: 'step1', ...task.step1, taskId: task.id });
+          pushAnswer({ kind: 'step1', ...task.step1, ...(revision ? { revision } : {}), taskId: task.id });
+          return sendJson(res, 200, revision ? { ok: true, revision } : { ok: true });
+        }
+        // The Stop button. The step is failed here and now, so the page shows its failure
+        // gate at once; the orchestrator stops the agent when the answer reaches it.
+        if (body.kind === 'stop') {
+          const step = findStep(task, Number(body.step));
+          if (!step || !AGENT_STEPS.includes(step.id)) return sendJson(res, 400, { error: 'unknown step' });
+          if (step.status !== 'in_progress') {
+            return sendJson(res, 409, { error: `step ${step.id} is not running` });
+          }
+          Object.assign(step, { status: 'failed', report: 'Stopped by the user.', currentOperation: 'Stopped' });
+          pushLog(step, 'Stopped by the user');
+          if (task.activeStep === step.id && task.question) {
+            task.question = null;
+            task.questionSeq = (task.questionSeq || 0) + 1;
+          }
+          if (step.id === REFINEMENT_STEP || step.id === STORY_STEP) task.reviewSummary = null;
+          if (step.id === MOCKUP_STEP) task.mockupReview = null;
+          persist();
+          pushAnswer({ kind: 'stop', step: step.id, taskId: task.id });
           return sendJson(res, 200, { ok: true });
         }
+        const attached = attachmentsOf(task, body.attachments);
         if (body.kind === 'mockup' && body.decision === 'feedback') {
           const step = findStep(task, MOCKUP_STEP);
           if (!step) return sendJson(res, 400, { error: `unknown step ${MOCKUP_STEP}` });
-          pushChat(step, { role: 'user', text: body.text });
+          pushChat(step, { role: 'user', text: body.text, attachments: attached });
           persist();
         }
         // A message typed on a step that has no gate of its own: it goes to that step's
@@ -643,10 +855,17 @@ function createApp(sessionDir, opts = {}) {
         if (body.kind === 'message') {
           const step = findStep(task, Number(body.step));
           if (!step) return sendJson(res, 400, { error: 'unknown step' });
-          pushChat(step, { role: 'user', text: body.text });
+          pushChat(step, { role: 'user', text: body.text, attachments: attached });
           persist();
         }
-        pushAnswer({ ...body, taskId: task.id });
+        // The transcript keeps bare names for the thumbnails; the orchestrator gets the
+        // absolute paths, which is what the agent it forwards them to can Read.
+        const answer = { ...body, taskId: task.id };
+        delete answer.attachments;
+        if (attached.length) {
+          answer.attachments = attached.map(n => path.join(taskDir(task.id), ATTACHMENTS, n));
+        }
+        pushAnswer(answer);
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'GET' && url.pathname === '/api/answer') {
@@ -664,7 +883,7 @@ function createApp(sessionDir, opts = {}) {
         if (body.copyFrom && !src) return sendJson(res, 400, { error: 'unknown task' });
         const task = taskState(`t${state.nextTaskId++}`);
         const v = body.values || {};
-        const copied = { mockups: [], contracts: [], hints: [] };
+        const copied = Object.fromEntries(UPLOAD_CATEGORIES.map(cat => [cat, []]));
         if (src) {
           for (const cat of UPLOAD_CATEGORIES) copied[cat] = copyCategory(src.id, task.id, cat);
           const srcAuth = path.join(taskDir(src.id), 'auth.json');
@@ -708,16 +927,36 @@ function createApp(sessionDir, opts = {}) {
         const body = JSON.parse(await readBody(req, res) || '{}');
         const task = findTask(body.taskId);
         if (!task) return sendJson(res, 400, { error: 'unknown task' });
-        if (!UPLOAD_CATEGORIES.includes(body.category)) {
+        const attachment = body.category === ATTACHMENTS;
+        if (!attachment && !UPLOAD_CATEGORIES.includes(body.category)) {
           return sendJson(res, 400, { error: 'bad category' });
         }
         const name = safeName(body.filename);
         if (!name) return sendJson(res, 400, { error: 'bad filename' });
+        if ((attachment || body.category === IMAGES) && !isImage(name)) {
+          return sendJson(res, 400, { error: `${body.category} are images only` });
+        }
+        if (!attachment && flowFrozen(task)) return sendJson(res, 409, { error: FROZEN });
         const destDir = path.join(taskDir(task.id), body.category);
         fs.mkdirSync(destDir, { recursive: true });
+        const data = Buffer.from(String(body.dataBase64 || ''), 'base64');
+        if (attachment) {
+          // Every message keeps its own copy: two screenshots called image.png, sent a
+          // round apart, must not leave the first message pointing at the second picture.
+          let n = 1;
+          while (fs.existsSync(path.join(destDir, `${n}-${name}`))) n++;
+          const stored = `${n}-${name}`;
+          fs.writeFileSync(path.join(destDir, stored), data);
+          return sendJson(res, 200, { ok: true, path: path.join(destDir, stored), name: stored });
+        }
         const dest = path.join(destDir, name);
-        fs.writeFileSync(dest, Buffer.from(String(body.dataBase64 || ''), 'base64'));
-        return sendJson(res, 200, { ok: true, path: dest });
+        let previous = null;
+        try { previous = fs.readFileSync(dest); } catch { /* a new file */ }
+        fs.writeFileSync(dest, data);
+        // The same file picked again is no change; the same name with new bytes is.
+        if (!previous || !previous.equals(data)) touch(task, body.category, name, previous ? 'replaced' : 'added');
+        persist();
+        return sendJson(res, 200, { ok: true, path: dest, name });
       }
       if (req.method === 'POST' && url.pathname === '/api/upload/remove') {
         const body = JSON.parse(await readBody(req, res) || '{}');
@@ -728,15 +967,19 @@ function createApp(sessionDir, opts = {}) {
         }
         const name = safeName(body.filename);
         if (!name) return sendJson(res, 400, { error: 'bad filename' });
+        if (flowFrozen(task)) return sendJson(res, 409, { error: FROZEN });
+        const file = path.join(taskDir(task.id), body.category, name);
+        const existed = fs.existsSync(file);
         try {
-          fs.rmSync(path.join(taskDir(task.id), body.category, name), { force: true });
+          fs.rmSync(file, { force: true });
         } catch {}
         // The form lists files from step1, so the record must follow the disk.
         const listed = task.step1 && task.step1[body.category];
-        if (Array.isArray(listed)) {
-          task.step1[body.category] = listed.filter(n => n !== name);
-          persist();
+        if (existed || (Array.isArray(listed) && listed.includes(name))) {
+          touch(task, body.category, name, 'removed');
         }
+        if (Array.isArray(listed)) task.step1[body.category] = listed.filter(n => n !== name);
+        persist();
         return sendJson(res, 200, { ok: true });
       }
       if (req.method === 'POST' && url.pathname === '/api/auth') {
@@ -751,8 +994,16 @@ function createApp(sessionDir, opts = {}) {
         fs.mkdirSync(taskDir(task.id), { recursive: true });
         // Write-only secret: no GET counterpart, so credentials never travel
         // back over HTTP; agents read the file straight from disk.
-        fs.writeFileSync(path.join(taskDir(task.id), 'auth.json'),
-          JSON.stringify({ login, password }), { mode: 0o600 });
+        const authFile = path.join(taskDir(task.id), 'auth.json');
+        const secret = JSON.stringify({ login, password });
+        let previous = null;
+        try { previous = fs.readFileSync(authFile, 'utf8'); } catch { /* none yet */ }
+        fs.writeFileSync(authFile, secret, { mode: 0o600 });
+        // Remembered credentials are sent again with every submission; only new ones are
+        // a change. The flag says THAT they changed - never what they are.
+        if (task.step1Submitted && previous !== secret) {
+          task.step1Touched = { ...(task.step1Touched || {}), auth: true };
+        }
         task.authSaved = true;
         persist();
         return sendJson(res, 200, { ok: true });
@@ -864,6 +1115,52 @@ function createApp(sessionDir, opts = {}) {
         });
         return res.end(data);
       }
+      if (req.method === 'GET' && url.pathname.startsWith('/uploads/')) {
+        // Thumbnails of the images uploaded with the form or attached to a message: only
+        // <taskId>/<category>/<bare image name>, so the route never reaches auth.json or
+        // leaves the task dir.
+        let parts;
+        try {
+          parts = decodeURIComponent(url.pathname.slice('/uploads/'.length)).replace(/\\/g, '/').split('/');
+        } catch (_e) {
+          return sendJson(res, 400, { error: 'bad path' });
+        }
+        const [id, category, name = ''] = parts;
+        const type = IMAGE_TYPES[path.extname(name).toLowerCase()];
+        if (parts.length !== 3 || !type || !findTask(id) || name.startsWith('.') || safeName(name) !== name
+          || ![...UPLOAD_CATEGORIES, ATTACHMENTS].includes(category)) {
+          return sendJson(res, 404, { error: 'not found' });
+        }
+        let data;
+        try {
+          data = fs.readFileSync(path.join(taskDir(id), category, name));
+        } catch (_e) {
+          return sendJson(res, 404, { error: 'not found' });
+        }
+        // An uploaded SVG opened on its own would otherwise run whatever script it holds
+        // on this origin, next to the API.
+        res.writeHead(200, {
+          'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        });
+        return res.end(data);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/open-folder') {
+        const body = JSON.parse(await readBody(req, res) || '{}');
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        if (!OPEN_FOLDERS.includes(body.folder)) return sendJson(res, 400, { error: 'bad folder' });
+        const dir = path.join(taskDir(task.id), body.folder);
+        let entries = [];
+        try { entries = fs.readdirSync(dir); } catch { /* not written yet */ }
+        if (!entries.length) return sendJson(res, 404, { error: 'the folder is empty or does not exist yet' });
+        try {
+          openFolder(dir);
+        } catch (e) {
+          return sendJson(res, 500, { error: `could not open ${dir}: ${e.message}`, path: dir });
+        }
+        return sendJson(res, 200, { ok: true, path: dir });
+      }
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
         const html = fs.readFileSync(path.join(__dirname, 'ui', 'index.html'));
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -931,5 +1228,5 @@ function main() {
   app.server.listen(port, '127.0.0.1');
 }
 
-module.exports = { createApp, initialState, taskState };
+module.exports = { createApp, initialState, taskState, MOCKUP_DIR, MOCKUP_TYPES, SCREENSHOT_DIR };
 if (require.main === module) main();

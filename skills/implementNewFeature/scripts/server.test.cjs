@@ -1580,3 +1580,251 @@ test('a run resumed from a seven-step state gets the story step, and its form th
   const res = await postState(base, { step: 8, status: 'in_progress', activeStep: 8 });
   assert.strictEqual(res.status, 200, 'the appended step takes updates like any other');
 });
+
+const stepOf = (task, id) => task.steps.find(s => s.id === id);
+const nextAnswer = async base => (await (await fetch(`${base}/api/answer`)).json()).answer;
+
+test('a resubmitted form names what changed and repeats only the steps that read it', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { generateMockups: true });
+  assert.strictEqual((await nextAnswer(base)).revision, undefined, 'the first form is no revision');
+  await postState(base, { step: 2, status: 'completed' });
+  await postState(base, { step: 3, status: 'in_progress', activeStep: 3, progress: 40,
+    currentOperation: 'Waiting for your review', mockupReview: { text: 'Round 1', screens: [] } });
+  // A setting alone repeats nothing: the gate the user left stays where it was.
+  let body = await (await step1(base, { generateMockups: true, codeReview: [{ flags: [] }] })).json();
+  assert.deepStrictEqual(body.revision.changed, ['codeReview']);
+  assert.strictEqual(body.revision.restartAt, null);
+  let task = await task0(base);
+  assert.strictEqual(task.activeStep, 3);
+  assert.ok(task.mockupReview, 'the mockup gate is still open');
+  assert.deepStrictEqual((await nextAnswer(base)).revision, body.revision, 'the orchestrator gets the same revision');
+  // The branch is read by nothing before implementation.
+  body = await (await step1(base, { generateMockups: true, codeReview: [{ flags: [] }], branch: 'feature/y' })).json();
+  assert.deepStrictEqual(body.revision.changed, ['branch']);
+  assert.strictEqual(body.revision.restartAt, null);
+  assert.strictEqual((await task0(base)).branch, 'feature/y');
+  // The description is read from the refinement on: it repeats, and every step after it
+  // waits again - at once, before the orchestrator has read the answer.
+  body = await (await step1(base, { generateMockups: true, codeReview: [{ flags: [] }],
+    branch: 'feature/y', taskDescription: 'Nowy opis' })).json();
+  assert.deepStrictEqual(body.revision.changed, ['description']);
+  assert.strictEqual(body.revision.restartAt, 2);
+  task = await task0(base);
+  assert.strictEqual(task.activeStep, 2);
+  assert.strictEqual(stepOf(task, 2).status, 'in_progress');
+  assert.strictEqual(stepOf(task, 3).status, 'waiting');
+  assert.strictEqual(stepOf(task, 3).progress, null);
+  assert.strictEqual(task.mockupReview, null, 'the old round is off the screen');
+  assert.match(stepOf(task, 2).log.at(-1).text, /description/);
+});
+
+test('a step switched on or off repeats what it feeds, and the step the run sits on hands over', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { refinement: false, storyDescription: true });
+  await postState(base, { step: 8, status: 'in_progress', activeStep: 8 });
+  // Refinement comes before the story, which already ran without it.
+  let body = await (await step1(base, { refinement: true, storyDescription: true })).json();
+  assert.deepStrictEqual(body.revision.switchedOn, [2]);
+  assert.deepStrictEqual(body.revision.changed, ['steps']);
+  assert.strictEqual(body.revision.restartAt, 2);
+  let task = await task0(base);
+  assert.deepStrictEqual([stepOf(task, 2).status, stepOf(task, 8).status], ['in_progress', 'waiting']);
+  // Switched off while it runs: the next step of the route takes over.
+  body = await (await step1(base, { refinement: false, storyDescription: true })).json();
+  assert.deepStrictEqual(body.revision.switchedOff, [2]);
+  assert.strictEqual(body.revision.restartAt, 8);
+  task = await task0(base);
+  assert.deepStrictEqual([stepOf(task, 2).status, stepOf(task, 2).enabled], ['waiting', false]);
+  assert.strictEqual(stepOf(task, 8).status, 'in_progress');
+  // The last step before implementation switched off: implementation starts.
+  body = await (await step1(base, { refinement: false, storyDescription: false })).json();
+  assert.strictEqual(body.revision.restartAt, 4);
+  task = await task0(base);
+  assert.strictEqual(task.activeStep, 4);
+  assert.strictEqual(stepOf(task, 4).status, 'in_progress');
+  // From here on only the settings move.
+  const res = await step1(base, { refinement: false, storyDescription: false, taskDescription: 'Inny' });
+  assert.strictEqual(res.status, 409);
+  assert.match((await res.json()).error, /description/);
+  assert.strictEqual((await task0(base)).step1.taskDescription, 'Opis', 'a refused form changes nothing');
+  body = await (await step1(base, { refinement: false, storyDescription: false,
+    agents: { effort: 'high' } })).json();
+  assert.deepStrictEqual(body.revision.changed, ['agents']);
+  assert.strictEqual((await post(base, '/api/upload', { taskId: 't1', category: 'hints',
+    filename: 'a.png', dataBase64: 'eA==' })).status, 409, 'nor can its files');
+  assert.strictEqual((await post(base, '/api/upload/remove', { taskId: 't1', category: 'hints',
+    filename: 'a.png' })).status, 409);
+  await postState(base, { summary: { text: 'Done' } });
+  assert.strictEqual((await step1(base, { refinement: false, storyDescription: false,
+    agents: { effort: 'low' } })).status, 409, 'a finished task takes no form at all');
+});
+
+test('approved mockups switched off send the refinement round again', async t => {
+  // Their approval wrote the ## UI design section into the refinement's files.
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { generateMockups: true, storyDescription: true });
+  await postState(base, { step: 2, status: 'completed' });
+  await postState(base, { step: 3, status: 'completed' });
+  await postState(base, { step: 8, status: 'in_progress', activeStep: 8 });
+  const body = await (await step1(base, { generateMockups: false, storyDescription: true })).json();
+  assert.strictEqual(body.revision.restartAt, 2);
+  const task = await task0(base);
+  assert.deepStrictEqual([2, 3, 8].map(id => stepOf(task, id).status), ['in_progress', 'waiting', 'waiting']);
+});
+
+test('a file counts as changed only when its bytes moved, a removal included', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const upload = data => post(base, '/api/upload', { taskId: 't1', category: 'hints',
+    filename: 'a.png', dataBase64: Buffer.from(data).toString('base64') });
+  await upload('x');
+  await step1(base, { hints: ['a.png'] });
+  await upload('x');
+  let body = await (await step1(base, { hints: ['a.png'] })).json();
+  assert.deepStrictEqual([body.revision.changed, body.revision.files], [[], []], 'the same file again');
+  await upload('y');
+  body = await (await step1(base, { hints: ['a.png'] })).json();
+  assert.deepStrictEqual(body.revision.files, [{ category: 'hints', name: 'a.png', change: 'replaced' }]);
+  assert.deepStrictEqual(body.revision.changed, ['materials']);
+  await post(base, '/api/upload/remove', { taskId: 't1', category: 'hints', filename: 'a.png' });
+  body = await (await step1(base, { hints: [] })).json();
+  assert.deepStrictEqual(body.revision.files, [{ category: 'hints', name: 'a.png', change: 'removed' }]);
+  // Credentials sent again unchanged are no change; new ones are, and only as a flag.
+  await post(base, '/api/auth', { taskId: 't1', login: 'u', password: 'p' });
+  body = await (await step1(base, { authProvided: true })).json();
+  assert.ok(body.revision.changed.includes('authorization'));
+  await post(base, '/api/auth', { taskId: 't1', login: 'u', password: 'p' });
+  body = await (await step1(base, { authProvided: true })).json();
+  assert.deepStrictEqual(body.revision.changed, []);
+  await post(base, '/api/auth', { taskId: 't1', login: 'u', password: 'q' });
+  body = await (await step1(base, { authProvided: true })).json();
+  assert.deepStrictEqual(body.revision.changed, ['authorization']);
+  assert.ok(!JSON.stringify(body).includes('"q"'), 'the password never travels back');
+});
+
+test('Stop fails a running step at once and tells the orchestrator', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 2, status: 'in_progress', activeStep: 2,
+    question: { id: 'q1', text: 'Which one?' } });
+  assert.strictEqual((await post(base, '/api/answer', { taskId: 't1', kind: 'stop', step: 2 })).status, 200);
+  const task = await task0(base);
+  assert.strictEqual(stepOf(task, 2).status, 'failed');
+  assert.strictEqual(stepOf(task, 2).report, 'Stopped by the user.');
+  assert.strictEqual(task.question, null, 'the question of a stopped agent is gone');
+  assert.deepStrictEqual(await nextAnswer(base), { kind: 'stop', step: 2, taskId: 't1' });
+  assert.strictEqual((await post(base, '/api/answer', { taskId: 't1', kind: 'stop', step: 2 })).status, 409,
+    'a step that is not running cannot be stopped');
+  assert.strictEqual((await post(base, '/api/answer', { taskId: 't1', kind: 'stop', step: 1 })).status, 400);
+});
+
+test('attachments: images only, never overwritten, names in the transcript and paths for the agent', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const attach = filename => post(base, '/api/upload', { taskId: 't1', category: 'attachments',
+    filename, dataBase64: Buffer.from(filename).toString('base64') });
+  assert.strictEqual((await (await attach('shot.png')).json()).name, '1-shot.png');
+  assert.strictEqual((await (await attach('shot.png')).json()).name, '2-shot.png');
+  assert.strictEqual((await attach('notes.txt')).status, 400);
+  await post(base, '/api/answer', { taskId: 't1', kind: 'message', step: 3, text: 'Zobacz',
+    attachments: ['1-shot.png', '2-shot.png', 'nope.png', '../auth.json'] });
+  const line = stepOf(await task0(base), 3).chat.at(-1);
+  assert.deepStrictEqual(line.attachments, ['1-shot.png', '2-shot.png']);
+  const answer = await nextAnswer(base);
+  assert.deepStrictEqual(answer.attachments, ['1-shot.png', '2-shot.png']
+    .map(n => path.join(dir, 'tasks', 't1', 'attachments', n)));
+  await post(base, '/api/answer', { taskId: 't1', kind: 'decision', decision: 'feedback', text: 'Popraw',
+    attachments: ['1-shot.png'] });
+  assert.strictEqual((await nextAnswer(base)).attachments.length, 1, 'plan feedback carries them too');
+  await post(base, '/api/answer', { taskId: 't1', kind: 'message', step: 3, text: 'Bez' });
+  assert.ok(!('attachments' in stepOf(await task0(base), 3).chat.at(-1)));
+  assert.ok(!('attachments' in await nextAnswer(base)));
+});
+
+test('description images: pictures only, kept with the form, and a new one repeats the flow', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const upload = filename => post(base, '/api/upload', { taskId: 't1', category: 'images',
+    filename, dataBase64: Buffer.from(filename).toString('base64') });
+  assert.strictEqual((await upload('notes.txt')).status, 400);
+  assert.strictEqual((await (await upload('flow.png')).json()).name, 'flow.png');
+  assert.ok(fs.existsSync(path.join(dir, 'tasks', 't1', 'images', 'flow.png')));
+  await step1(base, { images: ['flow.png', 'notes.txt'] });
+  assert.deepStrictEqual((await task0(base)).step1.images, ['flow.png'], 'the description keeps pictures only');
+  await nextAnswer(base);
+  await postState(base, { step: 2, status: 'in_progress', activeStep: 2 });
+  await upload('sketch.jpg');
+  const body = await (await step1(base, { images: ['flow.png', 'sketch.jpg'] })).json();
+  assert.deepStrictEqual(body.revision.changed, ['description'], 'a picture is part of the description');
+  assert.deepStrictEqual(body.revision.files, [{ category: 'images', name: 'sketch.jpg', change: 'added' }]);
+  assert.strictEqual(body.revision.restartAt, 2);
+  // Every agent reads the pictures from the task dir, so a copied task takes them along.
+  const { id } = await (await post(base, '/api/tasks', { copyFrom: 't1',
+    values: { taskDescription: 'Opis' } })).json();
+  assert.deepStrictEqual((await getState(base)).tasks[1].step1.images, ['flow.png', 'sketch.jpg']);
+  assert.ok(fs.existsSync(path.join(dir, 'tasks', id, 'images', 'sketch.jpg')));
+});
+
+test('Stop on the story gate closes the gate with the step', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 8, enabled: true, status: 'in_progress', activeStep: 8,
+    reviewSummary: { text: 'Five criteria' } });
+  assert.strictEqual((await post(base, '/api/answer', { taskId: 't1', kind: 'stop', step: 8 })).status, 200);
+  const task = await task0(base);
+  assert.strictEqual(stepOf(task, 8).status, 'failed');
+  assert.strictEqual(task.reviewSummary, null, 'a stopped story leaves no gate behind');
+});
+
+test('GET /uploads serves the task images for thumbnails, and nothing else', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await post(base, '/api/upload', { taskId: 't1', category: 'mockups', filename: 'm.png',
+    dataBase64: Buffer.from('png').toString('base64') });
+  await post(base, '/api/upload', { taskId: 't1', category: 'contracts', filename: 'api.yaml',
+    dataBase64: Buffer.from('openapi').toString('base64') });
+  await post(base, '/api/auth', { taskId: 't1', login: 'u', password: 'p' });
+  const res = await fetch(`${base}/uploads/t1/mockups/m.png`);
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.headers.get('content-type'), 'image/png');
+  assert.match(res.headers.get('content-security-policy'), /sandbox/);
+  assert.strictEqual(await res.text(), 'png');
+  for (const p of ['t1/mockups/..%2Fauth.json', 't1/contracts/api.yaml', 't9/mockups/m.png',
+    't1/secrets/m.png', 't1/mockups/missing.png', 't1/auth.json']) {
+    assert.strictEqual((await fetch(`${base}/uploads/${p}`)).status, 404, p);
+  }
+});
+
+test('POST /api/open-folder opens the screenshots folder once it holds something', async t => {
+  const dir = tmpDir();
+  const opened = [];
+  const app = createApp(dir, { openFolder: d => opened.push(d) });
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const open = folder => post(base, '/api/open-folder', { taskId: 't1', folder });
+  assert.strictEqual((await open('mockup-screenshots')).status, 404);
+  const shots = path.join(dir, 'tasks', 't1', 'mockup-screenshots');
+  fs.mkdirSync(shots, { recursive: true });
+  fs.writeFileSync(path.join(shots, '1.0 Login - Empty.png'), 'png');
+  const res = await open('mockup-screenshots');
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(opened, [shots]);
+  assert.strictEqual((await open('generated-mockups')).status, 400, 'only the folders the page may open');
+  assert.strictEqual((await open('..')).status, 400);
+});

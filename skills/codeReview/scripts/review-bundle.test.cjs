@@ -185,13 +185,85 @@ test('light consecutive files share a batch up to the limits; a heavy file, a fi
   const e = (number, lines, items, chars) => ({ number, lines, items, chars });
   assert.deepStrictEqual(
     rb.planBatches([e(1, 10, 20), e(2, 60, 60), e(3, 61, 5), e(4, 5, 5), e(5, null, 1), ...[6, 7, 8, 9, 10, 11, 12].map((n) => e(n, 5, 5)), e(14, 5, 5)]),
-    [[1, 2], [3], [4], [5], [6, 7, 8, 9, 10, 11], [12], [14]],
+    [[1, 2], [3], [4], [5], [6, 7, 8], [9, 10, 11], [12], [14]],
   );
   assert.deepStrictEqual(rb.planBatches([e(1, 5, 5, 30000), e(2, 5, 5, 20000), e(3, 5, 5, 1)]), [[1, 2], [3]], 'the size cap');
   assert.deepStrictEqual(rb.planBatches([e(1, 10, 50), e(2, 10, 50), e(3, 10, 50)]), [[1, 2], [3]], 'the item cap');
   assert.deepStrictEqual(rb.planBatches([e(1, 60, 1), e(2, 60, 1), e(3, 60, 1)]), [[1, 2], [3]], 'the line cap');
   assert.deepStrictEqual(rb.planBatches([e(1, 5, 61)]), [[1]]);
   assert.deepStrictEqual(rb.readsOf([{ bundlePath: 'b', contentPath: null, diffPath: 'd' }]), ['b', 'd']);
+});
+
+test('a target too long for one conversation is cut into even windows of whole batches', () => {
+  const alone = (count) => Array.from({ length: count }, (_, k) => [k + 1]);
+  const flat = () => 20000;
+  assert.deepStrictEqual(rb.planWindows(alone(5), flat), [], 'a walk that fits one window has none');
+  assert.deepStrictEqual(rb.planWindows(alone(6), flat).map((window) => window.length), [3, 3], 'six files are two windows of three, not five and one');
+  const long = rb.planWindows(alone(49), flat);
+  assert.strictEqual(long.length, 10, '980k tokens of walk at 100k a window');
+  assert.ok(long.every((window) => window.length >= 4 && window.length <= 5), 'the windows come out even');
+  assert.deepStrictEqual(long.flat(2), alone(49).flat(), 'every file lands in exactly one window, in order');
+  assert.deepStrictEqual(rb.planWindows([[1], [2], [3], [4], [5], [6], [7], [8]], () => 1000).map((window) => window.length), [4, 4], 'the file cap cuts a light target');
+  assert.deepStrictEqual(rb.planWindows([[1], [2, 3], [4]], (number) => (number === 1 ? 130000 : number === 4 ? 10000 : 20000)), [[[1]], [[2, 3], [4]]], 'a batch over the limit has a window of its own, and a batch is never split');
+  assert.strictEqual(rb.walkTokens(0), rb.windowLimits.fileTokens);
+  assert.strictEqual(rb.walkTokens(30000), rb.windowLimits.fileTokens + 10000, 'a third of the characters Reads bring');
+});
+
+test('the last batch of a window tells its walker to stop and keeps the lines for a reviewer walking alone', () => {
+  const nextFiles = [{ bundlePath: 'w/05.bundle.md', contentPath: 'w/05.ts', diffPath: null }];
+  assert.deepStrictEqual(rb.renderNext({ nextFiles, window: { first: 3, last: 4 } }), [
+    'Koniec okna (3-4):',
+    '- walker okna: zapisz części tej partii, niczego więcej nie czytaj i odpowiedz jedną linią `WINDOW DONE 3-4`;',
+    '- bez okien (całość prowadzisz sam):',
+    '  Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:',
+    '  - w/05.bundle.md',
+    '  - w/05.ts',
+  ]);
+  const last = rb.renderNext({ crossBundlePath: 'w/cross-file.bundle.md', crossPartPath: 'r/raport.part06.md', window: { first: 9, last: 9 } });
+  assert.strictEqual(last[0], 'Koniec okna (9):');
+  assert.ok(last[1].endsWith('`WINDOW DONE 9`;'), 'a window of one file names that file');
+  assert.ok(last.includes('  - w/cross-file.bundle.md'), 'the cross-file pass stays the alone reviewer\'s next step');
+});
+
+test('a window brief names the rules to read, the target settings, every batch with its parts and Reads, and the reply', () => {
+  const file = (number, reads) => ({ number, path: `src/f${number}.ts`, partPath: `r/raport.part0${number}.md`, reads });
+  const text = rb.renderWindowBrief({
+    index: 2,
+    total: 3,
+    skill: { path: '/s/SKILL.md', from: 90, limit: 686 },
+    target: { reportPath: 'r/raport.md', htmlReportPath: null, light: true, commands: { grep: 'git grep <pattern>' } },
+    batches: [[file(4, ['w/4.bundle.md', 'w/4.ts', 'w/4.diff']), file(5, ['w/5.bundle.md', 'w/5.ts'])], [file(6, ['w/6.bundle.md'])]],
+  });
+  const lines = text.split('\n');
+  assert.strictEqual(lines[0], '# Window 2 of 3: files 4-6');
+  assert.ok(text.includes('1. Read /s/SKILL.md with offset 90 and limit 686 - Step 3'), 'the lines of SKILL.md the walker reads');
+  assert.ok(text.includes('reply with exactly one line, `WINDOW DONE 4-6`'));
+  assert.ok(text.includes('`WINDOW STOPPED <file number>: <reason>`'));
+  const settings = JSON.parse(text.slice(text.indexOf('```json') + 7, text.lastIndexOf('```')));
+  assert.deepStrictEqual(settings, { reportPath: 'r/raport.md', htmlReportPath: null, light: true, commands: { grep: 'git grep <pattern>' } });
+  assert.deepStrictEqual(lines.slice(lines.indexOf('## Batch 1: files 4-5')), [
+    '## Batch 1: files 4-5',
+    '',
+    '- file 4: src/f4.ts; part r/raport.part04.md',
+    '- file 5: src/f5.ts; part r/raport.part05.md',
+    '',
+    'Reads, in ONE message:',
+    '- w/4.bundle.md',
+    '- w/4.ts',
+    '- w/4.diff',
+    '- w/5.bundle.md',
+    '- w/5.ts',
+    '',
+    '## Batch 2: file 6',
+    '',
+    '- file 6: src/f6.ts; part r/raport.part06.md',
+    '',
+    'Reads, in ONE message:',
+    '- w/6.bundle.md',
+    '',
+  ]);
+  assert.ok(rb.renderWindowBrief({ index: 1, total: 1, target: {}, batches: [[file(7, [])]] }).includes('from its `## Step 3` heading'), 'without the line range the brief says where to start in words');
+  assert.strictEqual(rb.windowBriefName(3), 'window03.md');
 });
 
 test('the cross bundle names its parts and carries the live section the hook rewrites', () => {
@@ -266,6 +338,31 @@ test('the cross-file bundle walks the reporting instructions and only accessibil
   const scanned = rb.renderCrossBundle({ instructions, walked, candidates: [{ path: 'a.ts', lines: '1-9', sources: ['b.ts:2-10'], kinds: ['renamed'] }] });
   assert.ok(scanned.includes('- a.ts:1-9 powtarza b.ts:2-10 (renamed)'));
   assert.ok(scanned.includes('## Fakty międzyplikowe\n\n- brak\n'));
+});
+
+test('the cross bundle lists the target\'s files with where their content and diff lie, for a pass that holds none in memory', () => {
+  const instructions = new Map([['code-quality', instruction('code-quality', ['dup'])]]);
+  const walked = new Map([['code-quality', new Set([1])]]);
+  const files = [
+    { path: 'src/a.reducer.ts', status: 'M', contentPath: 'D:/r/raport.work/01-a.reducer.ts', diffPath: 'D:/r/raport.work/01-a.reducer.ts.diff' },
+    { path: 'src/b.ts', status: 'A', contentPath: 'D:/r/raport.work/02-b.ts', diffPath: null },
+    { path: 'src/c.ts', status: 'D', contentPath: null, diffPath: 'D:/r/raport.work/03-c.ts.diff' },
+    { path: 'src/d.png', status: 'A', contentPath: null, diffPath: null },
+    { path: 'src/e.ts', status: 'A', contentPath: 'C:/project/src/e.ts', diffPath: null },
+  ];
+  const lines = rb.renderCrossBundle({ instructions, walked, files, workDir: 'D:/r/raport.work' }).split('\n');
+  const at = lines.indexOf('## Pliki celu');
+  assert.ok(at > lines.indexOf('## Fakty międzyplikowe'), 'after the facts');
+  assert.ok(at < lines.indexOf('## Pozycje, pod którymi przejście raportuje'), 'before the items');
+  assert.deepStrictEqual(lines.slice(at + 2, at + 8), [
+    'Treść i diff pliku, w `D:/r/raport.work/`, o ile nazwa nie zaczyna się od `/` albo litery dysku:',
+    '- 1 src/a.reducer.ts: 01-a.reducer.ts, 01-a.reducer.ts.diff',
+    '- 2 src/b.ts: 02-b.ts',
+    '- 3 src/c.ts (usunięty): 03-c.ts.diff',
+    '- 4 src/d.png: bez treści',
+    '- 5 src/e.ts: C:/project/src/e.ts',
+  ], 'work-folder names are short, a project file keeps its whole path, the number is the position in the target');
+  assert.ok(!rb.renderCrossBundle({ instructions, walked }).includes('## Pliki celu'), 'no files, no section');
 });
 
 test('the rulebook notes carry only the preambles', () => {

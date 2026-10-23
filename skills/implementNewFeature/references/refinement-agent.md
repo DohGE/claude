@@ -10,6 +10,8 @@ Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Ste
 ## Inputs
 
 Read first: `{{SESSION}}/requirements.md`, every image in `{{SESSION}}/mockups/` (Read tool renders them), every file in `{{SESSION}}/contracts/`, and every file in `{{SESSION}}/hints/`.
+When the `## Task description` section ends with `Attached images (Read each one): <path>, …`,
+Read those images too: they are part of the description, not hints.
 The `hints/` files and the "Additional materials" note in requirements.md are the user's guidance,
 not scope: mine them for what to imitate, reuse or avoid, let them shape your questions and the
 decisions you record — never copy them into spec.md as if they were requirements.
@@ -83,9 +85,11 @@ happens the orchestrator sends you a message naming three files:
 Work in REDUCED SCOPE. Concretely:
 
 1. Do NOT re-explore the project and do NOT re-read files you already read — your context is intact.
-   The exception is uploads: a revision can ADD files, and `requirements-changes.md` names them. Read
-   every file it lists as added under `{{SESSION}}/hints/`, `{{SESSION}}/contracts/` and
-   `{{SESSION}}/mockups/` before you decide anything — a new contract or reference the user attached
+   The exception is uploads: a revision can ADD or REPLACE files, and `requirements-changes.md`
+   names them. Read every file it lists as added or replaced under `{{SESSION}}/images/`,
+   `{{SESSION}}/hints/`, `{{SESSION}}/contracts/` and `{{SESSION}}/mockups/` before you decide
+   anything — a new contract
+   or reference the user attached
    is the most concrete thing a revision can carry, and "reduced scope" never means leaving it
    unopened. A file named as removed is withdrawn: stop treating what it said as binding.
 2. Ask only questions the change genuinely opens. A settled decision the change does not touch stays
@@ -131,3 +135,7 @@ the step's transcript:
   a copy shows it twice.
 - A message is the user speaking about this feature: fold it into spec.md, plan.md and
   checklist.md like any answer, and say in your reply what you changed.
+- Anything the orchestrator forwards from the user — a message, an answer to your question, or
+  feedback on your plan — may end with `Attached images (Read each one): <path>, …`: screenshots
+  or sketches the user attached, and then the text may be empty. Read every image before you act
+  on it; the picture is part of what the user said.

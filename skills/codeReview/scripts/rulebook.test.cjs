@@ -261,7 +261,7 @@ test('item facts, probes, second questions and answers are read, and a bad one w
   assert.strictEqual(extras.has(3), false);
   assert.strictEqual(rules.warnings.length, 4, rules.warnings.join('\n'));
   assert.match(rules.warnings.join('\n'), /no-such-kind/);
-  assert.match(rules.warnings.join('\n'), /code-quality#3 "answer" "nope" is not one of repo-search, input-binding - ignored/);
+  assert.match(rules.warnings.join('\n'), /code-quality#3 "answer" "nope" is not one of repo-search, input-binding, area-layout - ignored/);
   assert.match(rules.warnings.join('\n'), /unknown builtin probe "nope"/);
   assert.match(rules.warnings.join('\n'), /secondQuestion/);
 });

@@ -39,7 +39,20 @@ const crossInstructions = [['code-quality', null], ['architecture', null], ['gen
 // either `file*` limit keeps a response of its own, and a batch stops at any of the others.
 // `chars` weighs what the batch's Reads bring - bundles, contents, diffs - since a small file's
 // bundle is most of it: 48k is the largest batch the measured 3-file runs walked at full recall.
-const batchLimits = { fileLines: 60, fileItems: 60, files: 6, lines: 150, items: 120, chars: 50000 };
+// Three files at most: in the 2026-10-22 run every missed entry sat in a batch (singles 264
+// entries, 0 missed; batches of 2-3 96.5%, of 4-5 91.8%).
+const batchLimits = { fileLines: 60, fileItems: 60, files: 3, lines: 150, items: 120, chars: 50000 };
+// Whole batches are walked by one sub-agent per window (SKILL.md Step 3, Windows): a file's walk
+// grows its conversation by `fileTokens` - the thinking blocks stay in it for the whole run, plus
+// probes and the Write - and by a `charsPerToken`th of the characters its Reads bring, and a
+// conversation that passes about 165k tokens is compacted, which loses every bundle it read. A window
+// holds `tokens` of walk (the walker's own start adds about 25k) and at most `files` files; a target
+// whose whole walk fits one window is walked in the main conversation.
+const windowLimits = { tokens: 100000, fileTokens: 14000, charsPerToken: 3, files: 6 };
+// FIXED IDENTIFIERS. The two replies a window's walker ends with, which SKILL.md tells the main
+// conversation to read, and the file name of a window's brief.
+const windowReplies = { done: 'WINDOW DONE', stopped: 'WINDOW STOPPED' };
+const windowBriefName = (index) => `window${pad(index, 2)}.md`;
 // The skill folder, named in the bundles' pointers to its reference files.
 const skillDir = path.resolve(__dirname, '..').replace(/\\/g, '/');
 
@@ -324,34 +337,120 @@ function planBatches(entries, limits = batchLimits) {
   return batches;
 }
 
+// What the walk of one file adds to its conversation, in tokens: `chars` is what its Reads bring.
+const walkTokens = (chars) => windowLimits.fileTokens + Math.ceil((chars || 0) / windowLimits.charsPerToken);
+
+// Which batches share a window: `batches` are the numbers planBatches returned, `weigh(number)` the
+// tokens one file's walk adds. Empty when the whole walk fits one window. The cuts fall where the
+// running weight crosses a multiple of the share every window gets, so that no window is a stub
+// that pays the walker's start for a file or two; a batch over a limit has a window of its own.
+function planWindows(batches, weigh, limits = windowLimits) {
+  const weights = batches.map((batch) => batch.reduce((sum, number) => sum + weigh(number), 0));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const files = batches.reduce((sum, batch) => sum + batch.length, 0);
+  if (total <= limits.tokens && files <= limits.files) return [];
+  const share = total / Math.max(Math.ceil(total / limits.tokens), Math.ceil(files / limits.files));
+  const windows = [];
+  let current = null;
+  let tokens = 0;
+  let before = 0;
+  batches.forEach((batch, k) => {
+    const slot = Math.floor((before + weights[k] / 2) / share);
+    const fits = current !== null && slot === current.slot && tokens + weights[k] <= limits.tokens && current.files + batch.length <= limits.files;
+    if (!fits) {
+      current = { slot, files: 0, batches: [] };
+      windows.push(current);
+      tokens = 0;
+    }
+    current.batches.push(batch);
+    current.files += batch.length;
+    tokens += weights[k];
+    before += weights[k];
+  });
+  return windows.map((window) => window.batches);
+}
+
 // Every Read a walk opens with: the bundle, the content and the diff of each file of a batch.
 function readsOf(files) {
   return files.flatMap((file) => [file.bundlePath, file.contentPath, file.diffPath].filter(Boolean));
 }
 
 // The `## Dalej` lines of a batch's last bundle: the next batch's Reads, which ride with this
-// batch's Writes, or - after the last file - the cross-file pass and its reference.
-function renderNext({ nextFiles = [], crossBundlePath, crossPartPath }) {
-  if (nextFiles.length > 0) {
-    return ['Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:', ...readsOf(nextFiles).map((p) => `- ${p}`)];
-  }
+// batch's Writes, or - after the last file - the cross-file pass and its reference. The last batch
+// of a window (`window` is `{ first, last }`) tells the window's walker to stop; the lines for a
+// reviewer who walks the whole target alone stay under it.
+function renderNext({ nextFiles = [], crossBundlePath, crossPartPath, window = null }) {
+  const own = nextFiles.length > 0
+    ? ['Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:', ...readsOf(nextFiles).map((p) => `- ${p}`)]
+    : [
+      'Ostatni plik celu. Z zapisem części przeczytaj (Read) przejście międzyplikowe:',
+      `- ${crossBundlePath}`,
+      `- ${skillDir}/references/cross-file.md`,
+      `Jego część: ${crossPartPath}.`,
+    ];
+  if (!window) return own;
+  const range = window.first === window.last ? `${window.first}` : `${window.first}-${window.last}`;
   return [
-    'Ostatni plik celu. Z zapisem części przeczytaj (Read) przejście międzyplikowe:',
-    `- ${crossBundlePath}`,
-    `- ${skillDir}/references/cross-file.md`,
-    `Jego część: ${crossPartPath}.`,
+    `Koniec okna (${range}):`,
+    `- walker okna: zapisz części tej partii, niczego więcej nie czytaj i odpowiedz jedną linią \`${windowReplies.done} ${range}\`;`,
+    '- bez okien (całość prowadzisz sam):',
+    ...own.map((line) => `  ${line}`),
   ];
 }
 
-// The cross-file pass's bundle: the repository-wide facts, the items it reports under, the
-// jscpd candidates of the whole target and where the import ledger is. `walked` maps an
-// instruction id to the item numbers this run's plans walk.
+// What a window's walker reads first, from the prompt `Read <brief> and follow it`: where the
+// rules of the walk are, the target's settings Step 3 and 4 name, the batches of the window with
+// their parts and Reads, and how it ends. `skill` is `{ path, from, limit }` (review-hooks.cjs
+// walkLines) or null; `target` the settings (`reportPath`, `htmlReportPath`, `workDir`,
+// `withChecklist`, `withRuleText`, `light`, `dedupItems`, `commands`); `batches` lists per batch
+// `{ number, path, partPath, reads }` of each file.
+function renderWindowBrief({ index, total, skill = null, target, batches }) {
+  const first = batches[0][0].number;
+  const lastBatch = batches[batches.length - 1];
+  const last = lastBatch[lastBatch.length - 1].number;
+  const range = first === last ? `${first}` : `${first}-${last}`;
+  const out = [`# Window ${index} of ${total}: files ${range}`, ''];
+  out.push(`You walk files ${range} of this target, batch by batch in the order below, and nothing else.`);
+  out.push(skill
+    ? `1. Read ${skill.path} with offset ${skill.from} and limit ${skill.limit} - Step 3 (the walk) and Step 4 (the format of a part) - in the same response as the Reads of the first batch that still lacks a part.`
+    : '1. Read the codeReview SKILL.md from its `## Step 3` heading up to the one-time marker, in the same response as the Reads of the first batch that still lacks a part.');
+  out.push('2. A file whose part is on disk is finished: skip it and never write it again. Walk every other batch exactly as Step 3 says; the last bundle of a batch ends with `## Dalej`, which names the Reads that ride with its Writes.');
+  out.push(`3. The window ends with its last part: reply with exactly one line, \`${windowReplies.done} ${range}\`, and nothing else - no summary of findings.`);
+  out.push(`4. If you cannot go on - the Write of a part is refused, or a part still fails its check after two fixes - reply with the one line \`${windowReplies.stopped} <file number>: <reason>\`. Never write a part through the shell: the conversation that sent you walks the rest.`, '');
+  out.push('The `target.*` keys Step 3 and 4 name, for this target (a key missing here is false):', '', '```json', JSON.stringify(target, null, 2), '```', '');
+  batches.forEach((batch, k) => {
+    out.push(`## Batch ${k + 1}: ${batch.length > 1 ? `files ${batch[0].number}-${batch[batch.length - 1].number}` : `file ${batch[0].number}`}`, '');
+    for (const file of batch) out.push(`- file ${file.number}: ${file.path}; part ${file.partPath}`);
+    out.push('', 'Reads, in ONE message:', ...batch.flatMap((file) => file.reads).map((p) => `- ${p}`), '');
+  });
+  return `${out.join('\n').replace(/\n+$/, '')}\n`;
+}
+
+// The files of a target by number, with the content and the diff the cross pass opens: a pass that
+// follows a walk it did not make (a window's, or one a compaction cut) has no file in memory, and
+// the work folder's names (`<number>-<name>`) are not guessable. A path outside the work folder
+// stays whole, and starts with `/` or a drive letter (a folder-mode target reads the project's own
+// files).
+function renderTargetFiles(files, workDir) {
+  const name = (p) => (workDir && p.startsWith(`${workDir}/`) ? p.slice(workDir.length + 1) : p);
+  const rows = files.map((file, i) => {
+    const places = [file.contentPath, file.diffPath].filter(Boolean).map(name);
+    return `- ${i + 1} ${file.path}${file.status === 'D' ? ' (usunięty)' : ''}: ${places.length > 0 ? places.join(', ') : 'bez treści'}`;
+  });
+  return ['## Pliki celu', '', `Treść i diff pliku, w \`${workDir || '<katalog roboczy>'}/\`, o ile nazwa nie zaczyna się od \`/\` albo litery dysku:`, ...rows, ''];
+}
+
+// The cross-file pass's bundle: the repository-wide facts, the files it may open, the items it
+// reports under, the jscpd candidates of the whole target and where the import ledger is.
+// `walked` maps an instruction id to the item numbers this run's plans walk.
+// `files` are the target's files (`path`, `status`, `contentPath`, `diffPath`), `workDir` the
+// folder the script filled with their contents.
 // `crossPartPath` and `closingPartPath` are the parts the pass writes, `withPr` whether findings
 // carry the PR fields (an HTML run). The section between `reportedStart` and `reportedEnd` is
 // review-hooks.cjs's to rewrite (renderReported) when the bundle is read.
 function renderCrossBundle({
   cross = [], instructions, walked, candidates = null, importLedger = null, factRoot = '', partial = false,
-  crossPartPath = null, closingPartPath = null, withPr = true,
+  crossPartPath = null, closingPartPath = null, withPr = true, files = [], workDir = null,
 }) {
   const out = ['# Przejście międzyplikowe', ''];
   if (crossPartPath) out.push(`- część: ${crossPartPath}`);
@@ -359,6 +458,7 @@ function renderCrossBundle({
   if (partial) out.push('- fakty z części repozytorium (limit albo błąd git): brak wpisu niczego nie dowodzi');
   if (importLedger) out.push(`- księga importów: ${importLedger}`);
   out.push('', '## Fakty międzyplikowe', '', ...(cross.length > 0 ? cross.map((line) => `- ${line}`) : ['- brak']), '');
+  if (files.length > 0) out.push(...renderTargetFiles(files, workDir));
   out.push('## Pozycje, pod którymi przejście raportuje', '');
   for (const [id, only] of crossInstructions) {
     const instruction = instructions.get(id);
@@ -452,7 +552,7 @@ function factsDocument({ files, factRoot = '', partial = false, rules = null }) 
 
 module.exports = {
   linePrefix, itemPrefix, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
-  reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, skillDir,
+  reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, windowReplies, windowBriefName, skillDir,
   bindFile, renderBinding, renderBundle, renderCrossBundle, renderRulebookNotes, factsDocument,
-  planBatches, readsOf, renderNext, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
+  planBatches, planWindows, walkTokens, readsOf, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
 };

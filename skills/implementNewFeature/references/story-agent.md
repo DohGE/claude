@@ -37,6 +37,8 @@ Then read exactly the row that matches:
 | did not | did not | the task description, the uploaded mockups |
 
 - **The task description** is the `## Task description` section of `{{SESSION}}/requirements.md`.
+  When it ends with `Attached images (Read each one): <path>, …`, Read those images too: they are
+  part of the description.
   The other sections of that file are inputs for other steps or records of the form's settings —
   none of them is scope for the story.
 - **The generated screens**: `manifest.json`, then every HTML file it lists. The screens, states
@@ -121,3 +123,15 @@ the step's transcript:
   a copy shows it twice.
 - It can reword the story, add or drop a criterion, or change the role. Apply it to story.md with
   one more whole-file write — never paste the story into the reply.
+- A message may end with `Attached images (Read each one): <path>, …`: screenshots or sketches the
+  user attached, and then the text may be empty. Read every image before you act on the message;
+  the picture is part of what the user said.
+
+## Review of the story
+
+After your result the stepper shows story.md to the user, who approves it or asks for changes.
+Approval needs nothing from you. Once your result is out, every message that reaches you is that
+review — handle it here, not as above: it may end with the same `Attached images (Read each one):`
+line, so Read every image first. Apply the change to story.md with one more whole-file write, then
+end your turn with a fresh result JSON. Its summary is what the user reads at the gate, so post no
+chat reply.

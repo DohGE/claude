@@ -38,7 +38,10 @@
         },
         {
           "id": "routes#5",
-          "text": "Where state is registered (the parent route), the `providers` array holds `provideState(featureKey, reducer)`, `provideEffects([ ...all effect classes of the area ])` and the facade together."
+          "text": "Where state is registered (the parent route), the `providers` array holds `provideState(featureKey, reducer)`, `provideEffects([ ...all effect classes of the area ])` and the facade together.",
+          "facts": [
+            "state-key-literal"
+          ]
         },
         {
           "id": "routes#6",
@@ -48,6 +51,9 @@
           "id": "routes#7",
           "text": "Route parameters reach the component as signal `input()`s through `withComponentInputBinding()` (path params, query params, `data` and `resolve` keys all bind by name) — a route added in the diff never introduces a new `ActivatedRoute` read for a value the binding already delivers.",
           "severity": "low",
+          "facts": [
+            "input-binding-missing"
+          ],
           "secondQuestion": "W którym pliku routingu jest `withComponentInputBinding()` i które parametry trasy komponent mimo to czyta przez `ActivatedRoute`?",
           "answer": "input-binding"
         },
@@ -93,7 +99,8 @@
           "facts": [
             "area-routes-twice"
           ],
-          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?"
+          "secondQuestion": "Który element kanonicznego układu obszaru mieści ten plik i czy obszar ma ten element podwójnie albo poza układem (np. trasy i w `shared/routes/`, i w `shell/`)?",
+          "answer": "area-layout"
         },
         {
           "id": "architecture#2",

@@ -19,8 +19,8 @@ const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64');
 const file = name => ({ name, mimeType: 'image/png', buffer: PNG });
-// Pliki wybrane, a jeszcze niewgrane — istnieją tylko jako FileList w przeglądarce.
-const picked = (page, sel) => page.locator(sel).evaluate(el => [...el.files].map(f => f.name));
+// Pliki wybrane, a jeszcze niewgrane — istnieją tylko w przeglądarce, na liście pod polem.
+const picked = (page, cat) => page.locator(`#picked-${cat} li .file > span`);
 
 test.beforeEach(async ({ page }) => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inf-tasks-'));
@@ -245,12 +245,12 @@ test('New empty task zakłada task bez kopiowania formularza', async ({ page }) 
   await expect(page.locator('#refinement')).toBeChecked();
   await expect(page.locator('#branch')).toHaveValue('');
   await expect(page.locator('#genMockups')).not.toBeChecked();
-  expect(await picked(page, '#hints')).toEqual([]);
+  await expect(picked(page, 'hints')).toHaveCount(0);
   // Formularz źródła czeka nietknięty pod swoją zakładką — pusty task go nie zabiera.
   await page.click('#tabs .tab[data-task=t1]');
   await expect(page.locator('#task')).toHaveValue('Zaproszenia');
   await expect(page.locator('#branch')).toHaveValue('feature/zaproszenia');
-  expect(await picked(page, '#hints')).toEqual(['ekran.png']);
+  await expect(picked(page, 'hints')).toHaveText(['ekran.png']);
 });
 
 test('wybrane, jeszcze niewgrane pliki przeżywają kopię i lądują na dysku nowego taska', async ({ page }) => {
@@ -258,9 +258,9 @@ test('wybrane, jeszcze niewgrane pliki przeżywają kopię i lądują na dysku n
   await page.setInputFiles('#hints', [file('ekran.png')]);
   await page.fill('#hintsNote', 'Układ kart z ekranu');
   await page.click('#createTask');
-  // Plik istnieje tylko w przeglądarce — serwer nie ma czego skopiować, więc FileList
+  // Plik istnieje tylko w przeglądarce — serwer nie ma czego skopiować, więc wybór
   // musi przejechać do nowego taska po tej stronie.
-  expect(await picked(page, '#hints')).toEqual(['ekran.png']);
+  await expect(picked(page, 'hints')).toHaveText(['ekran.png']);
   await expect(page.locator('#hintsNote')).toBeVisible();
   await expect(page.locator('#hintsNote')).toHaveValue('Układ kart z ekranu');
   await page.fill('#branch', 'feature/drugi');

@@ -24,7 +24,8 @@ which of their results exist:
 | `story.md` | the user story: its acceptance criteria are requirements too, and step 5 tests every one |
 
 No `plan.md` → refinement did not run. The requirement is then the `## Task description` of
-`{{SESSION}}/requirements.md`, with the acceptance criteria of `story.md` when it exists, and the
+`{{SESSION}}/requirements.md` (Read every image its `Attached images (Read each one):` line names,
+when it has one), with the acceptance criteria of `story.md` when it exists, and the
 UI reference is the approved screens or, without them, the images in `{{SESSION}}/mockups/` (the
 Read tool renders them). Explore `{{ROOT}}` for the modules the feature touches, then write your
 own plan before any code: bite-sized tasks in TDD order, each with exact paths and a test before

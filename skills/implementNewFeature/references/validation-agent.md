@@ -21,7 +21,8 @@ screens match the visual baseline when one exists, and a hands-on UX pass in the
 judges what an assertion cannot.
 Feature Refinement, Mockups and Story Description each ran only when the user switched it on, so
 "the requirement" below means `{{SESSION}}/spec.md` when refinement ran, else the
-`## Task description` section of `{{SESSION}}/requirements.md` — and, either way, the acceptance
+`## Task description` section of `{{SESSION}}/requirements.md`, with every image its
+`Attached images (Read each one):` line names — and, either way, the acceptance
 criteria of `{{SESSION}}/story.md` when that file exists. The `## Pipeline steps`,
 `## Code review` and `## Agent settings` sections of requirements.md record how the pipeline
 runs — never a requirement.
