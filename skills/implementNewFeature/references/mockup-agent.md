@@ -30,10 +30,10 @@ Also read every file in `{{SESSION}}/hints/` together with the "Additional mater
 `{{SESSION}}/requirements.md`: they say what the user wants taken from those materials (a layout,
 a component, a tone) and what to leave behind — design direction that ranks below the requirement
 (spec.md, or the task description) and above your own taste.
-Then explore `{{PROJECT}}` for the real design language: global stylesheets, design tokens/theme
-files, component library, an existing screen closest to the feature. The mockup must look like it
-already belongs to this application — matching type scale, spacing, radii, palette and component
-shapes — not like a generic template.
+Then explore `{{PROJECT}}` for the real design language: the section "The project's own styling"
+below hands you its stylesheet and its components, and you read the existing screen closest to the
+feature. The mockup must look like it already belongs to this application — its own type scale,
+spacing, radii, palette and component shapes — not like a generic template.
 
 **Both themes from the first round.** When the application ships a dark theme — a dark palette in
 its tokens, a `prefers-color-scheme` rule, a theme switch, a `.dark` or `[data-theme]` class —
@@ -42,6 +42,46 @@ draw every state in both: the light state as usual, and a twin manifest entry fo
 with the app's own dark tokens on its root element. In a measured run both tasks' users asked for
 the dark versions in a second round; drawn in the first, that round never happens. An application
 with one theme gets one.
+
+## The project's own styling (MANDATORY — Storybook first)
+
+Every screen wears the application's own CSS — never a look imitated by eye, a CSS framework or
+tokens you made up. A mockup drawn to resemble the app drifts from it in every value it guessed,
+and step 4 then builds the drift.
+
+1. Before the first screen, run once:
+   `node "{{SKILL_DIR}}/scripts/project-styles.cjs" --project="{{PROJECT}}" --out="{{SESSION}}/generated-mockups" --app=<app>`
+   where `<app>` is the Angular project the feature belongs to — the one whose folder
+   (`projects/<app>/`) the plan's paths, or the closest existing screen, sit in; left out, the script
+   takes the app the Storybook renders with. Its one JSON line: `css` — the app's global stylesheet,
+   compiled with the project's own Sass into `generated-mockups/<css>`; `tokens` — the token and
+   variable files to read; `storybook` — null, or the project's Storybook (`configDirs`,
+   `stories`, `index`, `themes`, `static`, `build`, `buildDir`); `warnings` and `errors`.
+2. Every view file links that stylesheet before anything else: `<link rel="stylesheet" href="<css>">`
+   — a bare name: it sits next to the screens, and the preview's `'self'` policy serves it. Build
+   each screen from the project's own classes and component markup; your own `<style>` adds only
+   the layout glue the project has no class for — never a second palette, type scale, spacing scale
+   or component look. `css` null (no global stylesheet, or none that compiled — the warnings say
+   why) → take every value from the stylesheets and tokens you read, and say so in your round summary.
+3. `storybook` not null → the Storybook is the source of truth for every component a screen shows:
+   - Find each component in `generated-mockups/<storybook.index>` (its `title`, story `ids` and
+     `file`) and read its stories: their args, states and templates are the variants the
+     application really has. A variant no story shows is one you name in your round summary.
+   - `storybook.static` set (a built Storybook) → snapshot the stories you use, in one call:
+     `node "{{SKILL_DIR}}/scripts/storybook-snapshot.cjs" --static="<storybook.static>" --out="{{SESSION}}/generated-mockups" --story=<id>,<id>…`
+     (`--theme=<the dark class of storybook.themes>` for the dark twins) → one line, a FIXED
+     IDENTIFIER: `STORY_SNAPSHOTS <count> <dir>`. `<dir>/<id>.html` is the component as its story
+     rendered it — paste that markup into the screen, attributes included — and
+     `generated-mockups/story-<id>.css` holds its component styles: link it after the project
+     stylesheet. `; failed: …` names a story that rendered nothing (an id the build does not
+     know: the built `<storybook.static>/index.json` lists the real ones); `STORY_SNAPSHOTS_FAILED`
+     means draw from the stories' source.
+   - `storybook.static` null → build it once with `storybook.build`, run from `{{PROJECT}}` (Bash
+     timeout 600000): it writes into `storybook.buildDir`, inside the session, never into the
+     project. Built → snapshot as above. A build that fails or runs past 10 minutes → stop it, draw
+     from the stories' source and the project stylesheet, and say so in your round summary.
+4. The dark twin of a state (above) sets the dark class of `storybook.themes` — else the app's own
+   dark class — on its root element, so the project's own dark rules draw it.
 
 ## Naming and copy rulebook (MANDATORY)
 
@@ -87,7 +127,8 @@ Write into `{{SESSION}}/generated-mockups/`:
 - One `<view>-<slug>.html` per VIEW (`0-login.html`, `1-invite-list.html`; the slug is lowercase
   ASCII words joined by hyphens), and that one file renders EVERY state of its view —
   self-contained: CSS in a `<style>` tag, any JS inline, images as
-  `data:` URIs. NO external requests (no CDN, no web fonts, no remote images) — the server sends the
+  `data:` URIs — except the project's own stylesheets the scripts write next to the screens
+  (`project-<app>.css`, `story-<id>.css`), which a screen links by bare name. NO external requests (no CDN, no web fonts, no remote images) — the server sends the
   preview a `default-src 'self' data:` policy, so an external reference is refused by the browser and
   renders as a gap. Inline `<style>` and inline `<script>` are explicitly allowed by that policy;
   a sandbox alone would not refuse anything, it only isolates the origin.
@@ -214,8 +255,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Rules
 
-- Write ONLY inside `{{SESSION}}` (`generated-mockups/`, plus after approval spec/plan/checklist —
-  or `ui-design.md` when there is no spec.md).
+- Write ONLY inside `{{SESSION}}` (`generated-mockups/`, the `storybook-static/` and
+  `storybook-snapshots/` the styling scripts fill, plus after approval spec/plan/checklist — or
+  `ui-design.md` when there is no spec.md).
 - Each `.md` you write after the approval goes out in ONE write — the Write tool, or a single
   Bash heredoc if your harness refuses a `.md` write from a sub-agent. One write either way: a
   file assembled from several appends is one that ends half-written when anything goes wrong.

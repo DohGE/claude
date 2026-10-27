@@ -6,6 +6,10 @@ stepper never shows it, and the step before it already moved `activeStep` past i
 The agent designs from what refinement settled when step 2 ran, and from the requirements form
 alone when it did not — its brief tells the two apart by whether `spec.md` exists, so nothing
 about it reaches the prompt. It draws the dark theme too when the application has one.
+Every screen wears the project's own styling: the app's global stylesheet compiled with the
+project's Sass (`scripts/project-styles.cjs`) and, when the project has a Storybook, its components
+as their stories render them (`scripts/storybook-snapshot.cjs`, from a build it makes in the
+session when there is none) — the agent's brief says how.
 
 1. POST `{"taskId":"T","step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
 2. Spawn the mockup agent from `references/mockup-agent.md`, per "Spawning a sub-agent".
