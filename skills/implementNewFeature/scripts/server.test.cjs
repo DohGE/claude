@@ -746,6 +746,24 @@ test('POST /api/answer records mockup feedback in the chat as it arrives', async
   assert.strictEqual((await task0(base)).steps[2].chat.length, 1);
 });
 
+test('POST /api/answer: a Claude artifact of the mockups leaves the round on screen and goes to the orchestrator', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 3, enabled: true });
+  await postState(base, { step: 3, status: 'in_progress', activeStep: 3, currentOperation: 'Waiting for your review',
+    mockupReview: { text: 'Two screens', screens: [] } });
+  const res = await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'artifact' });
+  assert.equal(res.status, 200);
+  const task = await task0(base);
+  assert.ok(task.mockupReview && !task.mockupReview.answered, 'the round stays up for review');
+  assert.strictEqual(task.steps[2].currentOperation, 'Waiting for your review', 'the review goes on');
+  assert.deepStrictEqual(said(task.steps[2].chat), [], 'no chat line: the orchestrator posts the link');
+  assert.match(JSON.stringify(task.steps[2].log), /Claude artifact of the mockups requested/);
+  const answer = (await (await fetch(`${base}/api/answer?taskId=t1&wait=1`)).json()).answer;
+  assert.deepStrictEqual([answer.kind, answer.decision], ['mockup', 'artifact']);
+});
+
 test('POST /api/state stamps reviewSummary with a fresh rev every round', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);

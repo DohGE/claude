@@ -49,6 +49,16 @@ session when there is none) — the agent's brief says how.
        then SendMessage `[Stopped] The user stopped you mid-work; what follows is what they sent next.`
        and, on the next line, the same `APPROVED — …` text: the brief has the agent put back the
        round the user saw before recording it. Back to 3.
+     - `decision=="artifact"` → the "Create Claude artifact" button: the user wants the round on
+       screen as a Claude artifact. The agent is not involved and the round stays up for review.
+       Run `node "<SKILL_DIR>/scripts/mockup-artifact.cjs" "<SESSION>/tasks/T" --title="<T's branch>"`
+       → one JSON line, `{page, files, screens}` (or `{error}`): a gallery page of every view and
+       state at desktop and mobile width, and the screens and stylesheets it frames. Publish it with
+       the Artifact tool - `file_path` = `page`, `files` = `files`, a one-sentence description naming
+       the feature - always from that same `page` path, so a later press updates the same artifact.
+       Then POST `{"taskId":"T","step":3,"mockupChat":{"role":"agent","text":"Claude artifact: <url>"}}`
+       - or, when the script or the publish failed, the reason in the same field - and keep waiting
+       for the round.
    - `{"type":"result","summary","screens":[…]}` (only ever arrives after the approval message) →
      POST `{"taskId":"T","step":3,"status":"completed","progress":100,"mockupReview":null,"activeStep":<the next step>}`
      and continue there. Keep the screen count and the summary only — never the mockup markup.

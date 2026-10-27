@@ -845,6 +845,10 @@ function createApp(sessionDir, opts = {}) {
         body.duringRework = true;
         say(step, 'Approved — dropping the rework, recording the approved round…',
           'The mockups were approved during the rework');
+      } else if (body.decision === 'artifact') {
+        // A Claude artifact of the round on screen: the orchestrator builds and publishes it and
+        // posts its link in the chat, while the round stays up for review.
+        if (step) pushLog(step, 'Claude artifact of the mockups requested');
       }
     }
   }
