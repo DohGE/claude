@@ -25,6 +25,8 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview [target] --no-windows` | any of the above, but no sub-agent walks a window of files: the invoking conversation walks every file itself (for a session that cannot dispatch one; see [Token cost](#token-cost)) |
 | `/codeReview [target] --no-dedup-items` | any of the above, but every bundle shows every item in full, instead of an item an earlier bundle already showed arriving as a reference to that bundle (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
+| `/codeReview [target] --walker-model=<model>` | any of the above, but every window walker is dispatched on that model (the Agent tool's `model`, e.g. `sonnet`) instead of inheriting this session's |
+| `/codeReview [target] --walker-effort=<low\|medium\|high\|max>` | any of the above, but every window walker's prompt carries that thinking directive |
 
 A branch list is split on `,` and `;`. Git allows both characters inside a ref name, so a branch
 literally called `feature/a,b` cannot be named in that list — it would be read as two branches and
@@ -320,7 +322,8 @@ Every target is scanned for copy-paste by [jscpd](https://github.com/kucherenko/
 
 - **What is scanned** — the whole reviewed revision, not only the changed files, because a copy of an untouched file is found only when that file is scanned too: the branch's commit, the index for `staged`, the working tree for `folder` (tracked and untracked files, not the ignored ones). The revision is exported to a temporary folder outside the repository and deleted afterwards; the checkout, the index and every ref stay as they were. Paths the review skips and `.snap` files are left out.
 - **What is kept** — only the clone pairs the diff wrote: one side has to be at least half made of changed lines, and the block has to exist at least three times, because a duplication is a finding from its third copy.
-  Pairs that share a block (overlapping sides in one file) chain into one group of copies, the pairs the diff did not touch included.
+  The copies of a block are what it was paired with and what those were paired with — two steps, the pairs the diff did not touch included, never the whole chain of overlapping blocks behind them: on an Angular monorepo that chain put a median of 9 337 "copies" behind each of 50 candidates, 59 MB of context and bundles no Read could open.
+  A block with more than 12 copies is boilerplate (a TestBed setup, a store skeleton) and is not a candidate — the context's warnings count them — and a candidate names at most 3 of its copies, with `copies` giving the total.
   The written side is the copy the finding is anchored on, every other copy of its group a source it repeats.
   Editing one line inside a clone that already existed is therefore not a candidate.
   jscpd's own `--baseline-from-ref` was measured and rejected for exactly that case: a one-literal edit changes the clone's fingerprint and reads as two new clones.

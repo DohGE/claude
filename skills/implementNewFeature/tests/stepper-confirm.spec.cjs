@@ -33,6 +33,7 @@ async function openStep1(page) {
   await page.waitForSelector('#task');
   await page.fill('#task', 'Opis zadania');
   await page.fill('#branch', 'feature/test');
+  await page.fill('#commitMessage', 'feat: test');
 }
 
 async function openQuestion(page) {

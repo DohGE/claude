@@ -256,6 +256,34 @@ function copyEnvFiles(project, root, dir = '') {
   return copied;
 }
 
+// The other local-only config a checkout keeps out of git and an app will not start without:
+// `*.local.*` files such as `proxy.dpx.local.js` or `environment.local.ts`. Only what git
+// IGNORES and does not track is copied - a tracked file of that name is in the worktree already,
+// and copying the checkout's edited copy over it would carry uncommitted work across.
+// Measured on a dpx worktree: without its `proxy.dpx.local.js` the dev server never came up,
+// and two E2E runs failed with 32 times ERR_CONNECTION_REFUSED before anyone looked at a file.
+const isLocalConfig = (name) => /(^|\.)local\.[A-Za-z0-9]+$/.test(name) && !name.startsWith('.env');
+
+function copyLocalFiles(project, root, list = () => tryGit(project, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory'])) {
+  const copied = [];
+  for (const rel of String(list() || '').split('\n').map((line) => line.trim()).filter(Boolean)) {
+    // `--directory` collapses an ignored folder (node_modules/, dist/) into one entry.
+    if (rel.endsWith('/') || !isLocalConfig(path.basename(rel))) continue;
+    const parts = rel.split('/');
+    if (parts.some((part) => notWalked.has(part) || part.startsWith('.claude'))) continue;
+    const target = path.join(root, rel);
+    if (fs.existsSync(target)) continue;
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(project, rel), target);
+      copied.push(rel);
+    } catch {
+      // best-effort, like the `.env*` copy: a file that cannot be copied is reported by its absence
+    }
+  }
+  return copied;
+}
+
 function add(options) {
   const project = path.resolve(options.project || process.cwd());
   // The git seam. It exists for the one failure this function has to clean up
@@ -409,7 +437,8 @@ function main() {
 
 module.exports = {
   parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
-  detectPackageManager, installDependencies, installFailure, copyEnvFiles, add, remove, git, tryGit,
+  detectPackageManager, installDependencies, installFailure, copyEnvFiles, copyLocalFiles, isLocalConfig,
+  add, remove, git, tryGit,
 };
 
 if (require.main === module) main();

@@ -184,7 +184,9 @@ function renderSpecs(specs, root) {
 }
 
 function renderCandidates(candidates, withPath) {
-  return candidates.map((c) => `- ${withPath ? `${c.path}:` : 'L'}${c.lines} powtarza ${c.sources.join('; ')} (${c.kinds.join(', ')})`);
+  // `copies` is there when the scan named only some of them (duplication-scan.cjs sourceLimit).
+  const rest = (c) => (c.copies ? ` i ${c.copies - 1 - c.sources.length} kolejnych miejsc` : '');
+  return candidates.map((c) => `- ${withPath ? `${c.path}:` : 'L'}${c.lines} powtarza ${c.sources.join('; ')}${rest(c)} (${c.kinds.join(', ')})`);
 }
 
 // What the plan says of one item beyond its text (rulebook extras): the severity its finding

@@ -115,7 +115,11 @@ test('with --files every path gets its most specific kind, the kind\'s plan and 
   assert.strictEqual(files.get('src/app/y/+state/y.reducer.ts').rules, reducer.rules, 'one copy per kind, not per file');
   assert.ok(reducer.rules.startsWith(s.rulesDir));
   assert.strictEqual(reducer.projectRules, null, 'no project rulebook, no rule of its own');
-  assert.deepStrictEqual(files.get('README.md'), { path: 'README.md', kind: null, rules: null, projectRules: null, checklist: [] });
+  assert.deepStrictEqual(files.get('README.md'), { path: 'README.md', kind: null, rules: null, digest: null, projectRules: null, checklist: [] });
+  // The refinement plans from a digest: each item's address and first clause, nothing else.
+  const digest = fs.readFileSync(reducer.digest, 'utf8');
+  assert.ok(digest.startsWith('# `reducer`') && digest.includes('(digest)'), digest);
+  assert.ok(digest.split('\n').filter((l) => l.startsWith('- ')).every((l) => /^- [a-z-]+#\d+: /.test(l)), digest);
   assert.strictEqual(out.warnings.length, 1, out.warnings.join(' | '));
   assert.match(out.warnings[0], /^1 file\(s\) match no file kind .*README\.md$/);
   assert.strictEqual(out.projectInstructionsDir, null);

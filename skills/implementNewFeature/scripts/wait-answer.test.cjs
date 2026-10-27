@@ -48,7 +48,18 @@ test('every poll names the task and the session it is for', async (t) => {
   const port = await fakeServer(t, [{ kind: 'answer', taskId: 't2', value: 'a' }], { seen });
   await waitAnswer({ port, task: 't2', session: 's 2', windowMs: 5000, pollS: 7, lockDir: lockDir(t), write: () => {} });
   assert.deepStrictEqual(seen, ['/api/answer?taskId=t2&session=s%202&wait=5',
-    '/api/answer?taskId=t2&session=s%202']);
+    '/api/answer?taskId=t2&session=s%202', '/api/answer?taskId=t2&session=s%202&wait=2']);
+});
+
+test('an answer that arrives a moment after the first rides the same wake-up', async (t) => {
+  // The first answer, an empty drain, then the settle poll that catches the second one.
+  const replies = [{ kind: 'message', taskId: 't1', text: 'a' }, null, { kind: 'decision', taskId: 't1', decision: 'approve' }, null, null];
+  const server = http.createServer((req, res) => res.end(JSON.stringify({ answer: replies.shift() || null })));
+  t.after(() => server.close());
+  const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+  const lines = [];
+  assert.strictEqual(await waitAnswer({ port, task: 't1', windowMs: 5000, lockDir: lockDir(t), write: (l) => lines.push(l) }), 'ANSWER');
+  assert.deepStrictEqual(lines.map((l) => JSON.parse(l.slice('ANSWER '.length)).kind), ['message', 'decision']);
 });
 
 test('an empty window ends in WAIT_TIMEOUT and releases the lock', async (t) => {

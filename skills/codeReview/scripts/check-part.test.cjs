@@ -898,3 +898,28 @@ test('noSpecConflicts: a no-spec finding against test-coverage findings on the s
   assert.deepStrictEqual(cp.noSpecConflicts([sections[0]], rules), [], 'other instructions on the same spec are no conflict');
   assert.deepStrictEqual(cp.noSpecConflicts(sections, {}), []);
 });
+
+test('a verdict wrong only in form is put right before the check, and nothing else is touched', () => {
+  const part = [
+    '## a.ts',
+    '<!-- checklist: src/a.ts',
+    '[ ] general#1 — OK (L4)',
+    '[x] general#2 walidatory — NIEZWERYFIKOWANE poza recenzją: src/base.ts',
+    '[ ] general#3 OnPush — NARUSZENIE (7)',
+    '[x] general#4-6 — OK (brak wystąpień)',
+    '[ ] general#7 runtime — NIEZWERYFIKOWANE: narzędzie: brak eslint',
+    '-->',
+    '[ ] poza blokiem — OK (L1)',
+  ].join('\n');
+  const { text, fixes } = cp.normalizePart(part);
+  assert.deepStrictEqual(text.split('\n').slice(2, 7), [
+    '[x] general#1 — OK (L4)',
+    '[ ] general#2 walidatory — NIEZWERYFIKOWANE: poza recenzją: src/base.ts',
+    '[x] general#3 OnPush — NARUSZENIE (7)',
+    '[x] general#4-6 — OK (brak wystąpień)',
+    '[ ] general#7 runtime — NIEZWERYFIKOWANE: narzędzie: brak eslint',
+  ]);
+  assert.strictEqual(text.split('\n')[8], '[ ] poza blokiem — OK (L1)', 'a line outside the block is not a verdict');
+  assert.strictEqual(fixes.length, 4);
+  assert.deepStrictEqual(cp.normalizePart('<!-- checklist: x\n[x] a#1 — OK (L1)\n-->').fixes, [], 'a correct part is left alone');
+});

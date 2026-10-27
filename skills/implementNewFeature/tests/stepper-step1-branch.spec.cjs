@@ -30,6 +30,7 @@ test.afterEach(async () => {
 test('Next pozostaje zablokowany bez nazwy brancha', async ({ page }) => {
   await expect(page.locator('#next')).toBeDisabled();
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
   await expect(page.locator('#next')).toBeEnabled();
 });
 
@@ -41,6 +42,7 @@ test('nazwy nielegalne w gicie blokują Next i pokazują podpowiedź', async ({ 
     await expect(page.locator('#branchHint')).toBeVisible();
   }
   await page.fill('#branch', 'feature/ok-123');
+  await page.fill('#commitMessage', 'feat: test');
   await expect(page.locator('#branchHint')).toBeHidden();
   await expect(page.locator('#next')).toBeEnabled();
 });
@@ -55,6 +57,7 @@ test('pusty branch nie pokazuje podpowiedzi — nic jeszcze nie jest błędem', 
 
 test('branch trafia do odpowiedzi i do stanu taska', async ({ page }) => {
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
   await page.click('#next');
   await page.click('#confirmOk');
   const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
@@ -67,6 +70,7 @@ test('branch trafia do odpowiedzi i do stanu taska', async ({ page }) => {
 
 test('potwierdzenie pierwszego zgłoszenia mówi, że można wrócić', async ({ page }) => {
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
   await page.click('#next');
   await expect(page.locator('#confirmText'))
     .toContainText('come back and edit it until implementation starts');

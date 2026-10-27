@@ -1,6 +1,7 @@
 ---
 name: fixPr
 description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title
+argument-hint: "<branch>[;<branch>…] [--dry-run] [--no-push] [--keep-worktree] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:

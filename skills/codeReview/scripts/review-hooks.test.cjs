@@ -393,10 +393,13 @@ test('registration: the plugin runs every codeReview hook, SKILL.md none of them
     hooks: [{ type: 'command', command: 'node', args: [`\${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/${name}`, ...args], timeout }],
   });
   // The compaction note comes through the plugin's shared hook, which asks every skill's part.
-  assert.deepStrictEqual(config.hooks.SessionStart, [{
-    matcher: 'compact',
-    hooks: [{ type: 'command', command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/compact-hook.cjs', '--event=compact'], timeout: 10 }],
-  }]);
+  // A resumed session gets the same note, and the end of a turn the orchestrator's /compact hint.
+  const shared = (event, timeout) => ({ type: 'command', command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/compact-hook.cjs', `--event=${event}`], timeout });
+  assert.deepStrictEqual(config.hooks.SessionStart, [
+    { matcher: 'compact', hooks: [shared('compact', 10)] },
+    { matcher: 'resume', hooks: [shared('resume', 45)] },
+  ]);
+  assert.deepStrictEqual(config.hooks.Stop, [{ hooks: [shared('stop', 10)] }]);
   assert.ok(require('../../../scripts/compact-hook.cjs').parts.some((file) => file === path.join(__dirname, 'review-hooks.cjs')));
   assert.deepStrictEqual(config.hooks.PreToolUse, [
     { matcher: 'Write|Edit|Bash', ...run('check-part.cjs', [], 30) },

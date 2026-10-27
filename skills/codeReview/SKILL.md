@@ -1,6 +1,7 @@
 ---
 name: codeReview
 description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist; --light skips the rules of severity low and leaves Low findings and code snippets out) with severity, real line numbers, violated rule and expected result
+argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--with-rule-text] [--since-last] [--no-batch] [--no-windows] [--no-dedup-items] [--walker-model=<model>] [--walker-effort=<low|medium|high|max>] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -211,7 +212,12 @@ A target with an empty diff (`files` empty) lists none: it has no per-file parts
 It is empty for a target small enough to walk here, under `--no-windows` (Step 1) and for a resume with `resume.drafts`.
 With windows you do not walk the files yourself.
 After the `rm` and the header's Write, dispatch the windows in order, ONE AT A TIME — the parts must come in file order, so two walkers never run at once:
-`Agent(subagent_type: "doh:codereview-walker", description: "window <k>/<n>", prompt: "Read <brief> and follow it.")`, with the window's `brief` path; its reply is the one line `WINDOW DONE <first>-<last>` (FIXED IDENTIFIERS: `WINDOW DONE`, `WINDOW STOPPED`).
+`Agent(subagent_type: "doh:codereview-walker", description: "window <k>/<n>", model: <walker.model>, prompt: "Read <brief> and follow it.")`, with the window's `brief` path; its reply is the one line `WINDOW DONE <first>-<last>` (FIXED IDENTIFIERS: `WINDOW DONE`, `WINDOW STOPPED`).
+`walker` is a key of the Step 1 summary: leave `model` out when `walker.model` is empty, and when `walker.effort` is set add one line to the prompt — `medium` → `Effort: medium — think before each non-trivial decision.`, `high` → `Effort: high — think hard before each non-trivial decision.`, `max` → `Effort: max — ultrathink before each non-trivial decision.` (`think`, `think hard`, `ultrathink` are FIXED IDENTIFIERS, English verbatim); `low` adds nothing.
+A walker runs in the background, so do NOT end your turn to wait for it: right after the dispatch run (Bash tool) `node "<SKILL_DIR>/scripts/wait-part.cjs" --path="<the window's lastPart>"`, which waits under four minutes and prints `PART_READY` or `PART_PENDING` (FIXED IDENTIFIERS).
+`PART_READY` → the window is done: dispatch the next one in the same turn; its `WINDOW DONE` line, when it arrives later, needs nothing.
+`PART_PENDING` → run the same command again, up to six times in a row; after that end your turn and act on the walker's reply when it arrives.
+A turn ended while a walker runs is paid twice: whoever spawned this session is woken for nothing, and this conversation's context is re-read in full once its cache has expired.
 Any other reply, a refused dispatch, or no Agent tool in this session means the window is NOT done: walk it yourself from the first file of the window whose part is not on disk, exactly as the rest of this step says (each bundle's `## Dalej` lists what you read next), then dispatch the later windows as before.
 A session that cannot dispatch at all passes `--no-windows` in Step 1 instead.
 You are the walker when your prompt names a brief: the rest of this step is yours, for the files of that window only, and your reply is the one line.
@@ -517,9 +523,13 @@ For each file:
    exist in `contentPath`.
    A part that fails is NOT written: the call comes back with the list of problems, and the part's
    text waits in a draft, `<stem>.part<NN>.draft.md` in `target.workDir`.
-   Each problem quotes the draft lines it is about (`[szkic L<n>: "…"]`): fix exactly those with
-   Edit, without searching or re-reading the draft, in the message that carries the next batch's
-   Reads (after the last batch, before the cross-file pass).
+   Each problem quotes the draft lines it is about (`[szkic L<n>: "…"]`): Read the draft once,
+   in the message that carries the next batch's Reads (after the last batch, before the
+   cross-file pass) — the harness refuses an Edit of a file this conversation has not read, and
+   the hook wrote the draft, not you — then fix exactly those lines with Edit, without searching it.
+   A box that contradicts its verdict word and a NIEZWERYFIKOWANE that lost the colon before its
+   reason are not refusals: the hook puts them right and writes the part (`check-part: <part>
+   zapisana po poprawce formy`), and nothing needs doing.
    After every Edit of a draft the hook checks it again: when it passes, the hook writes the part, removes the draft and says so in its context (`check-part: <part> zapisana ze szkicu.`, with every later draft that can now follow), and otherwise it names what is still wrong, for the next Edit.
    Only when no such note came back, move the draft into place with the `--promote` command the refusal prints: it runs the same check.
    The draft saves re-sending every line the check already accepted; only when a refusal names no
@@ -538,12 +548,12 @@ For each file:
        [x] accessibility#3,#10-11,#15-16 — BRAMKA: plik nie buduje DOM ani nie zarządza fokusem
        [x] general#1-5,#7-9,#11-13 — OK (brak wystąpień)
        [x] general#6 importy między obszarami — NARUSZENIE (12, 18)
-       [x] general#10 nawigacja przez Router — OK (L14, L22, L31)
+       [x] general#10 — OK (L14, L22, L31)
        [x] component#1 OnPush — NARUSZENIE (4)
-       [x] component#2 osobny szablon i .scss — OK (L3)
+       [x] component#2 — OK (L3)
        [x] component#3-14,#17-27 — OK (brak wystąpień)
        [ ] component#15 walidatory runtime — NIEZWERYFIKOWANE: poza recenzją: src/app/shared/base-form.component.ts
-       [x] component#16 formularz → stan przez valueChanges — OK (L41)
+       [x] component#16 — OK (L41)
        -->
 
    - The block covers every item of the file's ticking list (point 1), in plan order — the plan's
@@ -583,9 +593,9 @@ For each file:
      `NARUSZENIE` and `NIEZWERYFIKOWANE` lines carry their own reason, and an OK with lines its own
      evidence, so they stay separate — a range is for the `brak wystąpień` run around them and for a
      gated-out instruction, never a way to sweep a violation into a neighbour's range.
-   - The 2–6 word label in your own words belongs on the lines that need it: `NARUSZENIE`,
-     `NIEZWERYFIKOWANE`, and a single-item `OK` worth naming. On a collapsed OK or BRAMKA range the
-     address IS the reference — do not spell out thirty rules to say the file has none of them.
+   - The 2–6 word label in your own words belongs on `NARUSZENIE` and `NIEZWERYFIKOWANE` lines
+     only. An `OK` or `BRAMKA` line is its address, its verdict and its evidence: the address IS the
+     reference, and a label on every passing item is output the finished report never shows.
    - `[x] … — OK (<where>)` — checked and compliant. `<where>` is where you saw the answer, one of:
      - the line numbers of THIS file that decide THIS item, as its Read printed them (`L12, L18`) —
        the declaration, call, binding or element its verdict was read from, and for an order rule
@@ -810,6 +820,10 @@ After a compaction, the hook names what of them to read again.
      Pass it only when this session cannot dispatch a sub-agent (it has no Agent tool), e.g. when it is itself a sub-agent.
    - `--no-dedup-items` → pass it through to the context script: every bundle shows every item in full.
      Without it `target.dedupItems` is true, and an item an earlier bundle of the run already showed is shown again only by reference (Step 3 point 1).
+   - `--walker-model=<model>` → pass it through to the context script (`walker.model`): the Agent tool `model` every window walker is dispatched with (Step 3, Windows), e.g. `sonnet`.
+     Without it the walkers inherit this session's model.
+   - `--walker-effort=<low|medium|high|max>` → pass it through to the context script (`walker.effort`): the thinking directive every walker's prompt carries (Step 3, Windows).
+     Without it the prompt carries none.
    - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read
      and — in staged mode — staged, where the reports land, and which `CLAUDE.md` and
      `.claude/doh/instructions/` bind. A caller whose work lives somewhere other than the current
@@ -834,7 +848,7 @@ After a compaction, the hook names what of them to read again.
      INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
      instead, which is how you review a folder of another repository.
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--with-rule-text] [--light] [--no-batch] [--no-dedup-items]`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--with-rule-text] [--light] [--no-batch] [--no-dedup-items] [--walker-model=<model>] [--walker-effort=<effort>]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
 5. Parse the JSON from stdout — the part of the context the review uses:
@@ -842,7 +856,7 @@ After a compaction, the hook names what of them to read again.
    - No targets / exit code 1 → stop after reporting the errors.
    - Report every top-level `warnings[]` entry, in Polish.
    - The file at `contextPath` IS the context every later step calls "the context JSON"; the scripts
-     and hooks read it. Its keys you use — `rulebookNotesPath`, `claudeMd`, and per target `start`,
+     and hooks read it. Its keys you use — `rulebookNotesPath`, `claudeMd`, `walker`, and per target `start`, `windows`,
      `commands`, `reportPath`, `htmlReportPath`, `workDir`, `crossBundlePath`, `resume`, `skipped`,
      `paths` (the reviewed files in order) — are in this summary: do not Read the file, whose
      60–75 kB would stay in your context until the first compaction. Read it (Read tool, never

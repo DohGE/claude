@@ -1732,8 +1732,49 @@ function sameDefectNotes(report, rules) {
   return notes;
 }
 
+// What a part's checklist block gets wrong only in form, put right before it is checked: a
+// verdict's box that contradicts its word (`[ ]` on OK, NARUSZENIE or BRAMKA, `[x]` on
+// NIEZWERYFIKOWANE) and a NIEZWERYFIKOWANE whose reason lost its colon. Each of these used
+// to cost a refused part and a rewrite, though the walk behind it was complete and the line
+// says unambiguously what it means. Anything that changes what a line SAYS - its address,
+// its evidence, its reason - is the walker's, and stays a refusal. Returns the text and the
+// fixes made, as `<address>: <what>`.
+function normalizePart(text) {
+  const fixes = [];
+  let inBlock = false;
+  const lines = String(text).split('\n').map((line) => {
+    if (/^\s*<!--\s*checklist:/.test(line)) inBlock = true;
+    else if (inBlock && /^\s*-->/.test(line)) inBlock = false;
+    if (!inBlock) return line;
+    const m = line.match(/^(\s*)\[( |x|X)\](\s+)(\S+)(.*)$/);
+    if (!m) return line;
+    const verdict = m[5].match(reVerdict);
+    if (!verdict) return line;
+    let [, indent, box, gap, address, rest] = m;
+    const word = verdict[1];
+    if (word === 'NIEZWERYFIKOWANE' && box !== ' ') {
+      box = ' ';
+      fixes.push(`${address}: [x] przy NIEZWERYFIKOWANE zamienione na [ ]`);
+    } else if (word !== 'NIEZWERYFIKOWANE' && box === ' ') {
+      box = 'x';
+      fixes.push(`${address}: [ ] przy ${word} zamienione na [x]`);
+    }
+    if (word === 'NIEZWERYFIKOWANE') {
+      const at = rest.search(/NIEZWERYFIKOWANE(?![\p{L}\p{N}_])/u) + 'NIEZWERYFIKOWANE'.length;
+      const tail = rest.slice(at);
+      if (/^\s+(narzędzie:|poza recenzją:|działająca aplikacja:)/.test(tail)) {
+        rest = `${rest.slice(0, at)}:${tail}`;
+        fixes.push(`${address}: dodany dwukropek po NIEZWERYFIKOWANE`);
+      }
+    }
+    return `${indent}[${box === 'X' ? 'x' : box}]${gap}${address}${rest}`;
+  });
+  return { text: lines.join('\n'), fixes };
+}
+
 // Resolves to what the hook prints and its exit code; any throw on the way means exit 0.
-// A string refuses the call (exit 2); `{ context }` lets it through with a note for the model.
+// A string refuses the call (exit 2); `{ context }` lets it through with a note for the model,
+// and `{ context, updatedInput }` lets it through as the normalised Write (normalizePart).
 function hookResult(input) {
   const tool = input && input.tool_name;
   const args = (input && input.tool_input) || {};
@@ -1743,8 +1784,9 @@ function hookResult(input) {
   const found = findContextFor(file);
   if (!found) return null;
   let text;
+  let fixes = [];
   if (tool === 'Write') {
-    text = String(args.content === undefined || args.content === null ? '' : args.content);
+    ({ text, fixes } = normalizePart(String(args.content === undefined || args.content === null ? '' : args.content)));
   } else {
     // An Edit is checked as the file it would leave behind.
     const current = fs.readFileSync(file, 'utf8');
@@ -1756,6 +1798,13 @@ function hookResult(input) {
   const problems = checkPart(found.context, found.target, file, text, { sequential: true, root: input.cwd, facts });
   if (problems.length === 0) {
     const notes = sameDefectNotes(partReport(text), rulesOf(facts));
+    if (fixes.length) {
+      return {
+        updatedInput: { ...args, content: text },
+        context: [`check-part: ${path.basename(file)} zapisana po poprawce formy (nic do zrobienia):`, ...fixes.map((fix) => `- ${fix}`),
+          ...(notes.length ? ['z uwagą:', ...notes.map((note) => `- ${note}`)] : [])].join('\n'),
+      };
+    }
     return notes.length ? { context: [`check-part: ${path.basename(file)} zapisana, z uwagą:`, ...notes.map((note) => `- ${note}`)].join('\n') } : null;
   }
   const draft = saveDraft(found.target, file, text);
@@ -1955,7 +2004,7 @@ function assemble(argv) {
 
 module.exports = {
   renderArgsOf, withDraftLines,
-  checkPart, checkAssembly, findContextFor, hookResult, scanPart, planItems, compact,
+  checkPart, checkAssembly, findContextFor, hookResult, normalizePart, scanPart, planItems, compact,
   rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellWrites, expandWord,
   promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName, noSpecConflicts,
 };
@@ -1971,6 +2020,10 @@ if (require.main === module) {
         if (!message) process.exit(0);
         if (typeof message === 'object') {
           const output = { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: message.context } };
+          // A Write whose only faults were formal goes through as the corrected text.
+          if (message.updatedInput) {
+            Object.assign(output.hookSpecificOutput, { permissionDecision: 'allow', updatedInput: message.updatedInput });
+          }
           process.stdout.write(JSON.stringify(output), () => process.exit(0));
           return;
         }

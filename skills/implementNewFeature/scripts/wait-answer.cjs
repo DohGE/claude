@@ -31,6 +31,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const pollSeconds = 290;
+// After an answer, how long one more poll waits for the next: a user who sends a line and then
+// presses a gate a second later is one wake-up of the orchestrator, not two - and every wake-up
+// re-reads its whole conversation.
+const settleSeconds = 2;
 
 function getJson(port, query, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -83,7 +87,7 @@ function releaseLock(lockPath) {
 }
 
 async function waitAnswer({ port, task, session = process.env.CLAUDE_CODE_SESSION_ID, windowMs, pollS = pollSeconds,
-  lockDir = os.tmpdir(), write = (line) => process.stdout.write(`${line}\n`) }) {
+  settleS = settleSeconds, lockDir = os.tmpdir(), write = (line) => process.stdout.write(`${line}\n`) }) {
   const lockPath = path.join(lockDir, `doh-answer-waiter-${port}-${task}.json`);
   const holder = acquireLock(lockPath, windowMs, session);
   if (holder) {
@@ -125,16 +129,24 @@ async function waitAnswer({ port, task, session = process.env.CLAUDE_CODE_SESSIO
       if (no) return no;
       if (!reply.answer) continue;
       write(`ANSWER ${JSON.stringify(reply.answer)}`);
-      // Whatever else is already queued goes out in the same wake-up.
-      for (;;) {
+      // Whatever else is already queued goes out in the same wake-up, and so does what arrives
+      // within `settleS` of the last one: the first empty poll of that length ends the wake-up.
+      // A drain (`--minutes 0`) only takes what is there.
+      const settleFor = windowMs > 0 ? settleS : 0;
+      for (let settle = 0; ;) {
         let next;
         try {
-          next = await getJson(port, query(0), 30000);
+          next = await getJson(port, query(settle), (settle + 30) * 1000);
         } catch {
           break;
         }
-        if (!next.answer) break;
+        if (!next.answer) {
+          if (settle || !settleFor) break;
+          settle = settleFor;
+          continue;
+        }
         write(`ANSWER ${JSON.stringify(next.answer)}`);
+        settle = 0;
       }
       return 'ANSWER';
     } while (Date.now() < deadline);

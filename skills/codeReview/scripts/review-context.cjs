@@ -63,8 +63,11 @@ function isSkippedPath(filePath) {
   return skipRes.some((re) => re.test(normalized));
 }
 
+// The effort levels a walker's prompt can carry, worded in SKILL.md Step 3 (Windows).
+const walkerEfforts = ['low', 'medium', 'high', 'max'];
+
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true, walkerModel: '', walkerEffort: '' };
   const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
@@ -85,7 +88,7 @@ function parseArgs(argv) {
     // default; `--dedup-items` is the old opt-in, kept so a caller that still passes it works.
     if (arg === '--dedup-items') { args.dedupItems = true; continue; }
     if (arg === '--no-dedup-items') { args.dedupItems = false; continue; }
-    const m = arg.match(/^--([a-z]+)=(.*)$/);
+    const m = arg.match(/^--([a-z][a-z-]*)=(.*)$/);
     // Anything unrecognised is refused rather than skipped: the user-facing flag
     // is `--only-md` while the script takes `--output=md`, so a silently dropped
     // argument would hand back an html context for a run the user asked to keep
@@ -96,10 +99,21 @@ function parseArgs(argv) {
     else if (m[1] === 'path') args.path = m[2];
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'output') args.output = m[2];
+    // What the window walkers are spawned with (Step 3 Windows): the Agent tool's `model` and
+    // the thinking directive their prompt carries. Recorded in the context, so a dispatch after
+    // a compaction still sends them on the model the caller picked.
+    else if (m[1] === 'walker-model') args.walkerModel = m[2].trim();
+    else if (m[1] === 'walker-effort') args.walkerEffort = m[2].trim();
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --light, --no-batch, --no-windows, --no-dedup-items, --dedup-items; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --light, --no-batch, --no-windows, --no-dedup-items, --dedup-items, --walker-model, --walker-effort; the skill's own --only-md maps to --output=md)`);
+  }
+  if (args.walkerModel && !/^[A-Za-z0-9][\w.[\]-]{0,63}$/.test(args.walkerModel)) {
+    throw new Error(`Unknown --walker-model=${args.walkerModel} (expected a value the Agent tool's model parameter takes, e.g. sonnet)`);
+  }
+  if (args.walkerEffort && !walkerEfforts.includes(args.walkerEffort)) {
+    throw new Error(`Unknown --walker-effort=${args.walkerEffort} (expected ${walkerEfforts.join('|')})`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -967,6 +981,8 @@ function buildContext(options) {
   const wantsHtml = options.output !== 'md';
   const result = {
     outputFormat: wantsHtml ? 'html' : 'md',
+    // '' is inherit: no `model` on the dispatch, no directive in the prompt.
+    walker: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
     // The root every file `path` is relative to - where the part check finds a file an OK names.
     project,
     instructionsCatalog: [],
@@ -1368,6 +1384,9 @@ function buildContext(options) {
       if (scan.omitted > 0) {
         result.warnings.push(`[${target.branch}] Duplication scan: ${scan.omitted} more duplication candidate(s) found than the ${scan.candidates.length} listed - they are not in this review.`);
       }
+      if (scan.boilerplate > 0) {
+        result.warnings.push(`[${target.branch}] Duplication scan: ${scan.boilerplate} changed block(s) repeat a pattern found more than ${require('./duplication-scan.cjs').maxCopies} times in the codebase - boilerplate, not listed as candidates.`);
+      }
     }
   }
 
@@ -1571,7 +1590,9 @@ function buildContext(options) {
           return { number, path: file.path, partPath: reviewBundle.partPathOf(target.reportPath, number, n), reads: reviewBundle.readsOf([file]) };
         })),
       })]);
-      return { files: windowSpans[k], brief };
+      // The part of the window's last file: once it is on disk the window is done, which is what
+      // the dispatcher waits for without ending its turn (SKILL.md Step 3, Windows).
+      return { files: windowSpans[k], brief, lastPart: reviewBundle.partPathOf(target.reportPath, windowSpans[k][1], n) };
     });
     target.batches = batches.filter((batch) => batch.length > 1).map((batch) => [batch[0], batch[batch.length - 1]]);
     target.start = batches.length > 0
@@ -1780,6 +1801,7 @@ function writeContext(context) {
     // What the review itself uses, so the reviewer never reads the whole context file: the
     // scripts and hooks read that one. Keys a step needs beyond these stay in `contextPath`.
     outputFormat: context.outputFormat,
+    walker: context.walker || { model: '', effort: '' },
     rulebookNotesPath: context.rulebookNotesPath,
     claudeMd: context.claudeMd,
     targets: context.targets.map((t) => ({

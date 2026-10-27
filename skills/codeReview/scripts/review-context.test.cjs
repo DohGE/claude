@@ -15,8 +15,15 @@ const { tempDir, run, commitFile, initRepo } = require('./test-helpers.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true, walkerModel: '', walkerEffort: '' },
   );
+  // The walkers' model and effort ride in the context, so a dispatch after a compaction keeps them.
+  assert.deepStrictEqual(
+    [rc.parseArgs(['--walker-model=sonnet']).walkerModel, rc.parseArgs(['--walker-effort=high']).walkerEffort],
+    ['sonnet', 'high'],
+  );
+  assert.throws(() => rc.parseArgs(['--walker-effort=extreme']), /Unknown --walker-effort/);
+  assert.throws(() => rc.parseArgs(['--walker-model=a b']), /Unknown --walker-model/);
   assert.strictEqual(rc.parseArgs(['--no-windows']).windows, false, 'windows are on unless turned off');
   assert.deepStrictEqual(
     [rc.parseArgs(['--with-rule-text']).withRuleText, rc.parseArgs(['--with-rule-text']).withChecklist],

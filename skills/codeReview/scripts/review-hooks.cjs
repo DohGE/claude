@@ -365,7 +365,13 @@ function position(context, contextPath, skillFile) {
     out.push(`- zapisane części plików: ${n - missing.length}/${n}; następny plik ${k}/${n}: ${files[k - 1].path}, część ${partOf(k)}`);
     if (window) {
       // Whoever sent the walkers is the conversation that was compacted: the walk is theirs, not its own.
-      out.push(`- okno ${windows.indexOf(window) + 1}/${windows.length}: pliki ${window.files[0]}-${window.files[1]}; jeśli możesz wysłać sub-agenta, wyślij \`doh:codereview-walker\` z promptem \`Read ${window.brief} and follow it\` (części na dysku pomija) i czekaj na jedną linię \`${bundle.windowReplies.done} ${window.files[0]}-${window.files[1]}\`; bez Agent albo po odmowie przejdź plik ${k} sam, tak:`);
+      const walker = context.walker || {};
+      const model = walker.model ? ` z \`model: ${walker.model}\`` : '';
+      const effort = walker.effort && walker.effort !== 'low' ? ` (prompt z linią Effort: ${walker.effort} ze Step 3)` : '';
+      const wait = window.lastPart
+        ? ` i nie kończ tury: \`node "${skillDir}/scripts/wait-part.cjs" --path="${window.lastPart}"\` aż \`PART_READY\`, potem następne okno`
+        : ` i czekaj na jedną linię \`${bundle.windowReplies.done} ${window.files[0]}-${window.files[1]}\``;
+      out.push(`- okno ${windows.indexOf(window) + 1}/${windows.length}: pliki ${window.files[0]}-${window.files[1]}; jeśli możesz wysłać sub-agenta, wyślij \`doh:codereview-walker\`${model} z promptem \`Read ${window.brief} and follow it\`${effort} (części na dysku pomija)${wait}; bez Agent albo po odmowie przejdź plik ${k} sam, tak:`);
     }
     const range = (target.batches || []).find(([first, last]) => k >= first && k <= last);
     const walk = files.slice(k - 1, range ? range[1] : k);

@@ -91,6 +91,36 @@ test('overlapping clones of one block are one candidate', () => {
   ]);
 });
 
+test('a chain of clones is followed two steps from the copy, never through the whole repository', () => {
+  // copy ~ a ~ b ~ c ~ d: what shares tokens with a neighbour of a neighbour is not a copy.
+  const found = dup.pickCandidates([
+    clone(['src/a.ts', 1, 9], ['src/copy.ts', 1, 9]),
+    clone(['src/a.ts', 1, 9], ['src/b.ts', 1, 9]),
+    clone(['src/b.ts', 1, 9], ['src/c.ts', 1, 9]),
+    clone(['src/c.ts', 1, 9], ['src/d.ts', 1, 9]),
+  ], [added('src/copy.ts')]);
+  assert.deepStrictEqual(found, [{ path: 'src/copy.ts', lines: '1-9', sources: ['src/a.ts:1-9', 'src/b.ts:1-9'], kinds: ['exact'] }]);
+});
+
+test('a candidate names a few copies and counts the rest', () => {
+  const pairs = Array.from({ length: 6 }, (_, i) => clone([`src/o${i}.ts`, 1, 9], ['src/copy.ts', 1, 9]));
+  const [found] = dup.pickCandidates(pairs, [added('src/copy.ts')]);
+  assert.strictEqual(found.sources.length, dup.sourceLimit);
+  assert.deepStrictEqual(found.sources, ['src/o0.ts:1-9', 'src/o1.ts:1-9', 'src/o2.ts:1-9']);
+  assert.strictEqual(found.copies, 7, 'the copy and its six originals');
+});
+
+test('a block the codebase repeats everywhere is boilerplate, not a candidate', () => {
+  // A hub every spec setup is paired with: the copy stands next to it, and its walk stops
+  // as soon as it has seen more than maxCopies.
+  const hub = Array.from({ length: 40 }, (_, i) => clone(['src/hub.ts', 1, 9], [`src/s${i}.spec.ts`, 1, 9]));
+  const stats = {};
+  const found = dup.pickCandidates([clone(['src/hub.ts', 1, 9], ['src/copy.ts', 1, 9]), ...hub], [added('src/copy.ts')], stats);
+  assert.deepStrictEqual(found, []);
+  assert.strictEqual(stats.boilerplate, 1);
+  assert.ok(dup.maxCopies < 40);
+});
+
 test('a branch is exported from its commit, not from the checkout', (t) => {
   const dir = initRepo(t, 'dup-repo-');
   commitFile(dir, 'src/a.ts', 'base\n', 'base');

@@ -27,6 +27,7 @@ test.beforeEach(async ({ page }) => {
   await page.waitForSelector('#attachImages');
   await page.fill('#task', 'Opis zadania');
   await page.fill('#branch', 'feature/test');
+  await page.fill('#commitMessage', 'feat: test');
 });
 
 test.afterEach(async () => {

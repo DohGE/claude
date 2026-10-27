@@ -28,6 +28,7 @@ test.afterEach(async () => {
 async function fillRequired(page) {
   await page.fill('#task', 'Opis zadania');
   await page.fill('#branch', 'feature/test');
+  await page.fill('#commitMessage', 'feat: test');
 }
 
 const post = (path, body) => fetch(`${base}${path}`, {
@@ -127,6 +128,7 @@ test('skopiowane credentials zapisują się do auth.json nowego taska', async ({
   await page.click('#createTask');
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
   await page.fill('#branch', 'feature/drugi');
+  await page.fill('#commitMessage', 'feat: test');
   await submit(page, '#next');
   const got = await (await fetch(`${base}/api/answer?wait=10&taskId=t2`)).json();
   expect(got.answer.authProvided).toBe(true);
@@ -148,7 +150,7 @@ test('New empty task startuje bez credentials', async ({ page }) => {
 test('usunięcie wgranego pliku nie czyści wpisanych pól', async ({ page }) => {
   await post('/api/upload', { taskId: 't1', category: 'hints', filename: 'ekran.png',
     dataBase64: Buffer.from('png').toString('base64') });
-  await post('/api/answer', { taskId: 't1', kind: 'step1', taskDescription: 'Opis',
+  await post('/api/answer', { taskId: 't1', kind: 'step1', commitMessage: 'feat: test', taskDescription: 'Opis',
     branch: 'feature/pierwszy', hints: ['ekran.png'] });
   await page.reload();
   await page.waitForSelector('#files-hints');

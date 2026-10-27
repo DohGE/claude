@@ -44,8 +44,11 @@ test('GET /api/state returns one task with the 8-step pipeline, Mockups and Stor
   assert.equal(task.id, 't1');
   assert.deepEqual(task.steps.map(s => s.name),
     ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-      'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description']);
+      'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description', 'Final Code Review']);
   assert.ok(task.steps.every(s => s.status === 'waiting'));
+  // The review runs before validation, the final review after it; Mockoon is on demand.
+  assert.deepEqual(task.route, [1, 2, 3, 8, 4, 6, 5, 9]);
+  assert.equal(task.base, null);
   // Mockups and Story are the steps the stepper hides until a step-1 switch enables them;
   // refinement has a switch too, but it starts on.
   assert.deepEqual(task.steps.filter(s => s.enabled === false).map(s => s.id), [3, 8]);
@@ -236,7 +239,7 @@ test('POST /api/state with unknown step returns 400', async t => {
   const app = createApp(tmpDir());
   const base = await listen(app);
   t.after(() => app.server.close());
-  assert.equal((await postState(base, { step: 9, status: 'completed' })).status, 400);
+  assert.equal((await postState(base, { step: 10, status: 'completed' })).status, 400);
 });
 
 test('answer queue is FIFO per task and empties', async t => {
@@ -801,11 +804,11 @@ test('the step names SKILL.md quotes at the user are the names the server ships'
   const names = (await getState(base)).tasks[0].steps.map(s => s.name);
   const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
   for (const quoted of ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-    'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description']) {
+    'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description', 'Final Code Review']) {
     assert.ok(names.includes(quoted), 'the server still ships the step named ' + quoted);
     assert.ok(skill.includes(quoted), 'SKILL.md still names the step ' + quoted);
   }
-  assert.strictEqual(names.length, 8);
+  assert.strictEqual(names.length, 9);
 });
 
 test('an answer reaches the poll with the field names SKILL.md tells the run to read', async t => {
@@ -832,7 +835,10 @@ test('every field the page sends back is a field SKILL.md names', () => {
   // renamed, reaches an orchestrator that never learned to read it - and an unread
   // field is indistinguishable from a field the user left empty.
   const ui = fs.readFileSync(path.join(__dirname, 'ui', 'index.html'), 'utf8');
-  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  // The orchestrator reads SKILL.md and the step file of the step it is on (references/steps/).
+  const stepsDir = path.join(__dirname, '..', 'references', 'steps');
+  const skill = [path.join(__dirname, '..', 'SKILL.md'), ...fs.readdirSync(stepsDir).map((n) => path.join(stepsDir, n))]
+    .map((p) => fs.readFileSync(p, 'utf8')).join('\n');
   const names = new Set();
   for (let at = ui.indexOf('sendAnswer({'); at !== -1; at = ui.indexOf('sendAnswer({', at + 1)) {
     const open = ui.indexOf('{', at);
@@ -1013,7 +1019,11 @@ test('krok 1 zapamiętuje model i effort agenta, globalnie i per krok', async t 
   assert.deepStrictEqual(agents.steps['4'], { model: '', effort: 'max' });
   assert.deepStrictEqual(agents.steps['6'], { model: 'haiku', effort: '' });
   // Kroki bez nadpisania dziedziczą — w stanie stoją jako puste, nie jako brak klucza.
-  assert.deepStrictEqual(Object.keys(agents.steps), ['2', '3', '4', '5', '6', '7', '8']);
+  assert.deepStrictEqual(Object.keys(agents.steps), ['2', '3', '4', '5', '6', '7', '8', '9']);
+  // Every helper a step's agent spawns has a setting of its own, unset here.
+  assert.deepStrictEqual(Object.keys(agents.roles), ['reviewWalker', 'reviewFixer', 'validationRunner',
+    'validationCompliance', 'finalWalker', 'finalFixer']);
+  assert.ok(Object.values(agents.roles).every(r => r.model === '' && r.effort === ''));
 });
 
 test('model i effort spoza listy schodzą do dziedziczenia, nie lecą do agenta', async t => {
@@ -1181,7 +1191,7 @@ test('message do nieistniejącego kroku jest odrzucany', async t => {
   const base = await listen(app);
   t.after(() => app.server.close());
   const res = await post(base, '/api/answer',
-    { taskId: 't1', kind: 'message', step: 9, text: 'halo' });
+    { taskId: 't1', kind: 'message', step: 10, text: 'halo' });
   assert.strictEqual(res.status, 400);
   const { answer } = await (await fetch(`${base}/api/answer`)).json();
   assert.strictEqual(answer, null, 'odrzucona wiadomość nie trafia do kolejki');
@@ -1585,7 +1595,10 @@ test('a run resumed from a seven-step state gets the story step, and its form th
   const base = await listen(app);
   t.after(() => app.server.close());
   const task = await task0(base);
-  assert.deepStrictEqual(task.steps.map(s => s.id), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepStrictEqual(task.steps.map(s => s.id), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  // Started before the final review existed: it keeps validation before its one review.
+  assert.deepStrictEqual(task.route, [1, 2, 3, 8, 4, 5, 6]);
+  assert.strictEqual(task.steps.find(s => s.id === 9).enabled, false, 'a legacy task never runs the final review');
   const story = task.steps.find(s => s.id === 8);
   assert.strictEqual(story.name, 'Story Description');
   assert.strictEqual(story.enabled, false, 'an old form never asked for a story');
@@ -2189,4 +2202,110 @@ test('żądanie, które inna strona kazała wysłać przeglądarce, jest odrzuca
   assert.equal(await send('GET', '/api/state', { host: `evil.example:${port}` }), 403, 'a name rebound to 127.0.0.1');
   assert.equal(await send('GET', '/', { 'sec-fetch-site': 'cross-site' }), 200, 'a link to the page still opens it');
   assert.equal(await send('GET', '/api/state', { host: `localhost:${port}`, origin: `http://localhost:${port}` }), 200);
+});
+
+test('the final review follows its own switch and runs, and its settings repeat nothing', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { commitMessage: '  feat: hosts  ' });
+  let task = await task0(base);
+  assert.strictEqual(task.step1.finalReview, true, 'on unless switched off');
+  assert.deepStrictEqual(task.step1.finalCodeReview, [{ flags: ['--since-last'] }]);
+  assert.strictEqual(task.step1.commitMessage, 'feat: hosts');
+  assert.strictEqual(stepOf(task, 9).enabled, true);
+  await postState(base, { step: 1, status: 'completed' });
+  const res = await (await step1(base, { commitMessage: 'feat: hosts and clusters', finalReview: false,
+    finalCodeReview: [{ flags: ['--light'] }] })).json();
+  assert.deepStrictEqual(res.revision.changed, ['finalCodeReview', 'commit']);
+  assert.strictEqual(res.revision.restartAt, null, 'nothing before implementation reads them');
+  task = await task0(base);
+  assert.strictEqual(stepOf(task, 9).enabled, false);
+  assert.strictEqual(task.step1.commitMessage, 'feat: hosts and clusters');
+});
+
+test('every helper of a step takes a model and effort of its own', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { agents: { model: 'opus', roles: { reviewWalker: { model: 'sonnet', effort: 'low' },
+    validationRunner: { model: 'haiku' }, finalFixer: { effort: 'high' }, bogus: { model: 'sonnet' } },
+    steps: { 9: { model: 'sonnet' } } } });
+  const { agents } = (await task0(base)).step1;
+  assert.deepStrictEqual(agents.roles.reviewWalker, { model: 'sonnet', effort: 'low' });
+  assert.deepStrictEqual(agents.roles.validationRunner, { model: 'haiku', effort: '' });
+  assert.deepStrictEqual(agents.roles.finalFixer, { model: '', effort: 'high' });
+  assert.strictEqual(agents.roles.bogus, undefined, 'only the roles the pipeline spawns');
+  assert.deepStrictEqual(agents.steps['9'], { model: 'sonnet', effort: '' });
+});
+
+test('the base a task starts from is kept for its pull request', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.strictEqual((await postState(base, { base: 'master' })).status, 200);
+  assert.strictEqual((await task0(base)).base, 'master');
+});
+
+test('the final review takes the E2E slot for its regression run and frees it when done', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await post(base, '/api/tasks', {});
+  assert.deepStrictEqual(await (await post(base, '/api/e2e', { taskId: 't1' })).json(), { granted: true });
+  await postState(base, { step: 5, status: 'in_progress' });
+  await post(base, '/api/state', { taskId: 't2', step: 9, status: 'in_progress', activeStep: 9 });
+  const queued = await (await post(base, '/api/e2e', { taskId: 't2', step: 9 })).json();
+  assert.strictEqual(queued.granted, false);
+  let t2 = (await getState(base)).tasks[1];
+  assert.strictEqual(stepOf(t2, 9).status, 'in_progress', 'the review waits mid-step, it is not put back');
+  assert.strictEqual(stepOf(t2, 9).currentOperation, 'Waiting for the E2E slot');
+  await postState(base, { step: 5, status: 'completed' });
+  assert.deepStrictEqual(await (await fetch(`${base}/api/answer?taskId=t2`)).json(), { answer: { kind: 'e2e', taskId: 't2' } });
+  t2 = (await getState(base)).tasks[1];
+  assert.strictEqual(stepOf(t2, 9).currentOperation, 'Took the E2E slot');
+  await post(base, '/api/state', { taskId: 't2', step: 9, status: 'completed' });
+  assert.strictEqual((await getState(base)).e2e.holder, null);
+  assert.strictEqual((await post(base, '/api/e2e', { taskId: 't1', step: 6 })).status, 400, 'the first review runs no suite');
+});
+
+test('shutdown with a pull request reaches every finished task, and leaves a request file for each', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.strictEqual((await post(base, '/api/answer', { taskId: 't1', kind: 'summary', decision: 'shutdown_pr' })).status, 409,
+    'nothing finished, nothing to open');
+  await post(base, '/api/tasks', {});
+  await post(base, '/api/tasks', {});
+  await step1(base, { commitMessage: 'feat: hosts' });
+  assert.strictEqual((await (await fetch(`${base}/api/answer?taskId=t1`)).json()).answer.kind, 'step1');
+  await postState(base, { branch: 'feature/x', base: 'master', root: '/w/x', summary: { finalStatus: 'Completed' } });
+  await post(base, '/api/state', { taskId: 't2', summary: { finalStatus: 'Failed at Implementation' } });
+  const res = await (await post(base, '/api/answer', { taskId: 't2', kind: 'summary', decision: 'shutdown_pr' })).json();
+  assert.deepStrictEqual(res, { ok: true, tasks: ['t1'] });
+  const request = JSON.parse(fs.readFileSync(path.join(dir, 'tasks', 't1', 'pr-request.json'), 'utf8'));
+  assert.deepStrictEqual({ ...request, requestedAt: undefined },
+    { requestedAt: undefined, taskId: 't1', branch: 'feature/x', base: 'master', root: '/w/x', commitMessage: 'feat: hosts' });
+  assert.ok(!fs.existsSync(path.join(dir, 'tasks', 't2', 'pr-request.json')), 'a failed task gets no pull request');
+  assert.deepStrictEqual(await (await fetch(`${base}/api/answer?taskId=t1`)).json(),
+    { answer: { kind: 'summary', decision: 'shutdown_pr', taskId: 't1' } });
+  assert.strictEqual((await (await fetch(`${base}/api/answer?taskId=t2`)).json()).answer, null);
+});
+
+test('the last mockup round can be approved while the agent reworks it', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await postState(base, { step: 3, status: 'in_progress', activeStep: 3, mockupReview: { text: 'r1', screens: [] } });
+  await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'feedback', text: 'dark mode too' });
+  assert.ok((await task0(base)).mockupReview.answered, 'the round is off the screen while reworked');
+  await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'approve' });
+  const task = await task0(base);
+  assert.strictEqual(task.mockupReview, null);
+  assert.strictEqual(stepOf(task, 3).currentOperation, 'Approved — dropping the rework, recording the approved round…');
+  await nextAnswer(base);
+  const approved = await nextAnswer(base);
+  assert.strictEqual(approved.decision, 'approve');
+  assert.strictEqual(approved.duringRework, true, 'the orchestrator stops the rework first');
 });
