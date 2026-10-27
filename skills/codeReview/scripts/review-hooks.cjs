@@ -361,7 +361,7 @@ function position(context, contextPath, skillFile) {
       const wait = window.lastPart
         ? ` i nie kończ tury: \`node "${skillDir}/scripts/wait-part.cjs" --path="<lastPart każdego wysłanego okna>"\` aż \`PART_READY\`, potem następne okno`
         : ` i czekaj na jedną linię \`${bundle.windowReplies.done} ${window.files[0]}-${window.files[1]}\``;
-      out.push(`- workflow recenzji (\`target.workflow\`), jeśli go uruchomiłeś i nie przyszło jego powiadomienie, jeszcze działa: czekaj na nie, nie wysyłaj okien drugi raz.`);
+      out.push(`- workflow recenzji (\`workflow\` kontekstu, jeden dla wszystkich celów z oknami), jeśli go uruchomiłeś i nie przyszło jego powiadomienie, jeszcze działa: czekaj na nie, nie wysyłaj okien drugi raz.`);
       out.push(`- okno ${windows.indexOf(window) + 1}/${windows.length}: pliki ${window.files[0]}-${window.files[1]}; bez workflow wyślij \`doh:codereview-walker\`${model}${effort} z promptem \`Read ${window.brief} and follow it.\`${lanes} (części na dysku pomija)${wait}; bez Agent albo po odmowie przejdź plik ${k} sam według ${bundle.walkRulesPath}, tak:`);
     }
     const range = (target.batches || []).find(([first, last]) => k >= first && k <= last);
@@ -370,8 +370,10 @@ function position(context, contextPath, skillFile) {
     out.push('- przeczytaj (Read) w jednej odpowiedzi, także to, co czytałeś przed kompaktowaniem - tego tekstu nie ma już w rozmowie, a kilka Grep po pozycjach to kilka odpowiedzi:', ...bundle.readsOf(walk).map((p) => `  - ${p}`));
   } else if (n > 0 && !exists(n + 1)) {
     out.push(`- części plików zapisane (${n}/${n}); następne: przejście międzyplikowe, część ${partOf(n + 1)}`);
-    if (target.crossBriefPath) {
+    if (target.crossBriefPath && !target.crossInline) {
       out.push(`- robi je świeży agent: wyślij \`doh:codereview-walker\` z promptem \`Read ${target.crossBriefPath} and follow it.\` i czekaj na \`${bundle.crossReplies.done}\` (\`wait-part.cjs --path="${partOf(n + 1)}"\`); bez Agent:`);
+    } else if (target.crossInline) {
+      out.push('- mały cel (`crossInline`): przejście robisz sam, w tej rozmowie:');
     }
     out.push('- przeczytaj (Read) w jednej odpowiedzi:', `  - ${target.crossBundlePath}`, `  - ${skillDir}/references/cross-file.md`);
   } else {

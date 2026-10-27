@@ -2201,6 +2201,7 @@ function renderMockupReview(review, step) {
     <div class="gate-actions">
       <button id="approveMockup">Approve mockups</button>
       ${screenshotsButton()}
+      <button type="button" id="mockupArtifact" class="secondary">Create Claude artifact</button>
       ${backButton()}
     </div>
     <p class="hint" id="shotsHint" hidden></p>
@@ -2285,7 +2286,29 @@ function renderMockupReview(review, step) {
   wireStop(step);
   wireDelete(step);
   wireScreenshots();
+  wireArtifact();
   drawPreview(review);
+}
+
+// A Claude artifact of the round on screen: only the orchestrator can publish one, so the press
+// is an answer it acts on - not a decision, the panel stays open for the review - and the link
+// arrives in the chat. Sent directly, never through sendFrom, which would lock the panel.
+function wireArtifact() {
+  const btn = $('#mockupArtifact');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    let ok = false;
+    try {
+      ok = !!(await sendAnswer({ kind: 'mockup', decision: 'artifact' })).ok;
+    } catch (_e) { /* said below */ }
+    const hint = $('#shotsHint');
+    if (!hint) return;
+    hint.classList.toggle('error', !ok);
+    hint.textContent = ok
+      ? 'Requested — the orchestrator publishes these mockups as a Claude artifact and posts its link in the chat below.'
+      : 'Could not reach the server.';
+    hint.hidden = false;
+  });
 }
 
 // The PNGs of every mockup round sit on disk next to the mockups, and a page cannot open

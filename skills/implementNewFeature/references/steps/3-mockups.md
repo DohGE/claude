@@ -6,6 +6,10 @@ stepper never shows it, and the step before it already moved `activeStep` past i
 The agent designs from what refinement settled when step 2 ran, and from the requirements form
 alone when it did not — its brief tells the two apart by whether `spec.md` exists, so nothing
 about it reaches the prompt. It draws the dark theme too when the application has one.
+Every screen wears the project's own styling: the app's global stylesheet compiled with the
+project's Sass (`scripts/project-styles.cjs`) and, when the project has a Storybook, its components
+as their stories render them (`scripts/storybook-snapshot.cjs`, from a build it makes in the
+session when there is none) — the agent's brief says how.
 
 1. POST `{"taskId":"T","step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
 2. Spawn the mockup agent from `references/mockup-agent.md`, per "Spawning a sub-agent".
@@ -45,6 +49,16 @@ about it reaches the prompt. It draws the dark theme too when the application ha
        then SendMessage `[Stopped] The user stopped you mid-work; what follows is what they sent next.`
        and, on the next line, the same `APPROVED — …` text: the brief has the agent put back the
        round the user saw before recording it. Back to 3.
+     - `decision=="artifact"` → the "Create Claude artifact" button: the user wants the round on
+       screen as a Claude artifact. The agent is not involved and the round stays up for review.
+       Run `node "<SKILL_DIR>/scripts/mockup-artifact.cjs" "<SESSION>/tasks/T" --title="<T's branch>"`
+       → one JSON line, `{page, files, screens}` (or `{error}`): a gallery page of every view and
+       state at desktop and mobile width, and the screens and stylesheets it frames. Publish it with
+       the Artifact tool - `file_path` = `page`, `files` = `files`, a one-sentence description naming
+       the feature - always from that same `page` path, so a later press updates the same artifact.
+       Then POST `{"taskId":"T","step":3,"mockupChat":{"role":"agent","text":"Claude artifact: <url>"}}`
+       - or, when the script or the publish failed, the reason in the same field - and keep waiting
+       for the round.
    - `{"type":"result","summary","screens":[…]}` (only ever arrives after the approval message) →
      POST `{"taskId":"T","step":3,"status":"completed","progress":100,"mockupReview":null,"activeStep":<the next step>}`
      and continue there. Keep the screen count and the summary only — never the mockup markup.

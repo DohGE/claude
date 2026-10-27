@@ -2258,7 +2258,12 @@ function repoSearchAnswer(entries, { tests = false } = {}) {
     .map((e) => `${e.what} ${cut(e.shown)} L${e.lines.join(', L')} - ${e.count > 1 ? `${e.count}× w tym pliku, ` : ''}${same(e)}`);
   const listed = entries.length > limit ? `${shown.join('; ')} (+${entries.length - limit} dalszych - te wyszukaj sam)` : shown.join('; ');
   const against = tests ? 'z innymi testami oraz ze skryptami (bez testów)' : 'ze skryptami (bez testów)';
-  return `porównane ${against}, szablonami i bazowym plikiem tłumaczeń repozytorium: ${listed}. ${limits}`;
+  // A value a spec repeats in its own cases is test data: the shape of the spec, not duplicated
+  // logic - every High in a measured run was such a fixture literal, reported twice.
+  const ownData = tests && entries.some((e) => e.count > 1)
+    ? ' Powtórzenie w obrębie jednego specu to dane testowe: unit-tests#12 (Medium), nie code-quality#1.'
+    : '';
+  return `porównane ${against}, szablonami i bazowym plikiem tłumaczeń repozytorium: ${listed}.${ownData} ${limits}`;
 }
 
 // `input-binding`: where the routing setup turns on `withComponentInputBinding()`, and

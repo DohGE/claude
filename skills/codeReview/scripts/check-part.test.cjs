@@ -635,9 +635,14 @@ test('assembly --assemble: only a passed check appends the parts, removes them w
   const f = fixture(t);
   const work = path.join(f.branchDir, 'raport.work');
   const ledger = path.join(f.branchDir, 'raport.imports.txt');
+  const snapshot = path.join(f.branchDir, 's', '10-00-00-1');
   fs.writeFileSync(ledger, 'src/a.ts:1 → ./b\n');
+  fs.mkdirSync(path.join(snapshot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(snapshot, 'src', 'a.ts'), 'x\n');
   f.target.workDir = work;
   f.target.importLedger = ledger;
+  f.target.snapshotDir = snapshot.replace(/\\/g, '/');
+  f.target.snapshotOwned = true;
   f.target.htmlReportPath = null;
   f.target.withChecklist = true;
   fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
@@ -645,7 +650,7 @@ test('assembly --assemble: only a passed check appends the parts, removes them w
   fs.writeFileSync(f.part(1), partA());
   let r = assemble();
   assert.strictEqual(r.status, 1, 'a missing part stops everything');
-  assert.ok(fs.existsSync(f.part(1)) && fs.existsSync(work) && fs.existsSync(ledger), 'a refused assembly removes nothing');
+  assert.ok(fs.existsSync(f.part(1)) && fs.existsSync(work) && fs.existsSync(ledger) && fs.existsSync(snapshot), 'a refused assembly removes nothing');
   fs.writeFileSync(f.part(2), partB);
   fs.writeFileSync(f.part(3), answered);
   r = assemble();
@@ -655,6 +660,7 @@ test('assembly --assemble: only a passed check appends the parts, removes them w
   assert.ok(report.indexOf('<!-- coverage: src/a.ts') < report.indexOf('<!-- coverage: src/b.ts'), 'the parts in part order');
   assert.ok(![1, 2, 3].some((k) => fs.existsSync(f.part(k))), 'the parts are gone');
   assert.ok(!fs.existsSync(work) && !fs.existsSync(ledger), 'the work folder and the ledger are gone');
+  assert.ok(!fs.existsSync(snapshot), 'and the snapshot the walkers searched');
   assert.match(r.stdout, /^severity: critical=0 high=0 medium=1 low=0 missing-unit-test=0$/m, 'the renderer ran and counted');
   r = assemble();
   assert.strictEqual(r.status, 0);
@@ -790,7 +796,8 @@ test('hook: two findings of one sameAs pair over the same lines pass, with a not
   const second = ['🟡 **Medium**', '- **Linia:** 4, 9', '- **Problem:** Drugi opis.', '- **Reguła:** general#2', '- **Expected Result:** Poprawka.', '', ''].join('\n');
   const text = partA({ rule: 'component#1' }).replace('<!-- checklist:', `${second}<!-- checklist:`);
   const input = { tool_name: 'Write', tool_input: { file_path: f.part(1), content: text } };
-  assert.strictEqual(cp.hookResult(input), null);
+  const unpaired = cp.hookResult(input);
+  assert.ok(unpaired && unpaired.context.startsWith('check-part: raport.part01.md zapisana, z uwagą:\n- src/a.ts: dwa znaleziska z tym samym polem Linia "4, 9" (component#1 oraz general#2)'), JSON.stringify(unpaired));
   f.target.factsPath = path.join(f.branchDir, 'raport.work', 'facts.json');
   fs.writeFileSync(f.target.factsPath, JSON.stringify(withRules({ sameAs: { 'component#1': ['general#2'], 'general#2': ['component#1'] } })));
   fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
@@ -804,6 +811,14 @@ test('hook: two findings of one sameAs pair over the same lines pass, with a not
     .replace('- **Linia:** 4, 9\n- **Problem:** Drugi', '- **Linia:** 4\n- **Problem:** Drugi')
     .replace('general#2 nazwy — NARUSZENIE (4, 9)', 'general#2 nazwy — NARUSZENIE (4)');
   assert.strictEqual(cp.hookResult({ ...input, tool_input: { ...input.tool_input, content: narrower } }), null);
+});
+
+test('two findings of one instruction over the same lines are two requirements: no note', (t) => {
+  const f = fixture(t);
+  const second = ['🟡 **Medium**', '- **Linia:** 4, 9', '- **Problem:** Drugi opis.', '- **Reguła:** component#2', '- **Expected Result:** Poprawka.', '', ''].join('\n');
+  const text = partA({ rule: 'component#1' }).replace('<!-- checklist:', `${second}<!-- checklist:`);
+  const notes = cp.sameDefectNotes(cp.partReport(text), { sameAs: {} });
+  assert.deepStrictEqual(notes, []);
 });
 
 test('assembly: the rulebook\'s fixed severity settles a finding, but never lowers one an unfixed address raised nor replaces a 🔵', (t) => {

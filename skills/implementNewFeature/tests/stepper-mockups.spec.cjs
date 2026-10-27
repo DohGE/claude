@@ -160,6 +160,17 @@ test('stany <widok>.<stan> są pogrupowane w zakładki widoków i ich stanów',
     await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('1.0');
   });
 
+test('przycisk zleca Claude artifact z makiet, a runda zostaje do przeglądu', async ({ page }) => {
+  await openMockupPanel(page);
+  await expect(page.locator('.gate-actions #mockupArtifact')).toHaveText('Create Claude artifact');
+  await page.click('#mockupArtifact');
+  expect(await takeAnswer()).toMatchObject({ kind: 'mockup', decision: 'artifact' });
+  await expect(page.locator('#shotsHint')).toHaveText(
+    'Requested — the orchestrator publishes these mockups as a Claude artifact and posts its link in the chat below.');
+  await expect(page.locator('#approveMockup')).toBeEnabled();
+  await expect(page.frameLocator('#mockupFrame').locator('#mk')).toBeVisible();
+});
+
 test('przycisk otwiera folder zrzutów makiet, gdy zrzuty już są', async ({ page }) => {
   await openMockupPanel(page);
   await page.click('#openShots');
