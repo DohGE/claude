@@ -2,7 +2,8 @@
 
 // Copy/paste detection for the revision a review covers. jscpd scans the WHOLE
 // reviewed tree - a copy of an untouched file is found only when that file is
-// scanned too - and the clone pairs are then narrowed to the ones the diff wrote:
+// scanned too - or, in a repository of several projects, the projects the review
+// reaches (review-scope.cjs), and the clone pairs are then narrowed to the ones the diff wrote:
 // a pair survives when one side is at least half made of changed lines and the
 // block exists at least three times. That side is the anchor the reviewer reports
 // on, the other copies the sources it repeats.
@@ -34,6 +35,14 @@ const importStatement = String.raw`(?m)^import\s(?:[^;\n]|\n[\s}])*?\sfrom\s*['"
 const minChangedShare = 0.5;
 // Duplication is a finding from its third copy: two may still diverge, three are a pattern.
 const minCopies = 3;
+// A block the codebase repeats more often than this is boilerplate - a TestBed setup, a store
+// skeleton, a CLI-generated file - not a copy the diff made. Measured on an Angular monorepo:
+// counting every block a chain of overlapping clones reached put a median of 9 337 "copies"
+// behind each of 50 candidates, 59 MB of review context and bundles no Read could open.
+const maxCopies = 12;
+// What a candidate names: enough copies to open and see the pattern, the count of the rest.
+// Every source is a line of the bundle a walker reads, and of the cross-file bundle after it.
+const sourceLimit = 3;
 // Per target: a diff that vendors a library would otherwise put hundreds of entries
 // into the context the orchestrator reads.
 const candidateLimit = 50;
@@ -78,11 +87,16 @@ function mergeOverlapping(items, absorb = () => {}) {
 }
 
 // jscpd clone pairs -> the candidates the diff wrote, one per block: a block matched
-// by two detectors or against two sources is opened by the reviewer once. Pairs that
-// share a block (overlapping sides in one file) chain into one group of copies, the
-// pairs the diff did not touch included; a candidate needs `minCopies` of them and
-// names every other copy as a source.
-function pickCandidates(duplicates, files) {
+// by two detectors or against two sources is opened by the reviewer once. The copies of
+// a block are what it was paired with and what those were paired with - jscpd pairs each
+// copy with one other, so two steps reach a clone repeated in a row or around one
+// original, the pairs the diff did not touch included. Further than that, a chain of
+// overlapping blocks walks into code that only shares a run of tokens with a neighbour of
+// a neighbour, which is how one candidate used to name the whole repository. A candidate
+// needs `minCopies` copies and at most `maxCopies` (more is boilerplate, counted in
+// `stats.boilerplate`), and names up to `sourceLimit` of them; `copies` then says how
+// many there are.
+function pickCandidates(duplicates, files, stats = {}) {
   const byPath = new Map(files.map((f) => [f.path, f]));
   const pairs = (duplicates || []).map((clone) => {
     const [first, second] = [clone.firstFile, clone.secondFile].map((side) => {
@@ -98,11 +112,36 @@ function pickCandidates(duplicates, files) {
   );
   const blockOf = [];
   blocks.forEach((block, b) => block.sides.forEach((side) => { blockOf[side] = b; }));
-  const parent = blocks.map((_, b) => b);
-  const find = (b) => (parent[b] === b ? b : (parent[b] = find(parent[b])));
-  pairs.forEach((_, i) => { parent[find(blockOf[2 * i])] = find(blockOf[2 * i + 1]); });
-  const copies = new Map();
-  blocks.forEach((_, b) => copies.set(find(b), [...(copies.get(find(b)) || []), b]));
+  const neighbours = blocks.map(() => new Set());
+  pairs.forEach((_, i) => {
+    const [a, b] = [blockOf[2 * i], blockOf[2 * i + 1]];
+    if (a !== b) {
+      neighbours[a].add(b);
+      neighbours[b].add(a);
+    }
+  });
+  // Two steps out from `own`, and no further than one copy past maxCopies: a block that
+  // stands next to a hub of thousands is decided by then, and its walk stays short.
+  const copiesOf = (own) => {
+    const seen = new Set([own]);
+    let frontier = [own];
+    for (let depth = 0; depth < 2 && seen.size <= maxCopies; depth++) {
+      const next = [];
+      for (const b of frontier) {
+        for (const n of neighbours[b]) {
+          if (seen.size > maxCopies) break;
+          if (!seen.has(n)) {
+            seen.add(n);
+            next.push(n);
+          }
+        }
+      }
+      frontier = next;
+    }
+    seen.delete(own);
+    return [...seen];
+  };
+  const boilerplate = new Set();
   const anchors = [];
   pairs.forEach(({ first, second, kind }, i) => {
     // Both sides written (two copies the diff adds) is still one candidate - each
@@ -110,25 +149,34 @@ function pickCandidates(duplicates, files) {
     const anchor = first.share > second.share ? first : second;
     if (anchor.share < minChangedShare) return;
     const own = blockOf[anchor === first ? 2 * i : 2 * i + 1];
-    const group = copies.get(find(own));
-    if (group.length < minCopies) return;
+    const others = copiesOf(own);
+    if (others.length + 1 < minCopies) return;
+    if (others.length + 1 > maxCopies) {
+      boilerplate.add(own);
+      return;
+    }
     anchors.push({
       path: anchor.path,
       start: anchor.start,
       end: anchor.end,
-      sources: group.filter((b) => b !== own).map((b) => ({ path: blocks[b].path, start: blocks[b].start, end: blocks[b].end })),
+      sources: others.map((b) => ({ path: blocks[b].path, start: blocks[b].start, end: blocks[b].end })),
       kinds: [kind],
     });
   });
+  if (boilerplate.size > 0) stats.boilerplate = boilerplate.size;
   return mergeOverlapping(anchors, (into, item) => {
     into.sources.push(...item.sources);
     into.kinds.push(...item.kinds);
-  }).map((c) => ({
-    path: c.path,
-    lines: `${c.start}-${c.end}`,
-    sources: mergeOverlapping(c.sources).map((s) => `${s.path}:${s.start}-${s.end}`),
-    kinds: [...new Set(c.kinds)].sort(),
-  }));
+  }).map((c) => {
+    const sources = mergeOverlapping(c.sources).map((s) => `${s.path}:${s.start}-${s.end}`);
+    return {
+      path: c.path,
+      lines: `${c.start}-${c.end}`,
+      sources: sources.slice(0, sourceLimit),
+      ...(sources.length > sourceLimit ? { copies: sources.length + 1 } : {}),
+      kinds: [...new Set(c.kinds)].sort(),
+    };
+  });
 }
 
 function git(project, args, { env, input } = {}) {
@@ -147,10 +195,11 @@ function git(project, args, { env, input } = {}) {
 // a staged review reads the real index, which checkout-index writes back only when
 // asked to (`-u`); a folder review copies the working tree as git sees it - tracked
 // and untracked files, not the ignored ones.
-function exportTree({ project, source, workDir, isSkipped = () => false }) {
+// `scope` (review-scope.cjs) narrows it to the projects the review reaches; null is the whole tree.
+function exportTree({ project, source, workDir, isSkipped = () => false, scope = null }) {
   const root = path.join(workDir, 'tree');
   fs.mkdirSync(root, { recursive: true });
-  const keep = (p) => p !== '' && !isSkipped(p) && !isSnapshot(p);
+  const keep = (p) => p !== '' && !isSkipped(p) && !isSnapshot(p) && (!scope || scope.has(p));
   if (source.workTree) {
     const listed = new Set(git(project, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split('\0').filter(keep));
     let count = 0;
@@ -228,13 +277,18 @@ function runJscpd(root, workDir, invocation = jscpdInvocation()) {
 // One target's scan. Never throws: a scan that cannot run (no npx, offline on the
 // first run, a ref that does not resolve) comes back as `{ error }` and the review
 // goes on without it.
-function scanDuplicates({ project, source, files, isSkipped, run = runJscpd }) {
+function scanDuplicates({ project, source, files, isSkipped, scope = null, run = runJscpd }) {
   if (files.length === 0) return { candidates: [], omitted: 0 };
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'doh-cpd-'));
   try {
-    const { root, count } = exportTree({ project, source, workDir, isSkipped });
-    const found = count === 0 ? [] : pickCandidates(run(root, workDir).duplicates, files);
-    return { candidates: found.slice(0, candidateLimit), omitted: Math.max(0, found.length - candidateLimit) };
+    const { root, count } = exportTree({ project, source, workDir, isSkipped, scope });
+    const stats = {};
+    const found = count === 0 ? [] : pickCandidates(run(root, workDir).duplicates, files, stats);
+    return {
+      candidates: found.slice(0, candidateLimit),
+      omitted: Math.max(0, found.length - candidateLimit),
+      ...(stats.boilerplate ? { boilerplate: stats.boilerplate } : {}),
+    };
   } catch (err) {
     return { error: String((err && err.message) || err).split('\n')[0].trim() };
   } finally {
@@ -244,4 +298,4 @@ function scanDuplicates({ project, source, files, isSkipped, run = runJscpd }) {
   }
 }
 
-module.exports = { candidateLimit, changedShare, pickCandidates, exportTree, jscpdInvocation, runJscpd, scanDuplicates };
+module.exports = { candidateLimit, maxCopies, sourceLimit, changedShare, pickCandidates, exportTree, jscpdInvocation, runJscpd, scanDuplicates };

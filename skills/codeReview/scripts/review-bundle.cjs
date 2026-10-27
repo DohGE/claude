@@ -34,7 +34,7 @@ const unverifiedMinFiles = 3;
 // The instructions the cross-file pass reports under (SKILL.md Step 3), with the items it
 // walks when not all of them: accessibility#22 is the consistency of repeated views.
 const crossInstructions = [['code-quality', null], ['architecture', null], ['general', null], ['accessibility', [22]]];
-// Consecutive light files are walked in one response (SKILL.md Step 3 point 4): a turn re-sends
+// Consecutive light files are walked in one response (references/walk.md Step 3 point 4): a turn re-sends
 // the whole conversation, which for a ten-line barrel costs more than its walk. A file over
 // either `file*` limit keeps a response of its own, and a batch stops at any of the others.
 // `chars` weighs what the batch's Reads bring - bundles, contents, diffs - since a small file's
@@ -47,8 +47,17 @@ const batchLimits = { fileLines: 60, fileItems: 60, files: 3, lines: 150, items:
 // probes and the Write - and by a `charsPerToken`th of the characters its Reads bring, and a
 // conversation that passes about 165k tokens is compacted, which loses every bundle it read. A window
 // holds `tokens` of walk (the walker's own start adds about 25k) and at most `files` files; a target
-// whose whole walk fits one window is walked in the main conversation.
-const windowLimits = { tokens: 100000, fileTokens: 14000, charsPerToken: 3, files: 6 };
+// whose whole walk fits one window is walked in the main conversation. Until 0.26 a window held
+// 100k and 6 files: on a 115-file run that was 63 windows, 37 of them a single file behind a
+// multi-MB bundle, and 63 walker starts. With bundles back under 256 KB, light files fill a
+// window up to 10 and the walk stays below the compaction line.
+const windowLimits = { tokens: 130000, fileTokens: 14000, charsPerToken: 3, files: 10 };
+// A Read shows at most 2 000 characters of a line and refuses a file over 256 KB, and a bundle
+// it cannot open is a file walked blind: a bundle line past `lineChars` is cut wherever the
+// plan does not need it whole, and past `bundleChars` the sections a verdict needs least go
+// first, each replaced by a line saying so. The cross bundle gets the line cut only.
+const bundleCaps = { lineChars: 1500, bundleChars: 200000 };
+const optionalSections = ['## Fakty spoza planu (bez wymogu)', '## Użycia składowych', '## Eksporty tego pliku i ich konsumenci', '## Spec', '## Kandydaci duplikacji (jscpd)'];
 // FIXED IDENTIFIERS. The two replies a window's walker ends with, which SKILL.md tells the main
 // conversation to read, and the file name of a window's brief.
 const windowReplies = { done: 'WINDOW DONE', stopped: 'WINDOW STOPPED' };
@@ -63,6 +72,26 @@ const pad = (number, width) => String(number).padStart(width, '0');
 const partWidth = (files) => Math.max(2, String(files + 2).length);
 // `<stem>.partNN.md` next to the report: the file number, padded like every part of the target.
 const partPathOf = (reportPath, number, files) => `${String(reportPath).replace(/\\/g, '/').replace(/\.md$/i, '')}.part${pad(number, partWidth(files))}.md`;
+
+// A bundle within bundleCaps. `keepWhole` names the section whose lines are never cut (the plan:
+// an item's text is what its verdict answers); `dropOptional` false keeps every section.
+function fitBundle(text, { caps = bundleCaps, keepWhole = '## Plan', dropOptional = true } = {}) {
+  const cut = (line) => (line.length > caps.lineChars ? `${line.slice(0, caps.lineChars)} … (+${line.length - caps.lineChars} znaków)` : line);
+  let whole = false;
+  let lines = text.split('\n').map((line) => {
+    if (line.startsWith('## ')) whole = line === keepWhole;
+    return whole ? line : cut(line);
+  });
+  for (const heading of dropOptional ? optionalSections : []) {
+    if (lines.join('\n').length <= caps.bundleChars) break;
+    const start = lines.indexOf(heading);
+    if (start < 0) continue;
+    let end = start + 1;
+    while (end < lines.length && !lines[end].startsWith('## ')) end++;
+    lines = [...lines.slice(0, start + 1), '', '- pominięte: paczka przekroczyła limit odczytu (Read)', '', ...lines.slice(end)];
+  }
+  return lines.join('\n');
+}
 
 // The severity lead line a finding copies: `🔴 **High**`.
 function severityText(level) {
@@ -183,8 +212,12 @@ function renderSpecs(specs, root) {
     : 'bez przypadków describe/it'}`);
 }
 
-function renderCandidates(candidates, withPath) {
-  return candidates.map((c) => `- ${withPath ? `${c.path}:` : 'L'}${c.lines} powtarza ${c.sources.join('; ')} (${c.kinds.join(', ')})`);
+function renderCandidates(candidates, withPath, numbered = false) {
+  // `copies` is there when the scan named only some of them (duplication-scan.cjs sourceLimit).
+  const rest = (c) => (c.copies ? ` i ${c.copies - 1 - c.sources.length} kolejnych miejsc` : '');
+  // The cross bundle numbers them: the address of each one's line in the questions block.
+  const label = (k) => (numbered ? `${questionIds.candidate}#${k + 1}: ` : '');
+  return candidates.map((c, k) => `- ${label(k)}${withPath ? `${c.path}:` : 'L'}${c.lines} powtarza ${c.sources.join('; ')}${rest(c)} (${c.kinds.join(', ')})`);
 }
 
 // What the plan says of one item beyond its text (rulebook extras): the severity its finding
@@ -219,13 +252,54 @@ function renderWriteRules({ file, kind, instructions, bound, lineCount }) {
   if (steps.some(({ instruction }) => instruction.severity) || extras.some((extra) => extra.severity)) {
     out.push('- Znalezisko pod pozycją z ważnością stałą ma tę ważność (przy kilku adresach najwyższą).');
   }
-  if (extras.some((extra) => extra.unverified)) out.push('- Gotowy werdykt przepisz do bloku bez zmian: OK tej pozycji jest odrzucane.');
+  if (extras.some((extra) => extra.unverified)) out.push('- Gotowy werdykt dopisuje hook, gdy linii brak; OK takiej pozycji jest odrzucane.');
+  out.push('- Szkielet bloku niżej: adresy w kolejności planu, `…` to miejsce werdyktu; linię z zakresem rozbij, gdy któraś jej pozycja nie jest `OK (brak wystąpień)` ani `BRAMKA`.', '', ...renderSkeleton({ file, kind, instructions, bound }));
   return out;
+}
+
+// The lines a bound item's verdict cites: its facts' and probes' lines, in order.
+function pointedLinesOf(binding) {
+  const lines = new Set();
+  for (const fact of [...(binding.strong || []), ...(binding.hints || [])]) for (const line of fact.lines) lines.add(line);
+  for (const hit of binding.probes || []) lines.add(hit.line);
+  return [...lines].sort((a, b) => a - b);
+}
+
+// The part's checklist block to fill (Step 4 format), so its addresses come in plan order and its
+// pointed lines are already there: a run of an instruction's items with nothing pointed at shares
+// one line, an item the bundle binds has its own, and a prepared verdict is left out - the part
+// check writes it in (check-part.cjs fillPart). `…` is where the verdict goes.
+function renderSkeleton({ file, kind, instructions, bound }) {
+  const out = [];
+  for (const step of kind ? kind.plan : []) {
+    const instruction = instructions.get(step.id);
+    if (!instruction) continue;
+    let run = [];
+    const flush = () => {
+      if (run.length) out.push(`[x] ${step.id}#${rulebook.formatItemSpec(run).replace(/,/g, ',#')} — …`);
+      run = [];
+    };
+    for (const n of step.numbers) {
+      const extra = instruction.extras.get(n) || {};
+      const binding = bound.items[`${step.id}#${n}`];
+      if (extra.unverified) {
+        flush();
+      } else if (binding) {
+        flush();
+        const lines = pointedLinesOf(binding);
+        out.push(`[x] ${step.id}#${n} — …${lines.length ? ` (${lineList(lines)})` : ''}${binding.secondQuestion ? `; ${linePrefix.second} …` : ''}`);
+      } else {
+        run.push(n);
+      }
+    }
+    flush();
+  }
+  return [`    <!-- checklist: ${file.path}`, ...out.map((line) => `    ${line}`), '    -->', `    <!-- coverage: ${file.path} <sprawdzone>/${file.checklistTotal} -->`];
 }
 
 // The items whose verdict owes an answer to a line of this bundle, in plan order - the list the
 // check enforces, gathered so the reviewer never searches the bundle for them. `## Do odpowiedzi`
-// is a FIXED IDENTIFIER: SKILL.md Step 3 point 2 names it.
+// is a FIXED IDENTIFIER: references/walk.md Step 3 point 2 names it.
 function renderDuties({ kind, instructions, bound }) {
   const out = [];
   for (const step of kind ? kind.plan : []) {
@@ -269,7 +343,7 @@ function renderBundle({
   if (partPath) out.push(`- część: ${partPath}`);
   if (batch) out.push(`- partia: ${batch.join(', ')} - przejścia po kolei, części razem w jednej odpowiedzi`);
   if (factRoot) out.push(`- ścieżki w faktach: względem \`${factRoot}/\``);
-  if (partial) out.push('- fakty z części repozytorium (limit albo błąd git): każdy fakt tylko wskazuje linię');
+  if (partial) out.push('- fakty z części repozytorium (limit, błąd git albo konsument w projekcie spoza czytanych): każdy fakt tylko wskazuje linię');
   if (kind && kind.notes.length > 0) {
     out.push('', 'Uwagi rodzaju:');
     for (const note of kind.notes) out.push(`- ${note}`);
@@ -308,12 +382,13 @@ function renderBundle({
   }
   if (kind && kind.plan.length > 0) out.push(...renderWriteRules({ file, kind, instructions, bound, lineCount }), '');
   if (next) out.push('## Dalej', '', ...next, '');
-  return `${out.join('\n').replace(/\n+$/, '')}\n`;
+  return `${fitBundle(out.join('\n')).replace(/\n+$/, '')}\n`;
 }
 
 // Which files share a response: consecutive light ones, up to the batch limits. `entries` are
-// `{ number, lines, items, chars }` in walk order (`lines` null for a file without content, which
-// keeps a response of its own; `chars` the size of its Reads, 0 when unknown); the result lists
+// `{ number, lines, items, chars, walker }` in walk order (`lines` null for a file without content,
+// which keeps a response of its own; `chars` the size of its Reads, 0 when unknown; `walker` the key
+// of its kind's walker setting, '' for none - a batch holds one setting); the result lists
 // the numbers of each batch. A batch never spans a gap
 // in the numbers (a resumed run's finished file), so [first, last] names exactly its members.
 function planBatches(entries, limits = batchLimits) {
@@ -324,14 +399,14 @@ function planBatches(entries, limits = batchLimits) {
     if (light && current && current.numbers.length < limits.files
       && current.numbers[current.numbers.length - 1] + 1 === entry.number
       && current.lines + entry.lines <= limits.lines && current.items + entry.items <= limits.items
-      && current.chars + (entry.chars || 0) <= limits.chars) {
+      && current.chars + (entry.chars || 0) <= limits.chars && current.walker === (entry.walker || '')) {
       current.numbers.push(entry.number);
       current.lines += entry.lines;
       current.items += entry.items;
       current.chars += entry.chars || 0;
       continue;
     }
-    current = light ? { numbers: [entry.number], lines: entry.lines, items: entry.items, chars: entry.chars || 0 } : null;
+    current = light ? { numbers: [entry.number], lines: entry.lines, items: entry.items, chars: entry.chars || 0, walker: entry.walker || '' } : null;
     batches.push(current ? current.numbers : [entry.number]);
   }
   return batches;
@@ -341,22 +416,53 @@ function planBatches(entries, limits = batchLimits) {
 const walkTokens = (chars) => windowLimits.fileTokens + Math.ceil((chars || 0) / windowLimits.charsPerToken);
 
 // Which batches share a window: `batches` are the numbers planBatches returned, `weigh(number)` the
-// tokens one file's walk adds. Empty when the whole walk fits one window. The cuts fall where the
-// running weight crosses a multiple of the share every window gets, so that no window is a stub
-// that pays the walker's start for a file or two; a batch over a limit has a window of its own.
-function planWindows(batches, weigh, limits = windowLimits) {
+// tokens one file's walk adds, `classOf(batch)` the walker setting its files need ('' for the
+// session's own): a window holds one, so one model walks it. Empty when the whole walk fits one
+// window. The cuts fall where the running weight crosses a multiple of the share every window
+// gets, so that no window is a stub that pays the walker's start for a file or two; a batch over
+// a limit has a window of its own.
+function planWindows(batches, weigh, limits = windowLimits, classOf = () => '') {
+  const total = batches.reduce((sum, batch) => sum + batch.reduce((s, number) => s + weigh(number), 0), 0);
+  const files = batches.reduce((sum, batch) => sum + batch.length, 0);
+  if (total <= limits.tokens && files <= limits.files) return [];
+  // Each run of one walker setting is cut on its own, so its windows come out even too.
+  const segments = [];
+  for (const batch of batches) {
+    const cls = classOf(batch);
+    const last = segments[segments.length - 1];
+    if (last && last.cls === cls) last.batches.push(batch);
+    else segments.push({ cls, batches: [batch] });
+  }
+  return segments.flatMap((segment) => evenWindows(segment.batches, weigh, limits));
+}
+
+// One run of batches as even windows: one window when it fits one. A share a window cannot hold
+// in whole batches leaves a stub behind each overflow: one more window, a smaller share, until
+// the cut comes out at the count it was planned for.
+function evenWindows(batches, weigh, limits) {
   const weights = batches.map((batch) => batch.reduce((sum, number) => sum + weigh(number), 0));
   const total = weights.reduce((sum, weight) => sum + weight, 0);
   const files = batches.reduce((sum, batch) => sum + batch.length, 0);
-  if (total <= limits.tokens && files <= limits.files) return [];
-  const share = total / Math.max(Math.ceil(total / limits.tokens), Math.ceil(files / limits.files));
+  if (total <= limits.tokens && files <= limits.files) return [batches];
+  const base = Math.max(Math.ceil(total / limits.tokens), Math.ceil(files / limits.files));
+  let best = null;
+  for (let count = base; count <= base + 3; count++) {
+    const plan = cutWindows(batches, weights, total / count, limits);
+    if (plan.length === count) return plan;
+    if (!best || plan.length < best.length) best = plan;
+  }
+  return best;
+}
+
+function cutWindows(batches, weights, share, limits) {
   const windows = [];
   let current = null;
   let tokens = 0;
   let before = 0;
   batches.forEach((batch, k) => {
     const slot = Math.floor((before + weights[k] / 2) / share);
-    const fits = current !== null && slot === current.slot && tokens + weights[k] <= limits.tokens && current.files + batch.length <= limits.files;
+    const fits = current !== null && slot === current.slot
+      && tokens + weights[k] <= limits.tokens && current.files + batch.length <= limits.files;
     if (!fits) {
       current = { slot, files: 0, batches: [] };
       windows.push(current);
@@ -379,11 +485,13 @@ function readsOf(files) {
 // batch's Writes, or - after the last file - the cross-file pass and its reference. The last batch
 // of a window (`window` is `{ first, last }`) tells the window's walker to stop; the lines for a
 // reviewer who walks the whole target alone stay under it.
-function renderNext({ nextFiles = [], crossBundlePath, crossPartPath, window = null }) {
+function renderNext({ nextFiles = [], crossBundlePath, crossPartPath, crossBriefPath = null, window = null }) {
   const own = nextFiles.length > 0
     ? ['Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:', ...readsOf(nextFiles).map((p) => `- ${p}`)]
     : [
-      'Ostatni plik celu. Z zapisem części przeczytaj (Read) przejście międzyplikowe:',
+      ...(crossBriefPath
+        ? [`Ostatni plik celu. Przejście międzyplikowe robi świeży agent: z zapisem części wyślij \`doh:codereview-walker\` z promptem \`Read ${crossBriefPath} and follow it.\` i czekaj na \`${crossReplies.done}\`. Bez narzędzia Agent przeczytaj (Read) z zapisem części:`]
+        : ['Ostatni plik celu. Z zapisem części przeczytaj (Read) przejście międzyplikowe:']),
       `- ${crossBundlePath}`,
       `- ${skillDir}/references/cross-file.md`,
       `Jego część: ${crossPartPath}.`,
@@ -398,22 +506,31 @@ function renderNext({ nextFiles = [], crossBundlePath, crossPartPath, window = n
   ];
 }
 
+// FIXED IDENTIFIERS. The cross-file pass's brief, the replies its agent ends with, and the opener
+// of the block its part answers the five questions and every jscpd candidate in (check-part.cjs),
+// with the addresses of that block's lines.
+const crossBriefName = 'cross-file.brief.md';
+const crossReplies = { done: 'CROSS DONE', stopped: 'CROSS STOPPED' };
+const questionsOpen = '<!-- questions:';
+const questionIds = { question: 'pytanie', candidate: 'jscpd' };
+const crossQuestions = 5;
+// The walk's rules, for a walker whose agent definition does not carry them and for a
+// conversation that walks a target itself (SKILL.md Step 3).
+const walkRulesPath = `${skillDir}/references/walk.md`;
+
 // What a window's walker reads first, from the prompt `Read <brief> and follow it`: where the
 // rules of the walk are, the target's settings Step 3 and 4 name, the batches of the window with
-// their parts and Reads, and how it ends. `skill` is `{ path, from, limit }` (review-hooks.cjs
-// walkLines) or null; `target` the settings (`reportPath`, `htmlReportPath`, `workDir`,
-// `withChecklist`, `withRuleText`, `light`, `dedupItems`, `commands`); `batches` lists per batch
-// `{ number, path, partPath, reads }` of each file.
-function renderWindowBrief({ index, total, skill = null, target, batches }) {
+// their parts and Reads, and how it ends. `target` the settings (`reportPath`, `htmlReportPath`,
+// `workDir`, `withChecklist`, `withRuleText`, `light`, `dedupItems`, `commands`); `batches` lists
+// per batch `{ number, path, partPath, reads }` of each file.
+function renderWindowBrief({ index, total, target, batches }) {
   const first = batches[0][0].number;
   const lastBatch = batches[batches.length - 1];
   const last = lastBatch[lastBatch.length - 1].number;
   const range = first === last ? `${first}` : `${first}-${last}`;
   const out = [`# Window ${index} of ${total}: files ${range}`, ''];
   out.push(`You walk files ${range} of this target, batch by batch in the order below, and nothing else.`);
-  out.push(skill
-    ? `1. Read ${skill.path} with offset ${skill.from} and limit ${skill.limit} - Step 3 (the walk) and Step 4 (the format of a part) - in the same response as the Reads of the first batch that still lacks a part.`
-    : '1. Read the codeReview SKILL.md from its `## Step 3` heading up to the one-time marker, in the same response as the Reads of the first batch that still lacks a part.');
+  out.push(`1. The rules of the walk (codeReview Step 3) and of a part (Step 4) are in your system prompt, the \`doh:codereview-walker\` definition; \`<SKILL_DIR>\` in them is ${skillDir}. A walker started without them Reads ${walkRulesPath} first, in the same response as the Reads of the first batch that still lacks a part.`);
   out.push('2. A file whose part is on disk is finished: skip it and never write it again. Walk every other batch exactly as Step 3 says; the last bundle of a batch ends with `## Dalej`, which names the Reads that ride with its Writes.');
   out.push(`3. The window ends with its last part: reply with exactly one line, \`${windowReplies.done} ${range}\`, and nothing else - no summary of findings.`);
   out.push(`4. If you cannot go on - the Write of a part is refused, or a part still fails its check after two fixes - reply with the one line \`${windowReplies.stopped} <file number>: <reason>\`. Never write a part through the shell: the conversation that sent you walks the rest.`, '');
@@ -424,6 +541,20 @@ function renderWindowBrief({ index, total, skill = null, target, batches }) {
     out.push('', 'Reads, in ONE message:', ...batch.flatMap((file) => file.reads).map((p) => `- ${p}`), '');
   });
   return `${out.join('\n').replace(/\n+$/, '')}\n`;
+}
+
+// What the cross-file pass's own agent reads first (SKILL.md Step 3, Windows): a fresh
+// conversation, so the pass is not the tail of a walk that is already deep in its context, and
+// a part the check refuses until every question and candidate has its verdict.
+function renderCrossBrief({ target, crossBundlePath, crossPartPath, closingPartPath = null }) {
+  const out = ['# Cross-file pass', ''];
+  out.push('You make the cross-file pass of this target, and nothing else: every file part is on disk.');
+  out.push(`1. Read in ONE message: ${crossBundlePath} and ${skillDir}/references/cross-file.md (\`<SKILL_DIR>\` is ${skillDir}). The verdict forms are those of your system prompt; a conversation without them Reads ${walkRulesPath} with them.`);
+  out.push(`2. Follow the reference: one round of lookups, an explicit verdict for each of its five questions and each jscpd candidate in the part's \`${questionsOpen}\` block, then the part ${crossPartPath} in one Write${closingPartPath ? `, and ${closingPartPath} when the target found nothing` : ''}.`);
+  out.push(`3. The assembly is not yours: once the part is written, reply with exactly one line, \`${crossReplies.done}\`, and nothing else.`);
+  out.push(`4. If you cannot go on - the Write is still refused after two fixes, a file you need is missing - reply with the one line \`${crossReplies.stopped}: <reason>\`. Never write a part through the shell.`, '');
+  out.push('The `target.*` keys the reference names, for this target (a key missing here is false):', '', '```json', JSON.stringify(target, null, 2), '```');
+  return `${out.join('\n')}\n`;
 }
 
 // The files of a target by number, with the content and the diff the cross pass opens: a pass that
@@ -476,18 +607,31 @@ function renderCrossBundle({
   out.push('## Kandydaci duplikacji (jscpd)', '');
   if (candidates === null) out.push('- skan się nie odbył (powód w ostrzeżeniach kontekstu)');
   else if (candidates.length === 0) out.push('- brak');
-  else out.push(...renderCandidates(candidates, true));
+  else out.push(...renderCandidates(candidates, true, true));
   out.push('', reportedStart, ...renderReported(null), reportedEnd, '');
   out.push('## Zapis części', '');
-  out.push('- Jeden Write: znaleziska przejścia (pusta część, gdy nic nie znalazło) i blok `<!-- unverified:`, gdy lista "Otwarte w 3+ plikach" nie jest pusta; bez bloku checklisty i markera coverage.');
+  out.push(`- Jeden Write: znaleziska przejścia, blok \`${questionsOpen}\` (zawsze) i blok \`<!-- unverified:\`, gdy lista "Otwarte w 3+ plikach" nie jest pusta; bez bloku checklisty i markera coverage.`);
+  const count = (candidates || []).length;
+  out.push(`- Blok questions: po jednej linii ${questionIds.question}#1-#${crossQuestions}${count ? ` i ${questionIds.candidate}#1-#${count} (każdy kandydat)` : ''} - OK z tym, co sprawdziłeś (kandydat: z powodem odrzucenia), NARUSZENIE z \`ścieżka:linie\` znaleziska tej części albo \`partNN\` części pliku, która je zgłasza, NIEZWERYFIKOWANE z powodem. Pusta część bez bloku jest odrzucana.`);
   if (closingPartPath) out.push(`- Cel bez żadnego znaleziska: jeszcze ${closingPartPath} z jedyną linią \`${render.emptyBodies[0]}\`.`);
   out.push('- Wada, którą część pliku już zgłasza (ten sam plik, adres albo jego `ta sama wada`, te same linie), nie wraca tu drugi raz.');
   out.push('', '    ## <ścieżka pliku>', '', '    🔴 **High**', '    - **Linia:** <linie w tym pliku>', '    - **Problem:** <wada i `ścieżka:linie` drugiej strony>',
     '    - **Reguła:** code-quality#<n>', '    - **Expected Result:** <poprawny stan + konkretna propozycja>');
   if (withPr) out.push('    - **PR Problem:** <English>', '    - **PR Expected:** <English>', '    - **PR Locations:** <English>');
+  out.push('', `    ${questionsOpen}`,
+    `    [x] ${questionIds.question}#1 — OK (<kandydaci otwarci, eksporty i wyszukiwania pytania 1>)`,
+    `    [x] ${questionIds.question}#2 — OK (<krawędzie księgi importów: N/N>)`,
+    `    [x] ${questionIds.question}#3 — OK (<przepływy danych, które sprawdziłeś>)`,
+    `    [x] ${questionIds.question}#4 — NARUSZENIE (<ścieżka>:<linie>)`,
+    `    [x] ${questionIds.question}#5 — OK (brak wystąpień)`,
+    ...(count ? [
+      `    [x] ${questionIds.candidate}#1 — OK (<kształt narzucony | dane równoległe | sama składnia>: <dlaczego>)`,
+      `    [x] ${questionIds.candidate}#2 — NARUSZENIE (<ścieżka>:<linie> | part<NN>)`,
+    ] : []),
+    '    -->');
   out.push('', '    <!-- unverified:', '    [x] <adres> <etykieta> — NARUSZENIE (<ścieżka>:<linie>)', '    [x] <adres> <etykieta> — OK (<ścieżka>)',
     '    [ ] <adres> <etykieta> — NIEZWERYFIKOWANE: <narzędzie: | poza recenzją: | działająca aplikacja:> <czego zabrakło>', '    -->');
-  return `${out.join('\n')}\n`;
+  return `${fitBundle(out.join('\n'), { keepWhole: '## Pozycje, pod którymi przejście raportuje', dropOptional: false })}\n`;
 }
 
 // The live section of the cross bundle. `state` is null before any part is read, or
@@ -553,6 +697,7 @@ function factsDocument({ files, factRoot = '', partial = false, rules = null }) 
 module.exports = {
   linePrefix, itemPrefix, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
   reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, windowReplies, windowBriefName, skillDir,
-  bindFile, renderBinding, renderBundle, renderCrossBundle, renderRulebookNotes, factsDocument,
+  crossBriefName, crossReplies, questionsOpen, questionIds, crossQuestions, walkRulesPath, bundleCaps,
+  bindFile, renderBinding, renderBundle, renderCrossBundle, renderCrossBrief, renderRulebookNotes, factsDocument, fitBundle, renderSkeleton,
   planBatches, planWindows, walkTokens, readsOf, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
 };

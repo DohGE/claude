@@ -28,7 +28,7 @@ test.beforeEach(async () => {
       dataBase64: Buffer.from('x').toString('base64') });
   }
   // Exactly what the browser sends on submit — the server stores it for the re-render.
-  await post('/api/answer', { taskId: 't1', kind: 'step1',
+  await post('/api/answer', { taskId: 't1', kind: 'step1', commitMessage: 'feat: test',
     taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: 'POST /invites',
     hintsNote: 'układ z ekranu 2', mockups: [], contracts: [], hints: ['a.png', 'b.png'],
@@ -101,6 +101,7 @@ test('zmiana samej gałęzi niczego nie powtarza', async ({ page }) => {
   await page.waitForSelector('.step[data-step="1"]');
   await page.click('.step[data-step="1"]');
   await page.fill('#branch', 'feature/zaproszenia-v2');
+  await page.fill('#commitMessage', 'feat: test');
   await page.click('#next');
   await page.click('#confirmOk');
   // Nic się nie powtarza, więc strona wraca na krok, który właśnie pracuje.
@@ -128,6 +129,7 @@ test('edycja i ponowne wysłanie nadpisuje zapisane zgłoszenie', async ({ page 
   await page.waitForSelector('#branch');
   await page.fill('#task', 'Zaproszenia od admina i menedżera');
   await page.fill('#branch', 'feature/zaproszenia-v2');
+  await page.fill('#commitMessage', 'feat: test');
   await page.click('#next');
   await page.click('#confirmOk');
   const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();

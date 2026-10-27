@@ -12,6 +12,7 @@ const { taskState } = require('./server.cjs');
 const skillFile = path.join(__dirname, '..', 'SKILL.md');
 const slash = (p) => p.replace(/\\/g, '/');
 const noteOf = (out) => out && out.hookSpecificOutput.additionalContext;
+const stepFile = (name) => `${slash(path.join(__dirname, '..'))}/references/steps/${name}`;
 
 // The line of SKILL.md's `## <title…>` heading and the length of its section.
 function sectionOf(title) {
@@ -81,9 +82,10 @@ test('compact: names the run, where each task stands, the E2E slot and the secti
   for (const title of ['Talking to a running agent', 'Stopping a step', 'Server helpers']) {
     assert.ok(note.includes(`${sectionOf(title)} (${title}`), `the cut reached ${title}: ${note}`);
   }
-  assert.ok(note.includes(`${sectionOf('Step 4 ')} (Step 4`), note);
-  assert.ok(note.includes(`${sectionOf('Step 5 ')} (Step 5`), note);
-  assert.ok(!/\(Step 2 |\(Failure protocol|\(Final summary/.test(note), 'only what the tasks\' state calls for');
+  assert.ok(note.includes(stepFile('4-implementation.md')), note);
+  assert.ok(note.includes(stepFile('5-validation.md')), note);
+  assert.ok(!/2-refinement|\(Failure protocol|final-summary/.test(note), 'only what the tasks\' state calls for');
+  for (const name of ['4-implementation.md', '5-validation.md']) assert.ok(fs.existsSync(path.join(__dirname, '..', 'references', 'steps', name)), name);
   assert.ok(note.includes(hooks.loopCard(skillFile)[0]), 'the loop card rides along');
 });
 
@@ -95,9 +97,8 @@ test('compact: a failed step adds the failure protocol; a shown summary the fina
   });
   const note = noteOf(hooks.onCompact(f.input, f.env));
   assert.ok(note.includes('failed: step 5; final summary shown'), note);
-  for (const title of ['Step 6 ', 'Step 7 ', 'Failure protocol', 'Final summary']) {
-    assert.ok(note.includes(`${sectionOf(title)} (${title.trim()}`), `${title}: ${note}`);
-  }
+  assert.ok(note.includes(`${sectionOf('Failure protocol')} (Failure protocol`), note);
+  for (const name of ['6-code-review.md', '7-mockoon.md', 'final-summary.md']) assert.ok(note.includes(stepFile(name)), `${name}: ${note}`);
   assert.ok(note.includes('- waiter for t1: none is listening - start one (loop card point 1) before you end this turn'), note);
 });
 
@@ -119,7 +120,7 @@ test('compact: a session hears only of the task it orchestrates, and of the serv
   assert.ok(note.includes('- E2E slot: held by t3; queued: t2 (the server hands it on in this order)'), note);
   assert.ok(note.includes(`- waiter for t2: listening (pid ${process.pid})`), note);
   assert.ok(!note.includes('waiter for t1'), note);
-  assert.ok(note.includes(`${sectionOf('Step 5 ')} (Step 5`) && !note.includes('(Step 4'), note);
+  assert.ok(note.includes(stepFile('5-validation.md')) && !note.includes('4-implementation.md'), note);
 });
 
 test('compact: a task before implementation can still be revised; the story step has its own section', (t) => {
@@ -131,11 +132,9 @@ test('compact: a task before implementation can still be revised; the story step
   });
   const note = noteOf(hooks.onCompact(f.input, f.env));
   assert.ok(note.includes('- t1 on no branch yet: step 8 Story Description - in_progress, "Writing the story"'), note);
-  for (const title of ['Step 8 ', 'Revising step 1']) {
-    assert.ok(note.includes(`${sectionOf(title)} (${title.trim()}`), `${title}: ${note}`);
-  }
+  for (const name of ['8-story.md', '1-requirements.md']) assert.ok(note.includes(stepFile(name)), `${name}: ${note}`);
   const alone = fixture(t, { tasks: [task('t2', 4, { 4: { status: 'in_progress' } }, { step1Submitted: true })] });
-  assert.ok(!noteOf(hooks.onCompact(alone.input, alone.env)).includes('(Revising step 1'), 'implementation closed the form');
+  assert.ok(!noteOf(hooks.onCompact(alone.input, alone.env)).includes('1-requirements.md'), 'implementation closed the form');
 });
 
 test('compact: a run with no task state yet still names the run and its sections', (t) => {
@@ -160,12 +159,12 @@ test('skillSections: only what the compaction cut, each section up to the next h
   const skill = hooks.skillSections(skillFile);
   const titles = skill.sections.map((s) => s.title);
   assert.ok(titles.some((title) => title.startsWith('Talking to a running agent')), 'it straddles the cut');
-  assert.ok(!titles.some((title) => title.startsWith('Model and effort')), 'that one stays in the head');
+  assert.ok(!titles.some((title) => title.startsWith('Spawning a sub-agent')), 'that one stays in the head');
   for (const s of skill.sections) assert.ok(s.line + s.limit > skill.cutLine, `${s.title} runs past the cut`);
-  const summary = skill.sections.find((s) => s.title.startsWith('Final summary'));
+  const failure = skill.sections.find((s) => s.title.startsWith('Failure protocol'));
   const lines = fs.readFileSync(skillFile, 'utf8').split(/\r?\n/);
-  assert.ok(lines[summary.line - 1 + summary.limit].startsWith('<!-- one-time:start -->'), 'Final summary ends at the one-time part');
-  assert.ok(lines[skill.headLimit].startsWith('## Step 1 '), 'the head runs up to step 1');
+  assert.ok(lines[failure.line - 1 + failure.limit].startsWith('<!-- one-time:start -->'), 'the failure protocol ends at the one-time part');
+  assert.ok(lines[skill.headLimit].startsWith('## Steps'), 'the head runs up to the steps index');
   assert.strictEqual(hooks.skillSections(path.join(__dirname, 'no-such', 'SKILL.md')), null);
 });
 
@@ -177,4 +176,57 @@ test('loop card: short enough to ride in every compaction, and the plugin\'s com
   }
   const shared = require('../../../scripts/compact-hook.cjs');
   assert.ok(shared.parts.includes(path.join(__dirname, 'pipeline-hooks.cjs')));
+});
+
+test('compact: the final review is a step file of its own, and the summary follows the route\'s last step', (t) => {
+  const done = task('t1', 9, { 5: { status: 'completed' }, 6: { status: 'completed' }, 9: { status: 'completed' } });
+  const f = fixture(t, { tasks: [done] });
+  const note = noteOf(hooks.onCompact(f.input, f.env));
+  assert.ok(note.includes(stepFile('9-final-code-review.md')) && note.includes(stepFile('final-summary.md')), note);
+  assert.ok(note.includes('step 9 Final Code Review - completed'), note);
+  // A task with the final review switched off ends at validation.
+  const off = task('t1', 5, { 5: { status: 'completed' }, 9: { enabled: false } });
+  const g = fixture(t, { tasks: [off] });
+  assert.ok(noteOf(hooks.onCompact(g.input, g.env)).includes(stepFile('final-summary.md')));
+  const running = task('t1', 5, { 5: { status: 'in_progress' } });
+  const h = fixture(t, { tasks: [running] });
+  assert.ok(!noteOf(hooks.onCompact(h.input, h.env)).includes('final-summary'), 'validation still running');
+});
+
+test('resume: a server that died with the session is started again, a live one is only described', (t) => {
+  const dead = spawnSync(process.execPath, ['-e', '']).pid;
+  const f = fixture(t, { serverPid: dead, tasks: [task('t1', 5, { 5: { status: 'in_progress' } })] });
+  const started = [];
+  const restart = (run) => {
+    started.push(run);
+    fs.writeFileSync(path.join(run.dir, 'server.json'), JSON.stringify({ port: 9999, pid: process.pid }));
+    return { ok: true, port: 9999 };
+  };
+  const note = noteOf(hooks.onResume(f.input, f.env, restart));
+  assert.strictEqual(started.length, 1);
+  assert.strictEqual(slash(started[0].dir), slash(f.session));
+  assert.ok(note.includes('started again on port 9999'), note);
+  assert.ok(note.includes('- t1 on no branch yet: step 5 Validation & E2E - in_progress'), note);
+  const live = fixture(t, { tasks: [task('t1', 4)] });
+  assert.ok(noteOf(hooks.onResume(live.input, live.env, () => assert.fail('a live server is never restarted'))).includes('was resumed'));
+  const finished = fixture(t, { serverPid: dead, tasks: [task('t1', 9, {}, { summary: { finalStatus: 'Completed' } })] });
+  assert.strictEqual(hooks.onResume(finished.input, finished.env, () => assert.fail('a finished run stays down')), null);
+  const failed = fixture(t, { serverPid: dead, tasks: [task('t1', 5)] });
+  assert.ok(noteOf(hooks.onResume(failed.input, failed.env, () => ({ ok: false, error: 'port 9999 is already in use' }))).includes('could not be started again (port 9999 is already in use)'));
+});
+
+test('stop: a large orchestrator context earns one /compact hint per 100k of growth', (t) => {
+  const f = fixture(t, { tasks: [task('t1', 5)] });
+  const usage = (tokens) => fs.appendFileSync(f.input.transcript_path, `\n${JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 1, cache_read_input_tokens: tokens, cache_creation_input_tokens: 0 } } })}`);
+  usage(120000);
+  assert.strictEqual(hooks.onStop(f.input, f.env), null, 'below the threshold');
+  usage(300000);
+  const hint = hooks.onStop(f.input, f.env);
+  assert.ok(hint && /about 300k tokens.*\/compact/.test(hint.systemMessage), JSON.stringify(hint));
+  usage(350000);
+  assert.strictEqual(hooks.onStop(f.input, f.env), null, 'said once per step of growth');
+  usage(420000);
+  assert.ok(hooks.onStop(f.input, f.env));
+  const other = fixture(t, { mention: false, tasks: [task('t1', 5)] });
+  assert.strictEqual(hooks.onStop(other.input, other.env), null, 'a session that drives no run hears nothing');
 });

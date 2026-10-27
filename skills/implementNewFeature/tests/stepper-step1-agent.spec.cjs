@@ -36,6 +36,7 @@ test.afterEach(async () => {
 const fillRequired = async page => {
   await page.fill('#task', 'Zaproszenia dla zespołu');
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
 };
 
 test('formularz startuje z dziedziczeniem modelu i effortu', async ({ page }) => {
@@ -88,7 +89,7 @@ test('wybór przeżywa przerysowanie panelu', async ({ page }) => {
 });
 
 test('sama zmiana modelu otwiera ponowne zgłoszenie wymagań', async ({ page }) => {
-  await post('/api/answer', { taskId: 't1', kind: 'step1',
+  await post('/api/answer', { taskId: 't1', kind: 'step1', commitMessage: 'feat: test',
     taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
     mockups: [], contracts: [], hints: [], authProvided: false, generateMockups: false,
@@ -111,7 +112,7 @@ test('sama zmiana modelu otwiera ponowne zgłoszenie wymagań', async ({ page })
 });
 
 test('po starcie implementacji ustawienia agenta nadal się zapisują', async ({ page }) => {
-  await post('/api/answer', { taskId: 't1', kind: 'step1',
+  await post('/api/answer', { taskId: 't1', kind: 'step1', commitMessage: 'feat: test',
     taskDescription: 'Zaproszenia',
     branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
     mockups: [], contracts: [], hints: [], authProvided: false, generateMockups: false,
@@ -137,7 +138,7 @@ test('po starcie implementacji ustawienia agenta nadal się zapisują', async ({
 
 // Zgłoszony formularz trzyma ustawienia zagnieżdżone (agents), a szkic — płasko.
 // Oba miejsca poniżej czytają je z jednego zgłoszenia, bez otwartego formularza.
-const submitted = extra => post('/api/answer', { taskId: 't1', kind: 'step1',
+const submitted = extra => post('/api/answer', { taskId: 't1', kind: 'step1', commitMessage: 'feat: test',
   taskDescription: 'Zaproszenia',
   branch: 'feature/zaproszenia', contractsText: '', hintsNote: '',
   mockups: [], contracts: [], hints: [], authProvided: false, generateMockups: false,

@@ -37,6 +37,7 @@ test('krok 1 kopiuje pola tekstowe, ale hasło nie dostaje przycisku', async ({ 
   expect(await clipboard(page)).toBe('Zaproszenia dla adminów');
   // Także pole jednoliniowe — branch.
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
   await page.click('.copy-wrap:has(#branch) button.copy');
   expect(await clipboard(page)).toBe('feature/zaproszenia');
   // Hasło jest wyłączone z dekoratora, login już nie.

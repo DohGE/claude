@@ -35,6 +35,14 @@ files, component library, an existing screen closest to the feature. The mockup 
 already belongs to this application — matching type scale, spacing, radii, palette and component
 shapes — not like a generic template.
 
+**Both themes from the first round.** When the application ships a dark theme — a dark palette in
+its tokens, a `prefers-color-scheme` rule, a theme switch, a `.dark` or `[data-theme]` class —
+draw every state in both: the light state as usual, and a twin manifest entry for its dark version
+(the next state id of the same view, its `title` ending in `(dark)`), rendered by the same file
+with the app's own dark tokens on its root element. In a measured run both tasks' users asked for
+the dark versions in a second round; drawn in the first, that round never happens. An application
+with one theme gets one.
+
 ## Naming and copy rulebook (MANDATORY)
 
 Every string you draw ends up as a translation entry written in step 4 and reviewed against the

@@ -35,6 +35,7 @@ async function openStep1(page) {
   await page.waitForSelector('#genMockups');
   await page.fill('#task', 'Opis zadania');
   await page.fill('#branch', 'feature/test');
+  await page.fill('#commitMessage', 'feat: test');
 }
 
 const SCREENS = [
@@ -56,19 +57,20 @@ async function openMockupPanel(page) {
 
 test('stepper ukrywa krok Mockups, dopóki toggle go nie włączy', async ({ page }) => {
   await page.goto(base);
-  await expect(page.locator('.step')).toHaveCount(6);
+  await expect(page.locator('.step')).toHaveCount(7);
+  // Code Review (6) przed Validation (5), końcowa recenzja (9) po niej: kafelki idą trasą zadania.
   await expect(page.locator('.step .name')).toHaveText(
-    ['Requirements', 'Feature Refinement', 'Implementation', 'Validation & E2E', 'Code Review',
-      'Mockoon Mocks']);
+    ['Requirements', 'Feature Refinement', 'Implementation', 'Code Review', 'Validation & E2E',
+      'Final Code Review', 'Mockoon Mocks']);
   // z ukrytym krokiem Mockups numer kafelka rozjezdza sie z id kroku: Implementation ma id 4,
   // a pokazuje sie jako 3 — dlatego finalStatus w podsumowaniu nazywa krok, a nie numeruje.
-  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6']);
+  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6', '7']);
   await postState({ step: 3, enabled: true });
-  await expect(page.locator('.step')).toHaveCount(7);
+  await expect(page.locator('.step')).toHaveCount(8);
   await expect(page.locator('.step').nth(2).locator('.name')).toHaveText('Mockups');
   // numeracja kafelków zostaje ciągła mimo stałych id kroków
-  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6', '7']);
-  // siedem kafelków musi zmieścić się w jednym rzędzie — inaczej ostatni ląduje sam pod spodem
+  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6', '7', '8']);
+  // osiem kafelków musi zmieścić się w jednym rzędzie — inaczej ostatni ląduje sam pod spodem
   const rows = await page.locator('.step').evaluateAll(els =>
     [...new Set(els.map(el => Math.round(el.getBoundingClientRect().top)))]);
   expect(rows).toHaveLength(1);
@@ -78,12 +80,12 @@ test('kafelek Story Description stoi przed Implementation, choć ma id 8', async
   await page.goto(base);
   await postState({ step: 3, enabled: true });
   await postState({ step: 8, enabled: true });
-  await expect(page.locator('.step')).toHaveCount(8);
+  await expect(page.locator('.step')).toHaveCount(9);
   await expect(page.locator('.step .name')).toHaveText(
     ['Requirements', 'Feature Refinement', 'Mockups', 'Story Description', 'Implementation',
-      'Validation & E2E', 'Code Review', 'Mockoon Mocks']);
-  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6', '7', '8']);
-  // osiem kafelków nadal w jednym rzędzie
+      'Code Review', 'Validation & E2E', 'Final Code Review', 'Mockoon Mocks']);
+  await expect(page.locator('.step .num')).toHaveText(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+  // dziewięć kafelków nadal w jednym rzędzie
   const rows = await page.locator('.step').evaluateAll(els =>
     [...new Set(els.map(el => Math.round(el.getBoundingClientRect().top)))]);
   expect(rows).toHaveLength(1);
@@ -91,7 +93,7 @@ test('kafelek Story Description stoi przed Implementation, choć ma id 8', async
   await postState({ step: 2, enabled: false });
   await expect(page.locator('.step .name')).toHaveText(
     ['Requirements', 'Mockups', 'Story Description', 'Implementation',
-      'Validation & E2E', 'Code Review', 'Mockoon Mocks']);
+      'Code Review', 'Validation & E2E', 'Final Code Review', 'Mockoon Mocks']);
 });
 
 test('toggle Generate mockups jest domyślnie wyłączony', async ({ page }) => {

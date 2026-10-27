@@ -397,10 +397,18 @@ function readPackageJson(root) {
   }
 }
 
+// Jest starts one worker per core but one by default, and each worker of a large Angular suite
+// holds its own copy of the compiled modules: on a 16-core machine with a dev server and a browser
+// already up, that is what ran the machine out of memory mid-run. Half the cores keeps the run
+// fast and leaves room - unless the project's script already says how many it wants.
+const jestWorkers = '--maxWorkers=50%';
+
 function extraArgsFor(step, scriptText) {
   if (step !== 'test') return [];
   for (const { match, args } of watchFlags) {
-    if (match.test(scriptText)) return args;
+    if (!match.test(scriptText)) continue;
+    const own = /--maxWorkers|(^|\s)-w(\s|=|$)|--runInBand|(^|\s)-i(\s|$)/.test(scriptText);
+    return match.test('jest') && !own ? [...args, jestWorkers] : args;
   }
   return [];
 }

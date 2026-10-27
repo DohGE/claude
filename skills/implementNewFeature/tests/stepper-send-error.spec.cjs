@@ -34,6 +34,7 @@ test('odrzucony zapis pokazuje pasek bledu zamiast udawac sukces', async ({ page
     status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'unknown task' })
   }));
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
   await page.click('#next');
   await page.click('#confirmOk');
   await expect(page.locator('#sendError')).toBeVisible();
@@ -43,6 +44,7 @@ test('odrzucony zapis pokazuje pasek bledu zamiast udawac sukces', async ({ page
 test('nieosiagalny serwer tez daje pasek bledu', async ({ page }) => {
   await page.route('**/api/answer', route => route.abort());
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
   await page.click('#next');
   await page.click('#confirmOk');
   await expect(page.locator('#sendError')).toBeVisible();

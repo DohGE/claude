@@ -220,7 +220,7 @@ test('draft: an Edit that fixes a refused part\'s draft moves it into place, and
   fs.writeFileSync(f.draft(1), partA('[x] general#1,#3 — OK'));
   const refused = edit(1);
   assert.strictEqual(refused.hookSpecificOutput.hookEventName, 'PostToolUse');
-  assert.ok(noteOf(refused).startsWith('Szkic raport.part01.draft.md nadal nie przechodzi kontroli formatu (codeReview SKILL.md, Step 3 point 4) - popraw kolejnym Edit tylko wskazane miejsca, hook sprawdzi go znowu:\n- '), noteOf(refused));
+  assert.ok(noteOf(refused).startsWith('Szkic raport.part01.draft.md nadal nie przechodzi kontroli formatu (codeReview references/walk.md, Step 3 point 4) - popraw kolejnym Edit tylko wskazane miejsca, hook sprawdzi go znowu:\n- '), noteOf(refused));
   assert.ok(noteOf(refused).includes('OK bez dowodu'), noteOf(refused));
   assert.ok(fs.existsSync(f.draft(1)) && !fs.existsSync(f.part(1)));
   fs.writeFileSync(f.draft(1), partA());
@@ -255,43 +255,20 @@ test('skillLines: from a little before the cut of the re-attached body to the on
   assert.strictEqual(hooks.skillLines(path.join(dir, 'missing.md')), null);
 });
 
-test('skillLines: the shipped SKILL.md sends a compacted session back for the rest of the walk, not for Steps 1-2', () => {
-  // A marker inside the re-attached head, or none, and the hook sends nobody back: the
-  // report format and the rest of Step 3 would be lost to the first compaction.
+test('skillLines: the shipped SKILL.md is re-attached whole after a compaction, and the walk lives in references/walk.md', () => {
+  // The orchestration ends before the re-attached head does, so a compaction keeps all of it; the
+  // walk's rules - Step 3, the report format, the rationalizations - are in walk.md, which the
+  // compaction note names to whoever walks a file next.
   const file = path.join(__dirname, '..', 'SKILL.md');
-  const lines = hooks.skillLines(file);
-  assert.ok(lines, 'SKILL.md carries the one-time marker past the re-attached head');
-  const text = fs.readFileSync(file, 'utf8').split('\n');
-  const reread = text.slice(lines.from - 1, lines.from - 1 + lines.limit).join('\n');
-  assert.match(reread, /^## Step 4 /m, 'the re-read reaches the report format');
-  assert.match(reread, /^## Skip rationalizations/m, 'and the rationalizations');
-  assert.doesNotMatch(reread, /^## Step [12] /m, 'and stops before the steps run once');
-  assert.strictEqual(text.join('\n').split(hooks.oneTimeMarker).length, 2, 'the marker stands once');
-});
-
-test('walkLines: from the Step 3 heading to the one-time part, the lines a window\'s walker reads', (t) => {
-  const dir = tempDir(t, 'review-hooks-walk-');
-  const file = path.join(dir, 'SKILL.md');
-  fs.writeFileSync(file, `---\nname: x\n---\n# head\n\nrule\n\n## Step 3 — Analyze\n\nwalk\n\n## Step 4 — Report\n\n${hooks.oneTimeMarker}\n## Step 1\n`);
-  assert.deepStrictEqual(hooks.walkLines(file), { path: file, from: 8, limit: 6 });
-  fs.writeFileSync(file, `---\nname: x\n---\n## Step 3\n`);
-  assert.strictEqual(hooks.walkLines(file), null, 'no one-time marker, no range');
-  fs.writeFileSync(file, `---\nname: x\n---\n${hooks.oneTimeMarker}\n## Step 3\n`);
-  assert.strictEqual(hooks.walkLines(file), null, 'a marker before the heading, no range');
-  assert.strictEqual(hooks.walkLines(path.join(dir, 'missing.md')), null);
-});
-
-test('walkLines: the shipped SKILL.md hands a walker Step 3 and Step 4, and neither Steps 1-2 nor the head', () => {
-  const file = path.join(__dirname, '..', 'SKILL.md');
-  const lines = hooks.walkLines(file);
-  assert.ok(lines, 'SKILL.md has a Step 3 heading before the one-time marker');
-  const text = fs.readFileSync(file, 'utf8').split('\n');
-  const read = text.slice(lines.from - 1, lines.from - 1 + lines.limit).join('\n');
-  assert.match(read, /^## Step 3 /m);
-  assert.match(read, /^## Step 4 /m, 'the walker reaches the report format');
-  assert.match(read, /^\*\*Windows\.\*\*/m, 'and the rule that makes it a walker');
-  assert.doesNotMatch(read, /^## Step [12] /m, 'and stops before the steps run once');
-  assert.ok(text[lines.from - 1].startsWith('## Step 3'), 'it starts on the heading');
+  assert.strictEqual(hooks.skillLines(file), null);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.strictEqual(text.split(hooks.oneTimeMarker).length, 2, 'the marker stands once');
+  assert.doesNotMatch(text, /^## Step 4 /m, 'the report format is not in SKILL.md');
+  const walk = fs.readFileSync(path.join(__dirname, '..', 'references', 'walk.md'), 'utf8');
+  assert.match(walk, /^## Step 3 /m);
+  assert.match(walk, /^## Step 4 /m);
+  assert.match(walk, /^## Skip rationalizations/m);
+  assert.doesNotMatch(walk, /^## Step [12] /m, 'and none of the steps run once');
 });
 
 test('compact: a run with windows sends its walker again, and the batch Reads stay for a session that cannot dispatch', (t) => {
@@ -301,7 +278,7 @@ test('compact: a run with windows sends its walker again, and the batch Reads st
   const at = lines.findIndex((line) => line.startsWith('- okno 1/1: pliki 1-2'));
   assert.ok(at > 0, lines.join('\n'));
   assert.ok(lines[at].includes('`doh:codereview-walker`'));
-  assert.ok(lines[at].includes(`\`Read ${f.dir}/window01.md and follow it\``));
+  assert.ok(lines[at].includes(`\`Read ${f.dir}/window01.md and follow it.\``));
   assert.ok(lines[at].includes('`WINDOW DONE 1-2`'));
   assert.ok(lines[at + 1].startsWith('- partia: pliki 1-2'), 'the Reads of the batch follow, for a session with no Agent tool');
 });
@@ -317,7 +294,8 @@ test('compact: where the run stands - the next file or batch with its Reads, the
     `- cel 1/1: feature, raport ${f.reportPath}`,
     `- rulebook (Step 2) wraca tylko z pliku: przeczytaj (Read) ${f.context.rulebookNotesPath}`,
   ];
-  const skill = `- SKILL.md wrócił po kompaktowaniu tylko do około linii 194 (po wznowieniu sesji - wcale): przeczytaj (Read) ${skillFile} z offset 194 i limit 10 - reszta kroku 3 i format raportu.`;
+  const skill = `- SKILL.md wrócił po kompaktowaniu tylko do około linii 194 (po wznowieniu sesji - wcale): przeczytaj (Read) ${skillFile} z offset 194 i limit 10 - reszta prowadzenia recenzji.`;
+  const walkRules = `- reguły przejścia pliku i format części (Step 3 i 4) są w ${bundle.walkRulesPath}: przeczytaj (Read), zanim sam przejdziesz plik albo zrobisz przejście międzyplikowe.`;
   // What was read before the compaction is gone from the conversation: the batch is read again, whole.
   const readAgain = '- przeczytaj (Read) w jednej odpowiedzi, także to, co czytałeś przed kompaktowaniem - tego tekstu nie ma już w rozmowie, a kilka Grep po pozycjach to kilka odpowiedzi:';
   const [a, b] = f.target.files;
@@ -328,6 +306,7 @@ test('compact: where the run stands - the next file or batch with its Reads, the
     readAgain,
     ...[a.bundlePath, a.contentPath, a.diffPath, b.bundlePath, b.contentPath, b.diffPath].map((p) => `  - ${p}`),
     skill,
+    walkRules,
   ]);
   // The batch's first part landed alone: the rest of the batch.
   fs.writeFileSync(f.part(1), partA());
@@ -338,10 +317,11 @@ test('compact: where the run stands - the next file or batch with its Reads, the
     ...[b.bundlePath, b.contentPath, b.diffPath].map((p) => `  - ${p}`),
     `- szkice odrzuconych części czekają na Edit (hook przenosi szkic po Edit): ${f.draft(2)}`,
     skill,
+    walkRules,
   ]);
   fs.rmSync(f.draft(2));
   fs.writeFileSync(f.part(2), partB);
-  assert.deepStrictEqual(at().slice(head.length, -1), [
+  assert.deepStrictEqual(at().slice(head.length, -2), [
     `- części plików zapisane (2/2); następne: przejście międzyplikowe, część ${f.part(3)}`,
     '- przeczytaj (Read) w jednej odpowiedzi:',
     `  - ${f.target.crossBundlePath}`,
@@ -393,10 +373,13 @@ test('registration: the plugin runs every codeReview hook, SKILL.md none of them
     hooks: [{ type: 'command', command: 'node', args: [`\${CLAUDE_PLUGIN_ROOT}/skills/codeReview/scripts/${name}`, ...args], timeout }],
   });
   // The compaction note comes through the plugin's shared hook, which asks every skill's part.
-  assert.deepStrictEqual(config.hooks.SessionStart, [{
-    matcher: 'compact',
-    hooks: [{ type: 'command', command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/compact-hook.cjs', '--event=compact'], timeout: 10 }],
-  }]);
+  // A resumed session gets the same note, and the end of a turn the orchestrator's /compact hint.
+  const shared = (event, timeout) => ({ type: 'command', command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/compact-hook.cjs', `--event=${event}`], timeout });
+  assert.deepStrictEqual(config.hooks.SessionStart, [
+    { matcher: 'compact', hooks: [shared('compact', 10)] },
+    { matcher: 'resume', hooks: [shared('resume', 45)] },
+  ]);
+  assert.deepStrictEqual(config.hooks.Stop, [{ hooks: [shared('stop', 10)] }]);
   assert.ok(require('../../../scripts/compact-hook.cjs').parts.some((file) => file === path.join(__dirname, 'review-hooks.cjs')));
   assert.deepStrictEqual(config.hooks.PreToolUse, [
     { matcher: 'Write|Edit|Bash', ...run('check-part.cjs', [], 30) },
@@ -436,4 +419,23 @@ test('compact: the walk card rides in every compaction note, since a resumed ses
   assert.ok(card.join('\n').length <= 3000, 'the card stays short: it rides in every compaction');
   assert.match(card.join('\n'), /Do odpowiedzi/);
   assert.strictEqual(hooks.walkCard(path.join(__dirname, 'no-such-skill', 'SKILL.md')), null);
+});
+
+test('read under --dedup-items with walkers side by side: per agent, or not at all without its id', (t) => {
+  const f = fixture(t, { dedupItems: true });
+  f.target.parallel = 2;
+  fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
+  const [a, b] = f.target.files.map((file) => file.bundlePath);
+  const readAs = (file, agent) => hooks.onRead({ session_id: 's1', agent_id: agent, tool_name: 'Read', tool_input: { file_path: file } }, f.env);
+  // No agent id: any walker may have read the first bundle, so nothing is shown by reference.
+  assert.strictEqual(read(f, a), null);
+  assert.strictEqual(read(f, b), null);
+  // With ids, each walker's own reads: w2 never read a, so b stays whole for it.
+  assert.strictEqual(readAs(a, 'w1'), null);
+  assert.strictEqual(readAs(b, 'w2'), null);
+  assert.ok(readAs(b, 'w1'), 'w1 read a: b shows a reference to it');
+  // One walker stopping forgets its own reads only.
+  hooks.onSubagent({ session_id: 's1', hook_event_name: 'SubagentStop', agent_id: 'w1' }, f.env);
+  const shown = stateOf(f).shown;
+  assert.ok(!shown['@w1'] && shown['@w2'], JSON.stringify(shown));
 });

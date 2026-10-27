@@ -1,10 +1,10 @@
 # codeReview — the cross-file pass
 
-Read together with `target.crossBundlePath`, in the message that writes a target's last file part: the last bundle's `## Dalej` names both, and after a compaction the hook does.
-This is point 3 of Step 3 (SKILL.md), answered once for the whole target.
+Read together with `target.crossBundlePath`: by the fresh `doh:codereview-walker` the cross-file brief (`target.crossBriefPath`) sends, or by the conversation that walked the target itself, in the message that writes its last file part (the last bundle's `## Dalej` names both, and after a compaction the hook does).
+This is point 3 of Step 3 (`references/walk.md`), answered once for the whole target.
 
-After the per-file pass, do ONE cross-file pass over the whole diff, written as part `N+1` (`N` = `target.files.length`): its findings sections and, when the rule below asks for it, one `<!-- unverified:` block — no checklist block and no coverage marker.
-That part is written on every target with files — empty when the pass found nothing, because the assembly refuses a report without it.
+After the per-file pass, do ONE cross-file pass over the whole diff, written as part `N+1` (`N` = `target.files.length`): its findings sections, one `<!-- questions:` block and, when the rule below asks for it, one `<!-- unverified:` block — no checklist block and no coverage marker.
+That part is written on every target with files — without findings when the pass found nothing, because the assembly refuses a report without it — and its `<!-- questions:` block is never left out: it is how the check knows the pass was made.
 
 The pass works from `target.crossBundlePath` (a FIXED IDENTIFIER, like every key of the context JSON), read with the Read tool:
 - `## Fakty międzyplikowe` — the facts that span files: repeated literals and conditions, label mappings implemented more than once, relative imports that leave their area;
@@ -19,7 +19,22 @@ A cross-file fact is a lead, like a per-file `WSKAZÓWKA`: open the places it na
 What the five questions need from outside the bundle — the copies of every candidate, `target.importLedger`, the files of a derived-data flow or of the views compared, the searches of question 1 — is read in ONE message of parallel calls, then judged together.
 A second round follows only a lead the first one opened, never a sweep of files that no fact, no finding of a file part and no question pointed at.
 
-Answer each of these five questions explicitly, against the diff as a whole:
+Answer each of these five questions explicitly, against the diff as a whole, and record each answer — and each jscpd candidate's, numbered `jscpd#<n>` in the bundle — on a line of the part's `<!-- questions:` block (the bundle's `## Zapis części` shows it):
+
+    <!-- questions:
+    [x] pytanie#1 — OK (12 eksportów: grep po nazwie i wyrażeniu; 3 kandydatów otwartych)
+    [x] pytanie#2 — OK (krawędzie księgi importów: 41/41)
+    [x] pytanie#3 — OK (przepływ akcji widoku: akcja, reducer, komponent)
+    [x] pytanie#4 — NARUSZENIE (src/app/users/user.const.ts:12)
+    [x] pytanie#5 — OK (brak wystąpień)
+    [x] jscpd#1 — OK (dane równoległe: pliki tłumaczeń)
+    [x] jscpd#2 — NARUSZENIE (part07)
+    -->
+
+An `OK` says what was opened and checked, never only the word; a candidate's `OK` names its ground for dismissal (below).
+A `NARUSZENIE` points at its finding — `path:lines` of this part's finding, or `partNN`, the file part that reports it.
+`NIEZWERYFIKOWANE` takes a reason, as in a file's block.
+`<!-- questions:`, `pytanie#` and `jscpd#` are FIXED IDENTIFIERS: the check refuses the part when the block, a question or a candidate is missing, or a line has no verdict.
 1. Duplication drift — is the same logic, formatting or literal implemented in three or more places of the reviewed revision, at least one of them written by this diff?
    An existing shared util, component, model or i18n key the diff re-implements counts as one of the places.
    Answer it from three sources:
@@ -69,4 +84,6 @@ No address open in 3 or more files means no block.
 A target whose whole review produced no finding closes with one more part file after the cross-file one, holding the single line `Nie wykryto problemów.` — the per-file parts before it still carry every checklist block and coverage marker, which is what a `--with-checklist` report then shows.
 The bundle's `## Zapis części` names that part.
 
-Write the cross-file part — and the closing part, when the target found nothing — and, in the same message, Read `references/assembly.md` in this skill's directory: the assembly comes next.
+Write the cross-file part — and the closing part, when the target found nothing.
+A walker sent with the cross-file brief then replies with the one line its brief names, and nothing else: the assembly is not its step.
+The conversation that runs the review Reads `references/assembly.md` in this skill's directory, in the same message as these Writes when it made the pass itself: the assembly comes next.

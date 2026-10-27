@@ -2,6 +2,10 @@
   "kind": "state-interface",
   "pattern": "src/app/**/models/interfaces/<name>-state.interface.ts",
   "role": "State interface of a feature slice.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "state-interface#1",

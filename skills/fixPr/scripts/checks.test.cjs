@@ -193,7 +193,10 @@ test('the test step carries the non-interactive flag its runner understands', (t
   const cases = [
     ['vitest', ['--run']],
     ['vitest run --coverage', ['--run']],
-    ['jest --coverage', ['--ci', '--watchAll=false']],
+    ['jest --coverage', ['--ci', '--watchAll=false', '--maxWorkers=50%']],
+    // A script that sets its own workers keeps them.
+    ['jest --runInBand', ['--ci', '--watchAll=false']],
+    ['jest --maxWorkers=2', ['--ci', '--watchAll=false']],
     ['ng test my-app', ['--watch=false']],
     ['karma start', ['--watch=false']],
     ['node --test', []],
@@ -554,11 +557,11 @@ test('a --command line still gets the flag that stops its runner watching, unles
   const cases = [
     ['npx ng test --include=src/app/foo.spec.ts', 'npx ng test --include=src/app/foo.spec.ts --watch=false'],
     ['npx vitest run src/a.spec.ts --run', 'npx vitest run src/a.spec.ts --run'],
-    ['npx jest src/foo.spec.ts', 'npx jest src/foo.spec.ts --ci --watchAll=false'],
+    ['npx jest src/foo.spec.ts', 'npx jest src/foo.spec.ts --ci --watchAll=false --maxWorkers=50%'],
     ['npx ng test --watch=false', 'npx ng test --watch=false'],
     // A package.json script names its runner in the script, not in the line.
     ['npm test -- --include=src/app/foo.spec.ts', 'npm test -- --include=src/app/foo.spec.ts --watch=false'],
-    ['npm run test:jest', 'npm run test:jest -- --ci --watchAll=false'],
+    ['npm run test:jest', 'npm run test:jest -- --ci --watchAll=false --maxWorkers=50%'],
     ['go test ./...', 'go test ./...'],
   ];
   for (const [line, expected] of cases) {

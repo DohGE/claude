@@ -1,6 +1,7 @@
 ---
 name: implementNewFeature
-description: Use when the user wants a complete feature implemented end-to-end - runs a pipeline (Requirements, Implementation, Validation & E2E, Code Review) with optional Feature Refinement, Mockups and Story Description steps and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, and the requirements form stays editable until implementation starts (its settings until the task finishes); the orchestrator coordinates sub-agents and keeps the main context clean
+description: Use when the user wants a complete feature implemented end-to-end - runs a pipeline (Requirements, Implementation, Code Review, Validation & E2E, Final Code Review) with optional Feature Refinement, Mockups and Story Description steps and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, the requirements form stays editable until implementation starts (its settings - every sub-agent's model and effort, both reviews, the commit message - until the task finishes), and a finished task can be committed, pushed and opened as a pull request from the summary screen; the orchestrator coordinates sub-agents and keeps the main context clean
+argument-hint: "[--attach <taskId> --port <n>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -17,7 +18,8 @@ You are the **orchestrator**. You never implement, test, or review code yourself
 Sub-agents do all heavy work; you hold only: task records, step statuses, artifact paths, short summaries.
 Dynamic texts (questions, reports, summary) stay in the user's conversation language; UI chrome is English.
 Arguments with `--attach <taskId> --port <n>` start this session at "Attach"; any other start runs
-"Setup" (both at the end of this file).
+"Setup" (both at the end of this file). Each step's own instructions are a file of
+`references/steps/` — "Steps" below says which, and when to read it.
 
 <!-- lean-mode:start (generated from shared/caveman-ultra.md) -->
 ## Lean mode: caveman ultra
@@ -90,13 +92,13 @@ Without that tool, re-read the file or re-run the command with narrower output.
   `{"taskId":"T","step":N,"currentOperation":"Waiting for you","reopenGate":true}`: the panel
   stops claiming work, and a plan, story or mockup gate the user's feedback took off the screen
   comes back, since no revised one is coming (see "A send takes its gate off the screen").
-- Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND, on the model and effort step 1 asked for (see "Model and effort"); continue an existing one with SendMessage (its context is preserved).
-- The pipeline NEVER commits in the target project. Each task works on its own branch; stage its changes at the very end.
+- Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND, on the model and effort step 1 asked for (see "Model and effort"); continue an existing one with SendMessage (its context is preserved) — unless it went cold ("Talking to a running agent").
+- The pipeline NEVER commits in the target project, with one exception: the summary screen's "Shut down and create pull request", which the user presses (`references/steps/final-summary.md`). Each task works on its own branch; stage its changes at the very end.
 - Update the stepper before and after every phase so the browser always reflects reality.
 
 ## The run is an event loop, not a walk
 
-A run holds one or more **tasks**. A task is one feature on one branch with its own eight-step
+A run holds one or more **tasks**. A task is one feature on one branch with its own nine-step
 pipeline, its own `<SESSION>/tasks/<id>/`, its own sub-agents and its own orchestrator, a separate
 Claude Code session. Tasks share only the server, the browser page and one Validation & E2E
 slot. You orchestrate ONE task, T: `t1` when this session ran Setup, else the one `--attach` named
@@ -104,8 +106,8 @@ slot. You orchestrate ONE task, T: `t1` when this session ran Setup, else the on
 
 Hold this for T, and nothing more:
 
-    { id, branch, root, step, agentIds{refinement, mockup, story, impl, validation, review, mockoon},
-      refinement, mockups, story, revisionCount, mockupRounds, agents, notes }
+    { id, branch, root, base, step, agentIds{refinement, mockup, story, impl, review, validation, finalReview, mockoon},
+      refinement, mockups, story, final, revisionCount, mockupRounds, agents, notes }
 
 Then loop until the user shuts the server down:
 
@@ -119,11 +121,15 @@ Then loop until the user shuts the server down:
    - `WAIT_TIMEOUT` — 50 minutes passed with nothing: back to 1 (the new waiter is the keep-alive).
    - `WAITER_RUNNING <pid>` — another waiter is still listening: end your turn without a new one.
    - `ORCHESTRATOR_RUNNING <session>` — another session orchestrates T: tell the user, stop looping.
-   - `SERVER_GONE`, or `TASK_GONE` (T was removed) — stop looping and end your turn.
+   - `SERVER_GONE`, or `TASK_GONE` (T was removed) — stop looping and end your turn. When
+     `<SESSION>/tasks/T/pr-request.json` exists, the user pressed "Shut down and create pull
+     request" while you were not listening: run that flow first (`references/steps/final-summary.md`).
 3. A sub-agent completion notification arrives → advance T's state machine, then back to 1.
 4. `{"kind":"summary","decision":"shutdown"}` → stop looping and end your turn.
+   `{"kind":"summary","decision":"shutdown_pr"}` → the pull request flow
+   (`references/steps/final-summary.md`, "Shut down and create pull request"), then stop.
 5. Once T has had its final summary, a `WAIT_TIMEOUT` ends the loop instead: do not start
-   another waiter (see "Final summary", point 7).
+   another waiter (`references/steps/final-summary.md`, point 7).
 
 Answer kinds and where they belong: `step1` → step 1 (the first one starts T's pipeline, every
 later one is a revision); `answer` → the question T's agent asked; `decision` → the plan or story
@@ -131,14 +137,16 @@ gate, failure gate or Mockoon gate; `mockup` → the mockup gate; `message` → 
 own composer, for that step's agent (see "Talking to a running agent"); `stop` → the Stop button of
 a running step (see "Stopping a step"); `delete` → the × on one of the user's own lines in a step's
 transcript (see "Talking to a running agent"); `summary` → the summary screen; `e2e` → the E2E slot
-came round to T (see "E2E slot").
+came round to T (see "E2E slot"): step 5 starts, or step 9's agent hears `E2E slot granted`.
 Each kind carries its own fields, and they are what you read — never guess a name: `answer` has
 `questionId` and `value` (the answer TEXT is `value`, not `text`); `decision` and `mockup` have
-`decision` plus a `text` on `feedback`; `message` has `step` and `text`; `stop` has `step`;
+`decision` plus a `text` on `feedback` (and a mockup `approve` sent while the agent reworked the
+round carries `duringRework: true`); `message` has `step` and `text`; `stop` has `step`;
 `delete` has `step`, the line's `id` and its `text`; `summary` has `decision`; `step1` carries the form as the server normalised it — `refinement`,
-`generateMockups` and `storyDescription` are booleans, and `codeReview` is a list of one to three
-runs, each `{"flags":[…]}` — and every `step1` after the first adds `revision` (see "Revising
-step 1"). An `answer`, a `message`, a `feedback` and a `delete` may also carry `attachments`, the
+`generateMockups`, `storyDescription` and `finalReview` are booleans, `codeReview` and
+`finalCodeReview` are lists of one to three runs, each `{"flags":[…]}`, `commitMessage` is text
+and `agents` holds every agent's model and effort — and every `step1` after the first adds
+`revision` (`references/steps/1-requirements.md`, "Revising step 1"). An `answer`, a `message`, a `feedback` and a `delete` may also carry `attachments`, the
 absolute paths of images the user attached in steps 2, 3 and 8: the key is there only when there
 is at least one, and then the text may be empty (see "Talking to a running agent"). An `answer`, a
 `decision`, a `mockup`, a `message` or a `delete` for a step the user stopped carries
@@ -183,12 +191,13 @@ Other tasks run in sessions of their own, so several sit in steps 2-4, 6 and 8 a
 that fails stops none of the others.
 
 **E2E slot.** Chrome, the Claude in Chrome extension, the Playwright installation and the app's dev
-port are single-instance, so only ONE task may be inside step 5 at a time, and the SERVER keeps the
-slot, never your memory. POST `/api/e2e` with `{"taskId":"T"}`: `{"granted":true}` → T has it;
-`{"granted":false,…}` → the server queued T (first come, first served) and shows its step 5
-waiting: wait for T's `kind=="e2e"`. T keeps the slot through step 5 — a Stop and a failure-protocol
-retry included — and the server hands it on once step 5 is posted `completed` or T's summary is
-set. Never release it yourself.
+port are single-instance, so only ONE task may run an E2E suite at a time — step 5, or the
+regression run of step 9 — and the SERVER keeps the slot, never your memory. POST `/api/e2e` with
+`{"taskId":"T"}` (and `"step":9` for the final review): `{"granted":true}` → T has it;
+`{"granted":false,…}` → the server queued T (first come, first served) and shows that step
+waiting: wait for T's `kind=="e2e"`. T keeps the slot through the step — a Stop and a
+failure-protocol retry included — and the server hands it on once that step is posted `completed`
+or T's summary is set. Never release it yourself.
 
 ## Spawning a sub-agent
 
@@ -199,6 +208,14 @@ that reads it. You never build the prompt yourself.
 
        node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/<name>-agent.md" --out="<SESSION>/prompts/<name>.md" --set=ROOT=<…> --set=PROJECT=<…> --set=SESSION=<…> --set=TASK_ID=<…> --set=PORT=9999 --set=SKILL_DIR=<…> --set=LANGUAGE=<…> --set=EFFORT=<…>
 
+   Some briefs take values of their own on top, each written as `--set=NAME=value` (quote the whole
+   argument when the value has spaces):
+   - the review agent (steps 6 and 9): `--set=STEP=`, `--set=STEP_NAME=`, `--set=REVIEW_SECTION=`,
+     `--set=DEFAULT_RUNS=`, `--set=REPORT_FILE=`, `--set=WALKER_FLAGS=`, `--set=FIXER_MODEL=` and
+     `--set=FIXER_EFFORT=` — the step files list each value;
+   - the validation agent: `--set=RUNNER_MODEL=`, `--set=RUNNER_EFFORT=`, `--set=COMPLIANCE_MODEL=`
+     and `--set=COMPLIANCE_EFFORT=`;
+   - the implementation agent: `--set=BASE=` (the branch step 4 started from).
    `<SESSION>` here is the task's own `{{SESSION}}` — the brief lands beside the artifacts of the
    task it belongs to, and the next round of the same agent replaces it. `EFFORT` is often empty:
    pass `--set=EFFORT=` and the paragraph disappears. `errors[]` non-empty → do NOT spawn: the
@@ -233,30 +250,41 @@ that still holds a placeholder; a hand-made one hands `{{ROOT}}` to the agent as
 
 ## Model and effort
 
-Step 1 carries `agents`: which model this task's sub-agents run on and how hard they are told to
-think. Keep it as `agents(T)` and read it at every spawn.
+Step 1 carries `agents`: which model each of this task's sub-agents runs on and how hard it is told
+to think. Keep it as `agents(T)` and read it at every spawn.
 
-    { model, effort, steps: { "2": {model, effort}, "3": …, "4": …, "5": …, "6": …, "7": …, "8": … } }
+    { model, effort,
+      steps: { "2": {model, effort}, "3": …, "4": …, "5": …, "6": …, "7": …, "8": …, "9": … },
+      roles: { reviewWalker, reviewFixer, validationRunner, validationCompliance, finalWalker, finalFixer } }
 
-Every field is `""` when the user left it on Inherit. A step reads its own override first and
-falls back to the task-wide pair — `model = agents.steps[N].model || agents.model`, same for
-`effort`. Step 1 has no entry: the form is step 1.
+Every field is `""` when the user left it on Inherit. No agent of the run has a model of its own:
+each one is an entry here, and an empty one falls back — a step's agent to the task-wide pair, a
+role to its step, then to the task-wide pair:
+
+- a step's agent: `model = agents.steps[N].model || agents.model`, same for `effort`;
+- a role, the helpers a step's agent spawns: `reviewWalker` and `reviewFixer` belong to step 6,
+  `finalWalker` and `finalFixer` to step 9, `validationRunner` and `validationCompliance` to step 5 —
+  `model = agents.roles[R].model || agents.steps[<its step>].model || agents.model`, same for
+  `effort`. The walkers are the window walkers `doh:codeReview` dispatches, the fixers the
+  parallel fix agents a review may hand files to, the runner and the compliance check the
+  validation agent's helpers. You never spawn them yourself: their values go into the brief of the
+  agent that does.
+
+Step 1 has no entry: the form is step 1.
 
 - **Model** goes to the Agent tool's `model` parameter as is: one of the `value`s you wrote to
-  `models.json` in Setup step 3.
-  Empty → omit the parameter entirely and let the session's default stand. Never invent a value;
-  the server already refuses anything outside that list, so an empty string means inherit, not
-  "ask the user".
-  One exception: step 7 (Mockoon) resolves an empty model — both its own and the task-wide one —
-  to `sonnet` when `models.json` lists it, not to the session's default. The step transcribes
-  contracts and code the task already has into one JSON environment, work Sonnet does as well as
-  Opus at a fraction of the tokens. Without `sonnet` on the list the step inherits like any other.
-  A model the user picked for step 7, or task-wide, always wins.
+  `models.json` in Setup step 3. Empty → omit the parameter entirely and let the session's default
+  stand. Never invent a value, and never pick one yourself — not for Mockoon, not for any step: the
+  server refuses anything outside that list, and an empty string means inherit, not "ask the user"
+  and not "choose a cheap one".
+  A role's model reaches its agent's brief as text: `--set=FIXER_MODEL=<value or empty>`, and for
+  the walkers as part of `WALKER_FLAGS`.
 - **Effort has no parameter.** The Agent tool cannot set a sub-agent's reasoning effort — only an
   agent definition file can, and this pipeline spawns general-purpose agents. So effort is
-  delivered as `{{EFFORT}}`, a directive inside the agent's own prompt:
+  delivered as a directive inside the agent's own prompt — `{{EFFORT}}` for a step's agent, the
+  `*_EFFORT` placeholders for a role:
 
-  | `effort` | `{{EFFORT}}` |
+  | `effort` | the directive |
   |---|---|
   | `""` or `low` | the empty string — substitute nothing and the paragraph disappears |
   | `medium` | `Effort: medium — think before each non-trivial decision.` |
@@ -268,11 +296,15 @@ falls back to the task-wide pair — `model = agents.steps[N].model || agents.mo
   in a sentence and the agent runs at the default effort while the UI says otherwise. Say so
   plainly if the user asks: this is a prompt-level approximation of an effort setting, not a knob
   the harness exposes.
+- **Walker flags.** `WALKER_FLAGS` is what the review agent adds to every `doh:codeReview` run for
+  its window walkers: `--walker-model=<model>` when the walker role resolves to a model and
+  `--walker-effort=<effort>` when it resolves to an effort, separated by a space — the empty
+  string when neither does.
 
 Both bind at SPAWN time. An agent already running cannot be moved to another model, so a step-1
-revision reaches only the steps that have not started — and never the refinement agent it
-continues by SendMessage. Do not re-spawn a running agent to apply a new setting: its exploration,
-spec and Q&A are worth more than the setting.
+revision reaches only the steps that have not started — and never the agent a revision continues
+by SendMessage. Do not re-spawn a running agent to apply a new setting: its exploration, spec and
+Q&A are worth more than the setting.
 
 ## Talking to a running agent
 
@@ -284,6 +316,13 @@ the pipeline moved, so do NOT touch `status`, `progress` or `activeStep` for it.
 - **That step's agent is alive** → SendMessage the text to it verbatim, then go back to polling.
   Do not post the line back as `chat`: the server recorded it the moment the browser sent it, and
   a copy would show it twice.
+- **A cold agent.** An agent idle for more than 55 minutes — the step's last `log` entry or `chat`
+  line in `/api/state` is older than that — has lost its prompt cache, and a SendMessage re-writes
+  its whole context: 440–512k tokens per message to one refinement agent, measured. For a
+  revision, a plan or mockup feedback, render the brief again and spawn a fresh agent with what
+  you would have sent in its prompt and its step's files as its memory (the step files say how).
+  An answer to a question the agent is waiting on still goes by SendMessage: only that agent holds
+  what the question was about.
 - **The step failed** → its agent is gone. Remember nothing: the server already put the line in
   that step's `chat` with a `time`, and your own memory of a long run is summarised away long
   before the user gets round to clicking retry. POST
@@ -367,7 +406,12 @@ the panel only notes that the agent was stopped. It reaches you as
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
-  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
+  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","base":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
+  Several bodies in ONE tool call — a step completed and the next one started, say — go through
+  `node "<SKILL_DIR>/scripts/post-state.cjs" --port PORT '<json>' '<json>'`, in order, stopping at the
+  first refusal (it prints `OK` or `ERROR <status> <message>` per body). Every curl is a turn that
+  re-reads this whole conversation; one call for the whole transition is one turn. Node also sends
+  the bodies as UTF-8 from any shell.
   `reopenGate` puts a plan, story or mockup gate the user answered with feedback back on screen
   as it was (see `noted` in "Hard rules"); with no such gate it changes nothing.
   `chat` appends to the transcript of the step named in the same body — every step has one, and
@@ -377,13 +421,12 @@ the panel only notes that the agent was stopped. It reaches you as
   Both carry the AGENT's lines only — the server records the user's own the moment the
   browser sends them, so a copy from you would show the same message twice.
   Step ids are fixed (1 Requirements, 2 Feature Refinement, 3 Mockups, 4 Implementation,
-  5 Validation & E2E, 6 Code Review, 7 Mockoon Mocks, 8 Story Description). The id is a name, not a
-  position: the stepper shows step 8 between 3 and 4, in the order the pipeline runs them. Steps 2,
-  3 and 8 are optional, and the SERVER sets their `enabled` from the switches of every `step1`
-  answer before you see it — never POST `enabled` for them yourself. The stepper hides a disabled
-  step and numbers the tiles it shows, so a task with only refinement shows five tiles numbered
-  1-5 plus the Mockoon one. Step 7 is always visible and stays `waiting` through the whole run — it
-  only moves when the user asks for mocks on the summary screen.
+  5 Validation & E2E, 6 Code Review, 7 Mockoon Mocks, 8 Story Description, 9 Final Code Review).
+  The id is a name, not a position: T's `route` is the order, and the stepper shows the tiles in it.
+  Steps 2, 3, 8 and 9 are optional, and the SERVER sets their `enabled` from the switches of every
+  `step1` answer before you see it — never POST `enabled` for them yourself. The stepper hides a
+  disabled step and numbers the tiles it shows. Step 7 is always visible and stays `waiting`
+  through the whole run — it only moves when the user asks for mocks on the summary screen.
   A body binds to ONE task and its step fields bind to ONE step, so merge consecutive updates into
   ONE POST only when they share both and nothing (user interaction, agent work) happens between them
   — e.g. completing a step and activating the next in the same task is a single body.
@@ -409,404 +452,29 @@ the panel only notes that the agent was stopped. It reaches you as
   If PowerShell is unavoidable, write the JSON to a temp file as UTF-8
   **without BOM** and send it with `--data-binary "@file"`.
 
-## Step 1 — Requirements (interactive, per task, repeatable)
+## Steps
 
-The sidebar offers two ways to spin off a task: "Copy of current task" (the server creates it and
-copies the open task step 1 form and its uploaded files) and "New empty task" (a blank form). Both
-work from whatever step that task is on. Either way the browser switches to the new task and puts
-it into its own step 1. There is NO barrier —
-each task starts its own pipeline the moment ITS form is submitted, so the user can launch task 1
-while still writing task 2. A task's first submission is also what gives it an orchestrator: the
-server opens a new terminal in `PROJECT` running
-`claude "/doh:implementNewFeature --attach <id> --port PORT"`, and that session runs the task (see
-"Attach"). Nothing about it is yours: a `step1` reaches you for T only. When no terminal opens, the
-stepper's top-right corner shows the task's orchestrator `closed` with an "Open session" button
-that offers the command to run by hand.
+T's `route` in `/api/state` is the order its steps run in — `1 → 2 → 3 → 8 → 4 → 6 → 5 → 9`, each
+optional one skipped while its switch is off, and Mockoon (7) only on demand. A task resumed from a
+run started before the final review existed keeps `1 → 2 → 3 → 8 → 4 → 5 → 6`. Each step's
+instructions are a file of `<SKILL_DIR>/references/steps/`: Read it when T reaches that step — and
+again after a compaction, which keeps only this file's head — and never from memory.
 
-On a `step1` answer for task T:
+| Step | Instructions |
+|---|---|
+| 1 Requirements, and every later `step1` (revisions) | `1-requirements.md` |
+| 2 Feature Refinement | `2-refinement.md` |
+| 3 Mockups | `3-mockups.md` |
+| 8 Story Description | `8-story.md` |
+| 4 Implementation | `4-implementation.md` |
+| 6 Code Review | `6-code-review.md` |
+| 5 Validation & E2E | `5-validation.md` |
+| 9 Final Code Review | `9-final-code-review.md` |
+| 7 Mockoon Mocks | `7-mockoon.md` |
+| the final summary, and "Shut down and create pull request" | `final-summary.md` |
 
-1. When `authProvided` is true, the browser has already written login+password for E2E tests to
-   `<SESSION>/tasks/T/auth.json` — NEVER read, quote or copy that file; only the validation agent
-   uses it.
-2. `branch` is the branch this task will be implemented on. Keep it; step 4 uses it verbatim.
-   `agents` is the model and effort every sub-agent of this task is spawned with — keep it as
-   `agents(T)` and read it at every spawn ("Model and effort").
-3. Write `<SESSION>/tasks/T/requirements.md`:
-
-   ```markdown
-   # Requirements
-
-   ## Task description
-   <taskDescription>
-   <"Attached images (Read each one): " and the absolute path of every entry of images, under <SESSION>/tasks/T/images/, joined by ", " — the line only when images is not empty>
-
-   ## Branch
-   <branch>
-
-   ## Additional materials (hints for refinement and mockups)
-   Files: <hints list or "—">
-   Note: <hintsNote or "—">
-
-   ## Contracts (pasted)
-   <contractsText or "—">
-
-   ## Uploaded files
-   Mockups: <mockups list or "—">  |  Contracts: <contracts list or "—">
-
-   ## Authorization
-   <"Provided — credentials in auth.json (task dir); never copy them into spec/plan/tests" if authProvided, else "—">
-
-   ## Pipeline steps
-   Refinement: <"on" if refinement, else "off">  |  Mockups: <"on" if generateMockups, else "off">  |  Story: <"on" if storyDescription, else "off">
-
-   ## Code review
-   Run 1: <the run's flags separated by spaces, or "—" when it has none>
-   <one such line per entry of codeReview, numbered from 1>
-
-   ## Agent settings
-   Model: <agents.model or "inherit">  |  Effort: <agents.effort or "default">
-   Overrides: <"step N: model/effort" for every step that has one, or "—">
-   ```
-
-   The last three sections are records for the user and for the revision diff, not instructions:
-   nothing in them is scope. The one exception is `## Code review`, which the review agent reads
-   in step 6 to know which `doh:codeReview` runs to make, so that heading and the `Run <n>: `
-   prefix are FIXED IDENTIFIERS — English verbatim, whatever `{{LANGUAGE}}` is — and the flags go in
-   exactly as the answer spells them.
-
-   (Uploads already sit in `<SESSION>/tasks/T/mockups/`, `contracts/` and `hints/`.)
-4. Remember `REFINEMENT(T) = answer.refinement`, `MOCKUPS(T) = answer.generateMockups` and
-   `STORY(T) = answer.storyDescription`. They shape **the route**: after step 1 a task runs
-   2 → 3 → 8 → 4 → 5 → 6, skipping each of 2, 3 and 8 whose switch is off. "The next step" below
-   always means the next one on that route. The server has already set the three steps' `enabled`
-   from this answer, so post nothing for that.
-5. POST `{"taskId":"T","step":1,"status":"completed","activeStep":<the next step>}` and start that
-   step for T. With all three switches off that is step 4, so from then on only the settings can change.
-
-## Revising step 1 (a later `step1` answer)
-
-Walking back to the requirements form costs nothing: its tile is always there, and reading the form
-changes no state. What reaches you is the RESUBMISSION, and the browser only offers that button once
-a field, a file, a switch, a review run, the agent settings or the credentials actually differ from
-the last submission — so every later `step1` answer carries a real change, which the server has
-already measured in its `revision`:
-
-    {"changed":["description","codeReview"],"restartAt":2,"switchedOn":[],"switchedOff":[3],
-     "files":[{"category":"hints","name":"flow.png","change":"added"}]}
-
-- `changed` lists the groups that differ, by the server's names — FIXED IDENTIFIERS. The FLOW
-  groups are what the steps before implementation read: `description` (the text or its images),
-  `branch`, `steps` (a switch), `materials` (hint files or the note), `mockups` (uploaded mockups)
-  and `contracts` (files or pasted text). The SETTINGS are read only when something starts:
-  `codeReview`, `agents` and `authorization`.
-- `restartAt` is the step the pipeline goes back to, or `null` when nothing that already ran read
-  what changed. A change to the description, materials, mockups or contracts repeats the first step
-  of the route that has started; a step switched on repeats itself when a later step already ran
-  without it; a step switched off repeats every started step that read its output, and hands over
-  to the next step of the route when the pipeline was sitting on it. The branch alone and every
-  setting give `null`: nothing before implementation reads them.
-- `switchedOn` and `switchedOff` are step ids. `files` names every upload added, removed or
-  replaced since the last submission; its `category` is `images`, `hints`, `mockups` or
-  `contracts`.
-
-The server has ALREADY moved the pipeline when the answer reaches you, because the page sends the
-user to `restartAt` at once and has to find it working: that step is `in_progress` with the log
-entry `Requirements changed (…) - the pipeline continues from here`, `activeStep` points at it,
-every later step and every switched-off one is back to `waiting`, and the question, the plan or
-story gate and the mockup gate are closed. Do not post any of that again. Step 1 stays `completed`: never send
-it back to `in_progress`, and never POST `activeStep:1` — only the user walked back.
-
-The flow groups can change until step 4 starts and the settings until the task's final summary;
-the server refuses anything else with a 409, and the page never offers it. A revision can
-therefore arrive at any moment — while an agent is thinking, while its question is on screen,
-while a gate is open, during implementation, validation or the review. Take it whatever T was
-doing, in this order:
-
-1. Write the requirement files:
-   - **settings only** (`changed` holds no flow group) → write the new `requirements.md`, and that
-     is all: no `revisionCount`, no `requirements-changes.md`;
-   - **any flow group** → `revisionCount(T)++`, copy `requirements.md` to `requirements-prev.md`,
-     write the new `requirements.md`, then write `requirements-changes.md`: a `## Revision <n>`
-     heading and a bullet list naming the changed groups, every entry of `files` with its change
-     (added, removed or replaced), and any change to the branch, a switch, the review runs or the
-     agent settings. Name the changes; do NOT copy the field bodies — they are already in the two
-     files.
-2. Remember the new `branch`, `REFINEMENT(T)`, `MOCKUPS(T)`, `STORY(T)` and `agents(T)`. When
-   `authProvided` turned false, delete `<SESSION>/tasks/T/auth.json`, so no later step logs in with
-   credentials the user took back. Each setting is read where it is used, so none needs a message:
-   - `agents` at the next spawn ("Model and effort") — never by an agent already running, or one a
-     revision continues by SendMessage; say so in the terminal if the user asks why a step still
-     runs on the old model;
-   - `## Code review` by the review agent before EACH of its runs: the run in progress finishes as
-     it started, and the next one follows the new list, so fewer runs end the review sooner;
-   - the credentials when step 5 starts, a retry included.
-3. Drop every step in `switchedOff`, whatever it was doing — nothing it left behind may reach a
-   later step:
-   - its agent, when still running → stop it with the TaskStop tool (the id from `agentIds(T)`) and
-     forget the id; a result or a completion notice that still arrives from it belongs to no step,
-     so ignore it;
-   - delete its artifacts in `<SESSION>/tasks/T`: refinement → `spec.md`, `plan.md`,
-     `checklist.md`; mockups → `generated-mockups/`, `mockup-screenshots/` and `ui-design.md`;
-     story → `story.md`;
-   - POST `{"taskId":"T","step":<N>,"status":"waiting","progress":null,"currentOperation":""}`, so
-     the tile starts clean if a later revision turns it back on — the server has usually done it
-     already, and once more costs nothing.
-4. `restartAt` is `null` → nothing repeats. Whatever was running carries on, and each step the
-   route has not reached yet reads the new `requirements.md` when it starts. Back to the loop.
-5. Otherwise every step from `restartAt` on takes the change when the route reaches it —
-   `restartAt` now, each later one when the step before it completes, as on the first pass:
-   - **Refinement that was already on** → REDUCED SCOPE. `SendMessage` the EXISTING refinement
-     agent — do not re-spawn it: its project exploration, spec, plan and whole Q&A ARE the reduced
-     scope.
-
-         Requirements changed. Read <SESSION>/tasks/T/requirements-changes.md, then requirements.md
-         and requirements-prev.md, then every file it names as ADDED or REPLACED under images/,
-         hints/, contracts/ and mockups/. Revision mode: patch spec.md, plan.md and checklist.md
-         only where the change lands, ask only what the change opens, do not re-explore the
-         project, and keep the ## UI design section. Reply with the result JSON.
-
-     When this revision turned Mockups OFF, append: `The mockups toggle was turned OFF — remove the
-     ## UI design section and the verify: visual checklist lines.`
-     If SendMessage cannot reach it, spawn a fresh refinement agent — render the brief again and
-     put that paragraph in the spawn prompt. Then continue at step 2's gate as usual.
-   - **Mockups whose screens are on disk** (`generated-mockups/manifest.json` exists) → POST step
-     3's point 1, then `SendMessage` the EXISTING mockup agent instead of spawning one:
-
-         Requirements changed. Read <SESSION>/tasks/T/requirements-changes.md, then requirements.md
-         and requirements-prev.md, and revise the screens as your brief's Revision mode says.
-
-     Then loop on its JSON from step 3's point 3. If SendMessage cannot reach it, spawn a fresh
-     mockup agent with that paragraph in the prompt.
-   - **Implementation** → step 4 from its point 1.
-   - **Anything else** — a step this revision switched ON, mockups with no screens yet, and the
-     story always — runs from its point 1 with a fresh agent: the first two have nothing to revise,
-     and a story has no conversation worth keeping. An agent of that step still running from
-     before is stopped with TaskStop first.
-6. While an earlier step repeats, an agent of a later one can still be busy with the old
-   requirements, and the server has already put its step back to `waiting`. Stop a story agent
-   with TaskStop — it restarts fresh anyway. Keep a mockup agent for its conversation, but ignore
-   whatever it returns before the route reaches step 3 again; the message above carries the change
-   then.
-
-## Step 2 — Feature Refinement (interactive, proxy Q&A)
-
-1. POST `{"taskId":"T","step":2,"status":"in_progress","activeStep":2,"progress":5,"currentOperation":"Refinement in progress"}`.
-2. Spawn the refinement agent from `references/refinement-agent.md`, per "Spawning a sub-agent".
-3. Route this task's answers and its agent's final JSON:
-   - `{"type":"question","id","text","options"?}` → POST `{"taskId":"T","question":{...}}`, wait for
-     T's `kind=="answer"`. The server has already taken the question down and logged the answer
-     (see "A send takes its gate off the screen"), so POST only
-     `{"taskId":"T","step":2,"progress":<min(60, 20+5×answers so far)>}`, then SendMessage the
-     answer text to the agent. You own the Q&A progress — the agent does not report between
-     questions. A `message` for step 2 before its next JSON is the user adding to what they just
-     said: SendMessage it to the same agent and keep waiting for that JSON.
-   - `{"type":"result","summary","critical"}` → spec/plan/checklist now exist in `<SESSION>/tasks/T`. Go to 4.
-   - `{"type":"error","report"}` → failure protocol (below) for step 2.
-4. Gate: POST `{"taskId":"T","reviewSummary":{"text":"<summary>","critical":[…]}}`, with `critical`
-   copied from the result as it came (`[]` when it has none): the panel lists it as "Critical
-   information" above the summary, where approving cannot pass it by. Wait for T's `kind=="decision"`:
-   - `approve` → POST `{"taskId":"T","reviewSummary":null,"step":2,"status":"completed","activeStep":<the next step>}`; continue there.
-     With `afterStop`, the agent first restores the plan it showed ("Stopping a step", point 3).
-   - `feedback` → SendMessage the feedback to the agent; back to 3. The gate is off the screen
-     already, and the agent's next result puts the revised plan up in its place.
-
-## Step 3 — Mockups (interactive, conditional)
-
-Runs ONLY when `MOCKUPS(T)`. Otherwise skip the whole step: it stays `enabled:false` / `waiting`, the
-stepper never shows it, and the step before it already moved `activeStep` past it.
-
-The agent designs from what refinement settled when step 2 ran, and from the requirements form
-alone when it did not — its brief tells the two apart by whether `spec.md` exists, so nothing
-about it reaches the prompt.
-
-1. POST `{"taskId":"T","step":3,"status":"in_progress","activeStep":3,"progress":5,"currentOperation":"Designing screens"}`.
-2. Spawn the mockup agent from `references/mockup-agent.md`, per "Spawning a sub-agent".
-3. Keep only `mockupRounds(T)`, for the progress bar. The chat transcript and the `rev` the UI
-   re-renders on are the SERVER's — never hold either in your context. Loop on the agent's final JSON:
-   - `{"type":"mockup","summary","screens":[{"id","view","title","file"}]}` → `mockupRounds(T)++`,
-     take the round's screenshots (below), then POST
-     `{"taskId":"T","step":3,"progress":<min(90, 20+10×mockupRounds)>,"currentOperation":"Waiting for your review","mockupReview":{"text":"<summary>","screens":[…]},"mockupChat":{"role":"agent","text":"<summary>"}}`.
-     Omit `rev`: the server stamps the next one itself, so a round can never reuse a number and
-     leave the panel locked. The chat is not part of the round at all — it belongs to step 3 and
-     the server appends `mockupChat` to it, which is why clearing `mockupReview` never erases the
-     conversation.
-     Take the screenshots with `node "<SKILL_DIR>/scripts/screenshot-mockups.cjs" "<SESSION>/tasks/T"`.
-     It refills `<SESSION>/tasks/T/mockup-screenshots/` with one full-page PNG per manifest entry —
-     every state of every view, each loaded through its `#<id>` fragment — at desktop width
-     (1280 px), named `<id> <view> - <title>.png`, the id numbered `{0-9}.{0-99}` (view, then
-     state, both from 0); the panel's "Open screenshots folder"
-     button opens that folder for the user. It prints one line, a FIXED IDENTIFIER:
-     `SCREENSHOTS <count> <dir>`, or `SCREENSHOTS_FAILED <reason>` — then post the round anyway,
-     with `Screenshots could not be taken: <reason>` at the end of the `mockupChat` text. The first
-     time the reason says the skill's Playwright is not installed or Chromium did not start, run
-     `npm --prefix "<SKILL_DIR>" install` and
-     `node "<SKILL_DIR>/node_modules/@playwright/test/cli.js" install chromium`, then try once more.
-     Never Read the screenshots: they are for the user.
-     Then wait for T's `kind=="mockup"`:
-     - `decision=="feedback"` → SendMessage the feedback text to the agent, and post nothing: the
-       server already took the round off the screen, put the step at `Reworking the mockups…` and
-       appended the line to the transcript — a `mockupChat` copy would show it twice. What the user
-       adds while the agent reworks comes from the step's composer as `message`: SendMessage each
-       one as it comes, in order, and keep waiting for the round. Back to 3.
-     - `decision=="approve"` → SendMessage exactly (a FIXED IDENTIFIER — English verbatim):
-       `APPROVED — record the approved design as your brief's Approval section says, then reply
-       with the result JSON.` Back to 3.
-   - `{"type":"result","summary","screens":[…]}` (only ever arrives after the approval message) →
-     POST `{"taskId":"T","step":3,"status":"completed","progress":100,"mockupReview":null,"activeStep":<the next step>}`
-     and continue there. Keep the screen count and the summary only — never the mockup markup.
-   - `{"type":"error","report"}` → failure protocol for step 3.
-
-## Step 8 — Story Description (interactive, conditional)
-
-Runs ONLY when `STORY(T)`, as the last step before implementation. Its id is 8 only because ids
-are never renumbered; the stepper shows its tile between Mockups and Implementation. Otherwise
-skip it like step 3.
-
-1. POST `{"taskId":"T","step":8,"status":"in_progress","activeStep":8,"progress":5,"currentOperation":"Writing the story"}`.
-2. Spawn the story agent from `references/story-agent.md`, per "Spawning a sub-agent". It picks its
-   sources from what exists — the refinement and mockup results when those steps ran, the task
-   description and the uploaded mockups when they did not — so nothing about the switches goes
-   into the prompt.
-3. Loop on the agent's final JSON:
-   - `{"type":"result","criteria":N,"summary"}` → `<SESSION>/tasks/T/story.md` exists. Keep the
-     count and the summary only: the browser fetches the story itself from
-     `/api/story?taskId=T`, so NEVER read story.md, and never paste it into a message or into
-     `/api/state`. Open the gate — the plan gate's `reviewSummary`, whose `rev` the server stamps
-     the same way — with
-     `{"taskId":"T","step":8,"progress":90,"currentOperation":"Waiting for your review","reviewSummary":{"text":"<summary>"},"logEntry":"Story written: <N> acceptance criteria"}`,
-     then wait for T's `kind=="decision"`:
-     - `feedback` → SendMessage the feedback text to the agent, with its attachments line, and
-       post nothing: the server already took the gate off the screen, put the step at `Reworking
-       the story…` and put the feedback in its transcript. What the user adds while the agent
-       reworks comes from the step's composer as `message`: SendMessage each one as it comes, in
-       order. Back to 3 — every result opens the gate again, and its new `rev` puts the revised
-       story on screen.
-     - `approve` → POST
-       `{"taskId":"T","reviewSummary":null,"step":8,"status":"completed","progress":100,"activeStep":4}`
-       and start step 4 — with `afterStop`, only once the agent has restored the story it
-       showed ("Stopping a step", point 3). When a feedback you forwarded has no result yet, wait for the agent's
-       next result first and post this instead of a new gate: the user approved with the change
-       on its way, and implementation must not start on a story that is being rewritten.
-   - `{"type":"error","report"}` → failure protocol for step 8.
-4. A result that arrives after step 8 completed means the agent was still busy with something the
-   user sent — a second feedback, or a line typed before the gate opened — and story.md was
-   rewritten: POST only `{"taskId":"T","step":8,"logEntry":"Story updated"}`. The steps already
-   past it read the file when they start, so say so in the terminal if the user asks why a running
-   step missed the edit.
-
-## Step 4 — Implementation (view-only)
-
-1. Pick this task's working directory `ROOT`, once, here. A new branch starts from the
-   repository's main branch `BASE`, never from whatever happens to be checked out — unless the user
-   asked for another start (a branch they named, or the current one) in the requirements or since,
-   and then from that. `BASE` is the first that `git -C "<PROJECT>" rev-parse --verify --quiet <name>`
-   finds of: the name `git -C "<PROJECT>" symbolic-ref --short refs/remotes/origin/HEAD` gives
-   without its `origin/`, `main`, `master`, then the same three under `origin/`. A branch that
-   already exists is checked out as it is, with its own commits.
-   Every task's orchestrator picks on its own, so the project's checkout is the server's to hand
-   out: POST `{"taskId":"T","root":"<PROJECT>"}` first.
-   - `200` → `ROOT = PROJECT`, T's for the rest of the run, and
-     `git -C "<ROOT>" checkout -b <branch> <BASE>` (or `checkout <branch>` when it already exists).
-     When git refuses because of local changes, go to
-     the failure protocol with its message — never stash, reset or discard the user's work.
-   - `409` (`root … is task tN's`: another task has it) →
-     `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<slug>-<taskId>`,
-     where `<slug>` is the branch with `/` and non-ASCII replaced by `-`. The task id is what keeps
-     the path unique: two different branches can slugify to the same string, and `worktree add`
-     would then fail on an existing directory. Create it with
-     `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch> <BASE>`.
-     When the branch already exists and is not checked out anywhere, use
-     `git -C "<PROJECT>" worktree add "<ROOT>" <branch>`. When it IS checked out elsewhere, go to
-     the failure protocol with a report naming the conflict.
-   A fresh worktree has neither `node_modules` nor the untracked local config the app needs. Bootstrap it before spawning anything, with ONE call (Bash tool):
-
-       node "<SKILL_DIR>/scripts/bootstrap-worktree.cjs" --root="<ROOT>" --project="<PROJECT>"
-
-   It installs from whatever lockfile the project committed and copies every `.env*` across at
-   the same path relative to the root — they are gitignored, so a fresh worktree has none of them,
-   and one nested in a workspace package is the one whose absence looks like an application bug in
-   step 5 rather than a missing file. Do NOT do either by hand: the copier skips `node_modules`,
-   build output and the run's own `.claude` folder, and a hand-rolled walk of the project finds a
-   dependency's `.env.example` long before it finds the project's own.
-   `errors[]` non-empty → failure protocol for step 4. `warnings[]` is not a failure: a failed or
-   skipped install means step 5 cannot run the suites, and it is reported, not retried. Keep
-   `installed` and say so in the summary. When `ROOT` is `PROJECT` the call is a no-op that says so —
-   that checkout already has both. Playwright is unaffected either way: the pipeline keeps using
-   the plugin's own installation in `SKILL_DIR`.
-   POST `{"taskId":"T","root":"<ROOT>"}` so the summary can name it.
-2. POST `{"taskId":"T","step":4,"status":"in_progress","activeStep":4,"progress":0}`.
-3. Spawn the implementation agent from `references/implementation-agent.md`, per "Spawning a
-   sub-agent" (`ROOT` is the one step 4 just fixed). It reports progress itself via POST /api/state and writes code
-   against the `doh:codeReview` checklist of each file's kind (its "Coding rulebook" section).
-   It builds from what the optional steps left — spec and plan, the approved mockups, the story —
-   and falls back to the requirements form for each one that did not run; its brief tells them
-   apart by which files exist, so nothing about the switches goes into the prompt.
-4. Final JSON `{"type":"result","filesChanged":[…],"summary","deviations":[…]}` → POST
-   `{"taskId":"T","step":4,"status":"completed","progress":100,"report":"<the summary, then every
-   `deviations` entry on its own line>"}`. Keep the `filesChanged` COUNT, the summary and the
-   deviations; the path list itself stays out of your context.
-   `deviations` is the agent's only channel for what it had to do differently — a plan step it
-   replaced, a mockup that overrode the plan, a rulebook its worktree never received because the
-   project had not committed it. Nothing else in the run reports any of that, so an orchestrator
-   that parses the field and drops it hides exactly the part a reviewer needs. `error` → failure
-   protocol.
-
-## Step 5 — Validation & E2E (view-only, except the Chrome-extension prompt)
-
-Take the E2E slot first (see "E2E slot"): POST `/api/e2e` with `{"taskId":"T"}`, and on
-`{"granted":false,…}` wait for T's `kind=="e2e"` before point 1.
-
-1. POST `{"taskId":"T","step":5,"status":"in_progress","activeStep":5,"progress":0}`.
-2. Spawn the validation agent from `references/validation-agent.md`, per "Spawning a sub-agent". It runs the task's own unit
-   suite, then writes and runs the E2E suite on the plugin's own Playwright, and uses the user's
-   Chrome (Claude in Chrome extension) for discovery, failure debugging and a UX pass — expect a
-   tab to open there during this step. Endpoints the backend does not serve yet are faked in the
-   app's code for the length of the step and removed before it ends (archived to
-   `<SESSION>/tasks/T/mocks/`), so step 6 and the commit never see them. Without refinement there
-   is no `checklist.md`: the agent writes one from the task description, the story and the approved
-   screens before it tests anything, as its brief says — nothing about it goes into the prompt.
-3. Route this task's answers and its agent's final JSON:
-   - `{"type":"question","id","text","options"?}` → the extension is unavailable, and it is
-     REQUIRED: the agent is blocked until the user installs/enables it. POST `{"taskId":"T","question":{...}}`,
-     wait for T's `kind=="answer"` — the server has already taken the question down and logged
-     the answer — then POST `{"taskId":"T","step":5,"currentOperation":"Retrying the Chrome extension…"}`
-     and SendMessage the answer text to the agent. Never tell it to continue without the
-     extension, and never re-spawn it with that requirement waived.
-   - `{"type":"result","compliance":NN,"testsSummary","unitSummary","mockupSummary","uxSummary","apiMockSummary"}`
-     with `compliance>=99` → POST completed (the server hands the slot on). Keep `apiMockSummary` for the
-     final summary — it says which endpoints were faked, so the user knows what was never proven
-     against a real API.
-   - `{"type":"error","report"}` (<99% after 3 cycles, a unit suite that stayed red, or an
-     extension that never became available) → failure protocol. T keeps the slot across a
-     `retry`, because the retry is still T inside step 5; a `finish` frees it with the summary.
-
-## Step 6 — Code Review (view-only)
-
-1. POST `{"taskId":"T","step":6,"status":"in_progress","activeStep":6,"progress":0}`.
-2. Spawn the review agent from `references/review-agent.md`, per "Spawning a sub-agent" (it reviews exclusively via the `doh:codeReview` skill — no other review method, pointed at this task's `ROOT`. It makes the runs the form set, one to three, read from `requirements.md`'s `## Code review` with exactly the flags listed there, re-reading that section before every run so a revision made during the review reaches only the runs not yet started, and stops early when a run finds nothing, or when a `--since-last` run would only re-check a run that fixed nothing; it fixes every finding except the ones that would break functionality, contradict the requirements or leave the mockups).
-3. `{"type":"result","findingsFixed":N,"findingsRejected":N,"reviewSummary"}` → delete `<SESSION>/tasks/T/auth.json` if it exists
-   (step 6's regression run is its last consumer, so the credentials die with the step, not with the
-   pipeline), then POST completed. `error` → failure protocol.
-
-## Step 7 — Mockoon mocks (on demand, view-only, per task)
-
-Never part of a task's run: the tile waits until the user clicks "Generate Mockoon mocks" on that
-task's summary screen, which reaches you as `{"kind":"summary","decision":"mockoon","taskId":"T"}`.
-It can run any number of times ("Regenerate" is the same step over the same file).
-
-1. POST `{"taskId":"T","step":7,"status":"in_progress","activeStep":7,"progress":0}` — this also
-   pulls the browser off the summary and onto the step's panel.
-2. Spawn the mockoon agent from `references/mockoon-agent.md`, per "Spawning a sub-agent". It
-   reads spec/plan (the task description and the story when refinement did not run), the contracts
-   and the implemented code, and writes `<SESSION>/tasks/T/mockoon.json`
-   (one environment on `localhost:3000`). The browser fetches that file itself from
-   `/api/mockoon?taskId=T` — NEVER read it, never paste it into a message or into `/api/state`.
-3. `{"type":"result","routes":N,"summary"}` → POST `{"taskId":"T","step":7,"status":"completed","progress":100}`;
-   the panel then shows the JSON with a Copy button. Keep the route count and the summary only.
-4. `{"type":"error","report"}` → POST `{"taskId":"T","step":7,"status":"failed","report":"<report>"}`, then wait
-   for T's `kind=="decision"`: `retry` → the server has already put step 7 back
-   `in_progress`, so just re-spawn the agent **fresh**; `finish` → the user went back to the summary, so leave the step
-   failed and keep looping.
+Only the file of the step T is on is needed at a time: a session that orchestrates step 5 of a task
+never pays for the mockup protocol.
 
 ## Failure protocol (any step, any task)
 
@@ -821,7 +489,7 @@ It can run any number of times ("Regenerate" is the same step over the same file
      failure`. Read them back from `/api/state` rather than from memory: on a long run yours has
      been summarised since. The re-spawn reads `agents(T)` again, so a model changed since the
      failure takes effect here.
-   - `finish` → write that task's final summary (below, including the `auth.json` cleanup) with
+   - `finish` → write that task's final summary (`final-summary.md`, including the `auth.json` cleanup) with
      `finalStatus:"Failed at <step name>"` — the NAME (`Implementation`, `Validation & E2E`), never
      the id. The stepper numbers the tiles it shows, in pipeline order, so with only refinement on
      step 4 is the tile labelled 3 and with a story it is not even the next id: an id quoted at the
@@ -829,41 +497,6 @@ It can run any number of times ("Regenerate" is the same step over the same file
 3. The E2E slot needs nothing from you: a `finish` sets T's summary, and that frees the slot for
    the next task in the queue.
 4. A failed task does not end the run: the other tasks go on in their own sessions.
-
-## Final summary (per task)
-
-1. Delete `<SESSION>/tasks/T/auth.json` if it still exists — step 6 normally already did, so this is
-   the backstop for tasks that never got there (the server also wipes every task's on shutdown). Do
-   this on BOTH outcomes — success and `finish` after a failure.
-2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), API mocks, mockup comparison, UX findings, review results, and step 4's deviations when it reported any — they belong at the end of `changes`, prefixed so a reader sees at once that the run departed from the plan.
-3. POST `{"taskId":"T","summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `mockupComparison` = its `mockupSummary` - every renamed field is listed here, so a missing line reads as "no source" and the section lands empty even when the step did the work; `uxReview` = its `uxSummary`; `codeReview` = the review agent's `reviewSummary`, which also names every finding it rejected and on what ground). Put the task's branch and `ROOT` at the top of `changes` so the user can find the work.
-4. Stage that task's changes: `git -C "<ROOT>" add -A` (already done by its step-6 agent; verify with
-   `git -C "<ROOT>" status --short`). Worktrees have their own index, so tasks never stage into each other.
-5. Print T's summary in the terminal (user's language): its branch, working directory and final
-   status, then the details. Every other task's orchestrator prints its own.
-6. Suggest `superpowers:finishing-a-development-branch` for T's branch, and — when T got a
-   worktree — `git worktree remove <ROOT>` AFTERWARDS, in that order. The order is not a preference:
-   the pipeline deliberately ends with the work staged and uncommitted, and `git worktree remove`
-   refuses a worktree in that state (`fatal: ... contains modified or untracked files`). Say so when
-   you suggest it, and say plainly that `--force` is NOT the way around it — it would delete the
-   feature the run just built. Finish the branch first (commit, merge or PR), then remove the
-   worktree; the pipeline never removes one itself, and it holds copies of the project's `.env*`
-   files, so an abandoned worktree leaves those sitting outside the project.
-7. Leave the server running — other tasks may still be on it. Do NOT kill the PID yourself. After
-   the summary, keep T's waiter listening (start it if none is) and serve what it brings — a
-   "Generate Mockoon mocks" press arrives this way — but when it ends in `WAIT_TIMEOUT`, end your
-   turn WITHOUT starting another. Tell the user, in the summary, that a button pressed after that
-   waits in the server until they type anything in this terminal, or until "Open session" in the
-   stepper's corner opens a new one for T; then drain the queue with
-   `node "<SKILL_DIR>/scripts/wait-answer.cjs" --port PORT --task T --minutes 0` in the foreground,
-   act on each `ANSWER`, and go back to the event loop. The run ends when the user presses "Shut
-   down server" — it stops every task's run, so they press it once the others are done too — or
-   the server dies. Point them at the button rather
-   than letting them close the terminal: pressing it is also what wipes every task's `auth.json`, so a
-   run killed any other way leaves the credentials they typed sitting in the session directory
-   (git-ignored, but still on disk) until they delete them by hand. The browser keeps its own copy
-   when "Remember on this browser" was left ticked on the step-1 form — that one is the user's to
-   clear, by unticking it, and no shutdown touches it. Say so if they ask where their password lives.
 
 <!-- one-time:start -->
 <!-- What follows runs once per run (Setup): it sits last, outside the head a compaction re-attaches. -->
@@ -933,9 +566,11 @@ names instead (e.g. `claude --permission-mode acceptEdits`). Do this instead of 
    `ORCHESTRATOR_RUNNING <session>` → another session still runs T: tell the user and stop.
    `TASK_GONE` → stop.
 3. Read T's entry of `/api/state` (its `branch` and `root` too) and go on from the first that fits:
-   - a drained `step1` → "Step 1", as for any `step1`; step 1 never sent → the event loop, where
+   - a drained `step1` → `references/steps/1-requirements.md`, as for any `step1`; step 1 never sent → the event loop, where
      the form arrives as one.
-   - a summary → "Final summary", point 7.
+   - `<SESSION>/tasks/T/pr-request.json` exists → the pull request flow of `final-summary.md`; it
+     ends the session.
+   - a summary → `final-summary.md`, point 7.
    - a drained `e2e` → step 5 from point 1: the slot is T's. Step 5 `Waiting for the E2E slot` →
      POST `/api/e2e` again (the server keeps T's place) and wait for `kind=="e2e"`.
    - a step `failed` → "Failure protocol" from point 2.

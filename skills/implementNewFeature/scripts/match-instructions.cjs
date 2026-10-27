@@ -83,6 +83,28 @@ function renderKind(kind, instructions, plan = kind.plan, projectOnly = false) {
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
+// The same plan for an agent that PLANS files rather than writes them - the refinement: every
+// item's address and the first clause of its text, no preambles. What a plan decides is where a
+// file goes and what it holds, which the clause says; the whole wording is what the code is
+// checked against, and the implementation reads it in `rules`. Measured on a dpx run: the
+// refinement agent read 120 KB of rules for six kinds and kept them in its context for 132 turns.
+function firstClause(text, limit = 140) {
+  const clause = String(text).split(/(?<=[.;])\s|\s[—–]\s/)[0].trim();
+  return clause.length <= limit ? clause : `${clause.slice(0, limit - 1).trimEnd()}…`;
+}
+
+function renderDigest(kind, instructions, plan = kind.plan) {
+  const lines = [`# \`${kind.name}\` - ${kind.role} (digest)`, '',
+    'One line per checklist item: its address and the first clause of its rule. The implementation follows the full wording, in this kind\'s `rules` file.', ''];
+  for (const step of plan) {
+    const instruction = instructions.get(step.id);
+    lines.push(`## ${instruction.name} (\`${instruction.id}\`)`);
+    for (const n of step.numbers) lines.push(`- ${instruction.id}#${n}: ${firstClause(instruction.items.get(n))}`);
+    lines.push('');
+  }
+  return `${lines.join('\n').trimEnd()}\n`;
+}
+
 // Named by its content: two agents writing one kind at once write the same bytes, and
 // a project that restates a rule gets a file of its own instead of overwriting the copy
 // another project's agent is reading.
@@ -155,7 +177,7 @@ function buildOutput(options) {
     const { kind, tied } = rulebook.matchKind(rules, p);
     if (!kind) {
       unmatched.push(p);
-      return { path: p, kind: null, rules: null, projectRules: null, checklist: [] };
+      return { path: p, kind: null, rules: null, digest: null, projectRules: null, checklist: [] };
     }
     if (tied.length > 0) {
       out.warnings.push(`${p} matches file kinds ${tied.join(' = ')} equally well - it follows "${kind.name}", the one its review walks.`);
@@ -170,13 +192,14 @@ function buildOutput(options) {
       try {
         copies.set(kind.name, {
           rules: writeCopy(rulesDir, kind.name, renderKind(kind, rules.instructions)),
+          digest: writeCopy(rulesDir, `${kind.name}.digest`, renderDigest(kind, rules.instructions)),
           projectRules: own.length > 0
             ? writeCopy(rulesDir, `${kind.name}.project`, renderKind(kind, rules.instructions, own, true))
             : null,
         });
       } catch (err) {
         out.errors.push(`Could not write the rules of kind "${kind.name}" to ${rulesDir} (${(err && err.message) || err}).`);
-        copies.set(kind.name, { rules: null, projectRules: null });
+        copies.set(kind.name, { rules: null, digest: null, projectRules: null });
       }
     }
     return {

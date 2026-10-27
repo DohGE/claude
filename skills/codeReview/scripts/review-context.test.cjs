@@ -15,8 +15,15 @@ const { tempDir, run, commitFile, initRepo } = require('./test-helpers.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true, walkerModel: '', walkerEffort: '', parallel: 0 },
   );
+  // The walkers' model and effort ride in the context, so a dispatch after a compaction keeps them.
+  assert.deepStrictEqual(
+    [rc.parseArgs(['--walker-model=sonnet']).walkerModel, rc.parseArgs(['--walker-effort=high']).walkerEffort],
+    ['sonnet', 'high'],
+  );
+  assert.throws(() => rc.parseArgs(['--walker-effort=extreme']), /Unknown --walker-effort/);
+  assert.throws(() => rc.parseArgs(['--walker-model=a b']), /Unknown --walker-model/);
   assert.strictEqual(rc.parseArgs(['--no-windows']).windows, false, 'windows are on unless turned off');
   assert.deepStrictEqual(
     [rc.parseArgs(['--with-rule-text']).withRuleText, rc.parseArgs(['--with-rule-text']).withChecklist],
@@ -748,8 +755,14 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   assert.ok(bundle(8).includes('Koniec okna (5-8):') && bundle(8).includes(`  - ${t0.crossBundlePath}\n`), 'the last window ends at the cross-file pass, which stays the main conversation\'s');
   const brief = fs.readFileSync(t0.windows[1].brief, 'utf8');
   assert.ok(brief.startsWith('# Window 2 of 2: files 5-8\n'), brief);
-  assert.match(brief, /1\. Read \S*SKILL\.md with offset \d+ and limit \d+ - Step 3/);
+  assert.match(brief, /1\. The rules of the walk \(codeReview Step 3\) and of a part \(Step 4\) are in your system prompt/);
+  assert.ok(!brief.includes('SKILL.md'), 'the walker reads no part of SKILL.md');
   const settings = JSON.parse(brief.slice(brief.indexOf('```json') + 7, brief.lastIndexOf('```')));
+  // The windows walk side by side, and the Workflow tool gets the same plan in a few bytes.
+  assert.strictEqual(t0.parallel, 2);
+  assert.deepStrictEqual(t0.workflow.args, { dir: t0.workDir, lanes: 2, windows: [['1-4', '', ''], ['5-8', '', '']], cross: { model: '', effort: '' } });
+  assert.ok(t0.workflow.scriptPath.endsWith('/workflows/review-windows.js'));
+  assert.ok(fs.existsSync(t0.crossBriefPath), 'the cross-file pass has a brief of its own');
   assert.strictEqual(settings.reportPath, t0.reportPath);
   assert.strictEqual(settings.workDir, t0.workDir);
   assert.strictEqual(settings.htmlReportPath, t0.htmlReportPath);
@@ -1323,7 +1336,7 @@ test('folder mode reviews every file under the folder as added', (t) => {
     assert.strictEqual(f.diffPath, null, 'folder mode has no diffs');
     assert.strictEqual(f.contentPath, `${dir.replace(/\\/g, '/')}/${f.path}`, 'working-tree files are read in place');
   }
-  assert.deepStrictEqual(fs.readdirSync(t0.workDir), ['01-a.component.ts.bundle.md', '02-b.scss.bundle.md', 'cross-file.bundle.md', 'facts.json'],
+  assert.deepStrictEqual(fs.readdirSync(t0.workDir), ['01-a.component.ts.bundle.md', '02-b.scss.bundle.md', 'cross-file.brief.md', 'cross-file.bundle.md', 'facts.json'],
     'so the work folder holds no copy of a file, only what the review reads next to it');
   assert.deepStrictEqual(t0.skipped, ['src/app/logo.png']);
   const comp = t0.files.find((f) => f.path === 'src/app/a.component.ts');
@@ -1712,9 +1725,16 @@ test('each target carries a search over the revision it reviews', (t) => {
   fs.mkdirSync(path.join(dir, 'src'));
   fs.writeFileSync(path.join(dir, 'src', 'b.ts'), 'const b = 2;\n');
   const staged = rc.buildContext({ mode: 'staged', project: dir, skillDir, now }).targets[0];
-  assert.match(staged.commands.grep, /grep -n -I --cached -E "<pattern>" -- > "\$f";/);
+  assert.match(staged.commands.grep, /grep -n -I --cached -E "<pattern>" -- > "\$f" 2> "\$f\.err";/);
   const folder = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now }).targets[0];
-  assert.match(folder.commands.grep, /grep -n -I --untracked -E "<pattern>" -- > "\$f";/);
+  assert.match(folder.commands.grep, /grep -n -I --untracked -E "<pattern>" -- > "\$f" 2> "\$f\.err";/);
+  // No match is an answer; a pattern git rejects is not, and says so instead of "0 match(es)".
+  const none = spawnSync('sh', ['-c', staged.commands.grep.replace('<pattern>', 'no-such-symbol-anywhere')], { encoding: 'utf8' });
+  assert.strictEqual(none.status, 0, none.stderr);
+  assert.match(none.stdout, /^0 match\(es\) -> /);
+  const bad = spawnSync('sh', ['-c', staged.commands.grep.replace('<pattern>', 'a(')], { encoding: 'utf8' });
+  assert.notStrictEqual(bad.status, 0);
+  assert.match(bad.stderr, /grep failed \(exit \d+/);
   assert.match(staged.commands.assemble, / --assemble$/);
   assert.match(folder.commands.assemble, / --assemble$/);
 });
@@ -1724,7 +1744,7 @@ test('a duplicate has one severity - in the instruction and in the criteria alik
   // owns it and the skill's severity criteria both say so; change one side alone and
   // the reviewer is handed two severities for the same copy.
   const quality = instructionText('code-quality');
-  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'references', 'walk.md'), 'utf8');
   assert.match(quality, /two duplication items[^]*?🔴 \*\*High\*\*/, 'the instruction makes its duplication items High');
   const criterion = (label) => skill.split('\n').find((l) => l.trimStart().startsWith(`- ${label}`)) || '';
   assert.match(criterion('🔴 **High**'), /duplication/, 'the High criterion lists duplication');
@@ -1995,7 +2015,7 @@ test('an interrupted folder review is resumed only for the same folder', (t) => 
   fs.writeFileSync(snapshot, JSON.stringify({ at: 'x', reportPath, folder: 'src', reviewed: ['src/a.ts'] }));
   const same = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 8, 11, 0) });
   assert.strictEqual(same.targets[0].reportPath, reportPath);
-  assert.deepStrictEqual(same.targets[0].resume, { from: '2026-07-08-10-00-00', doneFiles: ['src/a.ts'], headerWritten: false });
+  assert.deepStrictEqual(same.targets[0].resume, { from: '2026-07-08-10-00-00', doneFiles: ['src/a.ts'], headerWritten: true }, 'the context script wrote the header the interrupted run had not');
   assert.ok(same.warnings.some((w) => /without a content check/.test(w)));
 });
 
@@ -2022,4 +2042,53 @@ test('pruneReports leaves the codeReview folder alone', (t) => {
   fs.writeFileSync(report, 'x');
   rc.pruneReports(dir, 0);
   assert.ok(fs.existsSync(report));
+});
+
+test('the context script writes the header and names the context next to the report', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'src/a.ts', 'export const a = 1;\n', 'a');
+  commitFile(dir, 'logo.png', 'png', 'logo');
+  const skillDir = makeSkillDir(t, [TS_KIND]);
+  const ctx = rc.writeContext(rc.buildContext({ mode: 'folder', path: '.', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12, 5) }));
+  const t0 = ctx.targets[0];
+  assert.strictEqual(fs.readFileSync(t0.reportPath, 'utf8'), `# Code Review: folder . (main) | 2026-07-15 17:12\n\n`
+    + (t0.skipped.length ? `Pominięto pliki wygenerowane/binarne: ${t0.skipped.join(', ')}\n\n` : ''));
+  assert.strictEqual(fs.readFileSync(path.join(path.dirname(t0.reportPath), rc.contextPointerName), 'utf8').trim(), ctx.contextPath);
+});
+
+test('a project Markdown rule is walked only by the files its applies-to and applies-when reach', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'src/app/a.component.ts', "export const title = 'labels.save';\n", 'a');
+  commitFile(dir, 'src/app/b.component.ts', 'export const n = 1;\n', 'b');
+  commitFile(dir, 'src/app/c.service.ts', "export const title = 'labels.save';\n", 'c');
+  fs.mkdirSync(path.join(dir, '.claude', 'doh', 'local'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'doh', 'local', 'wording.md'),
+    '---\nname: Wording\napplies-to:\n  - "**/*.component.ts"\napplies-when: user-text\n---\n## Checklist\n\n- one\n- two\n');
+  const skillDir = makeSkillDir(t, [TS_KIND]);
+  const ctx = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const byPath = new Map(ctx.targets[0].files.map((f) => [f.path, f]));
+  const plan = (p) => ctx.checklistPlans[byPath.get(p).plan].checklist;
+  assert.deepStrictEqual(plan('src/app/a.component.ts'), ['ts:1', 'wording:1-2'], 'a component holding a translation key');
+  assert.deepStrictEqual(plan('src/app/b.component.ts'), ['ts:1'], 'a component with no text a user reads');
+  assert.deepStrictEqual(plan('src/app/c.service.ts'), ['ts:1'], 'a file outside applies-to');
+  assert.deepStrictEqual([...byPath.values()].map((f) => f.checklistTotal), [3, 1, 1]);
+});
+
+test('files of a kind with a walker setting fill windows of their own, spawned with that setting', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
+  for (let n = 1; n <= 8; n++) commitFile(dir, `src/f${n}.ts`, body(n), `f${n}`);
+  for (let n = 1; n <= 3; n++) commitFile(dir, `src/models/m${n}.enum.ts`, body(n), `m${n}`);
+  const light = kind('enum', '<name>.enum.ts', [instruction('ts', ['rule'])], { walker: { model: 'sonnet', effort: 'medium' } });
+  const skillDir = makeSkillDir(t, [TS_KIND, light]);
+  const ctx = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12), walkerEffort: 'high' });
+  assert.deepStrictEqual(ctx.errors, []);
+  const t0 = ctx.targets[0];
+  const enums = t0.files.map((f, i) => (f.path.endsWith('.enum.ts') ? i + 1 : null)).filter(Boolean);
+  const window = t0.windows.find((w) => w.files[0] === enums[0]);
+  assert.deepStrictEqual(window.files, [enums[0], enums[enums.length - 1]], 'the enums share one window, alone');
+  assert.deepStrictEqual([window.model, window.effort], ['sonnet', 'medium']);
+  assert.ok(t0.windows.filter((w) => w !== window).every((w) => w.effort === 'high' && !w.model), 'every other window carries --walker-effort');
+  assert.ok(t0.workflow.args.windows.some(([range, model, effort]) => range === `${window.files[0]}-${window.files[1]}` && model === 'sonnet' && effort === 'medium'));
 });

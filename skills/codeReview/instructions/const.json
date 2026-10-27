@@ -2,6 +2,10 @@
   "kind": "const",
   "pattern": "src/app/**/models/consts/<name>.const.ts",
   "role": "Const file of the area models (shared literal, option set, configuration).",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#1",

@@ -36,7 +36,16 @@ const reCwd = /"cwd":"((?:[^"\\]|\\.)*)"/g;
 // wait-answer.cjs: a lock older than its holder's window plus a minute is stale; 50 minutes
 // for a lock that does not say.
 const waiterWindowMs = 50 * 60 * 1000;
-const stepNames = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation', 'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description'];
+const stepNames = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation', 'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description', 'Final Code Review'];
+// Each step's instructions, a file of references/steps/ (SKILL.md "Steps"): after a compaction the
+// orchestrator reads the one its task stands at, never the whole pipeline.
+const stepFiles = { 1: '1-requirements.md', 2: '2-refinement.md', 3: '3-mockups.md', 4: '4-implementation.md',
+  5: '5-validation.md', 6: '6-code-review.md', 7: '7-mockoon.md', 8: '8-story.md', 9: '9-final-code-review.md' };
+const summaryFile = 'final-summary.md';
+// The context above which a turn's end suggests /compact (the Stop hook), and how much more it
+// must grow before it says so again.
+const compactHintTokens = 250000;
+const compactHintStep = 100000;
 
 function readJson(file) {
   try {
@@ -115,8 +124,9 @@ function skillSections(skillFile = path.join(skillDir, 'SKILL.md')) {
     const end = i + 1 < heads.length ? heads[i + 1].line : lines.length + 1;
     if (end > cutLine) sections.push({ title: head.title, line: head.line, limit: end - head.line });
   });
-  const firstStep = heads.find((head) => head.title && /^Step 1\b/.test(head.title));
-  return { path: skillFile.replace(/\\/g, '/'), cutLine, headLimit: firstStep ? firstStep.line - 1 : cutLine, sections };
+  // The head runs up to the steps index; what follows it is the failure protocol and the one-time part.
+  const index = heads.find((head) => head.title && /^Steps\b/.test(head.title));
+  return { path: skillFile.replace(/\\/g, '/'), cutLine, headLimit: index ? index.line - 1 : cutLine, sections };
 }
 
 // A task's waiter, by the lock wait-answer.cjs keeps for its port and task.
@@ -165,26 +175,38 @@ function e2eLine(tasks, e2e) {
   return `- E2E slot: ${holder ? `held by ${holder}` : 'free'}${queue.length ? `; queued: ${queue.join(', ')} (the server hands it on in this order)` : ''}`;
 }
 
-// The sections a task's next event needs: every section of the head the cut reached - it now
-// runs through "Talking to a running agent", so the Stop and delete protocols and Server helpers
-// come back only this way - the step each task stands at, and the protocols its state calls for.
+// The last step of a task's route that is on: once it completed, the final summary is next.
+function lastStep(task) {
+  const route = Array.isArray(task.route) ? task.route : [1, 2, 3, 8, 4, 5, 6];
+  const on = route.filter((id) => (stepOf(task, id) || { enabled: true }).enabled !== false);
+  return on[on.length - 1];
+}
+
+// What a task's next event needs: every section of SKILL.md's head the cut reached - the Stop and
+// delete protocols and Server helpers come back only this way - the failure protocol when a step
+// failed, and the step files of references/steps/ for the step each task stands at.
 function sectionsFor(tasks, skill) {
   const wanted = (title) => skill.sections.find((s) => s.title.startsWith(title));
   const picked = skill.sections.filter((s) => s.line <= skill.headLimit);
-  const steps = new Set();
-  for (const task of tasks) {
-    const n = Number(task.activeStep) || 1;
-    steps.add(n);
-    // The form stays editable until implementation starts, so a revision can arrive at any
-    // step of the route before it: 2, 3 and 8 (the story's id, though its tile sits before 4).
-    if (task.step1Submitted && [1, 2, 3, 8].includes(n)) picked.push(wanted('Revising step 1'));
-    if (task.summary) steps.add(7);
-  }
-  for (const n of [...steps].sort()) picked.push(wanted(`Step ${n} `));
   if (tasks.some((t) => (t.steps || []).some((s) => s.status === 'failed'))) picked.push(wanted('Failure protocol'));
-  if (tasks.some((t) => t.summary || (stepOf(t, 6) || {}).status === 'completed')) picked.push(wanted('Final summary'));
   const seen = new Set();
   return picked.filter((s) => s && !seen.has(s.line) && seen.add(s.line));
+}
+
+function stepFilesFor(tasks, skill) {
+  const files = new Set();
+  for (const task of tasks) {
+    const n = Number(task.activeStep) || 1;
+    if (stepFiles[n]) files.add(stepFiles[n]);
+    // The form stays editable until implementation starts, so a revision can arrive at any step
+    // of the route before it: 2, 3 and 8 (the story's id, though its tile sits before 4).
+    if (task.step1Submitted && [1, 2, 3, 8].includes(n)) files.add(stepFiles[1]);
+    if (task.summary) files.add(stepFiles[7]);
+    const last = lastStep(task);
+    if (task.summary || (last && (stepOf(task, last) || {}).status === 'completed')) files.add(summaryFile);
+  }
+  const dir = `${path.dirname(skill.path)}/references/steps`;
+  return [...files].map((name) => `${dir}/${name}`);
 }
 
 function loopCard(skillFile = path.join(skillDir, 'SKILL.md')) {
@@ -224,6 +246,8 @@ function compactLines(input, env = process.env, skillFile = path.join(skillDir, 
   if (skill) {
     const reads = sectionsFor(tasks, skill).map((s) => `offset ${s.line} limit ${s.limit} (${s.title})`);
     out.push(`- SKILL.md came back only up to about line ${skill.cutLine} (after a resumed session: not at all). Before acting on a task, Read ${skill.path} at: ${reads.join('; ')}; after a resumed session also offset 1 limit ${skill.headLimit} (the head).`);
+    const files = stepFilesFor(tasks.length ? tasks : [{ activeStep: 1 }], skill);
+    if (files.length) out.push(`- the instructions of the step each task stands at: Read ${files.join(' and ')}`);
   }
   const card = loopCard(skillFile);
   if (card) out.push('', ...card);
@@ -235,4 +259,114 @@ function onCompact(input, env = process.env) {
   return lines ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: lines.join('\n') } } : null;
 }
 
-module.exports = { findRun, skillSections, sectionsFor, taskLine, e2eLine, ownTasks, loopCard, compactLines, onCompact, reattachedChars };
+// A run the transcript names whose server died rather than shut down: `server.json` is still there
+// (a clean shutdown removes it) and names a process that is gone, while a task is unfinished. Only
+// a run under a project's `.claude/doh/`, whose project is the folder that holds it.
+function deadRun(input, env = process.env) {
+  let text;
+  try {
+    text = fs.readFileSync(input.transcript_path, 'utf8');
+  } catch {
+    return null;
+  }
+  const stamps = new Set([...text.matchAll(reSessionStamp)].map((m) => m[1]));
+  const cwds = new Set([input.cwd]);
+  for (const m of text.matchAll(reCwd)) {
+    try {
+      cwds.add(JSON.parse(`"${m[1]}"`));
+    } catch {}
+  }
+  const runs = [];
+  for (const cwd of cwds) {
+    if (typeof cwd !== 'string' || !cwd) continue;
+    for (const stamp of stamps) {
+      const dir = path.join(cwd, '.claude', 'doh', stamp);
+      const server = readJson(path.join(dir, 'server.json'));
+      if (!server || !Number.isInteger(server.pid) || isAlive(server.pid)) continue;
+      const state = readJson(path.join(dir, 'pipeline-state.json'));
+      const tasks = state && Array.isArray(state.tasks) ? ownTasks(state.tasks, input.session_id) : [];
+      if (tasks.some((t) => !t.summary)) runs.push({ dir, stamp, project: cwd });
+    }
+  }
+  runs.sort((a, b) => b.stamp.localeCompare(a.stamp));
+  return runs[0] || null;
+}
+
+// The launcher of SKILL.md Setup point 4, without `-Open`: the user's tab reconnects by itself.
+function restartServer(run, { spawn = require('node:child_process').spawnSync, platform = process.platform } = {}) {
+  const scripts = path.join(skillDir, 'scripts');
+  const [cmd, args] = platform === 'win32'
+    ? ['powershell', ['-NoProfile', '-File', path.join(scripts, 'start-server.ps1'), '-SessionDir', run.dir, '-ProjectDir', run.project]]
+    : ['bash', [path.join(scripts, 'start-server.sh'), '--session-dir', run.dir, '--project-dir', run.project]];
+  const res = spawn(cmd, args, { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  const port = String(res.stdout || '').match(/"port":\s*(\d+)/);
+  if (res.status === 0 && port) return { ok: true, port: Number(port[1]) };
+  return { ok: false, error: (String(res.stderr || res.stdout || '').trim().split('\n')[0]) || `exit ${res.status}` };
+}
+
+// SessionStart(resume): a session resumed in a new process gets none of SKILL.md back and finds a
+// server that died with the old one more often than not - eight relaunches in one measured run,
+// each a turn of the orchestrator. The server is started again here, and the same note as after a
+// compaction says where every task stands.
+function onResume(input, env = process.env, restart = restartServer) {
+  if (!input || typeof input.transcript_path !== 'string') return null;
+  let note = null;
+  if (!findRun(input, env)) {
+    const dead = deadRun(input, env);
+    if (!dead) return null;
+    const r = restart(dead);
+    note = r.ok
+      ? `- the stepper server had died with the previous session; it was started again on port ${r.port} from ${dead.dir.replace(/\\/g, '/')} (state reloaded) - the open tab reconnects`
+      : `- the stepper server is down and could not be started again (${r.error}): run the launcher of SKILL.md Setup point 4 with -SessionDir/--session-dir ${dead.dir.replace(/\\/g, '/')}`;
+  }
+  const lines = compactLines(input, env) || [];
+  if (!lines.length && !note) return null;
+  const head = 'implementNewFeature: this session was resumed while it drives a run.';
+  const body = lines.length ? [head, ...(note ? [note] : []), ...lines.slice(1)] : [head, note];
+  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: body.join('\n') } };
+}
+
+// The context the last answer of the transcript was given, in tokens: what the next one re-reads.
+function contextTokens(transcript) {
+  let text;
+  try {
+    const fd = fs.openSync(transcript, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, 512 * 1024);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    text = buf.toString('utf8');
+  } catch {
+    return 0;
+  }
+  const lines = text.split('\n').reverse();
+  for (const line of lines) {
+    if (!line.includes('"usage"')) continue;
+    try {
+      const o = JSON.parse(line);
+      const u = o && o.message && o.message.usage;
+      if (u) return (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    } catch {}
+  }
+  return 0;
+}
+
+// Stop: an orchestrator whose conversation has grown past compactHintTokens is told, once per
+// compactHintStep of growth, that /compact is safe now. Every wake-up of the loop re-reads the
+// whole conversation, so a 400k one costs four times a 100k one per turn - and the run's state is
+// in the server, which is what the compaction note brings back.
+function onStop(input, env = process.env) {
+  if (!input || typeof input.transcript_path !== 'string' || !findRun(input, env)) return null;
+  const tokens = contextTokens(input.transcript_path);
+  const threshold = Number(env.DOH_COMPACT_HINT_TOKENS) || compactHintTokens;
+  if (tokens < threshold) return null;
+  const mark = path.join(env.DOH_WAITER_LOCK_DIR || os.tmpdir(), `doh-compact-hint-${String(input.session_id || 'x').replace(/[^\w-]/g, '')}.json`);
+  const last = (readJson(mark) || {}).tokens || 0;
+  if (last && tokens < last + compactHintStep) return null;
+  try { fs.writeFileSync(mark, JSON.stringify({ tokens })); } catch {}
+  return { systemMessage: `doh: this orchestrator's conversation holds about ${Math.round(tokens / 1000)}k tokens, and every wake-up of its loop re-reads them. Type /compact when no question is waiting: the run's state lives in the server, and the compaction note brings back where each task stands.` };
+}
+
+module.exports = { findRun, deadRun, restartServer, skillSections, sectionsFor, stepFilesFor, taskLine, e2eLine, ownTasks,
+  loopCard, compactLines, onCompact, onResume, onStop, contextTokens, reattachedChars };

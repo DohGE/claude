@@ -44,18 +44,18 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
    single Bash heredoc if your harness refuses a `.md` write from a sub-agent. One write either
    way: a file assembled from several appends is one that ends half-written when anything goes
    wrong, and the step after it reads the half.
-5. Apply the `superpowers:writing-plans` methodology to write `{{SESSION}}/plan.md`: bite-sized TDD tasks with exact paths into `{{PROJECT}}`, complete code, run commands, no placeholders. NO git commit steps — the pipeline never commits.
+5. Apply the `superpowers:writing-plans` methodology to write `{{SESSION}}/plan.md`: bite-sized TDD tasks with exact paths into `{{PROJECT}}`, run commands, no placeholders — but NO finished code. Each task names its files, the interfaces and signatures they carry, the behaviour each one implements and the test cases that prove it (each case's name and what it asserts); a snippet appears only where words would be ambiguous — a signature, a selector, one binding — never a whole file. The implementation writes the code against the full rulebook; a plan that already holds it is written twice, and read in full by every step after it. Keep `plan.md` under 40 KB: past that, split a feature into fewer, larger tasks rather than writing more text per task. NO git commit steps — the pipeline never commits.
    Head every task with `### Task <n>: <name>` — that exact English spelling, at that exact level,
    even though the plan's prose is in {{LANGUAGE}}. It is a FIXED IDENTIFIER, not a title to
    localise: step 4 counts these headings to know how many tasks there are, and reports progress as
    `<done*100/total>` and `Task <k>/<total>`. Translate it to `## Zadanie 1 —`, or group the work
    under stage headings instead, and the count is zero — the progress bar divides by nothing and the
    whole of step 4 runs with no visible progress.
-   The plan carries real code, so it obeys the same rulebook step 4 writes against and step 6 reviews with.
+   The plan decides where every file goes, what it is called and what it holds, so it obeys the same rulebook step 4 writes against and step 6 reviews with.
    Before writing it, run `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` for the file kinds the rulebook knows (`kinds[]`: each one's `kind`, `pattern` and `role` — where every file belongs).
-   Then re-run it with the paths the plan will create (`--files="<project-relative paths>"`) and read the `rules` file of each kind they come back with — the whole checklist of that kind, item by item under `<id>#<n>`, one file per kind however many paths share it.
+   Then re-run it with the paths the plan will create (`--files="<project-relative paths>"`) and read the `digest` file of each kind they come back with — one line per checklist item of that kind, its address `<id>#<n>` and the first clause of its rule, one file per kind however many paths share it. The `rules` file beside it holds the full wording: open it only for an item whose clause leaves your plan undecided. The implementation reads `rules` in full; a plan needs the constraints, not every example.
    A path that comes back as a kind whose `role` is not the file's, or as `kind: null`, sits where the rulebook does not expect it: move it to the pattern of its kind.
-   File layout, names and every code sample in the plan must already satisfy those checklists — a plan that contradicts them only turns into deviations in step 4 and findings in step 6.
+   File layout, names, interfaces and every snippet in the plan must already satisfy those checklists — a plan that contradicts them only turns into deviations in step 4 and findings in step 6.
 6. Write `{{SESSION}}/checklist.md` — every verifiable requirement from spec.md, one line each:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`
    The `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS — English verbatim, even though the

@@ -35,6 +35,7 @@ async function openStep1(page) {
   await page.waitForSelector('#genMockups');
   await page.fill('#task', 'Opis zadania');
   await page.fill('#branch', 'feature/test');
+  await page.fill('#commitMessage', 'feat: test');
 }
 
 const SCREENS = [

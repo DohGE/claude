@@ -2,6 +2,10 @@
   "kind": "type",
   "pattern": "src/app/**/models/types/<name>.type.ts",
   "role": "Type file of the area models (unions, utility types, table types).",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#16",

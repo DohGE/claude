@@ -16,12 +16,13 @@ try {
 } catch { /* the sibling skill is optional; the orchestrator still writes the file */ }
 
 const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-  'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description'];
+  'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description', 'Final Code Review'];
 // Ids stay fixed so agent prompts can hardcode their step number. That is why Story
-// Description is 8 although it runs between Mockups and Implementation: it was added
-// last, and renumbering would have moved every step after it. The stepper orders the
-// tiles itself. Opt-in steps start disabled; the steps a switch on the form controls
-// follow that switch from the step-1 answer on.
+// Description is 8 although it runs between Mockups and Implementation, and why Code Review
+// (6) runs before Validation & E2E (5): steps were added and moved, and renumbering would
+// have moved every step after them. The order is each task's `route`. Opt-in steps start
+// disabled; the steps a switch on the form controls follow that switch from the step-1
+// answer on.
 const OPTIONAL_STEPS = [3, 8];
 const STATUSES = ['waiting', 'in_progress', 'completed', 'failed'];
 // One fixed port, so the stepper always lives at the same URL: the user can keep the
@@ -31,9 +32,17 @@ const DEFAULT_PORT = 9999;
 const REFINEMENT_STEP = 2;
 const MOCKUP_STEP = 3;
 const STORY_STEP = 8;
+const REVIEW_STEP = 6;
+const FINAL_REVIEW_STEP = 9;
 // The steps added after the state file's shape was settled. A run resumed from an older
 // file gets them appended.
-const ADDED_STEPS = [STORY_STEP];
+const ADDED_STEPS = [STORY_STEP, FINAL_REVIEW_STEP];
+// The order a task runs its steps in, Mockoon (7) aside: it runs only on demand. The code
+// review comes before validation, so the E2E suite runs once, on code the review already
+// fixed, and the final review re-checks what validation changed. A task resumed from a state
+// file written before the final review existed keeps the route it was started on.
+const ROUTE = [1, 2, 3, 8, 4, 6, 5, 9];
+const LEGACY_ROUTE = [1, 2, 3, 8, 4, 5, 6];
 const MOCKUP_DIR = 'generated-mockups';
 const MOCKOON_FILE = 'mockoon.json';
 const STORY_FILE = 'story.md';
@@ -43,9 +52,14 @@ const MOCKUP_TYPES = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.woff2': 'font/woff2'
 };
-// Every sub-agent the pipeline spawns runs on a step, so a per-step override is the
-// finest grain the setting can have. Step 1 has no agent: the form IS step 1.
-const AGENT_STEPS = [2, 3, 4, 5, 6, 7, 8];
+// Every sub-agent the pipeline spawns runs on a step, and a step's agent may spawn helpers
+// of its own: the review steps' window walkers and fixers, the validation step's test runner
+// and compliance checker. Each of them is its own setting, so no agent of the run is left on
+// a model nobody chose; an unset one falls back to its step, then to the task-wide pair.
+// Step 1 has no agent: the form IS step 1. FIXED IDENTIFIERS: the orchestrator reads these keys.
+const AGENT_STEPS = [2, 3, 4, 5, 6, 7, 8, 9];
+const AGENT_ROLES = { reviewWalker: REVIEW_STEP, reviewFixer: REVIEW_STEP, validationRunner: 5,
+  validationCompliance: 5, finalWalker: FINAL_REVIEW_STEP, finalFixer: FINAL_REVIEW_STEP };
 // What the Agent tool accepts as a model override, and the effort levels the
 // orchestrator knows how to turn into a thinking directive. Anything else is stored as
 // '' (inherit): a value the spawn cannot use would only fail halfway through the run.
@@ -88,7 +102,9 @@ const OPEN_FOLDERS = [SCREENSHOT_DIR];
 const IMPLEMENTATION_STEP = 4;
 // The step that runs the project's E2E suite - one task at a time, through the slot this
 // server keeps (POST /api/e2e): two suites at once fight over the app's ports and the browser.
+// The final review re-runs the suite after its fixes, so it takes the same slot for that run.
 const VALIDATION_STEP = 5;
+const E2E_STEPS = [VALIDATION_STEP, FINAL_REVIEW_STEP];
 const E2E_WAITING = 'Waiting for the E2E slot';
 // Every task has an orchestrator of its own (launch-orchestrator.cjs). One is listening while
 // its waiter's poll is parked here and working between two polls; one not seen for this long,
@@ -105,7 +121,7 @@ const PRE_STEPS = [REFINEMENT_STEP, MOCKUP_STEP, STORY_STEP];
 // later step starts or a review run begins, so changing it alone repeats nothing.
 // FIXED IDENTIFIERS: SKILL.md and the orchestrator read these names off `revision.changed`.
 const FLOW_GROUPS = ['description', 'branch', 'steps', 'materials', 'mockups', 'contracts'];
-const SETTING_GROUPS = ['codeReview', 'agents', 'authorization'];
+const SETTING_GROUPS = ['codeReview', 'finalCodeReview', 'agents', 'authorization', 'commit'];
 const FILE_GROUP = { hints: 'materials', mockups: 'mockups', contracts: 'contracts', images: 'description' };
 // What each pre-implementation step's output is read by. Approved mockups also write the
 // ## UI design section into the refinement's files, so a refinement that ran before them
@@ -121,14 +137,17 @@ const READERS = { [REFINEMENT_STEP]: [MOCKUP_STEP, STORY_STEP], [MOCKUP_STEP]: [
 // /api/answer is deliberately NOT checked this way: it is a pipe to the
 // orchestrator, and what travels through it belongs to whoever reads it.
 const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
-  'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root',
+  'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root', 'base',
   'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate']);
+// What the "Shut down and create pull request" button leaves in each finished task's folder:
+// the orchestrator of a task that was not listening when the server went down finds it there.
+const PR_REQUEST_FILE = 'pr-request.json';
 
 // One task is one feature on one branch with its own eight-step pipeline, its own
 // artifacts under tasks/<id>/ and its own sub-agents. A run holds one or more.
 function taskState(id) {
   return {
-    id, branch: '', root: null,
+    id, branch: '', root: null, base: null, route: [...ROUTE],
     steps: STEP_NAMES.map((name, i) => ({
       id: i + 1, name, status: 'waiting', progress: null,
       enabled: !OPTIONAL_STEPS.includes(i + 1),
@@ -260,13 +279,15 @@ function loadModels(sessionDir) {
 function agentsOf(raw, models) {
   const a = raw && typeof raw === 'object' ? raw : {};
   const steps = a.steps && typeof a.steps === 'object' ? a.steps : {};
+  const roles = a.roles && typeof a.roles === 'object' ? a.roles : {};
+  const pair = s => {
+    const v = s && typeof s === 'object' ? s : {};
+    return { model: pick(models, v.model), effort: pick(AGENT_EFFORTS, v.effort) };
+  };
   return {
     model: pick(models, a.model), effort: pick(AGENT_EFFORTS, a.effort),
-    steps: Object.fromEntries(AGENT_STEPS.map(n => {
-      const s = steps[n] && typeof steps[n] === 'object' ? steps[n] : {};
-      return [String(n), { model: pick(models, s.model),
-        effort: pick(AGENT_EFFORTS, s.effort) }];
-    }))
+    steps: Object.fromEntries(AGENT_STEPS.map(n => [String(n), pair(steps[n])])),
+    roles: Object.fromEntries(Object.keys(AGENT_ROLES).map(r => [r, pair(roles[r])]))
   };
 }
 
@@ -281,6 +302,8 @@ function agentsOf(raw, models) {
 const CODE_REVIEW_DIR = path.join(__dirname, '..', '..', 'codeReview');
 const MAX_REVIEW_RUNS = 3;
 const defaultReviewRuns = () => [{ flags: [] }, { flags: ['--since-last'] }];
+// The final review re-checks what validation changed since the review before it.
+const defaultFinalReviewRuns = () => [{ flags: ['--since-last'] }];
 
 function flagText(row, bullet) {
   let s = row ? row.replace(/^any of the above, but /, '')
@@ -328,8 +351,8 @@ function readReviewFlags() {
 // readReviewFlags() found; null keeps any well-formed flag, so a skill that cannot be
 // read for a moment does not wipe what the user set. A missing or empty list is the
 // default, the two passes the review step ran before they could be configured.
-function reviewRunsOf(raw, known) {
-  if (!Array.isArray(raw) || !raw.length) return defaultReviewRuns();
+function reviewRunsOf(raw, known, fallback = defaultReviewRuns) {
+  if (!Array.isArray(raw) || !raw.length) return fallback();
   return raw.slice(0, MAX_REVIEW_RUNS).map(r => {
     const given = new Set((Array.isArray(r && r.flags) ? r.flags : []).map(String));
     return { flags: known ? known.filter(f => given.has(f))
@@ -345,9 +368,14 @@ function formOf(body, models, reviewFlags) {
   // run, a copied task - still carries the second one, so it is folded in, not lost.
   const description = [body.taskDescription, body.businessRequirements]
     .map(v => String(v == null ? '' : v)).filter(v => v.trim()).join('\n\n');
+  const known = reviewFlags && reviewFlags.map(f => f.name);
   return {
     taskDescription: text(description),
     branch: text(body.branch),
+    // The message of the one commit the "Shut down and create pull request" button makes. The
+    // page requires it; a form saved before the field existed has none, and the button then
+    // asks for nothing - the orchestrator falls back to the branch name.
+    commitMessage: text(body.commitMessage).trim(),
     contractsText: text(body.contractsText),
     hintsNote: text(body.hintsNote),
     mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
@@ -358,7 +386,10 @@ function formOf(body, models, reviewFlags) {
     refinement: body.refinement !== false,
     generateMockups: !!body.generateMockups,
     storyDescription: !!body.storyDescription,
-    codeReview: reviewRunsOf(body.codeReview, reviewFlags && reviewFlags.map(f => f.name)),
+    codeReview: reviewRunsOf(body.codeReview, known),
+    // The review after validation: on unless switched off, with runs of its own.
+    finalReview: body.finalReview !== false,
+    finalCodeReview: reviewRunsOf(body.finalCodeReview, known, defaultFinalReviewRuns),
     agents: agentsOf(body.agents, models)
   };
 }
@@ -368,9 +399,10 @@ function formOf(body, models, reviewFlags) {
 function applySwitches(task) {
   const f = task.step1;
   for (const [id, on] of [[REFINEMENT_STEP, f.refinement], [MOCKUP_STEP, f.generateMockups],
-    [STORY_STEP, f.storyDescription]]) {
+    [STORY_STEP, f.storyDescription], [FINAL_REVIEW_STEP, f.finalReview]]) {
     const step = (task.steps || []).find(s => s.id === id);
-    if (step) step.enabled = on;
+    // A task on the route from before the final review existed never runs one.
+    if (step) step.enabled = id === FINAL_REVIEW_STEP && !(task.route || ROUTE).includes(id) ? false : on;
   }
 }
 
@@ -404,6 +436,10 @@ function revisionOf(task, before, after) {
   if (before.hintsNote !== after.hintsNote) groups.add('materials');
   if (before.contractsText !== after.contractsText) groups.add('contracts');
   if (!same(before.codeReview, after.codeReview)) groups.add('codeReview');
+  if (before.finalReview !== after.finalReview || !same(before.finalCodeReview, after.finalCodeReview)) {
+    groups.add('finalCodeReview');
+  }
+  if ((before.commitMessage || '') !== (after.commitMessage || '')) groups.add('commit');
   if (!same(before.agents, after.agents)) groups.add('agents');
   if (before.authProvided !== after.authProvided || touched.auth) groups.add('authorization');
   const changed = [...FLOW_GROUPS, ...SETTING_GROUPS].filter(g => groups.has(g));
@@ -596,8 +632,15 @@ function createApp(sessionDir, opts = {}) {
       // in the state a new task would give it. Only those: a file that lacks one of the
       // original seven is damaged, not old, and filling the gap in would hide it.
       if (!Array.isArray(t.steps)) t.steps = [];
+      // A file from before the final review existed: its task keeps the order it was started
+      // in - validation, then the one review - and the final review step it gets never runs.
+      if (!Array.isArray(t.route)) t.route = t.steps.some(s => s.id === FINAL_REVIEW_STEP) ? [...ROUTE] : [...LEGACY_ROUTE];
+      if (t.base === undefined) t.base = null;
       for (const st of taskState(t.id).steps) {
-        if (ADDED_STEPS.includes(st.id) && !t.steps.some(s => s.id === st.id)) t.steps.push(st);
+        if (ADDED_STEPS.includes(st.id) && !t.steps.some(s => s.id === st.id)) {
+          if (!t.route.includes(st.id)) st.enabled = false;
+          t.steps.push(st);
+        }
       }
       for (const st of t.steps) {
         if (!Array.isArray(st.chat)) st.chat = [];
@@ -711,7 +754,7 @@ function createApp(sessionDir, opts = {}) {
       const next = findTask(e2e.queue.shift());
       if (!next || next.summary) continue;
       e2e.holder = next.id;
-      const step = findStep(next, VALIDATION_STEP);
+      const step = findStep(next, next.e2eStep || VALIDATION_STEP);
       if (step) {
         step.currentOperation = 'Took the E2E slot';
         pushLog(step, 'Took the E2E slot');
@@ -795,9 +838,20 @@ function createApp(sessionDir, opts = {}) {
       } else if (body.decision === 'approve' && review && !review.answered) {
         task.mockupReview = null;
         say(step, 'Approved — updating spec, plan and checklist…', 'The mockups were approved');
+      } else if (body.decision === 'approve' && review && review.answered) {
+        // The last round approved while the agent reworks it: the rework is dropped, and the
+        // orchestrator stops the agent and has it put that round back before recording it.
+        task.mockupReview = null;
+        body.duringRework = true;
+        say(step, 'Approved — dropping the rework, recording the approved round…',
+          'The mockups were approved during the rework');
       }
     }
   }
+
+  // The tasks the "Shut down and create pull request" button opens a pull request for: every one
+  // whose pipeline finished, and did not end in a failure.
+  const prReady = task => !!task.summary && !/^failed/i.test(String(task.summary.finalStatus || '').trim());
 
   function copyCategory(fromId, toId, category) {
     const from = path.join(taskDir(fromId), category);
@@ -873,6 +927,8 @@ function createApp(sessionDir, opts = {}) {
     if (body.activeStep !== undefined) task.activeStep = body.activeStep;
     if (body.branch !== undefined) task.branch = String(body.branch);
     if (body.root !== undefined) task.root = body.root == null ? null : String(body.root);
+    // The branch the task's branch was started from (SKILL.md step 4): the pull request's base.
+    if (body.base !== undefined) task.base = body.base == null ? null : String(body.base);
     if (body.question !== undefined) {
       task.question = body.question;
       // Monotonic, server-owned: the UI keys its re-render on this counter, so a
@@ -922,9 +978,9 @@ function createApp(sessionDir, opts = {}) {
       pushChat(step, body.mockupChat);
     }
     if (body.summary !== undefined) task.summary = body.summary;
-    // The E2E slot follows its holder's step 5: done or put back, the step frees it; failed, it
-    // keeps it for the retry. A finished task neither holds it nor waits for it.
-    if (body.step === VALIDATION_STEP && (body.status === 'completed' || body.status === 'waiting')) {
+    // The E2E slot follows its holder's step 5 or 9: done or put back, the step frees it; failed,
+    // it keeps it for the retry. A finished task neither holds it nor waits for it.
+    if (E2E_STEPS.includes(body.step) && (body.status === 'completed' || body.status === 'waiting')) {
       releaseE2e(task.id, body.status === 'completed');
     }
     if (body.summary != null) releaseE2e(task.id, true);
@@ -1122,6 +1178,22 @@ function createApp(sessionDir, opts = {}) {
           pushAnswer(answer);
           return sendJson(res, 200, { ok: true });
         }
+        // The summary screen's "Shut down and create pull request". The page shuts the server down
+        // right after this, so each finished task's orchestrator hears it now, and a request file
+        // in the task's folder keeps it for one that was not listening (SKILL.md, Final summary).
+        if (body.kind === 'summary' && body.decision === 'shutdown_pr') {
+          const targets = state.tasks.filter(prReady);
+          if (!targets.length) return sendJson(res, 409, { error: 'no task has finished its pipeline - there is nothing to open a pull request for' });
+          for (const t of targets) {
+            fs.mkdirSync(taskDir(t.id), { recursive: true });
+            fs.writeFileSync(path.join(taskDir(t.id), PR_REQUEST_FILE), JSON.stringify({
+              requestedAt: new Date().toISOString(), taskId: t.id, branch: t.branch, base: t.base || null,
+              root: t.root || null, commitMessage: (t.step1 && t.step1.commitMessage) || ''
+            }, null, 2));
+            pushAnswer({ kind: 'summary', decision: 'shutdown_pr', taskId: t.id });
+          }
+          return sendJson(res, 200, { ok: true, tasks: targets.map(t => t.id) });
+        }
         const attached = attachmentsOf(task, body.attachments);
         if (body.kind === 'mockup' && !findStep(task, MOCKUP_STEP)) {
           return sendJson(res, 400, { error: `unknown step ${MOCKUP_STEP}` });
@@ -1213,6 +1285,10 @@ function createApp(sessionDir, opts = {}) {
         const body = JSON.parse(await readBody(req, res) || '{}');
         const task = findTask(body.taskId);
         if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        // Validation by default; the final review asks for its regression run.
+        const stepId = body.step === undefined ? VALIDATION_STEP : Number(body.step);
+        if (!E2E_STEPS.includes(stepId)) return sendJson(res, 400, { error: `step ${body.step} runs no E2E suite` });
+        task.e2eStep = stepId;
         const e2e = state.e2e;
         if (!e2e.holder || e2e.holder === task.id) {
           e2e.holder = task.id;
@@ -1222,12 +1298,14 @@ function createApp(sessionDir, opts = {}) {
         }
         if (!e2e.queue.includes(task.id)) {
           e2e.queue.push(task.id);
-          const step = findStep(task, VALIDATION_STEP);
+          const step = findStep(task, stepId);
           if (step) {
-            Object.assign(step, { status: 'waiting', currentOperation: E2E_WAITING });
+            // The final review queues mid-step: its agent is waiting, so the step stays running.
+            Object.assign(step, stepId === VALIDATION_STEP ? { status: 'waiting', currentOperation: E2E_WAITING }
+              : { currentOperation: E2E_WAITING });
             pushLog(step, 'Queued for the E2E slot');
           }
-          task.activeStep = VALIDATION_STEP;
+          task.activeStep = stepId;
           persist();
         }
         return sendJson(res, 200, { granted: false, holder: e2e.holder, queue: e2e.queue });
@@ -1423,7 +1501,8 @@ function createApp(sessionDir, opts = {}) {
         // Asked once, when the page opens; see readReviewFlags. An unreadable skill
         // leaves the runs without switches, never without runs.
         return sendJson(res, 200, {
-          flags: readReviewFlags() || [], defaultRuns: defaultReviewRuns(), maxRuns: MAX_REVIEW_RUNS
+          flags: readReviewFlags() || [], defaultRuns: defaultReviewRuns(),
+          defaultFinalRuns: defaultFinalReviewRuns(), maxRuns: MAX_REVIEW_RUNS
         });
       }
       if (req.method === 'GET' && url.pathname.startsWith(`/${MOCKUP_DIR}/`)) {

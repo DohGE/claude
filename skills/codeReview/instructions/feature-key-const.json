@@ -2,6 +2,10 @@
   "kind": "feature-key-const",
   "pattern": "src/app/**/models/consts/<area>-feature-key.const.ts",
   "role": "Feature key of an area slice.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#11",

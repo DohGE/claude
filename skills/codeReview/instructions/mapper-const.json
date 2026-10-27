@@ -2,6 +2,10 @@
   "kind": "mapper-const",
   "pattern": "src/app/**/models/consts/<subject>-mapper.const.ts",
   "role": "`Record<EnumKey, Value>` mapper const replacing a switch/lookup function.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#21",

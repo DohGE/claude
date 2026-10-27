@@ -2,6 +2,10 @@
   "kind": "enum",
   "pattern": "src/app/**/models/enums/<name>.enum.ts",
   "role": "String enum file of the area models.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#20",

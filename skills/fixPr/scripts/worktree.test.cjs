@@ -374,3 +374,21 @@ test('the skill still tidies away its OWN empty worktrees directory', (t) => {
   assert.strictEqual(fs.existsSync(wt.worktreesDirFor(dir)), false,
     'the last worktree out turns the light off');
 });
+
+test('the ignored local config travels to the worktree, a tracked file of the same shape does not', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, '.gitignore', 'proxy.*.local.js\nnested/*.local.json\nnode_modules/\n', 'ignore local config');
+  commitFile(dir, 'tracked.local.ts', 'export const tracked = 1;\n', 'a tracked local file');
+  fs.writeFileSync(path.join(dir, 'tracked.local.ts'), 'export const tracked = 2; // edited, not committed\n');
+  fs.writeFileSync(path.join(dir, 'proxy.dpx.local.js'), 'module.exports = {};\n');
+  fs.mkdirSync(path.join(dir, 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'nested', 'api.local.json'), '{}\n');
+  fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'node_modules', 'pkg', 'x.local.js'), '\n');
+  const root = fs.realpathSync(tempDir(t, 'fpc-root-'));
+  const copied = wt.copyLocalFiles(dir, root).sort();
+  assert.deepStrictEqual(copied, ['nested/api.local.json', 'proxy.dpx.local.js']);
+  assert.ok(!fs.existsSync(path.join(root, 'tracked.local.ts')), 'a tracked file is the worktree\'s own');
+  assert.ok(!fs.existsSync(path.join(root, 'node_modules')), 'dependency folders are never walked');
+  assert.deepStrictEqual(wt.copyLocalFiles(dir, root), [], 'what is there already is left alone');
+});

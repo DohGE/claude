@@ -1877,12 +1877,12 @@ test('the page script the renderer emits actually parses', () => {
   }
 });
 
-test('the report template in SKILL.md names the fields this parser accepts', () => {
+test('the report template in references/walk.md names the fields this parser accepts', () => {
   // Step 4 calls its own template `a contract, not a suggestion` - but the contract
   // lives in two places: the template agents copy, and the table this file parses.
   // Rename a field on one side and every future report silently loses it, while
   // every test here keeps passing because they all write the other spelling.
-  const skill = fs.readFileSync(path.join(__dirname, '..', 'SKILL.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(__dirname, '..', 'references', 'walk.md'), 'utf8');
   const lines = skill.slice(skill.indexOf('## Step 4')).split(/\r?\n/);
   const open = lines.findIndex((l) => /^ {4}# Code Review:/.test(l));
   assert.ok(open > 0, 'Step 4 still carries its indented report template');

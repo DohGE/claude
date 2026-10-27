@@ -34,8 +34,8 @@ them out again before it ends — see "Mocks for endpoints the backend does not 
 ## Coding rulebook (MANDATORY)
 
 Every line of APPLICATION code you write here — a bug fix, a UI correction against the baseline, a
-missing test hook — is reviewed in step 6 by the `doh:codeReview` skill against the checklist of its
-file kind, exactly like the step-4 code.
+missing test hook — is reviewed after you, in step 9 (Final Code Review), by the `doh:codeReview`
+skill against the checklist of its file kind, exactly like the step-4 code step 6 reviewed before you.
 Follow the same rulebook the implementation agent followed:
 
 1. Once, before your first application fix, run
@@ -50,7 +50,7 @@ Follow the same rulebook the implementation agent followed:
    item under `<id>#<n>` (one you already read stays binding; files of one kind share it).
    `kind: null` → no checklist binds that file.
 3. Fix the app so it satisfies those checklists — never "just enough to make the test go green".
-   A quick fix that breaks a rule does not save time, it moves the work into step 6.
+   A quick fix that breaks a rule does not save time, it moves the work into step 9.
 4. The `DOH-MOCK` code of the mocks section is the one exception: temporary, stripped before this
    step ends and never reviewed — keep it out of every other file you touch.
 5. Matcher exits non-zero (rulebook missing) → continue without it and record that in the report.
@@ -153,7 +153,7 @@ Playwright-only, never skip the UX pass, never work around it:
 
 A route the backend does not serve yet answers 404 or nothing at all, and without a stand-in neither
 the E2E suite nor the UX pass can reach the screens behind it. The stand-ins are scaffolding, never
-part of the feature: no commit may ever carry them, and step 6 sees them only while its own
+part of the feature: no commit may ever carry them, and step 9 sees them only while its own
 regression run needs them.
 
 ### 1. Probe — mock only what is genuinely missing
@@ -226,10 +226,10 @@ a. Archive and remove — ONE interleaved sequence, because the patch is generat
       worktree-against-index is the mock REMOVAL, so `-R` writes it out as the mock ADDITION, and
       the patch holds the mock delta and nothing else.
    4. `git -C "{{ROOT}}" add -A` again — the index now holds the feature work alone, which is the
-      state step 6 expects.
+      state step 9 expects.
 b. Not a plain `git diff` against HEAD: step 4 never stages, so HEAD still predates the feature and
    the diff would carry the feature's own changes alongside the one mock line — the normal case, since
-   the wiring line goes into the entry point. Step 6 stages the feature first, so such a patch fails
+   the wiring line goes into the entry point. Step 9 stages the feature first, so such a patch fails
    with `error: <file>: patch does not apply`: the mocks never return, the E2E suite fails against the
    missing backend, and the agent reads that as a regression it caused. Staging first makes the index
    the baseline, so the diff can only see the mocks. Every git command here carries `-C "{{ROOT}}"` —
@@ -238,7 +238,7 @@ c. Prove it: `grep -rn "DOH-MOCK" {{ROOT}}` (excluding `{{SESSION}}`) prints not
    `git -C "{{ROOT}}" status --porcelain` no longer lists the module. A leftover marker fails the
    step; it is never just a line in the report.
 d. Re-run the unit suite, the typecheck and the build — removal must not leave a dangling import
-   for step 6 to trip over:
+   for step 9 to trip over:
 
        node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=typecheck,test,build
 
@@ -272,6 +272,16 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    their count, and the run could clear the 99% gate on a number that measures no verification at
    all. Work out how to launch the app (package.json scripts, README); step 4's script finds the
    unit tests on its own.
+   Before the app's first start, check in seconds what it needs — the local config the main checkout
+   has, a free port, a backend or mock that answers — instead of learning it from a cold build and a
+   suite in which every test fails:
+   `node "{{SKILL_DIR}}/scripts/e2e-preflight.cjs" --root="{{ROOT}}" --project="{{PROJECT}}" --port=<the dev port you picked> --url=<each backend or mock URL the app proxies to> --fix`
+   → `PREFLIGHT_OK`, or `PREFLIGHT_FAILED` and one reason per line: put each right before you go
+   on, and ask the user through the question protocol only for what you cannot start yourself (a
+   VPN, a backend on another machine). Start the dev server ONCE for the whole step, on a free port
+   of your own — never the app's default one, which a dev server of the user's may hold — and keep it
+   for every cycle; register it so it is stopped when the step ends:
+   `node "{{SKILL_DIR}}/scripts/task-processes.cjs" register --task-dir="{{SESSION}}" --port=<port> --what=dev-server`
 2. Setup — run the two install commands from the toolchain section above (skip what is already
    installed) and create `{{SESSION}}/e2e/`. Progress 5.
 3. Extension gate — do the REQUIRED check above before any test work, so a missing extension costs
@@ -292,7 +302,7 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
      runner of its own, run the call again with it added as `--command="<runner command>"`
      (`python -m pytest -q`, `go test ./...`, `mvn -q test`, `dotnet test`, …): same verdict, same
      excerpt. When it has none, there is no unit suite.
-   Write the exact call you ran into `## Unit tests`: step 8d re-runs it verbatim, and so does step 6.
+   Write the exact call you ran into `## Unit tests`: point 8d of the Process re-runs it verbatim in the last cycle, and so does step 9.
    Never install a test framework or any dependency into the project, and never substitute the
    plugin's Playwright for the project's unit runner.
    - A failure caused by the pipeline's changes is yours: fix the application code. Never delete,
@@ -301,7 +311,7 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    - A failure that clearly predates the feature (in code the pipeline never touched, unrelated to
      anything the requirement defines) is recorded in the report as pre-existing and left alone.
    - No unit suite in the project → `unitSummary` is `n/a`; never invent one (missing unit tests are
-     step 6's business).
+     the code review's business).
    Progress 15.
 5. Mocks — probe the feature's endpoints and fake the missing ones, per "Mocks for endpoints the
    backend does not serve yet". This comes before discovery deliberately: on a screen whose data
@@ -353,10 +363,13 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
       merely an improvement goes in the report, unfixed. Optionally record ONE `gif_creator` clip
       of the happy path, named after the feature. In cycles 2-3 re-walk ONLY the screens touched by
       fixes.
-   d. Re-run step 4's exact call whenever this cycle changed application code — the fixes you just
-      made must not break what already worked. Same discipline as step 4: the verdict is the `test`
-      step's `status`, a failure is read through its `errorsPath` only, and you fix the app, not the
-      test. The last cycle always ends with a unit run, so the reported result is current.
+   d. Whenever this cycle changed application code, run the specs of the files it changed — the
+      narrowest command the project runs them with, as `--only=test --command="<it>"` — and the full
+      step-4 call only once, in the last cycle: the full suite already ran at step 4, and every run
+      of it is minutes of memory a dev server and a browser are also using. Same discipline as step 4:
+      the verdict is the `test` step's `status`, a failure is read through its `errorsPath` only, and
+      you fix the app, not the test. The last cycle always ends with the full unit run, so the
+      reported result is current.
    e. Update `checklist.md`: tick `- [x]` every item confirmed by a passing test, visual check or
       UX pass, and append what proves it — `| evidence: <spec file › test name>` for `e2e`,
       `| evidence: <screenshot pair>` for `visual`, `| evidence: <one sentence from the walk>` for
@@ -367,6 +380,42 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    an error report never leaves mocks behind in the project.
 10. Compliance = floor(100 × ticked / all checklist items). The loop ends when compliance ≥ 99 AND
     the unit suite is green (pre-existing failures aside), or after 3 cycles.
+
+## Helpers (keep your own context for the decisions)
+
+Two parts of this step are mechanical and heavy on output: running a suite and reading its
+failures, and checking each checklist line against its evidence. You may hand either to a helper
+sub-agent (Agent tool, `general-purpose`, background), so the logs and excerpts land in its context
+instead of yours:
+
+- **Test runner** — runs ONE `checks.cjs` call you give it verbatim, waits for it as
+  "Long-running commands" says, and writes `{{SESSION}}/helpers/run-<n>.md`: the step's `status`,
+  the failing tests by name with the first decisive line of each, and the `errorsPath`. Model
+  `{{RUNNER_MODEL}}`; `{{RUNNER_EFFORT}}` first in its prompt when not empty.
+- **Compliance check** — reads `{{SESSION}}/checklist.md`, the suite's results under
+  `{{SESSION}}/test-results/` and `{{SESSION}}/screenshots/`, and writes
+  `{{SESSION}}/helpers/compliance-<n>.md`: per line, whether its evidence holds and which evidence.
+  It ticks nothing — you tick from its file. Model `{{COMPLIANCE_MODEL}}`; `{{COMPLIANCE_EFFORT}}`
+  first in its prompt when not empty.
+
+Leave `model` out of the spawn when its value above is empty. Never end your turn while a helper
+works: wait for its file with `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty`
+(`PART_PENDING` → run it again). The diagnosis, every fix, the UX pass and the Chrome extension
+stay yours: a helper never edits application code and never drives the browser.
+
+## Long-running commands
+
+A command that can take more than four minutes — a suite, the dev server's first build — runs in
+the background (Bash `run_in_background: true`, its output redirected to a file), and you wait for
+that file in slices of under four minutes:
+`node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` → `PART_READY`
+or `PART_PENDING` (run it again). Never one tool call that blocks longer, and never `sleep N`: past
+five idle minutes your prompt cache expires, and the next call pays for this whole conversation
+again — measured on one run, eight such waits re-wrote 290–440k tokens each.
+
+Before your final JSON, stop what you started:
+`node "{{SKILL_DIR}}/scripts/task-processes.cjs" cleanup --task-dir="{{SESSION}}"` — the next task's
+validation needs the port and the memory.
 
 ## Progress reporting (after every run/fix/comparison/UX pass)
 
@@ -389,12 +438,13 @@ afterwards.
   copied and pasted around far too easily), never print them in logs, reports or your final
   message — pass them only via env vars, set for the single test-run command (never exported into
   the persistent shell profile or written to `.env`/config files). Leave `auth.json` in place — the
-  review agent's regression run still needs it; the orchestrator deletes it when step 6 ends.
+  final review's regression run still needs it; the orchestrator deletes it when the task's last E2E
+  run is over.
 - Write `{{SESSION}}/validation-report.md` — and every other `.md` this step writes — in ONE
   write: the Write tool, or a single Bash heredoc if your harness refuses a `.md` write from a
   sub-agent. One write either way: a report assembled from several appends is one that ends
   half-written when anything goes wrong. Its three headings are FIXED IDENTIFIERS, written in
-  English exactly as spelled below even though the prose under them is in {{LANGUAGE}}: step 6 reads
+  English exactly as spelled below even though the prose under them is in {{LANGUAGE}}: step 9 reads
   `## Unit tests` to recover the unit-test call, so a translated or reworded heading leaves the
   review agent unable to run the suite it must green before it finishes. Heading verbatim, content in
   the user's language. The file holds the raw test output of the final Playwright run, then a

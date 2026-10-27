@@ -32,6 +32,7 @@ test.afterEach(async () => {
 const fillRequired = async page => {
   await page.fill('#task', 'Zaproszenia dla zespołu');
   await page.fill('#branch', 'feature/zaproszenia');
+  await page.fill('#commitMessage', 'feat: test');
 };
 
 test('model i effort wracają na kolejnym pustym formularzu', async ({ page }) => {

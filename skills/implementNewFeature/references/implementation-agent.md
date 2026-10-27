@@ -19,7 +19,7 @@ which of their results exist:
 
 | File | Means |
 |---|---|
-| `plan.md` (with `spec.md` and `checklist.md`) | refinement ran: execute `plan.md` task by task, in order; `spec.md` is the requirement |
+| `plan.md` (with `spec.md` and `checklist.md`) | refinement ran: execute `plan.md` task by task, in order; `spec.md` is the requirement. Each task names its files, the interfaces and behaviour they carry and the test cases that prove it — the code is yours to write, against the rules below |
 | `generated-mockups/manifest.json` | the user approved screens — see "Approved mockups" |
 | `story.md` | the user story: its acceptance criteria are requirements too, and step 5 tests every one |
 
@@ -55,6 +55,15 @@ script, never straight through the shell:
   without its cause, Grep `logPath` for that one test name or error code with a small `-C`.
 - The script writes `{{SESSION}}/checks/` itself. That does not lift the rule below: you never
   write into `{{SESSION}}`.
+- A run that can take more than four minutes — the whole suite, a build — goes in the background
+  (Bash `run_in_background: true`, its JSON redirected to a file under `{{SESSION}}/checks/`), and
+  you wait for that file in slices of under four minutes:
+  `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` →
+  `PART_READY` or `PART_PENDING` (run it again). Never one tool call that blocks longer, and never
+  `sleep N`: past five idle minutes your prompt cache expires, and the next call pays for this whole
+  conversation again. A dev server you start is registered by its port —
+  `node "{{SKILL_DIR}}/scripts/task-processes.cjs" register --task-dir="{{SESSION}}" --port=<port> --what=dev-server` —
+  and stopped with `… cleanup --task-dir="{{SESSION}}"` before your final JSON.
 
 ## Approved mockups (when they exist)
 
@@ -107,6 +116,13 @@ authoritative.
    record it as a deviation.
 4. Before reporting a task done, re-check its files item by item against their `rules` and fix every
    violation — step 6 will reject what you skip.
+   Before your final JSON, run the TDD gate once over the whole change:
+   `node "{{SKILL_DIR}}/scripts/tdd-gate.cjs" --root="{{ROOT}}" --base="{{BASE}}"` → `{checked, missing, untested}`.
+   Every entry of `missing` is a new file of a tested kind with no spec anywhere: write its spec,
+   red then green, or — when the file carries no behaviour of its own (a presentational component
+   with no logic) — say so in `deviations`. Every entry of `untested` is a changed file whose spec
+   this change did not touch: when its behaviour changed, extend the spec. A missing unit test the
+   review finds instead costs a review run, a fix round and a re-run of the suite.
 5. Matcher exits non-zero (rulebook missing) → continue without it and record that in `deviations`.
 
 ## Rules

@@ -170,7 +170,12 @@ test('the bundle names its part and batch, the fixed severities and item rules, 
   assert.ok(rules.includes('- OK cytuje linie, z których odczytano werdykt, nigdy 20+ z 40 linii; zakres adresów tylko z `OK (brak wystąpień)` albo `BRAMKA`.'));
   assert.ok(rules.includes('- q: jedno znalezisko na plik, pole Reguła wymienia każdą złamaną pozycję.'));
   assert.ok(rules.includes('- Znalezisko pod pozycją z ważnością stałą ma tę ważność (przy kilku adresach najwyższą).'));
-  assert.ok(rules.includes('- Gotowy werdykt przepisz do bloku bez zmian: OK tej pozycji jest odrzucane.'));
+  assert.ok(rules.includes('- Gotowy werdykt dopisuje hook, gdy linii brak; OK takiej pozycji jest odrzucane.'));
+  // The block's skeleton: plan order, the prepared item left to the check, `…` for each verdict.
+  const skeleton = rules.slice(rules.findIndex((line) => line.startsWith('    <!-- checklist: ')));
+  assert.ok(skeleton.length > 2 && skeleton.every((line) => line === '' || line.startsWith('    ')), skeleton.join('\n'));
+  assert.ok(!skeleton.some((line) => line.includes('u#2')), 'the prepared verdict is the check\'s to write');
+  assert.ok(skeleton.some((line) => /^ {4}<!-- coverage: .+ <sprawdzone>\/\d+ -->$/.test(line)));
   assert.ok(!rules.some((line) => line.startsWith('- Pozycja z `FAKT`')), 'nothing bound, no binding rule');
   assert.ok(text.endsWith('## Dalej\n\nZ zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:\n- w/03-c.ts.bundle.md\n- w/03-c.ts\n- w/03-c.ts.diff\n'));
   assert.deepStrictEqual(rb.renderNext({ crossBundlePath: 'w/cross-file.bundle.md', crossPartPath: 'r/raport.part04.md' }), [
@@ -198,12 +203,16 @@ test('a target too long for one conversation is cut into even windows of whole b
   const alone = (count) => Array.from({ length: count }, (_, k) => [k + 1]);
   const flat = () => 20000;
   assert.deepStrictEqual(rb.planWindows(alone(5), flat), [], 'a walk that fits one window has none');
-  assert.deepStrictEqual(rb.planWindows(alone(6), flat).map((window) => window.length), [3, 3], 'six files are two windows of three, not five and one');
+  assert.deepStrictEqual(rb.planWindows(alone(6), flat), [], 'six files of 20k fit one window');
+  assert.deepStrictEqual(rb.planWindows(alone(7), flat).map((window) => window.length), [3, 4], 'seven files are two windows, not six and one');
   const long = rb.planWindows(alone(49), flat);
-  assert.strictEqual(long.length, 10, '980k tokens of walk at 100k a window');
-  assert.ok(long.every((window) => window.length >= 4 && window.length <= 5), 'the windows come out even');
+  assert.strictEqual(long.length, 9, '980k tokens of walk at 130k a window, with one more window rather than a stub');
+  assert.ok(long.every((window) => window.length >= 5 && window.length <= 6), 'the windows come out even');
   assert.deepStrictEqual(long.flat(2), alone(49).flat(), 'every file lands in exactly one window, in order');
-  assert.deepStrictEqual(rb.planWindows([[1], [2], [3], [4], [5], [6], [7], [8]], () => 1000).map((window) => window.length), [4, 4], 'the file cap cuts a light target');
+  assert.deepStrictEqual(rb.planWindows(alone(12), () => 1000).map((window) => window.length), [6, 6], 'the file cap cuts a light target');
+  // A window holds one walker setting: the light kinds' files are walked on their own.
+  assert.deepStrictEqual(rb.planWindows(alone(12), () => 1000, undefined, (batch) => (batch[0] >= 5 && batch[0] <= 8 ? 'sonnet|medium' : '')).map((window) => window.flat()),
+    [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]);
   assert.deepStrictEqual(rb.planWindows([[1], [2, 3], [4]], (number) => (number === 1 ? 130000 : number === 4 ? 10000 : 20000)), [[[1]], [[2, 3], [4]]], 'a batch over the limit has a window of its own, and a batch is never split');
   assert.strictEqual(rb.walkTokens(0), rb.windowLimits.fileTokens);
   assert.strictEqual(rb.walkTokens(30000), rb.windowLimits.fileTokens + 10000, 'a third of the characters Reads bring');
@@ -230,13 +239,13 @@ test('a window brief names the rules to read, the target settings, every batch w
   const text = rb.renderWindowBrief({
     index: 2,
     total: 3,
-    skill: { path: '/s/SKILL.md', from: 90, limit: 686 },
     target: { reportPath: 'r/raport.md', htmlReportPath: null, light: true, commands: { grep: 'git grep <pattern>' } },
     batches: [[file(4, ['w/4.bundle.md', 'w/4.ts', 'w/4.diff']), file(5, ['w/5.bundle.md', 'w/5.ts'])], [file(6, ['w/6.bundle.md'])]],
   });
   const lines = text.split('\n');
   assert.strictEqual(lines[0], '# Window 2 of 3: files 4-6');
-  assert.ok(text.includes('1. Read /s/SKILL.md with offset 90 and limit 686 - Step 3'), 'the lines of SKILL.md the walker reads');
+  assert.ok(text.includes('are in your system prompt, the `doh:codereview-walker` definition'), 'the rules ride in the agent definition');
+  assert.ok(text.includes(`Reads ${rb.walkRulesPath} first`), 'and a walker without them reads walk.md');
   assert.ok(text.includes('reply with exactly one line, `WINDOW DONE 4-6`'));
   assert.ok(text.includes('`WINDOW STOPPED <file number>: <reason>`'));
   const settings = JSON.parse(text.slice(text.indexOf('```json') + 7, text.lastIndexOf('```')));
@@ -262,7 +271,7 @@ test('a window brief names the rules to read, the target settings, every batch w
     '- w/6.bundle.md',
     '',
   ]);
-  assert.ok(rb.renderWindowBrief({ index: 1, total: 1, target: {}, batches: [[file(7, [])]] }).includes('from its `## Step 3` heading'), 'without the line range the brief says where to start in words');
+  assert.ok(!text.includes('SKILL.md'), 'no walker reads SKILL.md any more');
   assert.strictEqual(rb.windowBriefName(3), 'window03.md');
 });
 
@@ -336,7 +345,8 @@ test('the cross-file bundle walks the reporting instructions and only accessibil
   assert.ok(!text.includes('security'), 'an instruction the pass does not report under stays out');
   assert.ok(lines.includes('- skan się nie odbył (powód w ostrzeżeniach kontekstu)'));
   const scanned = rb.renderCrossBundle({ instructions, walked, candidates: [{ path: 'a.ts', lines: '1-9', sources: ['b.ts:2-10'], kinds: ['renamed'] }] });
-  assert.ok(scanned.includes('- a.ts:1-9 powtarza b.ts:2-10 (renamed)'));
+  assert.ok(scanned.includes('- jscpd#1: a.ts:1-9 powtarza b.ts:2-10 (renamed)'), 'numbered: the address of its line in the questions block');
+  assert.ok(scanned.includes('    [x] jscpd#1 — OK (<kształt narzucony | dane równoległe | sama składnia>: <dlaczego>)'));
   assert.ok(scanned.includes('## Fakty międzyplikowe\n\n- brak\n'));
 });
 
@@ -404,4 +414,30 @@ test('a bundle shows where each member is named and which specs cover the file, 
   assert.ok(none.split('\n').includes('- żaden spec nie importuje tego pliku'));
   assert.ok(!none.includes('## Użycia składowych'), 'no members, no section');
   assert.ok(!rb.renderBundle({ file, kind: null, instructions: new Map() }).includes('## Spec'), 'a file that is no source script has none');
+});
+
+test('a bundle stays within what one Read opens: long lines cut outside the plan, the least needed sections dropped first', () => {
+  const caps = { lineChars: 60, bundleChars: 330 };
+  const facts = Array.from({ length: 5 }, () => `- ${'f'.repeat(50)}`);
+  const text = ['# a.ts', '', '## Plan', '', `- x#1: ${'p'.repeat(100)}`, '', '## Spec', '', `- ${'s'.repeat(80)}`, '', '## Fakty spoza planu (bez wymogu)', '', ...facts, ''].join('\n');
+  const fitted = rb.fitBundle(text, { caps });
+  assert.ok(fitted.includes(`- x#1: ${'p'.repeat(100)}`), 'an item text is never cut');
+  assert.ok(fitted.includes(`- ${'s'.repeat(58)} … (+22 znaków)`), 'a long line elsewhere is');
+  assert.ok(fitted.length <= caps.bundleChars, `${fitted.length}`);
+  assert.ok(fitted.includes('## Fakty spoza planu (bez wymogu)\n\n- pominięte: paczka przekroczyła limit odczytu (Read)'), fitted);
+  assert.strictEqual(rb.fitBundle('## Plan\n- x', { caps }), '## Plan\n- x');
+});
+
+test('a batch holds one walker setting', () => {
+  const entry = (number, walker = '') => ({ number, lines: 10, items: 5, chars: 100, walker });
+  assert.deepStrictEqual(rb.planBatches([entry(1), entry(2, 'sonnet|medium'), entry(3, 'sonnet|medium'), entry(4)]), [[1], [2, 3], [4]]);
+});
+
+test('the cross-file brief sends a fresh agent to the pass, never to the assembly', () => {
+  const text = rb.renderCrossBrief({ target: { reportPath: 'r/raport.md', commands: { grep: 'g' } }, crossBundlePath: 'w/cross-file.bundle.md', crossPartPath: 'r/raport.part04.md', closingPartPath: 'r/raport.part05.md' });
+  assert.ok(text.includes('Read in ONE message: w/cross-file.bundle.md and '));
+  assert.ok(text.includes(`\`${rb.questionsOpen}\` block`), 'the questions block is named');
+  assert.ok(text.includes('r/raport.part04.md in one Write, and r/raport.part05.md when the target found nothing'));
+  assert.ok(text.includes('The assembly is not yours') && text.includes('`CROSS DONE`') && text.includes('`CROSS STOPPED: <reason>`'));
+  assert.deepStrictEqual(JSON.parse(text.slice(text.indexOf('```json') + 7, text.lastIndexOf('```'))), { reportPath: 'r/raport.md', commands: { grep: 'g' } });
 });

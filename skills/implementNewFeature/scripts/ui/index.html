@@ -67,11 +67,11 @@
           font-size:14px; line-height:1; flex:none; border-radius:4px; }
   .tabs-bar .close:hover:not(:disabled) { color:var(--failed); background:var(--card-2);
           transform:none; filter:none; }
-  .stepper { display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap; }
-  /* 100px basis keeps all eight tiles (every optional step on) on a single row at
+  .stepper { display:flex; gap:8px; margin-bottom:28px; flex-wrap:wrap; }
+  /* 88px basis keeps all nine tiles (every optional step on) on a single row at
      940px; a name longer than its tile wraps inside it. */
-  .step { flex:1 1 100px; background:var(--card); border:1px solid var(--border); border-radius:14px;
-          padding:14px 6px; text-align:center; transition:border-color .25s, box-shadow .25s;
+  .step { flex:1 1 88px; background:var(--card); border:1px solid var(--border); border-radius:14px;
+          padding:14px 4px; text-align:center; transition:border-color .25s, box-shadow .25s;
           box-shadow:0 12px 28px -18px rgba(0,0,0,.9); }
   .step.in_progress { border-color:var(--accent);
           box-shadow:0 0 0 1px rgba(124,140,248,.35), 0 8px 24px -12px rgba(124,140,248,.45); }
@@ -131,6 +131,11 @@
   .agent-grid { display:grid; grid-template-columns:minmax(120px,1fr) 1fr 1fr; gap:10px 12px;
           align-items:center; margin-top:10px; }
   .agent-grid > span { font-size:13px; color:var(--muted); }
+  /* A helper a step's agent spawns sits under its step, indented. */
+  .agent-grid > span.role { padding-left:14px; font-size:12.5px; }
+  /* Two short required fields that belong together: the branch and its commit message. */
+  .field-row { display:flex; gap:0 14px; flex-wrap:wrap; }
+  .field-row > div { flex:1 1 240px; }
   .agent-grid select { padding:8px 10px; }
   .panel h3 { font-size:14px; margin:22px 0 0; color:var(--accent); }
   input[type=file] { background:var(--card-2); border:1px dashed var(--border); border-radius:10px;
@@ -407,12 +412,14 @@
 <script>
 'use strict';
 const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementation',
-  'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description'];
+  'Validation & E2E', 'Code Review', 'Mockoon Mocks', 'Story Description', 'Final Code Review'];
 const MOCKOON_STEP = 7;
 const STORY_STEP = 8;
-// Ids are fixed, so Story Description - added last - is 8 although it runs before
-// Implementation. The stepper and the per-step overrides list the steps in this order.
-const STEP_ORDER = [1, 2, 3, 8, 4, 5, 6, 7];
+const FINAL_REVIEW_STEP = 9;
+// Ids are fixed, so Story Description - added later - is 8 although it runs before
+// Implementation, and Code Review (6) runs before Validation (5). A task's own `route` is the
+// order of its tiles; this is the order of a new task's, and of the per-step overrides.
+const STEP_ORDER = [1, 2, 3, 8, 4, 6, 5, 9, 7];
 const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
   completed: 'Completed', failed: 'Failed' };
 const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
@@ -426,6 +433,16 @@ const ATTACHMENTS = 'attachments';
 const SCREENSHOT_DIR = 'mockup-screenshots';
 // Step 1 has no agent of its own - the form IS step 1 - so the overrides start at 2.
 const AGENT_STEPS = STEP_ORDER.slice(1);
+// The helpers a step's agent spawns - every one a setting of its own, shown under its step, so
+// no agent of the run is left on a model nobody chose. Keys are the server's AGENT_ROLES.
+const AGENT_ROLES = [
+  { key: 'reviewWalker', step: 6, label: 'window walkers' },
+  { key: 'reviewFixer', step: 6, label: 'fix helpers' },
+  { key: 'validationRunner', step: 5, label: 'test runner' },
+  { key: 'validationCompliance', step: 5, label: 'compliance check' },
+  { key: 'finalWalker', step: 9, label: 'window walkers' },
+  { key: 'finalFixer', step: 9, label: 'fix helpers' },
+];
 // '' is "inherit": no model override on the spawn, no thinking directive in the prompt.
 // The models are the server's - what this session's Agent tool can spawn - so they
 // are read off the state document, never listed here.
@@ -481,6 +498,8 @@ let takenBranches = '';
 let reviewFlags = null;
 let reviewRunsMax = 3;
 let reviewRunsDefault = [{ flags: [] }, { flags: ['--since-last'] }];
+// The final review's own default: what validation changed since the review before it.
+let finalRunsDefault = [{ flags: ['--since-last'] }];
 // The open step-1 form's review runs, redrawn when the flag list lands after the form.
 let refreshRuns = null;
 
@@ -497,7 +516,7 @@ const STEP1_FLOW = ['taskDescription', 'branch', 'contractsText', 'hintsNote',
 // that seeds a new task both carry exactly these, so neither can quietly drift from
 // the form. Credentials are among them — which is why the copy is a page-side affair.
 const STEP1_INPUTS = {
-  taskDescription: '#task', branch: '#branch',
+  taskDescription: '#task', branch: '#branch', commitMessage: '#commitMessage', finalReview: '#finalReview',
   contractsText: '#contractsText', hintsNote: '#hintsNote',
   refinement: '#refinement', generateMockups: '#genMockups', storyDescription: '#storyDesc',
   authLogin: '#authLogin', authPassword: '#authPassword', rememberAuth: '#rememberAuth',
@@ -505,16 +524,20 @@ const STEP1_INPUTS = {
   // One draft key per override, so the whole form still travels as one flat record:
   // the snapshot, the copy that seeds a new task and the re-render all read it.
   ...Object.fromEntries(AGENT_STEPS.flatMap(n => [
-    [`agentModel${n}`, `#agentModel-${n}`], [`agentEffort${n}`, `#agentEffort-${n}`]]))
+    [`agentModel${n}`, `#agentModel-${n}`], [`agentEffort${n}`, `#agentEffort-${n}`]])),
+  ...Object.fromEntries(AGENT_ROLES.flatMap(r => [
+    [`agentModel_${r.key}`, `#agentModel-${r.key}`], [`agentEffort_${r.key}`, `#agentEffort-${r.key}`]]))
 };
 
 // One setting, two shapes: a draft holds it flat (`agentModel4`), a submitted form
 // holds it nested under `agents`. This reads whichever of the two the record has, so
 // nothing downstream needs to know which one it was handed. Unset is always ''.
 function agentValue(d, key, step) {
-  const flat = d[`agent${key[0].toUpperCase()}${key.slice(1)}${step || ''}`];
+  // `step` is a step id, or the key of a role (AGENT_ROLES), or nothing for the task-wide pair.
+  const role = typeof step === 'string' && !/^\d+$/.test(step);
+  const flat = d[`agent${key[0].toUpperCase()}${key.slice(1)}${step ? (role ? `_${step}` : step) : ''}`];
   const a = d.agents || {};
-  const from = step ? (a.steps || {})[step] || {} : a;
+  const from = !step ? a : role ? (a.roles || {})[step] || {} : (a.steps || {})[step] || {};
   const value = flat !== undefined ? flat : from[key] || '';
   // A model this session does not offer - remembered from one that did - has no
   // option to select, so the screen shows Inherit. Reading it as '' keeps what is
@@ -527,31 +550,36 @@ function agentValue(d, key, step) {
 const agentsOf = d => ({
   model: agentValue(d, 'model'), effort: agentValue(d, 'effort'),
   steps: Object.fromEntries(AGENT_STEPS.map(n => [String(n),
-    { model: agentValue(d, 'model', n), effort: agentValue(d, 'effort', n) }]))
+    { model: agentValue(d, 'model', n), effort: agentValue(d, 'effort', n) }])),
+  roles: Object.fromEntries(AGENT_ROLES.map(r => [r.key,
+    { model: agentValue(d, 'model', r.key), effort: agentValue(d, 'effort', r.key) }]))
 });
 
 // …and the same shape read straight off the form on screen.
 const agentsOnScreen = () => ({
   model: $('#agentModel').value, effort: $('#agentEffort').value,
   steps: Object.fromEntries(AGENT_STEPS.map(n => [String(n),
-    { model: $(`#agentModel-${n}`).value, effort: $(`#agentEffort-${n}`).value }]))
+    { model: $(`#agentModel-${n}`).value, effort: $(`#agentEffort-${n}`).value }])),
+  roles: Object.fromEntries(AGENT_ROLES.map(r => [r.key,
+    { model: $(`#agentModel-${r.key}`).value, effort: $(`#agentEffort-${r.key}`).value }]))
 });
 
-// The review runs as the server stores them, [{ flags: [...] }], read off the form.
-const runsOnScreen = () => [...document.querySelectorAll('#reviewRuns .run')].map(card => ({
+// The review runs as the server stores them, [{ flags: [...] }], read off the form - the review
+// after implementation's (#reviewRuns) or the final review's (#finalRuns).
+const runsOnScreen = (box = '#reviewRuns') => [...document.querySelectorAll(`${box} .run`)].map(card => ({
   flags: [...card.querySelectorAll('input[data-flag]:checked')].map(el => el.dataset.flag) }));
 
 // One card per run, every flag the skill takes as a checkbox, its description as the
 // tooltip. A flag the list does not have - it has not arrived yet - still gets one, so
 // reading the form back never drops what the run holds.
-function runsHtml(runs) {
+function runsHtml(runs, what = '') {
   const known = reviewFlags || [];
   return runs.map((run, i) => {
     const extra = run.flags.filter(f => !known.some(k => k.name === f))
       .map(name => ({ name, description: '' }));
     return `<div class="run" data-run="${i}">
       <div class="run-head"><span>Run ${i + 1}</span>${runs.length > 1
-    ? `<button type="button" class="run-rm" data-run="${i}" aria-label="Remove run ${i + 1}"
+    ? `<button type="button" class="run-rm" data-run="${i}" aria-label="Remove ${what}run ${i + 1}"
           title="Remove run">×</button>` : ''}</div>
       <div class="flags">${[...known, ...extra].map(f => `<label${
     f.description ? ` title="${esc(f.description)}"` : ''}><input type="checkbox"
@@ -585,7 +613,8 @@ function writeStore(key, value) {
 }
 
 const isInherit = a => !a.model && !a.effort
-  && AGENT_STEPS.every(n => !a.steps[n].model && !a.steps[n].effort);
+  && AGENT_STEPS.every(n => !a.steps[n].model && !a.steps[n].effort)
+  && AGENT_ROLES.every(r => !a.roles[r.key].model && !a.roles[r.key].effort);
 
 // What the agent selects should show. A task that has been submitted, or that
 // carries settings of its own (a copy), shows those; a blank form falls back to
@@ -616,6 +645,7 @@ function snapshotStep1() {
     v.draft[key] = el.type === 'checkbox' ? el.checked : el.value;
   }
   v.draft.codeReview = runsOnScreen();
+  v.draft.finalCodeReview = runsOnScreen('#finalRuns');
   // The files picked but not uploaded yet are not read here: the picker adds them to
   // v.picked the moment they are chosen, and empties itself for the next pick.
 }
@@ -629,6 +659,7 @@ function step1Of(task) {
   const out = {};
   for (const key of Object.keys(STEP1_INPUTS)) out[key] = d[key];
   out.codeReview = d.codeReview;
+  out.finalCodeReview = d.finalCodeReview;
   // The submitted form holds the agent settings nested and only a draft holds them
   // flat, so a task copied from another step - where there is no draft - would lose
   // them. agentValue reads whichever of the two actually has them.
@@ -637,6 +668,10 @@ function step1Of(task) {
   for (const n of AGENT_STEPS) {
     out[`agentModel${n}`] = agentValue(d, 'model', n);
     out[`agentEffort${n}`] = agentValue(d, 'effort', n);
+  }
+  for (const r of AGENT_ROLES) {
+    out[`agentModel_${r.key}`] = agentValue(d, 'model', r.key);
+    out[`agentEffort_${r.key}`] = agentValue(d, 'effort', r.key);
   }
   return out;
 }
@@ -1088,9 +1123,13 @@ function syncTabLabel() {
 // Step ids are fixed, but the tiles follow the order the steps run in (STEP_ORDER),
 // a disabled step (one whose switch on the form is off) is hidden, and the visible
 // ones are numbered 1..n so the badges stay contiguous.
-const rankOf = id => (STEP_ORDER.includes(id) ? STEP_ORDER.indexOf(id) : STEP_ORDER.length + id);
-const shownSteps = task => task.steps.filter(s => s.enabled !== false)
-  .sort((a, b) => rankOf(a.id) - rankOf(b.id));
+const orderOf = task => (Array.isArray(task.route)
+  ? [...task.route, ...STEP_ORDER.filter(id => !task.route.includes(id))] : STEP_ORDER);
+const rankOf = (id, order = STEP_ORDER) => (order.includes(id) ? order.indexOf(id) : order.length + id);
+const shownSteps = task => {
+  const order = orderOf(task);
+  return task.steps.filter(s => s.enabled !== false).sort((a, b) => rankOf(a.id, order) - rankOf(b.id, order));
+};
 function renderStepper(task) {
   // Rebuilding innerHTML every second would drop focus and restart the pulse
   // animation, so the tiles are redrawn only when something about them changed.
@@ -1333,6 +1372,7 @@ function renderStep1(task) {
   };
   // A draft's runs, else the last submission's, else the two passes the step always ran.
   const runs = d.codeReview && d.codeReview.length ? d.codeReview : reviewRunsDefault;
+  const finalRuns = d.finalCodeReview && d.finalCodeReview.length ? d.finalCodeReview : finalRunsDefault;
   const toggle = (id, on, label, hint) => `<div>
       <div class="switch">
         <input type="checkbox" id="${id}"${on ? ' checked' : ''}>
@@ -1354,10 +1394,17 @@ function renderStep1(task) {
         agent that reads the description sees them too.</span>
       <input type="file" id="images" multiple accept="image/*" hidden>
     </div>
-    <label>Branch <span class="req">*</span></label>
-    <input type="text" id="branch" placeholder="feature/my-feature" autocomplete="off"
-      value="${esc(d.branch || '')}">
-    <p class="hint error" id="branchHint" hidden></p>
+    <div class="field-row">
+      <div><label for="branch">Branch <span class="req">*</span></label>
+        <input type="text" id="branch" placeholder="feature/my-feature" autocomplete="off"
+          value="${esc(d.branch || '')}">
+        <p class="hint error" id="branchHint" hidden></p></div>
+      <div><label for="commitMessage">Commit message <span class="req">*</span></label>
+        <input type="text" id="commitMessage" placeholder="feat: add the hosts inventory" autocomplete="off"
+          value="${esc(d.commitMessage || '')}">
+        <p class="hint">The one commit "Shut down and create pull request" makes at the end, and its
+          pull request's title.</p></div>
+    </div>
     <h3>Steps before implementation</h3>
     <div class="switch-row">
       ${toggle('refinement', d.refinement !== false, 'Feature refinement',
@@ -1372,15 +1419,27 @@ function renderStep1(task) {
     + ' what the steps before it produced, else from this form.')}
     </div>
     <h3>Code review</h3>
-    <p class="muted">How many times the review step runs <code>/doh:codeReview</code> on the
-      task's changes, and with which flags; hover a flag to see what it does. A run that finds
-      nothing ends the review, and the runs after it are skipped.</p>
+    <p class="muted">How many times the review after implementation runs <code>/doh:codeReview</code>
+      on the task's changes, and with which flags; hover a flag to see what it does. A run that
+      finds nothing ends the review, and the runs after it are skipped. It comes before validation,
+      so the E2E suite runs on code the review already fixed.</p>
     <div id="reviewRuns">${runsHtml(runs)}</div>
     <button type="button" id="addRun" class="secondary">Add run</button>
+    <h3>Final code review</h3>
+    <div class="switch-row">
+      ${toggle('finalReview', d.finalReview !== false, 'Final code review',
+    'After validation and E2E: another review of what validation changed, with runs of its own.'
+    + ' Its fixes are proven by the unit suite and the E2E suite again.')}
+    </div>
+    <div id="finalReviewBox"${d.finalReview === false ? ' hidden' : ''}>
+      <div id="finalRuns">${runsHtml(finalRuns, 'final ')}</div>
+      <button type="button" id="addFinalRun" class="secondary">Add run</button>
+    </div>
     <h3>Agent</h3>
     <p class="muted">Which model this task's sub-agents run on, and how much thinking they
-      are asked for. Both bind when a step's agent is spawned, so a change here reaches
-      the steps that have not started yet — never the one already running.</p>
+      are asked for — every step's agent and every helper it spawns. An override left on
+      Inherit takes its step's setting, then this one. Both bind when an agent is spawned, so a
+      change here reaches the agents that have not started yet — never one already running.</p>
     <div class="agent-row">
       <div><label for="agentModel">Model</label>
         ${agentSelect('agentModel', agentModels(), ag.model)}</div>
@@ -1388,11 +1447,14 @@ function renderStep1(task) {
         ${agentSelect('agentEffort', AGENT_EFFORTS, ag.effort)}</div>
     </div>
     <details class="overrides" id="agentOverrides">
-      <summary>Per-step overrides</summary>
+      <summary>Per-agent overrides</summary>
       <div class="agent-grid">
         ${AGENT_STEPS.map(n => `<span>${esc(STEP_NAMES[n - 1])}</span>
           ${agentSelect(`agentModel-${n}`, agentModels(), ag.steps[n].model)}
-          ${agentSelect(`agentEffort-${n}`, AGENT_EFFORTS, ag.steps[n].effort)}`).join('')}
+          ${agentSelect(`agentEffort-${n}`, AGENT_EFFORTS, ag.steps[n].effort)}
+          ${AGENT_ROLES.filter(r => r.step === n).map(r => `<span class="role">↳ ${esc(r.label)}</span>
+          ${agentSelect(`agentModel-${r.key}`, agentModels(), ag.roles[r.key].model)}
+          ${agentSelect(`agentEffort-${r.key}`, AGENT_EFFORTS, ag.roles[r.key].effort)}`).join('')}`).join('')}
       </div>
     </details>
     <h3>Additional materials (optional)</h3>
@@ -1518,29 +1580,31 @@ function renderStep1(task) {
     }));
   // The flag list can land after the form, and a run can be added or removed: each one
   // redraws the cards from what is on screen, so no tick is lost on the way.
-  const drawRuns = list => {
-    $('#reviewRuns').innerHTML = runsHtml(list);
-    wireRuns();
+  // Two run editors of one shape: the review after implementation, and the final review.
+  const editors = [{ box: '#reviewRuns', add: '#addRun', what: '' }, { box: '#finalRuns', add: '#addFinalRun', what: 'final ' }];
+  const drawRuns = (list, ed = editors[0]) => {
+    $(ed.box).innerHTML = runsHtml(list, ed.what);
+    wireRuns(ed);
   };
-  const wireRuns = () => {
-    $('#addRun').disabled = finished || runsOnScreen().length >= reviewRunsMax;
+  const wireRuns = ed => {
+    $(ed.add).disabled = finished || runsOnScreen(ed.box).length >= reviewRunsMax;
     if (finished) {
-      document.querySelectorAll('#reviewRuns input, #reviewRuns button')
+      document.querySelectorAll(`${ed.box} input, ${ed.box} button`)
         .forEach(el => { el.disabled = true; });
       return;
     }
-    document.querySelectorAll('#reviewRuns input')
+    document.querySelectorAll(`${ed.box} input`)
       .forEach(el => el.addEventListener('change', () => onEdit()));
-    document.querySelectorAll('#reviewRuns .run-rm').forEach(btn =>
+    document.querySelectorAll(`${ed.box} .run-rm`).forEach(btn =>
       btn.addEventListener('click', () => {
-        const list = runsOnScreen();
+        const list = runsOnScreen(ed.box);
         list.splice(Number(btn.dataset.run), 1);
-        drawRuns(list);
+        drawRuns(list, ed);
         onEdit();
       }));
   };
-  wireRuns();
-  refreshRuns = () => drawRuns(runsOnScreen());
+  editors.forEach(wireRuns);
+  refreshRuns = () => editors.forEach(ed => drawRuns(runsOnScreen(ed.box), ed));
   if (finished) {
     document.querySelectorAll('#panel textarea, #panel input, #panel select, #panel .rm, #attachImages')
       .forEach(el => { el.disabled = true; });
@@ -1553,14 +1617,16 @@ function renderStep1(task) {
       '#attachImages', ...STEP1_FILES.map(cat => `#${cat}`)].forEach(sel => { $(sel).disabled = true; });
     document.querySelectorAll('#panel .rm').forEach(el => { el.disabled = true; });
   }
-  $('#addRun').addEventListener('click', () => {
-    const list = runsOnScreen();
-    // A run after the first re-reviews what the one before it fixed.
-    const since = !reviewFlags || reviewFlags.some(f => f.name === '--since-last');
-    list.push({ flags: since ? ['--since-last'] : [] });
-    drawRuns(list);
-    onEdit();
-  });
+  for (const ed of editors) {
+    $(ed.add).addEventListener('click', () => {
+      const list = runsOnScreen(ed.box);
+      // A run after the first re-reviews what the one before it fixed.
+      const since = !reviewFlags || reviewFlags.some(f => f.name === '--since-last');
+      list.push({ flags: since ? ['--since-last'] : [] });
+      drawRuns(list, ed);
+      onEdit();
+    });
+  }
   const auth = () => {
     const login = $('#authLogin').value.trim();
     const password = $('#authPassword').value;
@@ -1585,6 +1651,9 @@ function renderStep1(task) {
     if (a.login || a.password) return true;
     const prev = task.step1 || {};
     return JSON.stringify(runsOnScreen()) !== JSON.stringify(prev.codeReview || reviewRunsDefault)
+      || JSON.stringify(runsOnScreen('#finalRuns')) !== JSON.stringify(prev.finalCodeReview || finalRunsDefault)
+      || $('#finalReview').checked !== (prev.finalReview !== false)
+      || $('#commitMessage').value.trim() !== String(prev.commitMessage || '').trim()
       || JSON.stringify(agentsOnScreen()) !== JSON.stringify(agentsOf({ agents: prev.agents }));
   };
   const changed = () => flowEdited() || settingsEdited();
@@ -1600,9 +1669,10 @@ function renderStep1(task) {
         : taken ? 'Another task is already using this branch.' : '';
     $('#branchHint').textContent = problem;
     $('#branchHint').hidden = !problem;
-    // Auth is all-or-nothing: filling exactly one of the two fields blocks Next.
+    // Auth is all-or-nothing: filling exactly one of the two fields blocks Next. The commit
+    // message is required: it is what the pull request at the end is made of.
     const valid = !!($('#task').value.trim()
-      && branchOk(branch) && !taken
+      && branchOk(branch) && !taken && $('#commitMessage').value.trim()
       && (a.complete || (!a.login && !a.password.trim())));
     const dirty = !revisit || changed();
     $('#next').disabled = !(valid && dirty);
@@ -1612,10 +1682,14 @@ function renderStep1(task) {
   // about: a removed file, a failing step, a question arriving — any of them replaces
   // the panel, and only what was put away survives it.
   const onEdit = () => { snapshotStep1(); gate(); };
-  ['#task', '#branch', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
+  ['#task', '#branch', '#commitMessage', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
     .forEach(sel => $(sel).addEventListener('input', onEdit));
   ['#refinement', '#genMockups', '#storyDesc']
     .forEach(sel => $(sel).addEventListener('change', onEdit));
+  $('#finalReview').addEventListener('change', () => {
+    $('#finalReviewBox').hidden = !$('#finalReview').checked;
+    onEdit();
+  });
   document.querySelectorAll('#panel select').forEach(el => el.addEventListener('change', () => {
     onEdit();
     // Remembered as soon as it is picked, not on submit: the point is that the next
@@ -1712,6 +1786,9 @@ function renderStep1(task) {
       generateMockups: $('#genMockups').checked,
       storyDescription: $('#storyDesc').checked,
       codeReview: runsOnScreen(),
+      commitMessage: $('#commitMessage').value.trim(),
+      finalReview: $('#finalReview').checked,
+      finalCodeReview: runsOnScreen('#finalRuns'),
       agents: agentsOnScreen() });
     if (!sent.ok) return giveBack();
     // The form is the server's now, credentials included — nothing of it stays on
@@ -2344,16 +2421,31 @@ function renderProgress(task, step) {
   const live = liveOf(task, step);
   // The mockups step offers its screenshots from the first round on, and after approval.
   const shots = step.id === 3 && step.status !== 'waiting';
+  // A round the user answered with feedback is being reworked; it can still be approved as it was.
+  const rework = step.id === 3 && live && task.mockupReview && task.mockupReview.answered;
   $('#panel').innerHTML = `
     ${panelHead(esc(step.name), step)}
     ${progressBar()}
-    ${shots ? `<div class="gate-actions">${screenshotsButton()}</div>
+    ${shots ? `<div class="gate-actions">${screenshotsButton()}${rework
+    ? '<button id="approveRework" class="secondary" title="Stops the rework and keeps the round you saw">Approve the last round</button>' : ''}</div>
     <p class="hint" id="shotsHint" hidden></p>` : ''}
     <ul class="log" id="log"></ul>
     ${chatBlock(step, live)}`;
   wireChat(step);
   wireStop(step);
   wireScreenshots();
+  if ($('#approveRework')) {
+    $('#approveRework').addEventListener('click', async () => {
+      const ok = await askConfirm({ title: 'Approve the last round?',
+        text: 'The agent stops reworking, puts back the screens you saw and records them as the approved design. What you asked for in your feedback is dropped.',
+        confirmLabel: 'Approve the last round' });
+      if (!ok) return;
+      lockPanel('Approved — recording the approved round…');
+      await sendAnswer({ kind: 'mockup', decision: 'approve' });
+      lastSig = null;
+      tick();
+    });
+  }
   updateDynamic(task, step);
 }
 
@@ -2519,8 +2611,14 @@ function renderStory(task, step) {
   loadStory();
 }
 
+// The tasks "Shut down and create pull request" opens one for: every one whose pipeline finished
+// without failing - the server picks the same ones (prReady).
+const prReadyTasks = () => ((lastState && lastState.tasks) || [])
+  .filter(t => t.summary && !/^failed/i.test(String(t.summary.finalStatus || '').trim()));
+
 function renderSummary(task) {
   const sum = task.summary;
+  const prTasks = prReadyTasks();
   const mockoon = task.steps.find(s => s.id === MOCKOON_STEP) || {};
   const hasMocks = mockoon.status === 'completed';
   const story = task.steps.find(s => s.id === STORY_STEP) || {};
@@ -2549,6 +2647,7 @@ function renderSummary(task) {
         hasMocks ? 'Regenerate' : 'Generate Mockoon mocks'}</button>
     </section>
     <section id="shutdown-section">
+      <button id="shutdownPr"${prTasks.length ? '' : ` disabled title="No task finished its pipeline: there is nothing to open a pull request for"`}>Shut down and create pull request</button>
       <button id="shutdown" class="secondary">Shut down server</button>
     </section>
   </div>`;
@@ -2564,9 +2663,33 @@ function renderSummary(task) {
     lockPanel('Requested — the agent is building the Mockoon environment…');
     sendAnswer({ kind: 'summary', decision: 'mockoon' });
   });
+  $('#shutdownPr').addEventListener('click', async () => {
+    const list = prTasks.map(t => `${t.branch || t.id} → ${t.base || 'its base branch'}`).join(', ');
+    const ok = await askConfirm({
+      title: 'Shut down and create pull request?',
+      text: `For ${list}: commit the staged changes with the step-1 commit message, push the branch, open a pull request into the branch it was started from, and remove the task's worktree. The server stops right away; each task's orchestrator terminal does the rest and prints the pull request link.`,
+      confirmLabel: 'Shut down and create pull request' });
+    if (!ok) return;
+    serverDown = true;
+    $('#shutdownPr').disabled = true;
+    $('#shutdown').disabled = true;
+    const sent = await sendAnswer({ kind: 'summary', decision: 'shutdown_pr' });
+    if (!sent.ok) {
+      serverDown = false;
+      $('#shutdownPr').disabled = false;
+      $('#shutdown').disabled = false;
+      return;
+    }
+    // A moment for every listening orchestrator to take its answer before the socket dies.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    try { await postJson('/api/shutdown', {}); } catch (_e) { /* server exits mid-response */ }
+    $('#shutdown-section').innerHTML = `<p class="muted">Server stopped — the orchestrator terminal of ${
+      esc(sent.tasks.join(', '))} commits, pushes and opens the pull request; the link appears there.</p>`;
+  });
   $('#shutdown').addEventListener('click', async () => {
     serverDown = true;
     $('#shutdown').disabled = true;
+    if ($('#shutdownPr')) $('#shutdownPr').disabled = true;
     // Ends the orchestrator's post-summary poll before the socket dies under it.
     try { await sendAnswer({ kind: 'summary', decision: 'shutdown' }); } catch (_e) { /* gone */ }
     try { await postJson('/api/shutdown', {}); } catch (_e) { /* server exits mid-response */ }
@@ -2596,6 +2719,7 @@ async function newTask(copy, btn) {
     contractsText: from.contractsText, hintsNote: from.hintsNote,
     refinement: from.refinement, generateMockups: from.generateMockups,
     storyDescription: from.storyDescription, codeReview: from.codeReview,
+    commitMessage: from.commitMessage, finalReview: from.finalReview, finalCodeReview: from.finalCodeReview,
     agents: agentsOf(from) } } : {});
   if (id) {
     // The server copies what it holds — the form and the uploaded files. What only the
@@ -2644,6 +2768,7 @@ fetch('/api/review-flags')
     reviewFlags = Array.isArray(j.flags) ? j.flags : [];
     reviewRunsMax = j.maxRuns || reviewRunsMax;
     reviewRunsDefault = j.defaultRuns || reviewRunsDefault;
+    finalRunsDefault = j.defaultFinalRuns || finalRunsDefault;
     if (refreshRuns) refreshRuns();
   })
   .catch(() => { /* the runs keep showing the flags they hold, by name */ });

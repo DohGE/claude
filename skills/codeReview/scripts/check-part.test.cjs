@@ -50,6 +50,9 @@ function fixture(t, { kind = 'branch', outputFormat = 'md' } = {}) {
   return { dir, branchDir, context, target: context.targets[0], contextPath, reportPath, part: (k) => `${stem}.part${String(k).padStart(2, '0')}.md` };
 }
 
+// The cross-file part's questions block (references/cross-file.md): a passing cross part has one.
+const answered = ['<!-- questions:', ...[1, 2, 3, 4, 5].map((n) => `[x] pytanie#${n} — OK (sprawdzone)`), '-->', ''].join('\n');
+
 const finding = (rule, lines = '4, 9') => [
   '## src/a.ts',
   '',
@@ -283,7 +286,7 @@ test('an item left [ ] in three files gets one verdict for the target, in the cr
     2: open('src/b.ts'),
     3: open('src/c.ts'),
   };
-  const cross = (block) => check(f, 4, block, { readPart: (k) => parts[k] || null });
+  const cross = (block) => check(f, 4, answered + block, { readPart: (k) => parts[k] || null });
   const unverified = (...lines) => ['<!-- unverified:', ...lines, '-->', ''].join('\n');
   has(cross(''), 'brak bloku "<!-- unverified:" - general#3: [ ] w co najmniej 3 plikach');
   assert.deepStrictEqual(cross(unverified('[x] general#3 — OK (src/a.ts L2, src/b.ts L1)')), []);
@@ -340,7 +343,8 @@ test('a folder review has no mechanical files', (t) => {
 test('the cross-file and closing parts carry no tick, and the closing line only closes a clean target', (t) => {
   const f = fixture(t);
   has(check(f, 3, partB), 'przejścia międzyplikowego nie ma bloku');
-  assert.deepStrictEqual(check(f, 3, ''), []);
+  assert.deepStrictEqual(check(f, 3, answered), []);
+  has(check(f, 3, ''), 'brak bloku "<!-- questions:"');
   has(check(f, 5, 'x'), 'poza zakresem');
   has(check(f, 1, 'Nie wykryto problemów.\n' + partA()), 'należy tylko do ostatniej części');
   const withFinding = (k) => (k === 1 ? partA() : partB);
@@ -599,7 +603,7 @@ test('assembly: every file has its part, the cross-file part exists, and a clean
   assert.match(r.stderr, /brak części plików: part02 \(src\/b\.ts\)/);
   assert.match(r.stderr, /brak części przejścia międzyplikowego \(part03\)/);
   fs.writeFileSync(f.part(2), partB);
-  fs.writeFileSync(f.part(3), '');
+  fs.writeFileSync(f.part(3), answered);
   r = assemble();
   assert.strictEqual(r.status, 0, r.stderr);
 
@@ -643,7 +647,7 @@ test('assembly --assemble: only a passed check appends the parts, removes them w
   assert.strictEqual(r.status, 1, 'a missing part stops everything');
   assert.ok(fs.existsSync(f.part(1)) && fs.existsSync(work) && fs.existsSync(ledger), 'a refused assembly removes nothing');
   fs.writeFileSync(f.part(2), partB);
-  fs.writeFileSync(f.part(3), '');
+  fs.writeFileSync(f.part(3), answered);
   r = assemble();
   assert.strictEqual(r.status, 0, r.stderr);
   const report = fs.readFileSync(f.reportPath, 'utf8');
@@ -669,7 +673,7 @@ test('assembly: the coverage numbers are counted, not trusted', (t) => {
   const f = fixture(t);
   fs.writeFileSync(f.part(1), partA({ marker: '<!-- coverage: src/a.ts 2/9 -->' }));
   fs.writeFileSync(f.part(2), partB);
-  fs.writeFileSync(f.part(3), '');
+  fs.writeFileSync(f.part(3), answered);
   const r = spawnSync(process.execPath, [script, `--context=${f.contextPath}`, `--report=${f.reportPath}`], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.match(r.stdout, /przeliczone w 1 części\)/);
@@ -748,9 +752,9 @@ test('the cross-file block leaves out the prepared items, and the cross bundle l
   const readPart = (k) => parts[k] || null;
   const facts = withRules({ prepared: { 'general#3': preparedReason } });
   has(check(f, 4, '', { readPart, facts: null }), 'brak bloku "<!-- unverified:" - general#3');
-  assert.deepStrictEqual(check(f, 4, '', { readPart, facts }), []);
+  assert.deepStrictEqual(check(f, 4, answered, { readPart, facts }), []);
   // Listed anyway, a prepared item is tolerated: its verdict is the rulebook's either way.
-  assert.deepStrictEqual(check(f, 4, ['<!-- unverified:', `[ ] general#3 — NIEZWERYFIKOWANE: ${preparedReason}`, '-->', ''].join('\n'), { readPart, facts }), []);
+  assert.deepStrictEqual(check(f, 4, answered + ['<!-- unverified:', `[ ] general#3 — NIEZWERYFIKOWANE: ${preparedReason}`, '-->', ''].join('\n'), { readPart, facts }), []);
 
   assert.deepStrictEqual(cp.reportedState(f.target, readPart, null), {
     reported: [{ path: 'src/a.ts', entries: ['component#1, general#2 (4, 9)'] }],
@@ -762,7 +766,7 @@ test('the cross-file block leaves out the prepared items, and the cross bundle l
 test('one defect, one finding: the cross-file pass does not report again what a file part reported', (t) => {
   const f = fixture(t);
   const readPart = (k) => (k === 1 ? partA() : k === 2 ? partB : null);
-  const cross = (text, rules = {}) => check(f, 3, text, { readPart, facts: withRules(rules) });
+  const cross = (text, rules = {}) => check(f, 3, answered + text, { readPart, facts: withRules(rules) });
   has(cross(finding('general#2', '4')), 'src/a.ts: znalezisko z pola Linia "4" (general#2) powtarza znalezisko part01 (Linia "4, 9", component#1, general#2)');
   // Under the other side of a sameAs pair it is the same defect.
   has(cross(finding('general#3', '9'), { sameAs: { 'general#3': ['general#2'] } }), 'powtarza znalezisko part01');
@@ -823,7 +827,7 @@ test('assembly: the rulebook\'s fixed severity settles a finding, but never lowe
 
   // The assembly applies them once every part passed, and says how many it changed.
   fs.writeFileSync(f.part(1), partA());
-  fs.writeFileSync(f.part(3), '');
+  fs.writeFileSync(f.part(3), answered);
   f.target.factsPath = path.join(f.branchDir, 'raport.work', 'facts.json');
   fs.writeFileSync(f.target.factsPath, JSON.stringify(facts({ 'general#2': 'high' })));
   fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
@@ -897,4 +901,95 @@ test('noSpecConflicts: a no-spec finding against test-coverage findings on the s
   assert.match(problems[0], /routes#10.*src\/app\.routes\.ts/);
   assert.deepStrictEqual(cp.noSpecConflicts([sections[0]], rules), [], 'other instructions on the same spec are no conflict');
   assert.deepStrictEqual(cp.noSpecConflicts(sections, {}), []);
+});
+
+test('a verdict wrong only in form is put right before the check, and nothing else is touched', () => {
+  const part = [
+    '## a.ts',
+    '<!-- checklist: src/a.ts',
+    '[ ] general#1 — OK (L4)',
+    '[x] general#2 walidatory — NIEZWERYFIKOWANE poza recenzją: src/base.ts',
+    '[ ] general#3 OnPush — NARUSZENIE (7)',
+    '[x] general#4-6 — OK (brak wystąpień)',
+    '[ ] general#7 runtime — NIEZWERYFIKOWANE: narzędzie: brak eslint',
+    '-->',
+    '[ ] poza blokiem — OK (L1)',
+  ].join('\n');
+  const { text, fixes } = cp.normalizePart(part);
+  assert.deepStrictEqual(text.split('\n').slice(2, 7), [
+    '[x] general#1 — OK (L4)',
+    '[ ] general#2 walidatory — NIEZWERYFIKOWANE: poza recenzją: src/base.ts',
+    '[x] general#3 OnPush — NARUSZENIE (7)',
+    '[x] general#4-6 — OK (brak wystąpień)',
+    '[ ] general#7 runtime — NIEZWERYFIKOWANE: narzędzie: brak eslint',
+  ]);
+  assert.strictEqual(text.split('\n')[8], '[ ] poza blokiem — OK (L1)', 'a line outside the block is not a verdict');
+  assert.strictEqual(fixes.length, 4);
+  assert.deepStrictEqual(cp.normalizePart('<!-- checklist: x\n[x] a#1 — OK (L1)\n-->').fixes, [], 'a correct part is left alone');
+});
+
+test('windows side by side: a part waits only for the parts before it in its own window', (t) => {
+  const f = fixture(t);
+  const none = { sequential: true, readPart: () => null };
+  has(check(f, 2, partB, none), 'najpierw brakujące wcześniejsze części: part01');
+  f.target.windows = [{ files: [1, 1] }, { files: [2, 2] }];
+  assert.deepStrictEqual(check(f, 2, partB, none), [], 'part 1 is another walker\'s');
+  assert.strictEqual(cp.windowOf(f.target, 2)[0], 2);
+  // The one-response gap is one walker's rule: another window's part may land a second before.
+  const soon = { sequential: true, readPart: (k) => (k === 1 ? partA() : null), writtenAt: () => 1000, now: 1500 };
+  assert.deepStrictEqual(check(f, 2, partB, soon), []);
+  f.target.windows = [{ files: [1, 2] }];
+  has(check(f, 2, partB, soon), 'part01 zapisano 0.5 s temu');
+});
+
+test('fillPart writes in the prepared verdicts and the coverage marker a part left out', (t) => {
+  const f = fixture(t);
+  const facts = { files: {}, rules: { prepared: { 'general#3': 'narzędzie: recenzja nie uruchamia testów' } } };
+  const lacking = ['<!-- checklist: src/b.ts', '[x] general#1 — OK (L1, L4)', '[x] general#2 — OK (brak wystąpień)', '-->', ''].join('\n');
+  const { text, fixes } = cp.fillPart(f.context, f.target, f.part(2), lacking, facts);
+  assert.deepStrictEqual(text.split('\n'), [
+    '<!-- checklist: src/b.ts', '[x] general#1 — OK (L1, L4)', '[x] general#2 — OK (brak wystąpień)',
+    '[ ] general#3 — NIEZWERYFIKOWANE: narzędzie: recenzja nie uruchamia testów', '-->', '<!-- coverage: src/b.ts 2/3 -->', '',
+  ]);
+  assert.strictEqual(fixes.length, 2, fixes.join('\n'));
+  assert.deepStrictEqual(check(f, 2, text, { facts }), [], 'what it wrote passes the check');
+  // Nothing to fill, and a part without a block is the walk's to fix, not the script's.
+  assert.deepStrictEqual(cp.fillPart(f.context, f.target, f.part(2), partB, { files: {}, rules: {} }), { text: partB, fixes: [] });
+  assert.deepStrictEqual(cp.fillPart(f.context, f.target, f.part(2), 'x\n', facts).fixes, []);
+});
+
+test('the cross-file part answers every question and every jscpd candidate in its questions block', (t) => {
+  const f = fixture(t);
+  f.target.duplicationCandidates = [{ path: 'src/a.ts', lines: '1-9', sources: ['src/c.ts:1-9'], kinds: ['exact'] }];
+  const readPart = (k) => (k === 1 ? partA() : k === 2 ? partB : null);
+  const block = (...lines) => ['<!-- questions:', ...lines, '-->', ''].join('\n');
+  const questions = [1, 2, 3, 4, 5].map((n) => `[x] pytanie#${n} — OK (sprawdzone)`);
+  const cross = (text) => check(f, 3, text, { readPart });
+  has(cross(''), 'brak bloku "<!-- questions:"');
+  has(cross(block(...questions)), 'brak w bloku questions: jscpd#1');
+  assert.deepStrictEqual(cross(block(...questions, '[x] jscpd#1 — OK (sama składnia: inne wywołania)')), []);
+  has(cross(block(...questions, '[x] jscpd#1 — OK')), 'jscpd#1: OK bez tego, co sprawdzono');
+  has(cross(block(...questions.slice(1), '[x] jscpd#1 — OK (dane równoległe)')), 'brak w bloku questions: pytanie#1');
+  // A violation points at its finding: in this part, or in the file part that reports it.
+  has(cross(block(...questions, '[x] jscpd#1 — NARUSZENIE (src/a.ts:1-9)')), 'jscpd#1: NARUSZENIE bez znaleziska');
+  assert.deepStrictEqual(cross(block(...questions, '[x] jscpd#1 — NARUSZENIE (part01)')), [], 'part01 reports a finding');
+  has(cross(block(...questions, '[x] jscpd#1 — BRAMKA: nie')), 'werdykt w bloku questions');
+  has(cross(block(...questions, '[ ] jscpd#1 — NIEZWERYFIKOWANE: nie wiem')), 'powód NIEZWERYFIKOWANE zaczyna się od');
+  has(cross(block(...questions, '[x] jscpd#1 — OK (x)', '[x] pytanie#6 — OK (x)')), 'adresy spoza');
+  // A file part has no such block.
+  has(check(f, 2, partB + block(...questions), { readPart }), 'należy do części przejścia międzyplikowego');
+});
+
+test('findContextFor reads the context the report folder names before it searches the cache', (t) => {
+  const f = fixture(t);
+  // A second context of the same report, newer, in another cache folder: the search would pick it.
+  const other = path.join(f.dir, 'cache', 'other');
+  fs.mkdirSync(other, { recursive: true });
+  const decoy = path.join(other, '.review-context-branch.json');
+  fs.writeFileSync(decoy, JSON.stringify({ ...f.context, decoy: true }));
+  assert.strictEqual(cp.findContextFor(f.part(1)).context.decoy, true);
+  fs.writeFileSync(path.join(f.branchDir, '.review-context-path'), `${f.contextPath}\n`);
+  const found = cp.findContextFor(f.part(1));
+  assert.strictEqual(found.contextPath, f.contextPath);
+  assert.ok(!found.context.decoy);
 });

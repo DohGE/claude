@@ -2,6 +2,10 @@
   "kind": "models-barrel",
   "pattern": "src/app/**/models/index.ts",
   "role": "Barrel of the area models.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#7",
