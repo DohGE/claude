@@ -65,6 +65,9 @@ const reChecklistItem = /^\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)#(\d+(?:-\d+)?(?:\s*
 // The cross-file part's answer for the items left open in several files. This parser
 // swallows it like any other comment; check-part.cjs reads its lines.
 const reUnverifiedOpen = /^<!--\s*unverified:\s*(-->)?$/;
+// The cross-file part's answers to its five questions and to each jscpd candidate
+// (check-part.cjs checkQuestions): proof for the check like the block above, never shown.
+const reQuestionsOpen = /^<!--\s*questions:\s*(-->)?$/;
 // Widest range a single line may collapse: a guard against `#1-99999` silently
 // inflating a block into a million items.
 const maxItemSpan = 500;
@@ -2513,7 +2516,7 @@ function stripChecklists(markdown) {
       continue;
     }
     const multi = line.startsWith('<!--') && !line.includes('-->');
-    if (/^<!--\s*checklist:/.test(line) || reUnverifiedOpen.test(line) || reCoverage.test(line)) {
+    if (/^<!--\s*checklist:/.test(line) || reUnverifiedOpen.test(line) || reQuestionsOpen.test(line) || reCoverage.test(line)) {
       open = multi ? 'cut' : null;
       gap = true;
       changed = true;
@@ -2694,7 +2697,7 @@ module.exports = {
   projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, attachChecklistRules, appendRuleTexts, buildPayload, renderHtml, reportNameOf, detectPullRequest,
   changedFiles, treeEntries, stripChecklists, stripLowFindings, main,
   // check-part.cjs validates each part file against the same grammar this parser reads.
-  emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reUnverifiedOpen, reViolationVerdict, expandItemSpec,
+  emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reUnverifiedOpen, reQuestionsOpen, reViolationVerdict, expandItemSpec,
   // The severity lead lines a finding may open with, which the bundles and the assembly write.
   severities,
 };

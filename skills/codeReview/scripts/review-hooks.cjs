@@ -222,12 +222,20 @@ function onRead(input, env = process.env) {
     return null;
   }
   if (!stateFile) return null;
-  if (!found.target.dedupItems) {
+  // Walkers side by side (`target.parallel`) share the session id. A Read carrying the agent's
+  // own id dedups against what that agent read (`@<id>` in the state); one without it could be
+  // any walker's, and a reference to a bundle another walker read is an item never shown.
+  const agent = input.agent_id ? String(input.agent_id) : '';
+  if (!found.target.dedupItems || (!agent && (found.target.parallel || 1) > 1)) {
     record(stateFile, found.contextPath);
     return null;
   }
   const text = fs.readFileSync(file, 'utf8');
-  const result = record(stateFile, found.contextPath, (shown) => dedupItems(text, name, shown));
+  const result = record(stateFile, found.contextPath, (shown) => {
+    if (!agent) return dedupItems(text, name, shown);
+    if (!shown[`@${agent}`]) shown[`@${agent}`] = {};
+    return dedupItems(text, name, shown[`@${agent}`]);
+  });
   if (result.replaced === 0) return null;
   const copy = path.join(workDir, name.replace(reBundleName, '.bundle.dedup.md'));
   writeAtomic(copy, result.text);
@@ -266,7 +274,7 @@ function onDraft(input) {
       text = fs.readFileSync(draft, 'utf8');
     } catch {}
     return note('PostToolUse', cp.formatProblems(
-      `Szkic ${path.basename(draft)} nadal nie przechodzi kontroli formatu (codeReview SKILL.md, Step 3 point 4) - popraw kolejnym Edit tylko wskazane miejsca, hook sprawdzi go znowu:`,
+      `Szkic ${path.basename(draft)} nadal nie przechodzi kontroli formatu (codeReview references/walk.md, Step 3 point 4) - popraw kolejnym Edit tylko wskazane miejsca, hook sprawdzi go znowu:`,
       cp.withDraftLines(result.problems, text),
     ));
   }
@@ -293,24 +301,6 @@ function skillLines(file = `${skillDir}/SKILL.md`) {
   if (end === -1 || end <= cut) return null;
   const lineAt = (offset) => text.slice(0, offset).split('\n').length;
   const from = lineAt(cut);
-  return { path: file, from, limit: lineAt(end) - from };
-}
-
-// The lines of SKILL.md a window's walker reads: Step 3, the report format and what follows it, up
-// to the one-time part. `## Step 3` is a FIXED IDENTIFIER: a heading renamed sends the walker to
-// the head of the file instead (null here makes the brief say so in words).
-function walkLines(file = `${skillDir}/SKILL.md`) {
-  let text;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-  const start = text.search(/^## Step 3\b/m);
-  const end = text.indexOf(oneTimeMarker);
-  if (start === -1 || end <= start) return null;
-  const lineAt = (offset) => text.slice(0, offset).split('\n').length;
-  const from = lineAt(start);
   return { path: file, from, limit: lineAt(end) - from };
 }
 
@@ -365,13 +355,14 @@ function position(context, contextPath, skillFile) {
     out.push(`- zapisane części plików: ${n - missing.length}/${n}; następny plik ${k}/${n}: ${files[k - 1].path}, część ${partOf(k)}`);
     if (window) {
       // Whoever sent the walkers is the conversation that was compacted: the walk is theirs, not its own.
-      const walker = context.walker || {};
-      const model = walker.model ? ` z \`model: ${walker.model}\`` : '';
-      const effort = walker.effort && walker.effort !== 'low' ? ` (prompt z linią Effort: ${walker.effort} ze Step 3)` : '';
+      const model = window.model ? ` z \`model: ${window.model}\`` : '';
+      const effort = window.effort ? ` i \`effort: ${window.effort}\`` : '';
+      const lanes = (target.parallel || 1) > 1 ? `, do ${target.parallel} okien naraz` : '';
       const wait = window.lastPart
-        ? ` i nie kończ tury: \`node "${skillDir}/scripts/wait-part.cjs" --path="${window.lastPart}"\` aż \`PART_READY\`, potem następne okno`
+        ? ` i nie kończ tury: \`node "${skillDir}/scripts/wait-part.cjs" --path="<lastPart każdego wysłanego okna>"\` aż \`PART_READY\`, potem następne okno`
         : ` i czekaj na jedną linię \`${bundle.windowReplies.done} ${window.files[0]}-${window.files[1]}\``;
-      out.push(`- okno ${windows.indexOf(window) + 1}/${windows.length}: pliki ${window.files[0]}-${window.files[1]}; jeśli możesz wysłać sub-agenta, wyślij \`doh:codereview-walker\`${model} z promptem \`Read ${window.brief} and follow it\`${effort} (części na dysku pomija)${wait}; bez Agent albo po odmowie przejdź plik ${k} sam, tak:`);
+      out.push(`- workflow recenzji (\`target.workflow\`), jeśli go uruchomiłeś i nie przyszło jego powiadomienie, jeszcze działa: czekaj na nie, nie wysyłaj okien drugi raz.`);
+      out.push(`- okno ${windows.indexOf(window) + 1}/${windows.length}: pliki ${window.files[0]}-${window.files[1]}; bez workflow wyślij \`doh:codereview-walker\`${model}${effort} z promptem \`Read ${window.brief} and follow it.\`${lanes} (części na dysku pomija)${wait}; bez Agent albo po odmowie przejdź plik ${k} sam według ${bundle.walkRulesPath}, tak:`);
     }
     const range = (target.batches || []).find(([first, last]) => k >= first && k <= last);
     const walk = files.slice(k - 1, range ? range[1] : k);
@@ -379,6 +370,9 @@ function position(context, contextPath, skillFile) {
     out.push('- przeczytaj (Read) w jednej odpowiedzi, także to, co czytałeś przed kompaktowaniem - tego tekstu nie ma już w rozmowie, a kilka Grep po pozycjach to kilka odpowiedzi:', ...bundle.readsOf(walk).map((p) => `  - ${p}`));
   } else if (n > 0 && !exists(n + 1)) {
     out.push(`- części plików zapisane (${n}/${n}); następne: przejście międzyplikowe, część ${partOf(n + 1)}`);
+    if (target.crossBriefPath) {
+      out.push(`- robi je świeży agent: wyślij \`doh:codereview-walker\` z promptem \`Read ${target.crossBriefPath} and follow it.\` i czekaj na \`${bundle.crossReplies.done}\` (\`wait-part.cjs --path="${partOf(n + 1)}"\`); bez Agent:`);
+    }
     out.push('- przeczytaj (Read) w jednej odpowiedzi:', `  - ${target.crossBundlePath}`, `  - ${skillDir}/references/cross-file.md`);
   } else {
     out.push(assembly, `  ${(target.commands && target.commands.assemble) || '(brak w kontekście - złóż według assembly.md)'}`);
@@ -388,7 +382,10 @@ function position(context, contextPath, skillFile) {
   if (open.length > 1) out.push(`- potem cele: ${open.slice(1).map(labelOf).join(', ')}`);
   const skill = skillLines(skillFile);
   if (skill) {
-    out.push(`- SKILL.md wrócił po kompaktowaniu tylko do około linii ${skill.from} (po wznowieniu sesji - wcale): przeczytaj (Read) ${skill.path} z offset ${skill.from} i limit ${skill.limit} - reszta kroku 3 i format raportu.`);
+    out.push(`- SKILL.md wrócił po kompaktowaniu tylko do około linii ${skill.from} (po wznowieniu sesji - wcale): przeczytaj (Read) ${skill.path} z offset ${skill.from} i limit ${skill.limit} - reszta prowadzenia recenzji.`);
+  }
+  if (missing.length > 0 || (n > 0 && !exists(n + 1))) {
+    out.push(`- reguły przejścia pliku i format części (Step 3 i 4) są w ${bundle.walkRulesPath}: przeczytaj (Read), zanim sam przejdziesz plik albo zrobisz przejście międzyplikowe.`);
   }
   // The walk itself, whatever the harness re-attached: after a resumed session it re-attaches nothing.
   const card = walkCard(skillFile);
@@ -416,10 +413,16 @@ function forget(stateFile, contextPath) {
   withLock(stateFile, () => writeAtomic(stateFile, JSON.stringify({ contextPath, shown: {} })));
 }
 
+// A sub-agent's start or stop: what the session's reads without an agent id showed is reset, as
+// before (they may have been the sub-agent's), and so is that agent's own map; the maps of the
+// walkers still running stay.
 function onSubagent(input, env = process.env) {
   const stateFile = statePath(input && input.session_id, env);
   const state = stateFile ? readState(stateFile) : null;
-  if (state) forget(stateFile, state.contextPath);
+  if (!state) return null;
+  const agent = input && input.agent_id ? `@${input.agent_id}` : null;
+  const others = Object.fromEntries(Object.entries(state.shown).filter(([key]) => key.startsWith('@') && key !== agent));
+  withLock(stateFile, () => writeAtomic(stateFile, JSON.stringify({ contextPath: state.contextPath, shown: others })));
   return null;
 }
 
@@ -455,7 +458,7 @@ async function main() {
 }
 
 module.exports = {
-  parseArgs, stateDir, statePath, readState, dedupItems, skillLines, walkLines, walkCard, position, onRead, onDraft, onCompact,
+  parseArgs, stateDir, statePath, readState, dedupItems, skillLines, walkCard, position, onRead, onDraft, onCompact,
   onSubagent, reattachedChars, oneTimeMarker,
 };
 

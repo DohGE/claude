@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Deterministic check of the part files a codeReview run writes (SKILL.md Step 3 point 4),
+// Deterministic check of the part files a codeReview run writes (references/walk.md Step 3 point 4),
 // against the context that planned them. Two entry points share one set of rules:
 // - PreToolUse hook (no arguments): stdin carries a Write or Edit call. A `<stem>.partNN.md`
 //   whose `<stem>.md` is a target of a run's `.review-context-*.json` is checked BEFORE
@@ -44,7 +44,7 @@ const reContextName = /^\.review-context-[a-z]+\.json$/;
 // own two to six words, the text after it the evidence or the reason.
 const reVerdict = /(?:^|\s)[—–-]\s*(OK|NARUSZENIE|BRAMKA|NIEZWERYFIKOWANE)(?![\p{L}\p{N}_])/u;
 const reAddress = /[a-z0-9][a-z0-9-]*#\d+/i;
-// FIXED IDENTIFIERS (SKILL.md Step 3 point 4), matched here word for word: translated, each one
+// FIXED IDENTIFIERS (references/walk.md Step 3 point 4), matched here word for word: translated, each one
 // reads as missing and every verdict carrying it is refused.
 // - The one evidence an OK may give instead of lines.
 const noOccurrence = 'brak wystąpień';
@@ -88,6 +88,14 @@ function pad(number, digits) {
 // two or more consecutive light files as [first, last].
 function sameBatch(target, a, b) {
   return (target.batches || []).some(([first, last]) => a >= first && a <= last && b >= first && b <= last);
+}
+
+// The window file `k` is walked in, as [first, last] (review-context.cjs `target.windows`); a
+// target walked without windows is one. Windows run side by side (`target.parallel`), each walker
+// writing its own files in order: the order and the one-response gap hold within a window.
+function windowOf(target, k) {
+  const window = (target.windows || []).find((w) => w && Array.isArray(w.files) && k >= w.files[0] && k <= w.files[1]);
+  return window ? window.files : [1, (target.files || []).length];
 }
 
 function rulesOf(facts) {
@@ -275,6 +283,7 @@ function scanPart(text) {
   const markers = [];
   const blocks = [];
   const unverified = [];
+  const questions = [];
   let block = null;
   String(text).split(/\r?\n/).forEach((raw, i) => {
     const line = raw.trim();
@@ -303,10 +312,16 @@ function scanPart(text) {
       block = across[1] ? null : unverified[unverified.length - 1];
       return;
     }
+    const asked = line.match(render.reQuestionsOpen);
+    if (asked) {
+      questions.push({ lineNo: i + 1, lines: [] });
+      block = asked[1] ? null : questions[questions.length - 1];
+      return;
+    }
     const marker = line.match(render.reCoverage);
     if (marker) markers.push({ path: marker[1], value: marker[2] });
   });
-  return { markers, blocks, unverified, lines: blocks.flatMap((b) => b.lines) };
+  return { markers, blocks, unverified, questions, lines: blocks.flatMap((b) => b.lines) };
 }
 
 // The draft lines a refusal is about, quoted, so the fix needs no search of the draft: for a
@@ -581,10 +596,11 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
   const file = target.files[number - 1];
   if (options.sequential) {
     const missing = [];
-    // A part of the same batch may still be on its way in this response, or waiting as a draft.
-    for (let k = 1; k < number; k++) if (!sameBatch(target, k, number) && options.readPart(k) === null) missing.push(k);
+    // A part of the same batch may still be on its way in this response, or waiting as a draft;
+    // a part of another window is another walker's.
+    for (let k = windowOf(target, number)[0]; k < number; k++) if (!sameBatch(target, k, number) && options.readPart(k) === null) missing.push(k);
     if (missing.length) {
-      problems.push(`najpierw brakujące wcześniejsze części: ${listParts(missing, target, digits)} - pliki idą po kolei, a część każdego pliku (albo partii z paczki) jest zapisana, zanim otworzysz następny.`);
+      problems.push(`najpierw brakujące wcześniejsze części: ${listParts(missing, target, digits)} - pliki okna idą po kolei, a część każdego pliku (albo partii z paczki) jest zapisana, zanim otworzysz następny.`);
     }
   }
   if (scan.markers.length === 0) {
@@ -595,6 +611,9 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
   if (scan.blocks.length > 1) problems.push(`${scan.blocks.length} bloki checklisty - część jednego pliku ma najwyżej jeden.`);
   if (scan.unverified.length) {
     problems.push(`blok "<!-- unverified:" należy do części przejścia międzyplikowego (part${pad(target.files.length + 1, digits)}), nie do części pliku.`);
+  }
+  if (scan.questions.length) {
+    problems.push(`blok "${bundle.questionsOpen}" należy do części przejścia międzyplikowego (part${pad(target.files.length + 1, digits)}), nie do części pliku.`);
   }
   const name = `part${pad(number, digits)}`;
   for (const marker of scan.markers) {
@@ -779,10 +798,65 @@ function repeatedFindings(target, digits, report, readPart, rules) {
   return problems;
 }
 
+// The cross-file part answers each of its five questions and each jscpd candidate on a line of
+// its own, in the `<!-- questions:` block (references/cross-file.md). Until 0.26 an empty part
+// passed: a pass that opened no candidate and never asked questions 3-5 looked exactly like one
+// that found nothing (measured on a 115-file run, 2026-10-27: four High duplications missed).
+function checkQuestions(target, digits, scan, report, options) {
+  const problems = [];
+  const { question, candidate } = bundle.questionIds;
+  const candidates = (target.duplicationCandidates || []).length;
+  const required = [
+    ...Array.from({ length: bundle.crossQuestions }, (_, i) => `${question}#${i + 1}`),
+    ...Array.from({ length: candidates }, (_, i) => `${candidate}#${i + 1}`),
+  ];
+  const asked = `pytania 1-${bundle.crossQuestions}${candidates ? ` i każdy z ${candidates} kandydatów jscpd (${candidate}#1-#${candidates})` : ''}`;
+  if (scan.questions.length === 0) {
+    problems.push(`brak bloku "${bundle.questionsOpen}" - część przejścia odpowiada w nim na ${asked}, każde w osobnej linii z werdyktem (wzór w "## Zapis części" paczki przejścia).`);
+    return problems;
+  }
+  if (scan.questions.length > 1) problems.push(`${scan.questions.length} bloki "${bundle.questionsOpen}" - część przejścia ma dokładnie jeden.`);
+  const listed = new Map();
+  const doubled = [];
+  for (const line of scan.questions[0].lines) {
+    for (const k of line.numbers || []) {
+      const address = `${line.id}#${k}`;
+      if (listed.has(address)) doubled.push(address);
+      listed.set(address, line);
+    }
+  }
+  const missing = required.filter((address) => !listed.has(address));
+  const extra = [...listed.keys()].filter((address) => !required.includes(address));
+  if (doubled.length) problems.push(`${compact(doubled)}: w dwóch liniach bloku questions - każde pytanie i każdy kandydat stoi w nim dokładnie raz.`);
+  if (missing.length) problems.push(`brak w bloku questions: ${compact(missing)} - blok odpowiada na ${asked}.`);
+  if (extra.length) problems.push(`w bloku questions adresy spoza ${asked}: ${compact(extra)}.`);
+  const ownFindings = report.files.reduce((count, section) => count + section.findings.length, 0);
+  for (const [address, line] of listed) {
+    if (!required.includes(address)) continue;
+    const verdict = verdictOfLine(line);
+    if (!verdict || verdict.word === 'BRAMKA') {
+      problems.push(`${address}: werdykt w bloku questions to OK, NARUSZENIE albo NIEZWERYFIKOWANE.`);
+      continue;
+    }
+    if (verdict.word === 'OK' && !/^(?:\(\s*[^)\s][^)]*\)|:\s*\S)/.test(verdict.after)) {
+      problems.push(`${address}: OK bez tego, co sprawdzono - "OK (<co otwarłeś i przejrzałeś>)"${address.startsWith(candidate) ? ', u kandydata "OK (<kształt narzucony | dane równoległe | sama składnia>: <dlaczego>)"' : ''}.`);
+    }
+    if (verdict.word === 'NARUSZENIE') {
+      const cited = [...verdict.after.matchAll(/\bpart(\d+)\b/gi)].map((m) => Number(m[1]));
+      if (ownFindings === 0 && !cited.some((k) => hasFinding(options.readPart(k)))) {
+        problems.push(`${address}: NARUSZENIE bez znaleziska - ta część nie ma żadnego, a linia nie wskazuje (partNN) części pliku, która je zgłasza.`);
+      }
+    }
+    if (verdict.word === 'NIEZWERYFIKOWANE') problems.push(...checkReason(address, verdict.after.replace(/^:\s*/, ''), null));
+  }
+  return problems;
+}
+
 function checkCrossPart(context, target, digits, scan, report, options) {
   const problems = [];
   const rules = rulesOf(options.facts);
   problems.push(...repeatedFindings(target, digits, report, options.readPart, rules));
+  problems.push(...checkQuestions(target, digits, scan, report, options));
   const required = openAcross(target, options.readPart, rules.prepared).map(({ address }) => address);
   if (scan.unverified.length > 1) problems.push(`${scan.unverified.length} bloki "<!-- unverified:" - część przejścia ma najwyżej jeden.`);
   const block = scan.unverified[0];
@@ -885,7 +959,10 @@ function checkPart(context, target, partPath, text, options = {}) {
   // One part per response: the Write of part N-1 rides with the Reads of file N's bundle and
   // content, and part N comes in a response of its own, after that file's walk. The parts of
   // one batch come together, in the order of its bundles.
-  if (opts.sequential && opts.timing && number >= 2 && number <= n + 1 && !sameBatch(target, number - 1, number)) {
+  // Another window's part is another walker's response, written whenever that walker is ready;
+  // the cross-file part follows the last file of any window.
+  const sameWalker = number > n || windowOf(target, number - 1)[0] === windowOf(target, number)[0];
+  if (opts.sequential && opts.timing && number >= 2 && number <= n + 1 && sameWalker && !sameBatch(target, number - 1, number)) {
     const written = opts.writtenAt(number - 1);
     if (written !== null && opts.now - written < partGapMs) {
       problems.push(`part${pad(number - 1, digits)} zapisano ${Math.max(0, (opts.now - written) / 1000).toFixed(1)} s temu - ${timingRefusal} (razem tylko części jednej partii z paczki): ta część idzie w następnej odpowiedzi.`);
@@ -1033,7 +1110,7 @@ function rewriteCoverage(target) {
 // The fixed severities (facts.json `rules.severity`, by item address or instruction id) settle
 // each finding's severity line once every part passed: the highest one its addresses carry -
 // and the reviewer's own, when an address carries none and the reviewer's is higher. A 🔵 stays:
-// a missing spec is Missing Unit Test whichever item flags it (SKILL.md Step 4). Returns how
+// a missing spec is Missing Unit Test whichever item flags it (references/walk.md Step 4). Returns how
 // many findings changed.
 function fixedLevel(addresses, fixed, current) {
   if (current === 'missing-unit-test') return current;
@@ -1196,6 +1273,16 @@ function findContextFor(partPath) {
   const run = layout.runOf(partPath);
   if (!run) return null;
   const reportPath = path.join(run.dir, `${m[1]}.md`);
+  // The context review-context.cjs named next to the report: one file to open, not every
+  // context of the cache folder.
+  try {
+    const pointed = fs.readFileSync(path.join(path.dirname(reportPath), layout.contextPointerName), 'utf8').trim();
+    if (pointed && reContextName.test(path.basename(pointed))) {
+      const context = JSON.parse(fs.readFileSync(pointed, 'utf8'));
+      const target = (context.targets || []).find((t) => t && t.reportPath && samePath(t.reportPath, reportPath));
+      if (target) return { context, target, contextPath: pointed, mtime: fs.statSync(pointed).mtimeMs };
+    }
+  } catch {}
   const dirs = [layout.cacheDirOf(run.root, run.branchDir)];
   try {
     const cache = layout.cacheDirOf(run.root);
@@ -1392,7 +1479,7 @@ function shellPartWrite(command, cwd) {
   }
   if (parts.size === 0) return null;
   return [
-    `Polecenie NIE zostało wykonane: zapisuje ${[...parts].join(', ')} z powłoki (codeReview SKILL.md, Step 3 point 4).`,
+    `Polecenie NIE zostało wykonane: zapisuje ${[...parts].join(', ')} z powłoki (codeReview references/walk.md, Step 3 point 4).`,
     'Część zapisuje się tylko narzędziem Write, a poprawkę narzędziem Edit: zapis z powłoki (przekierowanie, heredoc, tee, cp, mv, sed -i) omija kontrolę formatu części, a długa część nie mieści się w wierszu polecenia.',
     'Zapisz całą część jednym wywołaniem Write.',
     '',
@@ -1703,7 +1790,7 @@ function shellReviewRead(command, cwd, sessionId = null, env = process.env) {
   if (hits.size === 0) return null;
   const shown = [...hits].slice(0, 5).join(', ') + (hits.size > 5 ? `, … (${hits.size} razem)` : '');
   return [
-    `Polecenie NIE zostało wykonane: wypisuje z powłoki plik recenzji: ${shown} (codeReview SKILL.md, Step 3).`,
+    `Polecenie NIE zostało wykonane: wypisuje z powłoki plik recenzji: ${shown} (codeReview references/walk.md, Step 3).`,
     'Recenzowany plik, jego diff i paczkę czyta się narzędziem Read (offset i limit dla fragmentu): wynik powłoki wraca skompresowany i bez numerów linii, które cytuje część.',
     `Szukanie (grep ze wzorcem) i liczenie (wc, grep -c) przechodzą. Jedyny odczyt z powłoki to linia dłuższa niż ${readLineLimit} znaków, którą Read ucina: sed -n '<N>p' <plik>.`,
     '',
@@ -1743,7 +1830,7 @@ function normalizePart(text) {
   const fixes = [];
   let inBlock = false;
   const lines = String(text).split('\n').map((line) => {
-    if (/^\s*<!--\s*checklist:/.test(line)) inBlock = true;
+    if (/^\s*<!--\s*(?:checklist|questions|unverified):/.test(line)) inBlock = true;
     else if (inBlock && /^\s*-->/.test(line)) inBlock = false;
     if (!inBlock) return line;
     const m = line.match(/^(\s*)\[( |x|X)\](\s+)(\S+)(.*)$/);
@@ -1772,6 +1859,51 @@ function normalizePart(text) {
   return { text: lines.join('\n'), fixes };
 }
 
+// What the script knows of a file's part before its walker writes it, put in where the walker
+// left it out: the prepared NIEZWERYFIKOWANE of each plan item that has one (no review can do
+// better, and until 0.26 every walker copied it by hand), and the coverage marker after the
+// block, whose numbers the assembly counts anyway. A part with no block, or with two, is left
+// as it is - what it is missing is the walk, not a line. Returns the text and the fixes.
+function fillPart(context, target, partPath, text, facts) {
+  const m = path.basename(partPath).match(rePartName);
+  const number = m ? Number(m[2]) : 0;
+  const file = (target.files || [])[number - 1];
+  if (!file) return { text, fixes: [] };
+  const plan = planItems(context, file);
+  const scan = scanPart(text);
+  if (!plan || scan.blocks.length !== 1) return { text, fixes: [] };
+  const { prepared } = rulesOf(facts);
+  const covered = new Set(scan.lines.flatMap((line) => (line.numbers || []).map((k) => `${line.id}#${k}`)));
+  const missing = [...plan].filter((address) => prepared[address] && !covered.has(address));
+  const lines = String(text).split('\n');
+  const open = lines.findIndex((line) => render.reChecklistOpen.test(line.trim()));
+  let close = -1;
+  for (let i = open + 1; open >= 0 && i < lines.length; i++) {
+    if (lines[i].includes('-->')) {
+      close = i;
+      break;
+    }
+  }
+  if (close < 0) return { text, fixes: [] };
+  const fixes = [];
+  const indent = (lines[open].match(/^\s*/) || [''])[0];
+  if (missing.length) {
+    // Before the closing line, or after the last item when the item and `-->` share a line.
+    const at = lines[close].trim().startsWith('-->') ? close : close + 1;
+    if (at === close + 1) lines[close] = lines[close].replace(/\s*-->\s*$/, '');
+    lines.splice(at, 0, ...missing.map((address) => `${indent}[ ] ${address} — NIEZWERYFIKOWANE: ${prepared[address]}`), ...(at === close + 1 ? [`${indent}-->`] : []));
+    fixes.push(`${compact(missing)}: dopisany gotowy werdykt z paczki`);
+  }
+  if (scan.markers.length === 0) {
+    const end = lines.findIndex((line, i) => i > open && line.includes('-->'));
+    const ticked = new Set(scanPart(lines.join('\n')).lines.filter((line) => line.ticked).flatMap((line) => (line.numbers || []).map((k) => `${line.id}#${k}`)));
+    const checked = [...plan].filter((address) => ticked.has(address)).length;
+    lines.splice(end + 1, 0, `${indent}<!-- coverage: ${file.path} ${checked}/${file.checklistTotal} -->`);
+    fixes.push('dopisany marker coverage (liczby przelicza złożenie)');
+  }
+  return { text: lines.join('\n'), fixes };
+}
+
 // Resolves to what the hook prints and its exit code; any throw on the way means exit 0.
 // A string refuses the call (exit 2); `{ context }` lets it through with a note for the model,
 // and `{ context, updatedInput }` lets it through as the normalised Write (normalizePart).
@@ -1787,6 +1919,9 @@ function hookResult(input) {
   let fixes = [];
   if (tool === 'Write') {
     ({ text, fixes } = normalizePart(String(args.content === undefined || args.content === null ? '' : args.content)));
+    const filled = fillPart(found.context, found.target, file, text, readFacts(found.target));
+    text = filled.text;
+    fixes = [...fixes, ...filled.fixes];
   } else {
     // An Edit is checked as the file it would leave behind.
     const current = fs.readFileSync(file, 'utf8');
@@ -1810,12 +1945,12 @@ function hookResult(input) {
   const draft = saveDraft(found.target, file, text);
   if (!draft) {
     return formatProblems(
-      `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview SKILL.md, Step 3 point 4). Popraw ją i zapisz całą jeszcze raz:`,
+      `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview references/walk.md, Step 3 point 4). Popraw ją i zapisz całą jeszcze raz:`,
       problems,
     );
   }
   return formatProblems(
-    `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview SKILL.md, Step 3 point 4):`,
+    `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview references/walk.md, Step 3 point 4):`,
     withDraftLines(problems, text),
     draftNotes(found.contextPath, draft, problems.every((problem) => problem.includes(timingRefusal))),
   );
@@ -1844,6 +1979,7 @@ function promoteDraft(found, draft, { timing = true, root } = {}) {
   } catch (err) {
     return { partName, state: 'refused', problems: [`nie można odczytać szkicu ${draft} (${(err && err.message) || err}).`] };
   }
+  text = fillPart(found.context, found.target, partPath, normalizePart(text).text, readFacts(found.target)).text;
   const problems = checkPart(found.context, found.target, partPath, text, { sequential: true, timing, root });
   if (problems.length > 0) return { partName, state: 'refused', problems };
   fs.writeFileSync(partPath, text);
@@ -1904,7 +2040,7 @@ function promote(args) {
   const result = promoteDraft(found, draft);
   if (result.state === 'refused') {
     process.stderr.write(formatProblems(
-      `Szkic ${path.basename(draft)} NIE został przeniesiony do ${partName}: nie przeszedł kontroli formatu (codeReview SKILL.md, Step 3 point 4):`,
+      `Szkic ${path.basename(draft)} NIE został przeniesiony do ${partName}: nie przeszedł kontroli formatu (codeReview references/walk.md, Step 3 point 4):`,
       withDraftLines(result.problems, fs.readFileSync(draft, 'utf8')),
       draftNotes(found.contextPath, draft, result.problems.every((problem) => problem.includes(timingRefusal))),
     ));
@@ -2004,7 +2140,7 @@ function assemble(argv) {
 
 module.exports = {
   renderArgsOf, withDraftLines,
-  checkPart, checkAssembly, findContextFor, hookResult, normalizePart, scanPart, planItems, compact,
+  checkPart, checkAssembly, findContextFor, hookResult, normalizePart, fillPart, checkQuestions, windowOf, scanPart, planItems, compact,
   rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellWrites, expandWord,
   promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName, noSpecConflicts,
 };

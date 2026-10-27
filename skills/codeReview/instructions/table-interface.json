@@ -2,6 +2,10 @@
   "kind": "table-interface",
   "pattern": "src/app/**/models/interfaces/<name>-(cell|source-data).interface.ts",
   "role": "Cell or source-data interface of a UI table.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#17",

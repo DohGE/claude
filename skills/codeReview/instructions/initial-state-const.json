@@ -2,6 +2,10 @@
   "kind": "initial-state-const",
   "pattern": "src/app/**/models/consts/<name>-initial-state.const.ts",
   "role": "Initial state const of a feature slice.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#12",

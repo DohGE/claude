@@ -5,8 +5,12 @@
 // (`pattern`) and carries the whole checklist a file of that kind is walked against -
 // instruction by instruction, every item keeping the `<id>#<n>` address it has in its
 // instruction. A file is reviewed against the ONE kind that describes it most
-// specifically (matchKind), so its plan is decided by that choice alone: nothing is
-// narrowed per item, per scope or per audience any more.
+// specifically (matchKind), so its plan is decided by that choice alone - except for an
+// instruction that says where it applies: `appliesTo` (path patterns) and `appliesWhen`
+// (what the reviewed lines hold) drop it from the plan of a file outside them (planOf).
+// A project's Markdown rules (`.claude/doh/local/*.md`, loadLocalInstructions) are such
+// instructions, added to every kind: measured on one monorepo (2026-10-27), a UI-wording rule
+// copied into every kind made 71% of all verdicts and no finding.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -17,7 +21,25 @@ const { factKinds, builtinAnswers, compileProbe } = require('./repo-facts.cjs');
 const reInstructionId = /^[a-z0-9][a-z0-9-]*$/;
 const reItemId = /^([a-z0-9][a-z0-9-]*)#([1-9]\d*)$/;
 // What a later definition of an instruction may restate. `items` merges per number.
-const instructionProps = ['name', 'gate', 'findings', 'preamble', 'checklistSize', 'severity'];
+const instructionProps = ['name', 'gate', 'findings', 'preamble', 'checklistSize', 'severity', 'appliesTo', 'appliesWhen'];
+// FIXED IDENTIFIERS of `appliesWhen`, each a test of the lines a file's review reports on.
+// `user-text`: the lines hold text a user reads or the key that carries it - a translation file,
+// a template, a translation-key-shaped string literal, a translate call, a label-like property
+// with a literal value. Anything else in `appliesWhen` is a regular expression.
+const reKeyLiteral = /(['"`])([A-Za-z][\w-]*(?:\.[\w-]+)+)\1/g;
+const reFileName = /\.(?:[cm]?[jt]sx?|json|html?|s?css|less|svg|png|jpe?g|gif|ico|md|txt|ya?ml)$/i;
+const contentGates = {
+  'user-text': (filePath, text) => {
+    if (/\.json$/i.test(filePath) && /(?:^|\/)(?:i18n|locales?|translations?|lang)\//.test(filePath)) return true;
+    if (/\.html?$/i.test(filePath)) return /\|\s*translate\b|\bi18n\b|>[^<>{}]*\p{L}{2}[^<>]*</u.test(text) || /\b(?:placeholder|title|alt|label|aria-label|tooltip)\s*=\s*"[^"{]*\p{L}{2}/u.test(text);
+    if (/\btranslate\b|\.instant\s*\(|\bmarker\s*\(|TranslateService/.test(text)) return true;
+    if (/\b(?:label|title|tooltip|placeholder|message|description|header|caption|text|confirmText|cancelText)\s*:\s*(['"`])[^'"`]*\p{L}{2}/u.test(text)) return true;
+    for (const m of text.matchAll(reKeyLiteral)) if (!reFileName.test(m[2])) return true;
+    return false;
+  },
+};
+// The Agent tool's effort levels a kind's `walker` may name.
+const walkerEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
 // The report's severity keys (render-report's ladder). A `severity` on an instruction
 // or on one item fixes the one every finding naming it is reported with.
 const severityLevels = ['critical', 'high', 'medium', 'low', 'missing-unit-test'];
@@ -218,9 +240,54 @@ function readItemExtras(item, address, where, warnings) {
   return Object.keys(extras).length > 0 ? extras : null;
 }
 
+// `appliesTo`: path patterns in the kinds' own grammar, matched against the whole path;
+// `appliesWhen`: contentGates names or regular expressions. A typo warns and drops the scope,
+// so the instruction applies everywhere rather than nowhere.
+function readScope(entry, where, warnings) {
+  const out = {};
+  if (entry.appliesTo !== undefined) {
+    const list = [].concat(entry.appliesTo);
+    try {
+      compilePattern(list);
+      out.appliesTo = list.map(String);
+    } catch (err) {
+      warnings.push(`${where}: "${entry.id}" appliesTo ${JSON.stringify(entry.appliesTo)} - ${err.message}; ignored, the instruction applies to every file of its kinds.`);
+    }
+  }
+  if (entry.appliesWhen !== undefined) {
+    const list = [].concat(entry.appliesWhen);
+    const bad = list.filter((gate) => {
+      if (typeof gate !== 'string' || gate.trim() === '') return true;
+      if (contentGates[gate]) return false;
+      try {
+        new RegExp(gate, 'u');
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    if (bad.length) warnings.push(`${where}: "${entry.id}" appliesWhen ${JSON.stringify(bad)} - neither ${Object.keys(contentGates).join(', ')} nor a regular expression; ignored.`);
+    else out.appliesWhen = list;
+  }
+  return out;
+}
+
+// An instruction under an old id a project renamed: read as the new one, items and all.
+function renamed(entry, id) {
+  const from = `${entry.id}#`;
+  return {
+    ...entry,
+    id,
+    items: (Array.isArray(entry.items) ? entry.items : []).map((item) => (
+      item && typeof item.id === 'string' && item.id.startsWith(from) ? { ...item, id: `${id}#${item.id.slice(from.length)}` } : item)),
+  };
+}
+
 // One instruction as a kind file carries it, validated. Items keep only what can be
 // addressed: an id of this instruction with a number, and a text - plus their extras.
-function readInstruction(entry, where, warnings) {
+// `aliases` maps an old instruction id to the one it is read as.
+function readInstruction(raw, where, warnings, aliases = new Map()) {
+  const entry = raw && typeof raw.id === 'string' && aliases.has(raw.id) ? renamed(raw, aliases.get(raw.id)) : raw;
   if (!entry || typeof entry.id !== 'string' || !reInstructionId.test(entry.id)) {
     warnings.push(`${where}: instruction id ${JSON.stringify(entry && entry.id)} is not a lowercase \`a-z0-9-\` name - the instruction is skipped.`);
     return null;
@@ -256,13 +323,160 @@ function readInstruction(entry, where, warnings) {
     warnings.push(`${where}: "${entry.id}" declares severity ${JSON.stringify(entry.severity)} - not one of ${severityLevels.join(', ')}, so it is ignored.`);
   }
   const props = {};
+  const scope = readScope(entry, where, warnings);
   for (const prop of instructionProps) {
     if (entry[prop] === undefined) continue;
     if (prop === 'findings' && entry.findings !== 'per-file') continue;
     if (prop === 'severity' && !severityLevels.includes(entry.severity)) continue;
+    if (prop === 'appliesTo' || prop === 'appliesWhen') {
+      if (scope[prop]) props[prop] = scope[prop];
+      continue;
+    }
     props[prop] = prop === 'preamble' ? [].concat(entry.preamble).map(String) : entry[prop];
   }
   return { id: entry.id, props, items, extras, numbers };
+}
+
+// A kind's `walker`: the model and effort a window made only of its files is walked with (the
+// Agent tool's `model` and `effort`), for kinds whose files need no deep reasoning.
+function readWalker(raw, where, warnings) {
+  if (raw === undefined) return null;
+  const ok = raw && typeof raw === 'object' && !Array.isArray(raw)
+    && (raw.model === undefined || (typeof raw.model === 'string' && /^[A-Za-z0-9][\w.[\]-]{0,63}$/.test(raw.model)))
+    && (raw.effort === undefined || walkerEfforts.includes(raw.effort));
+  if (!ok || (raw.model === undefined && raw.effort === undefined)) {
+    warnings.push(`${where}: "walker" ${JSON.stringify(raw)} is not { "model": "<Agent model>", "effort": "${walkerEfforts.join('|')}" } - ignored.`);
+    return null;
+  }
+  return { ...(raw.model ? { model: raw.model } : {}), ...(raw.effort ? { effort: raw.effort } : {}) };
+}
+
+// The front matter of a Markdown rule: `key: value`, or `key:` over `- item` lines; a ` #` starts
+// a comment, as in YAML.
+function frontMatterFields(text) {
+  const fields = {};
+  let list = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/(^|\s)#.*$/, '');
+    const item = line.match(/^\s*-\s*(.*?)\s*$/);
+    if (item && list) {
+      list.push(item[1].replace(/^(["'])(.*)\1$/, '$2'));
+      continue;
+    }
+    const m = line.match(/^([A-Za-z][\w-]*)\s*:\s*(.*?)\s*$/);
+    if (!m) continue;
+    const value = m[2].replace(/^(["'])(.*)\1$/, '$2');
+    if (value === '') {
+      list = [];
+      fields[m[1]] = list;
+    } else {
+      list = null;
+      fields[m[1]] = /^\[.*\]$/.test(value)
+        ? value.slice(1, -1).split(',').map((v) => v.trim().replace(/^(["'])(.*)\1$/, '$2')).filter(Boolean)
+        : value;
+    }
+  }
+  return fields;
+}
+
+// One Markdown rule as an instruction entry. The checklist is every bullet under a `##`
+// section whose heading says checklist or conventions, numbered in order and prefixed with its
+// section (`[Labels] ...`); every other paragraph of those sections, and the text before the
+// first, is the preamble; other sections (screenshots, reference material) stay in the file.
+// The same reading as the project-side generator this replaces, so an item keeps its number.
+function parseLocalMarkdown(text, fallbackId) {
+  const source = String(text).replace(/\r\n/g, '\n');
+  const fm = source.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!fm) return null;
+  const fields = frontMatterFields(fm[1]);
+  const preamble = [];
+  const items = [];
+  let paragraph = [];
+  let section = null;
+  let subsection = null;
+  let inTable = false;
+  const flush = () => {
+    if (paragraph.length) preamble.push(paragraph.join('\n'));
+    paragraph = [];
+  };
+  for (const line of source.slice(fm[0].length).split('\n')) {
+    const h2 = line.match(/^## (.+)$/);
+    const h3 = line.match(/^### (.+)$/);
+    if (h2) {
+      flush();
+      section = h2[1].trim();
+      subsection = null;
+      continue;
+    }
+    if (h3) {
+      flush();
+      subsection = h3[1].trim();
+      continue;
+    }
+    if (section && !/checklist|conventions/i.test(section)) continue;
+    const bullet = line.match(/^- (.+)$/);
+    if (section && bullet) {
+      flush();
+      items.push(`[${subsection || section}] ${bullet[1].trim()}`);
+      continue;
+    }
+    if (/^\|/.test(line)) {
+      inTable = true;
+      paragraph.push(line);
+      continue;
+    }
+    if (inTable && line.trim() === '') inTable = false;
+    if (line.trim() === '') flush();
+    else {
+      if (paragraph.length === 0 && section && !inTable) paragraph.push(`**${subsection || section}**`);
+      paragraph.push(line);
+    }
+  }
+  flush();
+  const id = typeof fields.id === 'string' && fields.id ? fields.id : fallbackId;
+  return {
+    entry: {
+      id,
+      name: typeof fields.name === 'string' && fields.name ? fields.name : id,
+      preamble,
+      checklistSize: items.length,
+      items: items.map((itemText, i) => ({ id: `${id}#${i + 1}`, text: itemText })),
+      ...(fields['applies-to'] !== undefined ? { appliesTo: [].concat(fields['applies-to']) } : {}),
+      ...(fields['applies-when'] !== undefined ? { appliesWhen: [].concat(fields['applies-when']) } : {}),
+    },
+    aliases: [].concat(fields.aliases || []).map(String).filter(Boolean),
+  };
+}
+
+// The project's Markdown rules: every `.md` of `dir` (`.claude/doh/local/`) is one instruction
+// that every kind walks where its `applies-to` and `applies-when` let it. Its id is the front
+// matter's `id`, else the file name; `aliases` are ids it was known by before, so a kind or a
+// report still naming the old one reads as this one.
+function loadLocalInstructions(dir, warnings = []) {
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((name) => name.endsWith('.md') && !/^readme\.md$/i.test(name)).sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    let parsed = null;
+    try {
+      parsed = parseLocalMarkdown(fs.readFileSync(path.join(dir, name), 'utf8'), path.basename(name, '.md').toLowerCase().replace(/[^a-z0-9-]+/g, '-'));
+    } catch {}
+    if (!parsed) {
+      warnings.push(`local/${name}: no front matter (--- name / applies-to ---) - skipped.`);
+      continue;
+    }
+    if (parsed.entry.items.length === 0) {
+      warnings.push(`local/${name}: no checklist item (bullets under a "## ...checklist..." or "## ...conventions..." section) - skipped.`);
+      continue;
+    }
+    const aliases = parsed.aliases.filter((alias) => reInstructionId.test(alias) && alias !== parsed.entry.id);
+    out.push({ ...parsed, aliases, file: path.join(dir, name), where: `local/${name}` });
+  }
+  return out;
 }
 
 // One layer's view of an instruction, gathered from every kind that carries it. The
@@ -297,13 +511,16 @@ function absorbInstruction(defs, instruction, where, warnings) {
 // `dirs` is the layered list, lowest priority first: the skill's `instructions/`,
 // then the project's `.claude/doh/instructions/` (null or a missing folder = no layer).
 // A project kind of the same name REPLACES the skill's kind - its pattern and plan
-// with it - and every other project kind is one more. An instruction a project kind
-// restates overrides, for every kind, only what it restates: its name, gate,
-// findings, preamble or size, and the texts of the item numbers it lists.
-function loadRulebook(dirs) {
+// with it, its `walker` only when it states one - and every other project kind is one more. An
+// instruction a project kind restates overrides, for every kind, only what it restates: its
+// name, gate, findings, preamble, size or scope, and the texts of the item numbers it lists.
+// `localDir` (`.claude/doh/local/`) adds the project's Markdown rules on top of both.
+function loadRulebook(dirs, { localDir = null } = {}) {
   const warnings = [];
   const kindsByName = new Map();
   const layerDefs = [];
+  const locals = localDir ? loadLocalInstructions(localDir, warnings) : [];
+  const aliases = new Map(locals.flatMap((local) => local.aliases.map((alias) => [alias, local.entry.id])));
   (Array.isArray(dirs) ? dirs : [dirs]).forEach((dir, layer) => {
     if (!dir) return;
     const { json, markdown } = rulebookFilesUnder(dir);
@@ -341,8 +558,9 @@ function loadRulebook(dirs) {
       }
       seen.set(raw.kind, where);
       const plan = [];
+      const warnedBefore = warnings.length;
       for (const entry of Array.isArray(raw.instructions) ? raw.instructions : []) {
-        const instruction = readInstruction(entry, where, warnings);
+        const instruction = readInstruction(entry, where, warnings, aliases);
         if (!instruction) continue;
         if (plan.some((step) => step.id === instruction.id)) {
           warnings.push(`${where}: "${instruction.id}" appears twice in kind "${raw.kind}" - the first one is kept.`);
@@ -355,6 +573,13 @@ function loadRulebook(dirs) {
       if (raw.itemCount !== undefined && raw.itemCount !== itemCount) {
         warnings.push(`${where}: kind "${raw.kind}" declares itemCount ${raw.itemCount} but lists ${itemCount} items.`);
       }
+      const replaced = kindsByName.get(raw.kind);
+      // A project kind with a skill kind's name and a fact kind this version lacks is, in practice,
+      // a copy of an older version's kind: it keeps replacing every later fix of the skill's.
+      if (layer > 0 && replaced && warnings.slice(warnedBefore).some((w) => w.includes('names no known fact kind'))) {
+        warnings.push(`${where}: kind "${raw.kind}" replaces the skill's kind of the same name and names fact kinds this doh version does not have - it looks like a copy of an older version's kind. Delete it (a project rule that only adds to every kind belongs in .claude/doh/local/*.md) or copy the current one.`);
+      }
+      const walker = raw.walker === undefined && replaced ? replaced.walker : readWalker(raw.walker, where, warnings);
       kindsByName.set(raw.kind, {
         name: raw.kind,
         pattern: raw.pattern,
@@ -364,11 +589,29 @@ function loadRulebook(dirs) {
         variants,
         plan,
         itemCount,
+        walker,
         file,
         layer,
       });
     }
   });
+
+  // The Markdown rules: one layer above both, and a step of every kind that lacks it (a kind
+  // copied with the rule already appended keeps its own step, now scoped like the rule).
+  if (locals.length > 0) {
+    const defs = new Map();
+    layerDefs.push(defs);
+    for (const local of locals) {
+      const instruction = readInstruction(local.entry, local.where, warnings);
+      if (!instruction || instruction.numbers.length === 0) continue;
+      absorbInstruction(defs, instruction, local.where, warnings);
+      for (const kind of kindsByName.values()) {
+        if (kind.plan.some((step) => step.id === instruction.id)) continue;
+        kind.plan.push({ id: instruction.id, numbers: instruction.numbers });
+        kind.itemCount += instruction.numbers.length;
+      }
+    }
+  }
 
   // A layer restating an item replaces it whole: a probe written for the skill's text
   // need not fit the project's.
@@ -394,6 +637,7 @@ function loadRulebook(dirs) {
       preamble: props.preamble || [],
       severity: props.severity || null,
       size: Number.isInteger(props.checklistSize) ? props.checklistSize : Math.max(0, ...items.keys()),
+      scope: compileScope(props),
       items,
       extras,
     });
@@ -415,6 +659,37 @@ function loadRulebook(dirs) {
     }
   }
   return { kinds: [...kindsByName.values()], instructions, warnings };
+}
+
+// An instruction's validated `appliesTo` and `appliesWhen` as tests, null when it has neither.
+function compileScope(props) {
+  const paths = props.appliesTo ? compilePattern(props.appliesTo) : null;
+  const when = props.appliesWhen
+    ? props.appliesWhen.map((gate) => (contentGates[gate] ? contentGates[gate] : ((re) => (_, text) => re.test(text))(new RegExp(gate, 'u'))))
+    : null;
+  return paths || when ? { paths, when, appliesTo: props.appliesTo || null, appliesWhen: props.appliesWhen || null } : null;
+}
+
+// Whether `instruction` applies to the file at `relPath` whose reviewed lines are `text` (null
+// when it has none to read: deleted, binary): every path pattern is matched against the whole
+// path, and a content test needs the text.
+function appliesTo(instruction, relPath, text) {
+  const scope = instruction && instruction.scope;
+  if (!scope) return true;
+  const normalized = String(relPath).replace(/\\/g, '/');
+  if (scope.paths && !scope.paths.some((variant) => variant.regex.test(normalized))) return false;
+  if (scope.when) return typeof text === 'string' && scope.when.some((test) => test(normalized, text));
+  return true;
+}
+
+// The kind a file is walked as, without the instructions that do not apply to it: the kind itself
+// when every step applies, else a copy with the shorter plan and `skipped`, the ids left out.
+function planOf(kind, relPath, text, instructions) {
+  if (!kind) return kind;
+  const plan = kind.plan.filter((step) => appliesTo(instructions.get(step.id), relPath, text));
+  if (plan.length === kind.plan.length) return kind;
+  const skipped = kind.plan.filter((step) => !plan.includes(step)).map((step) => step.id);
+  return { ...kind, plan, itemCount: plan.reduce((n, step) => n + step.numbers.length, 0), skipped };
 }
 
 // The severity every finding naming `<id>#<n>` is reported with, or null when the
@@ -504,4 +779,5 @@ function renderNumbered(instruction, numbers) {
 module.exports = {
   reInstructionId, formatItemSpec, expandAlternations, compilePattern, loadRulebook, matchKind, renderNumbered,
   severityLevels, severityRank, unverifiedReasons, fixedSeverity, lightRulebook,
+  contentGates, walkerEfforts, loadLocalInstructions, parseLocalMarkdown, appliesTo, planOf,
 };

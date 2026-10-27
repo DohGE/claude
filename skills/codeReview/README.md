@@ -25,8 +25,9 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview [target] --no-windows` | any of the above, but no sub-agent walks a window of files: the invoking conversation walks every file itself (for a session that cannot dispatch one; see [Token cost](#token-cost)) |
 | `/codeReview [target] --no-dedup-items` | any of the above, but every bundle shows every item in full, instead of an item an earlier bundle already showed arriving as a reference to that bundle (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
-| `/codeReview [target] --walker-model=<model>` | any of the above, but every window walker is dispatched on that model (the Agent tool's `model`, e.g. `sonnet`) instead of inheriting this session's |
-| `/codeReview [target] --walker-effort=<low\|medium\|high\|max>` | any of the above, but every window walker's prompt carries that thinking directive |
+| `/codeReview [target] --walker-model=<model>` | any of the above, but every window walker and the cross-file agent are spawned on that model (e.g. `sonnet`) instead of inheriting this session's; a window of light kinds keeps its own setting (see [Token cost](#token-cost)) |
+| `/codeReview [target] --walker-effort=<low\|medium\|high\|xhigh\|max>` | any of the above, but every walker is spawned with that effort |
+| `/codeReview [target] --parallel=<n>` | any of the above, but `n` windows (1-6, default 3) are walked at once |
 
 A branch list is split on `,` and `;`. Git allows both characters inside a ref name, so a branch
 literally called `feature/a,b` cannot be named in that list — it would be read as two branches and
@@ -96,20 +97,31 @@ Inside a batch every file is still walked on its own, one after another, against
 The context lists the batches in `target.batches`, and a bundle's `partia:` line names the files of its batch.
 `--no-batch` makes every file a batch of its own.
 
-A large target is walked in windows: runs of whole batches that one `doh:codereview-walker` sub-agent walks, one window after another, never two at once.
+A large target is walked in windows: runs of whole batches that one `doh:codereview-walker` sub-agent walks, `--parallel` of them at once (3 by default).
 A file's walk adds about 14,000 tokens to a conversation — the thinking blocks of a response stay in it until the run ends — plus a third of the characters its Reads bring, and a conversation that grows past about 165,000 tokens is compacted: it loses every bundle it read, and every response re-reads all of it.
-A window holds at most 100,000 tokens of walk and 6 files, the cuts falling so that the windows come out even; a target whose whole walk fits one window is walked in the invoking conversation, which then dispatches nothing.
-The walker is sent the path of its brief (`<workDir>/windowNN.md`) and nothing else: the brief names the lines of `SKILL.md` to read (Step 3 up to the one-time part), the target settings the steps name, and every batch of the window with its parts and Reads.
-The last bundle of a window ends its `## Dalej` with an instruction to stop: the walker replies with one line, `WINDOW DONE <first>-<last>`, and the invoking conversation goes on with the cross-file pass and the assembly.
+A window holds at most 130,000 tokens of walk and 10 files, the cuts falling so that the windows come out even (one more window rather than a one-file stub); a target whose whole walk fits one window is walked in the invoking conversation, which then dispatches nothing but the cross-file pass.
+The windows are independent: each walker writes the parts of its own files, in order, and the part check asks a part only for the parts before it in its own window, and holds the one-response gap only between two parts of one window.
+A kind can name the walker its files need: the models kinds (enums, interfaces, types, constants, model barrels) declare `"walker": { "model": "sonnet", "effort": "medium" }`, their files share windows only with their like, and such a window is spawned with that setting; every other window takes `--walker-model` / `--walker-effort`, or inherits. A project kind replacing a skill kind keeps its `walker` unless it states one.
+Measured on a 115-file review (2026-10-27), before 0.26: 63 windows walked one after another took 94 minutes, and the invoking conversation paid 26.3M cache-read tokens just to send them, about as much as all the walkers together.
+So a session with the Workflow tool hands the whole walk to it: `target.workflow` is the call (`scriptPath` = `workflows/review-windows.js`, `args` = the work folder, the lanes, every window's range and setting), the workflow walks the windows side by side, starts a stopped walker once more, then sends the cross-file pass to a fresh walker, and the invoking conversation hears from it once.
+Without the Workflow tool the invoking conversation dispatches the windows with the Agent tool, `target.parallel` at once, and waits without ending its turn (`scripts/wait-part.cjs --path=<lastPart>`, repeated for every running window, returns when the first is on disk).
+The walker is sent the path of its brief (`<workDir>/windowNN.md`) and nothing else: the brief names the target settings the steps name and every batch of the window with its parts and Reads.
+The rules of the walk are in the walker's system prompt: `agents/codereview-walker.md` carries `references/walk.md` (Step 3, the report format of Step 4, the rationalizations), copied by `scripts/sync-walker.cjs` and checked by a test, so every walker starts from the same cached prompt instead of reading 70 kB of `SKILL.md` as its first tool call.
+The last bundle of a window ends its `## Dalej` with an instruction to stop: the walker replies with one line, `WINDOW DONE <first>-<last>`.
 A window that does not come back done — a refused dispatch, a refused Write, `WINDOW STOPPED` — is walked by the invoking conversation from its first missing part, and a session with no Agent tool passes `--no-windows`.
-The context lists the windows in `target.windows`, as `{ files: [first, last], brief }`; the resume of an interrupted run builds them from the files still to walk, and a resume that carries drafts of refused parts has none.
+The context lists the windows in `target.windows`, as `{ files: [first, last], brief, lastPart, model, effort }`; the resume of an interrupted run builds them from the files still to walk, and a resume that carries drafts of refused parts has none.
+Walkers side by side share a session id: item dedup (below) keys what was shown by the agent id a hook input carries, and is off for parallel windows whose hook inputs carry none.
+
+The cross-file pass is a fresh walker's too: `target.crossBriefPath` (`<workDir>/cross-file.brief.md`) sends it to the cross bundle and `references/cross-file.md`, and its part must carry a `<!-- questions:` block with a verdict for each of the five questions and each jscpd candidate (`pytanie#1-5`, `jscpd#<n>`): until 0.26 an empty cross-file part passed the check.
+
+The context script writes the report header itself, and the bundle's `## Zapis części` ends with the part's checklist skeleton — the plan's addresses in plan order, the pointed lines already in place, `…` for each verdict — while the part check writes in a prepared verdict (`gotowy werdykt`) or a coverage marker the walker left out.
 
 Item dedup shortens every bundle read after the first: an item an earlier bundle of the run already showed arrives as a reference to that bundle, while the facts and probe hits under it stay this file's own.
 A compaction resets it, so the bundles read after one show every item in full again.
 It is on by default since the A/B run of 2026-10-01 (`scripts/score-review.cjs --compare`); `--no-dedup-items` turns it off.
 
-A compaction re-attaches only the head of `SKILL.md`, so that file is ordered by need rather than by step.
-What the walk of every file needs comes first; Steps 1–2, which run once, stand after a `<!-- one-time:start -->` marker; the cross-file pass and the assembly are `references/cross-file.md` and `references/assembly.md`, read when the run reaches them.
+A compaction re-attaches only the head of `SKILL.md`, so that file is ordered by need rather than by step, and since 0.26 it holds the orchestration only (21 kB instead of 86 kB): it fits in the re-attached head whole.
+The walk is `references/walk.md`, read only by a conversation that walks a file itself; Steps 1–2, which run once, stand after a `<!-- one-time:start -->` marker; the cross-file pass and the assembly are `references/cross-file.md` and `references/assembly.md`, read when the run reaches them.
 After a compaction the plugin's hook names where the run stands and what to read again (see [Mechanics](#mechanics)).
 
 Every MCP server of a session costs tokens on every request — its tool names and its instructions — while the review calls no MCP tool but headroom's `headroom_retrieve`, for a tool output the headroom proxy compressed.
@@ -209,6 +221,28 @@ A reviewed project can also carry its own kinds in `<project>/.claude/doh/instru
 
 Markdown files in that folder are the rulebook format from before kinds existed: they are ignored, and named in a warning.
 The folder is reported as `projectInstructionsDir` in the context JSON, the implementNewFeature coding rulebook layers it the same way, and the `.claude/doh/.gitignore` written for run artifacts explicitly un-ignores it so the rulebook can be committed and shared.
+
+A project rule that applies across kinds is a Markdown file in `.claude/doh/local/`, not a copy of every kind: each `*.md` there is one instruction, walked by every kind where its front matter lets it.
+
+```
+---
+name: UI naming, wording and i18n labels
+id: naming-convention          # optional, else the file name
+aliases: [naming-covention]    # ids it was known by: a kind or report naming one reads as this
+applies-to:                    # path patterns, the kinds' own grammar, matched against the whole path
+  - "**/*.component.html"
+  - "**/models/**/*.ts"
+applies-when: user-text        # optional: what the reviewed lines must hold
+---
+## Checklist
+- an item, numbered `<id>#1`, `#2`, … in order
+```
+
+The checklist is every bullet under a `##` section whose heading says checklist or conventions (prefixed with its `###` subsection), and everything else of those sections is the preamble.
+`applies-when` takes `user-text` — the lines hold text a user reads or the key carrying it: a translation file, a template with text, a translation-key-shaped literal, a translate call, a label-like property with a literal — or a regular expression; it reads the lines the review reports on (all of an added file).
+A kind instruction can carry the same scope as `appliesTo` and `appliesWhen`.
+Measured on a monorepo (2026-10-27): a UI-wording rule appended to every kind by a project script made 71% of all verdicts of a 115-file review and no finding, and its 87 items pushed every plan past the batch limit; scoped, a reducer walks 43 items instead of 130.
+A project kind that replaces a skill kind and names a fact kind this version lacks is reported as a likely copy of an older version's kind.
 
 ### Matching
 
@@ -321,6 +355,7 @@ The terminal summary names the base and which of the three steps picked it.
 Every target is scanned for copy-paste by [jscpd](https://github.com/kucherenko/jscpd) before the review starts, and every duplication finding — whether jscpd listed it or the review found it — is reported as 🔴 **High**.
 
 - **What is scanned** — the whole reviewed revision, not only the changed files, because a copy of an untouched file is found only when that file is scanned too: the branch's commit, the index for `staged`, the working tree for `folder` (tracked and untracked files, not the ignored ones). The revision is exported to a temporary folder outside the repository and deleted afterwards; the checkout, the index and every ref stay as they were. Paths the review skips and `.snap` files are left out.
+  In a repository of several projects (a folder with `package.json`, `project.json`, `ng-package.json`, `tsconfig.app.json` or `tsconfig.lib.json`, or a `root` of `angular.json`/`workspace.json`), only the projects holding the reviewed files and the ones their imports reach are scanned (`scripts/review-scope.cjs`), and the repository facts read the same part: on the monorepo above, 4 796 fact files instead of a 5 000-file cap that made every fact a mere hint. A reviewed file another project imports through a tsconfig alias from outside that part keeps hint-only facts; a reviewed script outside every project means the whole repository, as before. The context's warnings name the projects read.
 - **What is kept** — only the clone pairs the diff wrote: one side has to be at least half made of changed lines, and the block has to exist at least three times, because a duplication is a finding from its third copy.
   The copies of a block are what it was paired with and what those were paired with — two steps, the pairs the diff did not touch included, never the whole chain of overlapping blocks behind them: on an Angular monorepo that chain put a median of 9 337 "copies" behind each of 50 candidates, 59 MB of context and bundles no Read could open.
   A block with more than 12 copies is boilerplate (a TestBed setup, a store skeleton) and is not a candidate — the context's warnings count them — and a candidate names at most 3 of its copies, with `copies` giving the total.

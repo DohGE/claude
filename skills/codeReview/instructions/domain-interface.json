@@ -2,6 +2,10 @@
   "kind": "domain-interface",
   "pattern": "src/app/**/models/interfaces/<name>.interface.ts",
   "role": "Domain model interface of an area, separate from the API contract.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#15",

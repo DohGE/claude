@@ -2,6 +2,10 @@
   "kind": "api-interface",
   "pattern": "src/app/**/models/interfaces/<endpoint>-(request|response|payload|dto).interface.ts",
   "role": "Request/response interfaces mirroring one API endpoint.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "models#13",

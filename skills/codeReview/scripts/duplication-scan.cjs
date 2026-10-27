@@ -2,7 +2,8 @@
 
 // Copy/paste detection for the revision a review covers. jscpd scans the WHOLE
 // reviewed tree - a copy of an untouched file is found only when that file is
-// scanned too - and the clone pairs are then narrowed to the ones the diff wrote:
+// scanned too - or, in a repository of several projects, the projects the review
+// reaches (review-scope.cjs), and the clone pairs are then narrowed to the ones the diff wrote:
 // a pair survives when one side is at least half made of changed lines and the
 // block exists at least three times. That side is the anchor the reviewer reports
 // on, the other copies the sources it repeats.
@@ -194,10 +195,11 @@ function git(project, args, { env, input } = {}) {
 // a staged review reads the real index, which checkout-index writes back only when
 // asked to (`-u`); a folder review copies the working tree as git sees it - tracked
 // and untracked files, not the ignored ones.
-function exportTree({ project, source, workDir, isSkipped = () => false }) {
+// `scope` (review-scope.cjs) narrows it to the projects the review reaches; null is the whole tree.
+function exportTree({ project, source, workDir, isSkipped = () => false, scope = null }) {
   const root = path.join(workDir, 'tree');
   fs.mkdirSync(root, { recursive: true });
-  const keep = (p) => p !== '' && !isSkipped(p) && !isSnapshot(p);
+  const keep = (p) => p !== '' && !isSkipped(p) && !isSnapshot(p) && (!scope || scope.has(p));
   if (source.workTree) {
     const listed = new Set(git(project, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split('\0').filter(keep));
     let count = 0;
@@ -275,11 +277,11 @@ function runJscpd(root, workDir, invocation = jscpdInvocation()) {
 // One target's scan. Never throws: a scan that cannot run (no npx, offline on the
 // first run, a ref that does not resolve) comes back as `{ error }` and the review
 // goes on without it.
-function scanDuplicates({ project, source, files, isSkipped, run = runJscpd }) {
+function scanDuplicates({ project, source, files, isSkipped, scope = null, run = runJscpd }) {
   if (files.length === 0) return { candidates: [], omitted: 0 };
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'doh-cpd-'));
   try {
-    const { root, count } = exportTree({ project, source, workDir, isSkipped });
+    const { root, count } = exportTree({ project, source, workDir, isSkipped, scope });
     const stats = {};
     const found = count === 0 ? [] : pickCandidates(run(root, workDir).duplicates, files, stats);
     return {

@@ -348,3 +348,88 @@ test('a prepared unverified verdict must open with a NIEZWERYFIKOWANE reason', (
   assert.strictEqual(extras.has(3), false);
   assert.strictEqual(rules.warnings.length, 2, rules.warnings.join('\n'));
 });
+
+// A project's Markdown rule, as `.claude/doh/local/*.md` carries it.
+const localRule = (front, body = '') => `---\n${front}\n---\nPreamble line.\n\n## Checklist\n\n### Labels\n\n- one\n- two\n\n## Screenshots\n\n- not an item\n${body}`;
+
+test('a local Markdown rule: front matter, numbered items under the checklist sections, the rest preamble', () => {
+  const parsed = rulebook.parseLocalMarkdown(localRule('name: UI wording\nid: ui-wording\naliases:\n  - ui-wordnig\napplies-to:\n  - "**/*.component.ts"\napplies-when: user-text'), 'file-name');
+  assert.strictEqual(parsed.entry.id, 'ui-wording');
+  assert.strictEqual(parsed.entry.name, 'UI wording');
+  assert.deepStrictEqual(parsed.entry.items, [{ id: 'ui-wording#1', text: '[Labels] one' }, { id: 'ui-wording#2', text: '[Labels] two' }]);
+  assert.deepStrictEqual(parsed.entry.appliesTo, ['**/*.component.ts']);
+  assert.deepStrictEqual(parsed.entry.appliesWhen, ['user-text']);
+  assert.deepStrictEqual(parsed.aliases, ['ui-wordnig']);
+  assert.deepStrictEqual(parsed.entry.preamble, ['Preamble line.']);
+  assert.strictEqual(rulebook.parseLocalMarkdown('no front matter', 'x'), null);
+  assert.strictEqual(rulebook.parseLocalMarkdown(localRule('name: n'), 'file-name').entry.id, 'file-name', 'the file name without an id');
+});
+
+test('local rules join every kind, scoped per file by appliesTo and appliesWhen', (t) => {
+  const skill = writeLayer(tempDir(t, 'rb-skill-'), [
+    kind('component', '<name>.component.ts', [instruction('general', ['a', 'b'])]),
+    kind('reducer', '<name>.reducer.ts', [instruction('general', ['a', 'b'])]),
+  ]);
+  const local = tempDir(t, 'rb-local-');
+  fs.writeFileSync(path.join(local, 'ui-wording.md'), localRule('name: UI wording\napplies-to:\n  - "**/*.component.ts"\napplies-when: user-text'));
+  const rules = rulebook.loadRulebook([skill], { localDir: local });
+  assert.deepStrictEqual(rules.warnings, []);
+  const component = rulebook.matchKind(rules, 'src/app/x.component.ts').kind;
+  assert.deepStrictEqual(component.plan.map((step) => step.id), ['general', 'ui-wording']);
+  assert.strictEqual(component.itemCount, 4);
+  const plan = (p, text) => rulebook.planOf(rulebook.matchKind(rules, p).kind, p, text, rules.instructions);
+  assert.strictEqual(plan('src/app/x.component.ts', "label: 'labels.save'"), component, 'a file the rule applies to walks the kind as it is');
+  const quiet = plan('src/app/x.component.ts', 'const n = 1;');
+  assert.deepStrictEqual([quiet.itemCount, quiet.skipped], [2, ['ui-wording']], 'no text a user reads: the rule drops out');
+  assert.deepStrictEqual(plan('src/app/x.reducer.ts', "label: 'labels.save'").skipped, ['ui-wording'], 'outside applies-to: the rule drops out');
+  assert.deepStrictEqual(plan('src/app/x.component.ts', null).skipped, ['ui-wording'], 'a file with nothing to read');
+});
+
+test('an alias reads a kind that still names the old id as the rule itself', (t) => {
+  const skill = writeLayer(tempDir(t, 'rb-skill-'), [kind('component', '<name>.component.ts', [instruction('general', ['a'])])]);
+  // A copy generated before the rename: the old id, with the rule's items.
+  const project = writeLayer(tempDir(t, 'rb-project-'), [
+    kind('component', '<name>.component.ts', [instruction('general', ['a']), instruction('ui-wordnig', ['[Labels] one', '[Labels] two'])]),
+  ]);
+  const local = tempDir(t, 'rb-local-');
+  fs.writeFileSync(path.join(local, 'ui-wording.md'), localRule('name: UI wording\nid: ui-wording\naliases: [ui-wordnig]\napplies-to:\n  - "**/shared/**/*.ts"'));
+  const rules = rulebook.loadRulebook([skill, project], { localDir: local });
+  const component = rulebook.matchKind(rules, 'src/app/x.component.ts').kind;
+  assert.deepStrictEqual(component.plan.map((step) => step.id), ['general', 'ui-wording'], 'one step, under the new id');
+  assert.ok(!rules.instructions.has('ui-wordnig'));
+  assert.deepStrictEqual(rules.instructions.get('ui-wording').scope.appliesTo, ['**/shared/**/*.ts'], 'and the rule\'s scope binds the copied step too');
+  assert.deepStrictEqual(rulebook.planOf(component, 'src/app/x.component.ts', 'x', rules.instructions).skipped, ['ui-wording']);
+});
+
+test('the user-text gate: translations, templates, translation keys, label literals', () => {
+  const gate = rulebook.contentGates['user-text'];
+  assert.ok(gate('src/assets/i18n/en.json', '{}'));
+  assert.ok(gate('a.component.html', '<button>{{ "labels.save" | translate }}</button>'));
+  assert.ok(gate('a.component.html', '<span>Zapisz</span>'));
+  assert.ok(!gate('a.component.html', '<div class="x"><span>{{ value }}</span></div>'));
+  assert.ok(gate('a.const.ts', "export const labels = { [S.on]: 'labels.online' };"));
+  assert.ok(gate('a.ts', "this.notify({ message: 'Saved' });"));
+  assert.ok(!gate('a.enum.ts', "export enum S { online = 'online' }"));
+  assert.ok(!gate('a.ts', "import { x } from './models/x.const';\nconst f = 'data.json';"));
+});
+
+test('a kind\'s walker setting is validated, and a project kind replacing it keeps it unless it states its own', (t) => {
+  const skill = writeLayer(tempDir(t, 'rb-skill-'), [
+    kind('enum', '<name>.enum.ts', [instruction('models', ['a'])], { walker: { model: 'sonnet', effort: 'medium' } }),
+    kind('pipe', '<name>.pipe.ts', [instruction('models', ['a'])], { walker: { effort: 'huge' } }),
+  ]);
+  const project = writeLayer(tempDir(t, 'rb-project-'), [kind('enum', '<name>.enum.ts', [instruction('models', ['a'])])]);
+  const rules = rulebook.loadRulebook([skill, project]);
+  assert.deepStrictEqual(rulebook.matchKind(rules, 'a.enum.ts').kind.walker, { model: 'sonnet', effort: 'medium' });
+  assert.strictEqual(rulebook.matchKind(rules, 'a.pipe.ts').kind.walker, null);
+  assert.ok(rules.warnings.some((w) => w.includes('"walker"')), rules.warnings.join('\n'));
+});
+
+test('a project kind copied from an older version is named as such', (t) => {
+  const skill = writeLayer(tempDir(t, 'rb-skill-'), [kind('enum', '<name>.enum.ts', [instruction('models', ['a'])])]);
+  const old = instruction('models', ['a']);
+  old.items[0].facts = ['i18n-invalid-json'];
+  const project = writeLayer(tempDir(t, 'rb-project-'), [kind('enum', '<name>.enum.ts', [old])]);
+  const rules = rulebook.loadRulebook([skill, project]);
+  assert.ok(rules.warnings.some((w) => w.includes('looks like a copy of an older version\'s kind')), rules.warnings.join('\n'));
+});
