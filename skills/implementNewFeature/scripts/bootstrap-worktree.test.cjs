@@ -69,13 +69,13 @@ test('a package.json with no lockfile is a warning, not a silent skip', (t) => {
   assert.deepStrictEqual(result.errors, []);
 });
 
-test('the first task works in the project checkout, so nothing is installed or copied', (t) => {
+test('the project checkout is no task\'s root - not even the only task\'s - so bootstrapping it is an error', (t) => {
   const project = tempDir(t, 'bw-proj-');
   writeFile(project, '.env', 'ROOT=1\n');
   const result = bw.bootstrap({ project, root: project });
-  assert.deepStrictEqual(result.envFiles, [], 'copying a file onto itself is not a bootstrap');
-  assert.match(result.warnings.join(' '), /project checkout itself/);
-  assert.deepStrictEqual(result.errors, []);
+  assert.deepStrictEqual(result.envFiles, [], 'nothing is copied onto itself');
+  assert.strictEqual(result.installed, false, 'nor installed over the user\'s node_modules');
+  assert.match(result.errors.join(' '), /is the project's checkout - every task works in a worktree of its own/);
 });
 
 test('a root that is not there is an error of the script, not a silent success', (t) => {

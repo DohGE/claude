@@ -243,7 +243,7 @@ that still holds a placeholder; a hand-made one hands `{{ROOT}}` to the agent as
 |---|---|
 | `{{SESSION}}` | `<SESSION>/tasks/<taskId>` — the task's own artifacts, not the run root |
 | `{{TASK_ID}}` | `t1`, `t2`, … — MANDATORY in every `/api/state` body the agent posts |
-| `{{ROOT}}` | the task's working directory. Before step 4 it is `PROJECT`; step 4 fixes it to `PROJECT` or to the task's worktree |
+| `{{ROOT}}` | the task's working directory. Before step 4 it is `PROJECT`, which agents only read; step 4 fixes it to the task's own worktree — every task gets one, the only task of a run too |
 | `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}` | the values from Setup (points 3 and 1) |
 | `{{EFFORT}}` | the thinking directive for THIS step, from the table in "Model and effort" — often the empty string, which makes the paragraph disappear |
 | `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation` — all but `story.md`, which the story agent writes in English whatever it is. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on |

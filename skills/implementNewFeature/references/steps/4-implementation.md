@@ -8,21 +8,20 @@
    without its `origin/`, `main`, `master`, then the same three under `origin/`. A branch that
    already exists is checked out as it is, with its own commits; its `BASE` is still the main
    branch found that way, the one its pull request will target.
-   Every task's orchestrator picks on its own, so the project's checkout is the server's to hand
-   out: POST `{"taskId":"T","root":"<PROJECT>"}` first.
-   - `200` → `ROOT = PROJECT`, T's for the rest of the run, and
-     `git -C "<ROOT>" checkout -b <branch> <BASE>` (or `checkout <branch>` when it already exists).
-     When git refuses because of local changes, go to
-     the failure protocol with its message — never stash, reset or discard the user's work.
-   - `409` (`root … is task tN's`: another task has it) →
-     `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<slug>-<taskId>`,
-     where `<slug>` is the branch with `/` and non-ASCII replaced by `-`. The task id is what keeps
-     the path unique: two different branches can slugify to the same string, and `worktree add`
-     would then fail on an existing directory. Create it with
-     `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch> <BASE>`.
-     When the branch already exists and is not checked out anywhere, use
-     `git -C "<PROJECT>" worktree add "<ROOT>" <branch>`. When it IS checked out elsewhere, go to
-     the failure protocol with a report naming the conflict.
+   EVERY task works in a git worktree of its own — the first one too, and the only task of a run
+   too. The project's checkout is the user's: the pipeline never switches its branch and never
+   writes into it, so whatever the user has checked out, staged or left uncommitted there stays as
+   it was, and their editor and dev server keep running on it for the whole run. The server and
+   the bootstrap below both refuse `ROOT = PROJECT`.
+   `ROOT = <parent of PROJECT>/<basename of PROJECT>-worktrees/<slug>-<taskId>`,
+   where `<slug>` is the branch with `/` and non-ASCII replaced by `-`. The task id is what keeps
+   the path unique: two different branches can slugify to the same string, and `worktree add`
+   would then fail on an existing directory. Create it with
+   `git -C "<PROJECT>" worktree add "<ROOT>" -b <branch> <BASE>`.
+   When the branch already exists and is not checked out anywhere, use
+   `git -C "<PROJECT>" worktree add "<ROOT>" <branch>`. When it IS checked out elsewhere — the
+   project's own checkout included — go to the failure protocol with a report naming the
+   conflict: never switch the user's checkout to another branch to free it.
    A fresh worktree has neither `node_modules` nor the untracked local config the app needs. Bootstrap it before spawning anything, with ONE call (Bash tool):
 
        node "<SKILL_DIR>/scripts/bootstrap-worktree.cjs" --root="<ROOT>" --project="<PROJECT>"
@@ -36,9 +35,8 @@
    dependency's `.env.example` long before it finds the project's own.
    `errors[]` non-empty → failure protocol for step 4. `warnings[]` is not a failure: a failed or
    skipped install means step 5 cannot run the suites, and it is reported, not retried. Keep
-   `installed` and say so in the summary. When `ROOT` is `PROJECT` the call is a no-op that says so —
-   that checkout already has both. Playwright is unaffected either way: the pipeline keeps using
-   the plugin's own installation in `SKILL_DIR`.
+   `installed` and say so in the summary. Playwright is unaffected: the pipeline keeps using the
+   plugin's own installation in `SKILL_DIR`.
    Then ONE call for both records, `BASE` without its `origin/`:
    `node "<SKILL_DIR>/scripts/post-state.cjs" --port PORT '{"taskId":"T","root":"<ROOT>","base":"<BASE>"}' '{"taskId":"T","step":4,"status":"in_progress","activeStep":4,"progress":0}'`
    — the summary names `root`, and the pull request targets `base`.

@@ -57,14 +57,12 @@ function bootstrap(options) {
     result.errors.push(`Not a directory: ${root}`);
     return result;
   }
-  // `ROOT === PROJECT` is the first task of a run: it works in the user's own
-  // checkout, which already has its dependencies and its `.env*` files. Installing
-  // over them would be a long no-op at best and a `npm ci` wiping a locally patched
-  // `node_modules` at worst, and copying a file onto itself is nothing at all.
-  if (root === project) {
-    result.installed = fs.existsSync(path.join(root, 'node_modules'));
-    result.manager = detectPackageManager(root);
-    result.warnings.push('The task works in the project checkout itself, so nothing was installed or copied.');
+  // The project's checkout is the user's: every task works in a worktree of its own, the only
+  // task of a run too (references/steps/4-implementation.md). A root that IS the checkout is an
+  // orchestrator that skipped the worktree - installing there would be an `npm ci` over the
+  // user's `node_modules`, and copying a file onto itself is nothing at all.
+  if (path.relative(project, root) === '') {
+    result.errors.push(`${root} is the project's checkout - every task works in a worktree of its own (git worktree add), even the only task of a run.`);
     return result;
   }
 

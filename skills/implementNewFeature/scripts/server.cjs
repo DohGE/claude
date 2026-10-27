@@ -889,10 +889,14 @@ function createApp(sessionDir, opts = {}) {
     }
     const task = findTask(body.taskId);
     if (!task) throw new Error(`unknown task ${body.taskId}`);
-    // Every task's orchestrator picks its working directory on its own (SKILL.md step 4), so the
-    // project's checkout is claimed here, where two of them cannot both win it: a root another
-    // task holds is refused, and the one refused takes a worktree.
+    // Every task works in a worktree of its own, the only task of a run too (SKILL.md step 4): the
+    // project's checkout stays the user's - its branch, its index, its uncommitted work - and no
+    // task may take it. A root another task holds is refused as well: two orchestrators given one
+    // worktree path.
     if (body.root != null) {
+      if (rootKey(body.root) === rootKey(projectDir)) {
+        throw Object.assign(new Error(`root ${body.root} is the project's checkout - every task works in a worktree of its own`), { status: 409 });
+      }
       const holder = state.tasks.find(t => t.id !== task.id && t.root && rootKey(t.root) === rootKey(body.root));
       if (holder) throw Object.assign(new Error(`root ${body.root} is task ${holder.id}'s`), { status: 409 });
     }

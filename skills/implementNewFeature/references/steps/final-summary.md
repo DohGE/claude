@@ -56,7 +56,7 @@ file when its waiter next says `SERVER_GONE` (or at "Attach"): the same flow, fr
    `node "<SKILL_DIR>/scripts/create-pr.cjs" --root="<ROOT>" --head="<branch>" --base="<BASE>" --title="<the message's first line>" --body-file="<SESSION>/tasks/T/pr-body.md"`
    → one line, a FIXED IDENTIFIER: `PR_CREATED <url>`, `PR_EXISTS <url>` (the branch already had
    one — nothing new was opened) or `PR_FAILED <reason>` (say it; the commit and the push stand).
-6. When `ROOT` is a worktree (not `PROJECT`):
+6. Remove T's worktree (`ROOT` is always one — step 4):
    `node "<SKILL_DIR>/scripts/remove-worktree.cjs" --project="<PROJECT>" --root="<ROOT>"` →
    `WORKTREE_REMOVED <root>`, or `WORKTREE_KEPT <reason>` (uncommitted work, or git refused — say
    so; never `--force`). It unlinks every link inside the worktree first, so a `node_modules`

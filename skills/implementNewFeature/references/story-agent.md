@@ -6,8 +6,8 @@ Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Ste
 
 {{EFFORT}}
 
-`{{ROOT}}` is this task's working directory: the repository itself for the first task in a run,
-and a dedicated `git worktree` for every other one. `{{ROOT}}` and `{{PROJECT}}` are named above
+`{{ROOT}}` is this task's working directory: a `git worktree` of the repository that is this
+task's alone — every task has one, the only task of a run too. `{{ROOT}}` and `{{PROJECT}}` are named above
 only so you can recognise the repository — this step reads nothing there and writes nothing there.
 
 ## Mission

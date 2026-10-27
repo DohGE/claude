@@ -11,8 +11,8 @@ paragraph below that names a step applies to you only when it names {{STEP}}.
 
 {{EFFORT}}
 
-`{{ROOT}}` is this task's working directory: the repository itself for the first task in a run,
-and a dedicated `git worktree` for every other one. Read, write, install, test and `git add` ONLY
+`{{ROOT}}` is this task's working directory: a `git worktree` of the repository that is this
+task's alone — every task has one, the only task of a run too. Read, write, install, test and `git add` ONLY
 inside `{{ROOT}}`. `{{PROJECT}}` is named above only so you can recognise the repository — never
 write there, and never assume the two are the same path.
 
