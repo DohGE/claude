@@ -196,8 +196,8 @@ function git(project, args, { env, input } = {}) {
 // asked to (`-u`); a folder review copies the working tree as git sees it - tracked
 // and untracked files, not the ignored ones.
 // `scope` (review-scope.cjs) narrows it to the projects the review reaches; null is the whole tree.
-function exportTree({ project, source, workDir, isSkipped = () => false, scope = null }) {
-  const root = path.join(workDir, 'tree');
+// `root` puts the tree elsewhere - where the review searches it after the scan (scanTargets).
+function exportTree({ project, source, workDir, isSkipped = () => false, scope = null, root = path.join(workDir, 'tree') }) {
   fs.mkdirSync(root, { recursive: true });
   const keep = (p) => p !== '' && !isSkipped(p) && !isSnapshot(p) && (!scope || scope.has(p));
   if (source.workTree) {
@@ -219,7 +219,9 @@ function exportTree({ project, source, workDir, isSkipped = () => false, scope =
   if (source.ref) git(project, ['read-tree', source.ref], { env });
   const listed = [...new Set(git(project, ['ls-files', '-z'], { env }).split('\0').filter(keep))];
   if (listed.length > 0) {
-    git(project, ['checkout-index', '-f', '-z', '--stdin', `--prefix=${root.replace(/\\/g, '/')}/`], {
+    // A tree kept inside the project sits a few folders deeper than the repository's own files:
+    // past 260 characters git for Windows writes nothing without core.longpaths.
+    git(project, ['-c', 'core.longpaths=true', 'checkout-index', '-f', '-z', '--stdin', `--prefix=${root.replace(/\\/g, '/')}/`], {
       env,
       input: listed.map((p) => `${p}\0`).join(''),
     });
@@ -243,7 +245,8 @@ function jscpdInvocation({ execPath = process.execPath, exists = fs.existsSync }
     : { command: 'npx', args: npxArgs, shell: true };
 }
 
-function runJscpd(root, workDir, invocation = jscpdInvocation()) {
+// One jscpd process over `root`, its config and report in `workDir`: what to start, and where.
+function jscpdCall(root, workDir, invocation) {
   // An explicit config: without one jscpd reads `.jscpd.json` or package.json#jscpd
   // from the scanned tree, and the project's threshold, reporters or ignores would
   // decide what this scan reports. The pattern travels in it rather than on the
@@ -253,16 +256,16 @@ function runJscpd(root, workDir, invocation = jscpdInvocation()) {
   const output = path.join(workDir, 'report');
   const args = [...invocation.args, '.', '--config', config, '--output', output, ...jscpdFlags];
   const quote = (a) => (/[\s"]/.test(a) ? `"${a}"` : a);
-  const res = spawnSync(invocation.shell ? [invocation.command, ...args.map(quote)].join(' ') : invocation.command,
-    invocation.shell ? [] : args, {
-      cwd: root,
-      encoding: 'utf8',
-      timeout: timeoutMs,
-      maxBuffer: 64 * 1024 * 1024,
-      shell: invocation.shell,
-      windowsHide: true,
-    });
-  const report = path.join(output, 'jscpd-report.json');
+  return {
+    command: invocation.shell ? [invocation.command, ...args.map(quote)].join(' ') : invocation.command,
+    args: invocation.shell ? [] : args,
+    options: { cwd: root, shell: invocation.shell, windowsHide: true },
+    report: path.join(output, 'jscpd-report.json'),
+  };
+}
+
+// The report a run left, or why there is none.
+function readReport(report, res) {
   if (!fs.existsSync(report)) {
     const why = res.error && res.error.code === 'ETIMEDOUT'
       ? `timed out after ${timeoutMs / 1000} s`
@@ -272,6 +275,79 @@ function runJscpd(root, workDir, invocation = jscpdInvocation()) {
     throw new Error(`jscpd wrote no report (${why})`);
   }
   return JSON.parse(fs.readFileSync(report, 'utf8'));
+}
+
+function runJscpd(root, workDir, invocation = jscpdInvocation()) {
+  const call = jscpdCall(root, workDir, invocation);
+  const res = spawnSync(call.command, call.args, { ...call.options, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
+  return readReport(call.report, res);
+}
+
+// How many scans run at once: jscpd is one thread, and a review of four branches scanned them
+// one after another - 4 x 36 s of a 213 s context build (2026-10-27).
+function defaultScanParallel(count, cpus = os.cpus().length) {
+  return Math.max(1, Math.min(count, 4, Math.floor(cpus / 2) || 1));
+}
+
+// Several scans side by side: `entries` are `{ root, workDir }`, the result one `{ report }` or
+// `{ error }` per entry. The review builds its context synchronously, so the processes run in a
+// child of this script (`--run-many`) that waits for all of them; one entry runs here directly.
+function runJscpdMany(entries, { parallel = defaultScanParallel(entries.length), invocation = jscpdInvocation() } = {}) {
+  const attempt = (fn) => {
+    try {
+      return { report: fn() };
+    } catch (err) {
+      return { error: String((err && err.message) || err).split('\n')[0].trim() };
+    }
+  };
+  if (entries.length === 0) return [];
+  if (entries.length === 1 || parallel <= 1) return entries.map((entry) => attempt(() => runJscpd(entry.root, entry.workDir, invocation)));
+  const calls = entries.map((entry) => jscpdCall(entry.root, entry.workDir, invocation));
+  const res = spawnSync(process.execPath, [__filename, '--run-many'], {
+    input: JSON.stringify({ calls, parallel }),
+    encoding: 'utf8',
+    timeout: timeoutMs * Math.ceil(entries.length / parallel) + 30000,
+    windowsHide: true,
+  });
+  let outcomes = [];
+  try {
+    outcomes = JSON.parse(res.stdout || '[]');
+  } catch {}
+  return calls.map((call, i) => attempt(() => readReport(call.report, outcomes[i] || { error: res.error, stderr: res.stderr, status: res.status })));
+}
+
+// The child of runJscpdMany: every call, `parallel` at a time; prints each one's exit as JSON.
+function runCalls({ calls, parallel }) {
+  const { spawn } = require('node:child_process');
+  const outcomes = new Array(calls.length);
+  let next = 0;
+  const lane = () => new Promise((done) => {
+    const step = () => {
+      if (next >= calls.length) return done();
+      const k = next++;
+      const call = calls[k];
+      let output = '';
+      let settled = false;
+      const finish = (outcome) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        outcomes[k] = outcome;
+        step();
+      };
+      const child = spawn(call.command, call.args, call.options);
+      const timer = setTimeout(() => {
+        child.kill();
+        finish({ error: { code: 'ETIMEDOUT' }, stderr: output });
+      }, timeoutMs);
+      child.stdout && child.stdout.on('data', (chunk) => { output = `${output}${chunk}`.slice(-2000); });
+      child.stderr && child.stderr.on('data', (chunk) => { output = `${output}${chunk}`.slice(-2000); });
+      child.on('error', (err) => finish({ error: { message: err.message }, stderr: output }));
+      child.on('close', (status) => finish({ status, stderr: output }));
+    };
+    step();
+  });
+  return Promise.all(Array.from({ length: Math.max(1, Math.min(parallel, calls.length)) }, lane)).then(() => outcomes);
 }
 
 // One target's scan. Never throws: a scan that cannot run (no npx, offline on the
@@ -298,4 +374,65 @@ function scanDuplicates({ project, source, files, isSkipped, scope = null, run =
   }
 }
 
-module.exports = { candidateLimit, maxCopies, sourceLimit, changedShare, pickCandidates, exportTree, jscpdInvocation, runJscpd, scanDuplicates };
+// Every target of a run: each exported (`treeRoot` keeps a target's tree there, for the review's
+// searches), then all scanned in one call (runJscpdMany), side by side. Never throws: a target
+// that cannot be exported or scanned comes back as `{ error }`, with its `tree` when it was kept.
+function scanTargets(jobs, { run = runJscpdMany, parallel } = {}) {
+  const results = jobs.map(() => null);
+  const pending = [];
+  jobs.forEach((job, i) => {
+    if (job.files.length === 0) {
+      results[i] = { candidates: [], omitted: 0 };
+      return;
+    }
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'doh-cpd-'));
+    const kept = job.treeRoot ? { tree: job.treeRoot } : {};
+    try {
+      if (job.treeRoot) fs.rmSync(job.treeRoot, { recursive: true, force: true });
+      const { root, count } = exportTree({ project: job.project, source: job.source, workDir, isSkipped: job.isSkipped, scope: job.scope || null, ...(job.treeRoot ? { root: job.treeRoot } : {}) });
+      if (count === 0) results[i] = { candidates: [], omitted: 0, ...kept };
+      else pending.push({ i, root, workDir, kept });
+    } catch (err) {
+      results[i] = { error: String((err && err.message) || err).split('\n')[0].trim(), ...kept };
+    }
+    if (results[i]) fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+  let reports = [];
+  try {
+    reports = run(pending.map(({ root, workDir }) => ({ root, workDir })), parallel === undefined ? {} : { parallel });
+  } catch (err) {
+    reports = pending.map(() => ({ error: String((err && err.message) || err).split('\n')[0].trim() }));
+  }
+  pending.forEach(({ i, workDir, kept }, k) => {
+    const outcome = reports[k] || { error: 'no report' };
+    if (outcome.error) results[i] = { error: outcome.error, ...kept };
+    else {
+      const stats = {};
+      const found = pickCandidates(outcome.report.duplicates, jobs[i].files, stats);
+      results[i] = {
+        candidates: found.slice(0, candidateLimit),
+        omitted: Math.max(0, found.length - candidateLimit),
+        ...(stats.boilerplate ? { boilerplate: stats.boilerplate } : {}),
+        ...kept,
+      };
+    }
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch {}
+  });
+  return results;
+}
+
+module.exports = {
+  candidateLimit, maxCopies, sourceLimit, changedShare, pickCandidates, exportTree, jscpdInvocation, runJscpd, scanDuplicates,
+  runJscpdMany, scanTargets, defaultScanParallel,
+};
+
+if (require.main === module && process.argv[2] === '--run-many') {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { input += chunk; });
+  process.stdin.on('end', () => {
+    runCalls(JSON.parse(input)).then((outcomes) => process.stdout.write(JSON.stringify(outcomes)));
+  });
+}

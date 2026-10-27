@@ -52,6 +52,33 @@ test('the workflow walks the windows side by side, each with its own setting, th
   assert.strictEqual(result.cross, 'CROSS DONE');
 });
 
+test('one run walks the windows of every target from one pool of lanes, each cross-file pass right after its own windows', async () => {
+  const args = {
+    lanes: 2,
+    targets: [
+      { dir: 'runs/s/a/raport.work', windows: [['1-4', '', ''], ['5-8', '', '']], cross: { model: '', effort: '' } },
+      { dir: 'runs/s/b/raport.work', windows: [['1-3', 'sonnet', 'medium']], cross: {} },
+    ],
+  };
+  const { result, calls, most } = await runWorkflow(args, (prompt) => (prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));
+  assert.strictEqual(most, 2, 'the targets share the lanes');
+  assert.deepStrictEqual(result.targets.map((t) => [t.dir, t.failed, t.cross]), [['runs/s/a/raport.work', [], 'CROSS DONE'], ['runs/s/b/raport.work', [], 'CROSS DONE']]);
+  const at = (prompt) => calls.findIndex((c) => c.prompt === prompt);
+  const read = (dir, name) => `Read ${dir}/${name} and follow it.`;
+  assert.ok(at(read('runs/s/a/raport.work', bundle.crossBriefName)) > at(read('runs/s/a/raport.work', bundle.windowBriefName(2))));
+  assert.ok(at(read('runs/s/b/raport.work', bundle.crossBriefName)) > at(read('runs/s/b/raport.work', bundle.windowBriefName(1))));
+  const sonnet = calls.find((c) => c.prompt === read('runs/s/b/raport.work', bundle.windowBriefName(1)));
+  assert.deepStrictEqual([sonnet.options.model, sonnet.options.effort], ['sonnet', 'medium']);
+  assert.match(sonnet.options.label, /^b: window 1\/1: files 1-3$/, 'a label names its target');
+});
+
+test('a target whose window stops twice holds back its own cross-file pass only', async () => {
+  const args = { lanes: 3, targets: [{ dir: 'a', windows: [['1-2', '', '']], cross: {} }, { dir: 'b', windows: [['1-2', '', '']], cross: {} }] };
+  const { result, calls } = await runWorkflow(args, (prompt) => (prompt.startsWith('Read a/window') ? 'WINDOW STOPPED 1: refused' : prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));
+  assert.deepStrictEqual(result.targets.map((t) => [t.failed, t.cross]), [[[1], null], [[], 'CROSS DONE']]);
+  assert.ok(!calls.some((c) => c.prompt === `Read a/${bundle.crossBriefName} and follow it.`));
+});
+
 test('a stopped window is started once more; one that stops twice holds the cross-file pass back', async () => {
   const args = { dir: 'w', lanes: 3, windows: [['1-2', '', ''], ['3-4', '', '']], cross: {} };
   const flaky = await runWorkflow(args, (prompt, attempt) => (prompt.includes('window01') && attempt === 1 ? 'WINDOW STOPPED 1: refused' : 'WINDOW DONE x'));

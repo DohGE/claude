@@ -276,6 +276,58 @@ test('a scan lists a bounded number of candidates and counts the rest', (t) => {
   assert.strictEqual(result.omitted, extra);
 });
 
+test('several scans run side by side, each with its own report, and one that writes none says so', (t) => {
+  const dir = tempDir(t, 'dup-many-');
+  const log = path.join(dir, 'log.txt');
+  const fake = path.join(dir, 'fake-jscpd.cjs');
+  fs.writeFileSync(fake, [
+    "const fs = require('node:fs');",
+    'const args = process.argv.slice(2);',
+    "const output = args[args.indexOf('--output') + 1];",
+    "if (process.cwd().includes('bad')) process.exit(3);",
+    `fs.appendFileSync(${JSON.stringify(log)}, 'start ' + Date.now() + '\\n');`,
+    'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);',
+    'fs.mkdirSync(output, { recursive: true });',
+    "fs.writeFileSync(output + '/jscpd-report.json', JSON.stringify({ duplicates: [], marker: output }));",
+    `fs.appendFileSync(${JSON.stringify(log)}, 'end ' + Date.now() + '\\n');`,
+  ].join('\n'));
+  const entry = (name) => {
+    const workDir = path.join(dir, name);
+    const root = path.join(workDir, 'tree');
+    fs.mkdirSync(root, { recursive: true });
+    return { root, workDir };
+  };
+  const entries = [entry('a'), entry('b'), entry('bad')];
+  const results = dup.runJscpdMany(entries, { parallel: 3, invocation: { command: process.execPath, args: [fake], shell: false } });
+  assert.deepStrictEqual(results.slice(0, 2).map((r) => r.report.marker), [path.join(dir, 'a', 'report'), path.join(dir, 'b', 'report')]);
+  assert.match(results[2].error, /jscpd wrote no report/);
+  const times = fs.readFileSync(log, 'utf8').trim().split('\n').map((line) => line.split(' '));
+  const starts = times.filter(([k]) => k === 'start').map(([, v]) => Number(v));
+  const ends = times.filter(([k]) => k === 'end').map(([, v]) => Number(v));
+  assert.ok(Math.max(...starts) < Math.min(...ends), `the second scan starts before the first ends: ${JSON.stringify(times)}`);
+});
+
+test('scanTargets exports every target, scans them in one call and keeps a tree where it is asked to', (t) => {
+  const dir = copyRepo(t);
+  const keep = path.join(tempDir(t, 'dup-keep-'), 'snap');
+  const seen = [];
+  const pairs = [clone(['src/orig.ts', 1, 9], ['src/copy.ts', 1, 9]), clone(['src/orig.ts', 1, 9], ['src/old.ts', 1, 9])];
+  const results = dup.scanTargets([
+    { project: dir, source: { ref: 'feature/copy' }, files: [added('src/copy.ts')], treeRoot: keep },
+    { project: dir, source: { ref: 'feature/copy' }, files: [added('src/copy.ts')] },
+    { project: dir, source: { ref: 'feature/copy' }, files: [] },
+  ], { run: (entries) => { seen.push(...entries); return entries.map(() => ({ report: { duplicates: pairs } })); } });
+  assert.strictEqual(seen.length, 2, 'every target with files, in one call');
+  assert.strictEqual(results[0].tree, keep);
+  assert.ok(fs.existsSync(path.join(keep, 'src', 'orig.ts')), 'the kept tree is the reviewed revision');
+  assert.ok(!('tree' in results[1]));
+  assert.ok(seen.every((entry) => !fs.existsSync(entry.workDir)), 'no scratch folder outlives the scan');
+  assert.deepStrictEqual(results[0].candidates, [{ path: 'src/copy.ts', lines: '1-9', sources: ['src/old.ts:1-9', 'src/orig.ts:1-9'], kinds: ['exact'] }]);
+  assert.deepStrictEqual(results[2], { candidates: [], omitted: 0 });
+  const failed = dup.scanTargets([{ project: dir, source: { ref: 'feature/copy' }, files: [added('src/copy.ts')], treeRoot: path.join(keep, 'x') }], { run: () => [{ error: 'npx: not found' }] });
+  assert.deepStrictEqual(failed, [{ error: 'npx: not found', tree: path.join(keep, 'x') }], 'a scan that fails keeps its tree: the searches still need it');
+});
+
 test('nothing reviewed, nothing scanned', (t) => {
   const dir = copyRepo(t);
   const result = dup.scanDuplicates({

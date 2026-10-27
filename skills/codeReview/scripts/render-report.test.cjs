@@ -1820,6 +1820,30 @@ test('an instruction id from a project rulebook is known, not reported as invent
   assert.match(report.warnings[0], /nie ma takiej instrukcji w rulebooku/);
 });
 
+test('a project Markdown rule (.claude/doh/local) answers its addresses and its ids like any other', (t) => {
+  const dir = tempDir(t, 'cr-local-');
+  const local = path.join(dir, '.claude', 'doh', 'local');
+  fs.mkdirSync(local, { recursive: true });
+  fs.writeFileSync(path.join(local, 'wording.md'), '---\nname: Wording\nid: wording\n---\n## Checklist\n\n- first wording rule\n- second wording rule\n');
+  const report = rr.parseReport(reportOf(
+    '## src/a.ts',
+    '🟡 **Średni**',
+    '- **Linia:** 1',
+    '- **Problem:** p',
+    '- **Reguła:** wording#2',
+    '- **Expected Result:** e',
+    '- **PR Problem:** p',
+    '- **PR Expected:** e',
+    '- **PR Locations:** l',
+  ));
+  rr.resolveRuleAddresses(report, dir);
+  assert.deepStrictEqual(report.files[0].findings[0].tags, [{ file: 'wording', rule: '[Checklist] second wording rule' }]);
+  assert.deepStrictEqual(report.warnings, [], 'the local rule is in the rulebook the renderer reads');
+  const ticks = { checklists: [{ path: 'src/a.ts', items: [{ id: 'wording#1' }] }], warnings: [] };
+  rr.warnUnknownChecklistIds(ticks, dir);
+  assert.deepStrictEqual(ticks.warnings, []);
+});
+
 test('parseRuleField reads a bare <id>#<n> address next to a prose rule', () => {
   assert.deepStrictEqual(rr.parseRuleField('security#3; general → spójność'), [
     { file: 'security', rule: '', address: { id: 'security', n: 3 } },

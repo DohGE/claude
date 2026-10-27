@@ -889,13 +889,15 @@ function treeEntries(report) {
 // else checks it: a mistyped or invented one (`a11y#1-30` for `accessibility`)
 // counts toward coverage all the same, so the report would claim a walk through a
 // checklist that does not exist. The ids are the ones the file kinds declare - the
-// skill's `instructions/*.json` plus the project's own when it has one - read by the
-// context builder's own loader, never a second reading of the same files.
+// skill's `instructions/*.json` plus the project's own when it has one, and its Markdown rules
+// (`.claude/doh/local/*.md`) - read by the context builder's own loader, never a second reading
+// of the same files.
 function rulebookInstructions(projectRoot) {
+  const root = projectRoot ? path.resolve(projectRoot) : null;
   return rulebook.loadRulebook([
     path.join(__dirname, '..', 'instructions'),
-    projectRoot ? path.join(path.resolve(projectRoot), '.claude', 'doh', 'instructions') : null,
-  ]).instructions;
+    root ? path.join(root, '.claude', 'doh', 'instructions') : null,
+  ], { localDir: root ? path.join(root, '.claude', 'doh', 'local') : null }).instructions;
 }
 
 function knownChecklistIds(projectRoot) {

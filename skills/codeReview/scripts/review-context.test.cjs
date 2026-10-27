@@ -760,8 +760,11 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   const settings = JSON.parse(brief.slice(brief.indexOf('```json') + 7, brief.lastIndexOf('```')));
   // The windows walk side by side, and the Workflow tool gets the same plan in a few bytes.
   assert.strictEqual(t0.parallel, 2);
-  assert.deepStrictEqual(t0.workflow.args, { dir: t0.workDir, lanes: 2, windows: [['1-4', '', ''], ['5-8', '', '']], cross: { model: '', effort: '' } });
-  assert.ok(t0.workflow.scriptPath.endsWith('/workflows/review-windows.js'));
+  assert.deepStrictEqual(ctx.workflow.args, { lanes: 2, targets: [{ dir: t0.workDir, windows: [['1-4', '', ''], ['5-8', '', '']], cross: { model: '', effort: '' } }] });
+  const runDir = path.dirname(path.dirname(t0.reportPath)).replace(/\\/g, '/');
+  assert.strictEqual(ctx.workflow.scriptPath, `${runDir}/review-windows.js`, 'inside the project, where the Workflow tool may read it');
+  assert.strictEqual(fs.readFileSync(ctx.workflow.scriptPath, 'utf8'), fs.readFileSync(path.join(__dirname, '..', 'workflows', 'review-windows.js'), 'utf8'));
+  assert.ok(!('workflow' in t0), 'one workflow for the run, not one per target');
   assert.ok(fs.existsSync(t0.crossBriefPath), 'the cross-file pass has a brief of its own');
   assert.strictEqual(settings.reportPath, t0.reportPath);
   assert.strictEqual(settings.workDir, t0.workDir);
@@ -781,6 +784,21 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   assert.ok(!fs.existsSync(`${alone.targets[0].workDir}/window01.md`));
   assert.deepStrictEqual(rc.parseArgs(['--no-windows']).windows, false);
   assert.deepStrictEqual(rc.parseArgs([]).windows, true);
+});
+
+test('a small target makes its cross-file pass in the conversation that walked it; a longer one sends it to a fresh walker', (t) => {
+  const dir = makeRepo(t);
+  for (let n = 1; n <= 3; n++) commitFile(dir, `src/small/s${n}.ts`, `export const s${n} = ${n};\n`, `s${n}`);
+  for (let n = 1; n <= 5; n++) commitFile(dir, `src/wide/w${n}.ts`, `export const w${n} = ${n};\n`, `w${n}`);
+  const skillDir = makeSkillDir(t, [TS_KIND]);
+  const lastBundle = (ctx) => fs.readFileSync(ctx.targets[0].files[ctx.targets[0].files.length - 1].bundlePath, 'utf8');
+  const small = rc.buildContext({ mode: 'folder', path: 'src/small', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12) });
+  assert.strictEqual(small.targets[0].crossInline, true);
+  assert.ok(lastBundle(small).includes('## Dalej\n\nOstatni plik celu. Z zapisem części przeczytaj (Read) przejście międzyplikowe:'), lastBundle(small));
+  assert.ok(!lastBundle(small).includes('świeży agent'));
+  const wide = rc.buildContext({ mode: 'folder', path: 'src/wide', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 13) });
+  assert.ok(!wide.targets[0].crossInline);
+  assert.ok(lastBundle(wide).includes('Przejście międzyplikowe robi świeży agent'), lastBundle(wide));
 });
 
 test('a target that one conversation walks without a compaction has no windows', (t) => {
@@ -1693,6 +1711,54 @@ test('a duplication scan that could not run is said out loud', (t) => {
   assert.ok(!('duplicationCandidates' in unscanned.targets[0]), 'no scanner, no list');
 });
 
+test('a branch target keeps its reviewed revision as a snapshot to search, and its briefs say where', (t) => {
+  const dup = require('./duplication-scan.cjs');
+  const dir = makeRepo(t);
+  fs.mkdirSync(path.join(dir, '.claude'));
+  run(dir, ['checkout', '-q', '-b', 'feature/snap']);
+  commitFile(dir, 'src/a.ts', 'export const fromBranch = 1;\n', 'a');
+  run(dir, ['checkout', '-q', 'main']);
+  const scans = [];
+  const scanTargets = (jobs) => {
+    scans.push(jobs.length);
+    return dup.scanTargets(jobs, { run: (entries) => entries.map(() => ({ report: { duplicates: [] } })) });
+  };
+  const skillDir = makeSkillDir(t, [TS_KIND]);
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature/snap', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 0), scanTargets });
+  assert.deepStrictEqual(ctx.errors, []);
+  assert.deepStrictEqual(scans, [1], 'every target in one call');
+  const t0 = ctx.targets[0];
+  assert.ok(t0.snapshotDir.startsWith(`${dir.replace(/\\/g, '/')}/.claude/doh/codeReview/`), t0.snapshotDir);
+  assert.strictEqual(fs.readFileSync(path.join(t0.snapshotDir, 'src', 'a.ts'), 'utf8').replace(/\r\n/g, '\n'), 'export const fromBranch = 1;\n', 'the branch, not the checkout');
+  const brief = fs.readFileSync(t0.crossBriefPath, 'utf8');
+  assert.strictEqual(JSON.parse(brief.slice(brief.indexOf('```json') + 7, brief.lastIndexOf('```'))).snapshotDir, t0.snapshotDir);
+  assert.strictEqual(rc.writeContext(ctx).targets[0].snapshotDir, t0.snapshotDir);
+
+  fs.writeFileSync(path.join(dir, 'src.ts'), 'const staged = 1;\n');
+  const staged = rc.buildContext({ mode: 'staged', project: dir, skillDir, now: new Date(2026, 6, 8, 10, 1), scanTargets }).targets[0];
+  assert.strictEqual(staged.snapshotDir, dir.replace(/\\/g, '/'), 'the index of a staged review is the working tree: nothing to export');
+});
+
+test('the context build reports how long each phase took when asked to', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'src/a.ts', 'export const a = 1;\n', 'a');
+  const phases = [];
+  rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir: makeSkillDir(t, [TS_KIND]), now: new Date(2026, 6, 8, 10, 0), timing: (phase, ms) => phases.push([phase, typeof ms]) });
+  assert.deepStrictEqual(phases.map(([phase]) => phase), ['rulebook', 'targets', 'scan', 'bundles', 'write']);
+  assert.ok(phases.every(([, type]) => type === 'number'));
+});
+
+test('the search of a repository of several projects covers the projects the review reaches', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'projects/a/package.json', '{}\n', 'a');
+  commitFile(dir, 'projects/b/package.json', '{}\n', 'b');
+  commitFile(dir, 'projects/b/src/b.ts', 'export const needle = 2;\n', 'b src');
+  run(dir, ['checkout', '-q', '-b', 'feature/scope']);
+  commitFile(dir, 'projects/a/src/a.ts', 'export const needle = 1;\n', 'a src');
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature/scope', project: dir, skillDir: makeSkillDir(t, [TS_KIND]), now: new Date(2026, 6, 8, 10, 0) });
+  assert.match(ctx.targets[0].commands.grep, / -- "projects\/a" > "\$f"/);
+});
+
 test('each target carries a search over the revision it reviews', (t) => {
   // "Does this helper already exist?" has to be asked of the code the review reads.
   // Here the checkout is back on main, so only a search of the branch's commit finds it.
@@ -1812,6 +1878,14 @@ test('an interrupted review is resumed from its parts while the target is unchan
   fs.writeFileSync(`${stem}.part01.md`, '<!-- checklist: src/a.ts\n[x] ts#1 — OK\n-->\n<!-- coverage: src/a.ts 1/1 -->\n');
   // A part the run died writing before its marker: that file is not done.
   fs.writeFileSync(`${stem}.part02.md`, '## src/b.ts\n');
+  // The order the interrupted run numbered its parts in is the order a resume keeps.
+  const snapshot = path.join(path.dirname(path.dirname(path.dirname(path.dirname(first.targets[0].reportPath)))), 'cache', 'feature-resume', '.last-review-branch.json');
+  const recorded = JSON.parse(fs.readFileSync(snapshot, 'utf8'));
+  assert.deepStrictEqual(recorded.reviewed, ['src/a.ts', 'src/b.ts']);
+  fs.writeFileSync(snapshot, JSON.stringify({ ...recorded, reviewed: ['src/b.ts', 'src/a.ts'] }));
+  const reordered = rc.buildContext({ mode: 'auto', project: dir, skillDir, now: new Date(2026, 6, 8, 11, 0) });
+  assert.deepStrictEqual(reordered.targets[0].files.map((f) => f.path), ['src/b.ts', 'src/a.ts']);
+  fs.writeFileSync(snapshot, JSON.stringify(recorded));
 
   const second = rc.buildContext({ mode: 'auto', project: dir, skillDir, sinceLast: true, now: new Date(2026, 6, 8, 11, 30) });
   const target = second.targets[0];
@@ -1892,16 +1966,42 @@ test('writeContext puts the context in a file and prints a summary', (t) => {
   assert.strictEqual(summary.contextPath, path.join(dir, 'b', '.review-context-branch.json'));
   assert.deepStrictEqual([summary.errors, summary.warnings, summary.outputFormat], [[], ['w'], 'md']);
   assert.deepStrictEqual(
-    (({ branch, files, paths, reportPath: report, resumed, resume }) => ({ branch, files, paths, report, resumed, resume }))(summary.targets[0]),
-    { branch: 'b', files: 1, paths: ['a.ts'], report: reportPath, resumed: false, resume: null },
+    (({ branch, files, baseSource, reportPath: report, resumed, resume }) => ({ branch, files, baseSource, report, resumed, resume }))(summary.targets[0]),
+    { branch: 'b', files: 1, baseSource: null, report: reportPath, resumed: false, resume: null },
     'the summary carries what the review uses, so the context file is never read whole',
   );
+  assert.ok(!('paths' in summary.targets[0]), 'the file list stays in the file');
   assert.ok(!('checklistPlans' in summary) && !('instructionsCatalog' in summary), 'the plans stay in the file');
   const written = fs.readFileSync(summary.contextPath, 'utf8');
   assert.deepStrictEqual(JSON.parse(written), { outputFormat: 'md', targets: context.targets });
   assert.ok(written.split('\n').length > 5, 'laid out one element per line');
   const failed = { targets: [], errors: ['x'] };
   assert.strictEqual(rc.writeContext(failed), failed, 'no target, nothing to put in a file');
+});
+
+test('the summary of a wide run stays small: counts, the walk\'s start and the assembly, never per-file lists', (t) => {
+  const dir = tempDir(t, 'cr-ctx-');
+  const reportPath = path.join(dir, 'b', 'raport.md');
+  fs.mkdirSync(path.dirname(reportPath));
+  const deep = (i) => `projects/vstor/src/app/pages/storage/volumes/details-volume/edit-s3-settings-dialog/components/ui/f${i}.component.ts`;
+  const workDir = `${dir}/b/raport.work`.replace(/\\/g, '/');
+  const target = (branch, windows) => ({
+    kind: 'branch', branch, baseBranch: 'origin/master', baseSource: 'pr', prNumber: 7, reportPath, htmlReportPath: reportPath.replace(/\.md$/, '.html'), workDir,
+    files: Array.from({ length: 52 }, (_, i) => ({ path: deep(i), plan: 0 })),
+    skipped: ['package-lock.json'],
+    windows: Array.from({ length: windows }, (_, k) => ({ files: [k * 4 + 1, k * 4 + 4], brief: `${workDir}/window${String(k + 1).padStart(2, '0')}.md`, lastPart: `${workDir}/../raport.part${k * 4 + 4}.md` })),
+    start: [`${workDir}/01-f0.component.ts.bundle.md`, `${workDir}/01-f0.component.ts`],
+    commands: { grep: `f="${workDir}/grep-"$$.txt; git -C "${dir}" grep -n -I -E "<pattern>" origin/${branch} -- > "$f"`.repeat(2), assemble: `node check-part.cjs --report="${reportPath}" --assemble` },
+  });
+  const context = { outputFormat: 'html', errors: [], warnings: [], targets: [target('VSTOR-1-a', 12), target('VSTOR-2-b', 0), target('VSTOR-3-c', 6), target('VSTOR-4-d', 0)] };
+  const summary = rc.writeContext(context);
+  const size = JSON.stringify(summary).length;
+  assert.ok(size < 8000, `the summary is ${size} chars`);
+  const [windowed, inline] = summary.targets;
+  assert.deepStrictEqual([windowed.files, windowed.windows, windowed.skipped, windowed.baseSource, windowed.prNumber], [52, 12, 1, 'pr', 7]);
+  assert.deepStrictEqual(windowed.commands, { assemble: context.targets[0].commands.assemble }, 'the walkers find the search in their brief');
+  assert.ok(!('start' in windowed), 'a windowed target is walked by its walkers');
+  assert.deepStrictEqual(inline.start, context.targets[1].start, 'a target walked here starts with these Reads');
 });
 
 test('runOf reads the root, stamp and branch folder of a run file', () => {
@@ -2051,8 +2151,10 @@ test('the context script writes the header and names the context next to the rep
   const skillDir = makeSkillDir(t, [TS_KIND]);
   const ctx = rc.writeContext(rc.buildContext({ mode: 'folder', path: '.', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12, 5) }));
   const t0 = ctx.targets[0];
+  const { skipped } = JSON.parse(fs.readFileSync(ctx.contextPath, 'utf8')).targets[0];
+  assert.strictEqual(t0.skipped, skipped.length, 'the summary counts what the context lists');
   assert.strictEqual(fs.readFileSync(t0.reportPath, 'utf8'), `# Code Review: folder . (main) | 2026-07-15 17:12\n\n`
-    + (t0.skipped.length ? `Pominięto pliki wygenerowane/binarne: ${t0.skipped.join(', ')}\n\n` : ''));
+    + (skipped.length ? `Pominięto pliki wygenerowane/binarne: ${skipped.join(', ')}\n\n` : ''));
   assert.strictEqual(fs.readFileSync(path.join(path.dirname(t0.reportPath), rc.contextPointerName), 'utf8').trim(), ctx.contextPath);
 });
 
@@ -2090,5 +2192,81 @@ test('files of a kind with a walker setting fill windows of their own, spawned w
   assert.deepStrictEqual(window.files, [enums[0], enums[enums.length - 1]], 'the enums share one window, alone');
   assert.deepStrictEqual([window.model, window.effort], ['sonnet', 'medium']);
   assert.ok(t0.windows.filter((w) => w !== window).every((w) => w.effort === 'high' && !w.model), 'every other window carries --walker-effort');
-  assert.ok(t0.workflow.args.windows.some(([range, model, effort]) => range === `${window.files[0]}-${window.files[1]}` && model === 'sonnet' && effort === 'medium'));
+  assert.ok(ctx.workflow.args.targets[0].windows.some(([range, model, effort]) => range === `${window.files[0]}-${window.files[1]}` && model === 'sonnet' && effort === 'medium'));
+});
+
+test('files a rename only renamed are found mechanical by the script and walked in a light window of their own', (t) => {
+  const dir = makeRepo(t);
+  const body = (n, word) => `${Array.from({ length: 70 }, (_, i) => `export const v${n}x${i} = ${i};`).join('\n')}\nexport const ${word}Port${n} = '${word}-${n}';\n`;
+  for (let n = 1; n <= 12; n++) commitFile(dir, `src/minio-${n}/minio-${n}.ts`, body(n, 'minio'), `m${n}`);
+  commitFile(dir, 'src/logic.ts', 'export const limit = 1;\n', 'logic');
+  commitFile(dir, 'src/t-logic.ts', 'export const top = 1;\n', 't logic');
+  run(dir, ['checkout', '-q', '-b', 'feature/rename']);
+  for (let n = 1; n <= 12; n++) {
+    run(dir, ['mv', `src/minio-${n}`, `src/s3-${n}`]);
+    run(dir, ['mv', `src/s3-${n}/minio-${n}.ts`, `src/s3-${n}/s3-${n}.ts`]);
+    fs.writeFileSync(path.join(dir, 'src', `s3-${n}`, `s3-${n}.ts`), body(n, 's3'));
+  }
+  fs.writeFileSync(path.join(dir, 'src', 'logic.ts'), 'export const limit = 2;\n');
+  fs.writeFileSync(path.join(dir, 'src', 't-logic.ts'), 'export const top = 2;\n');
+  run(dir, ['add', '-A']);
+  run(dir, ['commit', '-q', '-m', 'rename']);
+  run(dir, ['checkout', '-q', 'main']);
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature/rename', project: dir, skillDir: makeSkillDir(t, [TS_KIND]), now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const t0 = ctx.targets[0];
+  const found = t0.files.filter((f) => f.mechanical);
+  assert.strictEqual(found.length, 12, JSON.stringify(t0.files.map((f) => [f.path, f.status, f.mechanical])));
+  assert.ok(found.every((f) => f.status.startsWith('R') && f.mechanical === 'substitution'));
+  assert.ok(!t0.files.find((f) => f.path === 'src/logic.ts').mechanical, 'a changed value is behaviour');
+  // By path the renamed folders sit between the two changed files: grouped, they make one window, not three.
+  assert.deepStrictEqual(t0.files.slice(0, 2).map((f) => f.path), ['src/logic.ts', 'src/t-logic.ts'], 'behaviour first, the mechanical files after it');
+  assert.strictEqual(t0.windows.length, 2, JSON.stringify(t0.windows.map((w) => w.files)));
+  const window = t0.windows.find((w) => t0.files[w.files[0] - 1].mechanical);
+  assert.deepStrictEqual([window.files[1] - window.files[0] + 1, window.model, window.effort], [12, 'sonnet', 'medium'], 'one light window holds them all');
+  const bundle = fs.readFileSync(found[0].bundlePath, 'utf8');
+  assert.match(bundle, /## Zmiana mechaniczna \(wykryta przez skrypt\)\n\nCały diff tego pliku: podmiana słów `minio` → `s3`\./);
+  assert.match(bundle, /Stare słowa w przeglądanej rewizji: nigdzie/);
+  assert.ok(!bundle.includes('- ts#1: rule'), 'the short bundle carries no item text');
+  assert.strictEqual(found[0].fullBundlePath, found[0].bundlePath.replace(/\.bundle\.md$/, '.full.bundle.md'));
+  assert.ok(fs.readFileSync(found[0].fullBundlePath, 'utf8').includes('- ts#1: rule'), 'the full one is there for a walk of the checklist');
+});
+
+test('a lone mechanical file stays among its neighbours: no window of its own', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
+  for (let n = 1; n <= 11; n++) commitFile(dir, `src/f${n}.ts`, `${body(n)}export const limit${n} = 1;\n`, `f${n}`);
+  for (let n = 1; n <= 3; n++) commitFile(dir, `src/models/m${n}.enum.ts`, `${body(n)}export const flag${n} = 1;\n`, `m${n}`);
+  commitFile(dir, 'src/minio/minio.ts', `${body(99)}export const minioPort = 1;\n`, 'minio');
+  run(dir, ['checkout', '-q', '-b', 'feature/lone']);
+  for (let n = 1; n <= 11; n++) fs.writeFileSync(path.join(dir, 'src', `f${n}.ts`), `${body(n)}export const limit${n} = 2;\n`);
+  for (let n = 1; n <= 3; n++) fs.writeFileSync(path.join(dir, 'src', 'models', `m${n}.enum.ts`), `${body(n)}export const flag${n} = 2;\n`);
+  run(dir, ['mv', 'src/minio', 'src/s3']);
+  run(dir, ['mv', 'src/s3/minio.ts', 'src/s3/s3.ts']);
+  fs.writeFileSync(path.join(dir, 'src', 's3', 's3.ts'), `${body(99)}export const s3Port = 1;\n`);
+  run(dir, ['add', '-A']);
+  run(dir, ['commit', '-q', '-m', 'lone']);
+  run(dir, ['checkout', '-q', 'main']);
+  const light = kind('enum', '<name>.enum.ts', [instruction('ts', ['rule'])], { walker: { model: 'sonnet', effort: 'medium' } });
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature/lone', project: dir, skillDir: makeSkillDir(t, [FACT_KIND, light]), now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const t0 = ctx.targets[0];
+  assert.strictEqual(t0.files.filter((f) => f.mechanical).length, 1);
+  assert.ok(t0.windows.length > 1 && t0.windows.every((w) => w.files[1] > w.files[0]), JSON.stringify(t0.windows.map((w) => w.files)));
+});
+
+test('every windowed target of a run goes to one workflow, whose lanes the targets share', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
+  for (const b of ['a', 'b']) {
+    run(dir, ['checkout', '-q', '-b', `feature/${b}`, 'main']);
+    for (let n = 1; n <= 8; n++) commitFile(dir, `src/${b}${n}.ts`, body(n), `${b}${n}`);
+  }
+  run(dir, ['checkout', '-q', 'main']);
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature/a;feature/b', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 12) });
+  assert.deepStrictEqual(ctx.errors, []);
+  assert.deepStrictEqual(ctx.workflow.args.targets.map((x) => x.dir), ctx.targets.map((x) => x.workDir));
+  assert.strictEqual(ctx.workflow.args.lanes, 4, 'four windows of two targets, four lanes by default');
+  assert.deepStrictEqual(ctx.targets.map((x) => x.parallel), [4, 4], 'the Agent tool dispatches as many at once');
+  assert.strictEqual(rc.buildContext({ mode: 'branches', branches: 'feature/a;feature/b', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 13), parallel: 2 }).workflow.args.lanes, 2);
 });

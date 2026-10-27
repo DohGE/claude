@@ -328,9 +328,29 @@ function renderDuties({ kind, instructions, bound }) {
 // script), `lineCount` the lines of its content (null without one), `partPath` the part it is
 // written to, `batch` the paths walked in the same response (null for a file walked alone) and
 // `next` the `## Dalej` lines of the batch's last bundle (renderNext).
+const mechanicalReasons = { rename: 'sama zmiana nazwy lub miejsca pliku', imports: 'tylko importy', format: 'tylko formatowanie' };
+
+// What the script found about a mechanical file (mechanical.cjs): what its diff did, and - when
+// the target's renames taught words - where the old ones are still in the reviewed revision, the
+// first answer to "did the change break something".
+function renderMechanical(file, { reason, map = {}, leftovers = { total: 0, hits: [] } }) {
+  const words = Object.entries(map).map(([from, to]) => `\`${from}\` → \`${to}\``).join(', ');
+  const out = [
+    `Cały diff tego pliku: ${reason === 'substitution' ? `podmiana słów ${words}` : mechanicalReasons[reason] || reason}.`,
+    `Sprawdź to w diffie. Zgadza się: tylko dwa pytania bramki zmian mechanicznych (references/walk.md, Step 3) i marker \`<!-- coverage: ${file.path} mechanical -->\` bez bloku checklisty. Diff zmienia zachowanie: checklista jak zwykle.`,
+  ];
+  if (Object.keys(map).length > 0) {
+    out.push('', leftovers.total > 0
+      ? `Stare słowa w przeglądanej rewizji (${leftovers.total}${leftovers.hits.length < leftovers.total ? `, pokazane ${leftovers.hits.length}` : ''}):`
+      : 'Stare słowa w przeglądanej rewizji: nigdzie - żadna referencja nie została.');
+    for (const hit of leftovers.hits) out.push(`- ${hit.path}:${hit.line}: ${hit.text}`);
+  }
+  return out;
+}
+
 function renderBundle({
   file, kind, instructions, bound = { items: {}, info: [] }, exports = [], members = [], specs = null, candidates = [], factRoot = '',
-  partial = false, lineCount = null, partPath = null, batch = null, next = null,
+  partial = false, lineCount = null, partPath = null, batch = null, next = null, mechanical = null, fullPath = null,
 }) {
   const out = [`# ${file.path}`, ''];
   out.push(kind
@@ -344,6 +364,22 @@ function renderBundle({
   if (batch) out.push(`- partia: ${batch.join(', ')} - przejścia po kolei, części razem w jednej odpowiedzi`);
   if (factRoot) out.push(`- ścieżki w faktach: względem \`${factRoot}/\``);
   if (partial) out.push('- fakty z części repozytorium (limit, błąd git albo konsument w projekcie spoza czytanych): każdy fakt tylko wskazuje linię');
+  if (mechanical) out.push('', '## Zmiana mechaniczna (wykryta przez skrypt)', '', ...renderMechanical(file, mechanical));
+  // A mechanical file's short bundle (`fullPath` names the full one): the two questions of the gate
+  // need no item text, and a plan's text was 22 kB of the 28 kB a mechanical file's walk read
+  // (2026-10-27). A walker that finds behaviour in the diff walks the checklist by the full bundle.
+  if (mechanical && fullPath) {
+    out.push('', '## Plan (skrót)', '', `Pełny plan z treścią pozycji: ${fullPath} - przeczytaj go (Read), gdy diff zmienia zachowanie: wtedy przechodzisz checklistę według tamtej paczki.`);
+    for (const step of kind ? kind.plan : []) {
+      const instruction = instructions.get(step.id);
+      if (instruction) out.push(`- ${instruction.name} (\`${step.id}:${rulebook.formatItemSpec(step.numbers)}\`)`);
+    }
+    out.push('');
+    if (exports.length > 0) out.push('## Eksporty tego pliku i ich konsumenci', '', ...renderExports(exports, factRoot), '');
+    out.push('## Zapis części', '', `- Zmiana mechaniczna: jeden Write - znaleziska dwóch pytań bramki (o ile są) i marker \`<!-- coverage: ${file.path} mechanical -->\`, bez bloku checklisty.`, '');
+    if (next) out.push('## Dalej', '', ...next, '');
+    return `${out.join('\n').replace(/\n+$/, '')}\n`;
+  }
   if (kind && kind.notes.length > 0) {
     out.push('', 'Uwagi rodzaju:');
     for (const note of kind.notes) out.push(`- ${note}`);
@@ -412,8 +448,16 @@ function planBatches(entries, limits = batchLimits) {
   return batches;
 }
 
-// What the walk of one file adds to its conversation, in tokens: `chars` is what its Reads bring.
-const walkTokens = (chars) => windowLimits.fileTokens + Math.ceil((chars || 0) / windowLimits.charsPerToken);
+// What the walk of one file adds to its conversation, in tokens: `chars` is what its Reads bring,
+// `fileTokens` what the walk itself writes and reasons - less for a file the script found
+// mechanical, whose walk is the gate's two questions.
+const walkTokens = (chars, fileTokens = windowLimits.fileTokens) => fileTokens + Math.ceil((chars || 0) / windowLimits.charsPerToken);
+// Windows of files the script found mechanical (mechanical.cjs): a walk of two questions each, so
+// more of them share a walker - a 52-file rename branch took twelve windows (2026-10-27).
+const mechanicalLimits = { ...windowLimits, fileTokens: 4000, files: 25 };
+// The class (planWindows `classOf`) of such a window starts with this; the rest is its walker setting.
+const mechanicalClass = 'mech|';
+const limitsOfClass = (cls) => (String(cls || '').startsWith(mechanicalClass) ? mechanicalLimits : windowLimits);
 
 // Which batches share a window: `batches` are the numbers planBatches returned, `weigh(number)` the
 // tokens one file's walk adds, `classOf(batch)` the walker setting its files need ('' for the
@@ -421,11 +465,12 @@ const walkTokens = (chars) => windowLimits.fileTokens + Math.ceil((chars || 0) /
 // window. The cuts fall where the running weight crosses a multiple of the share every window
 // gets, so that no window is a stub that pays the walker's start for a file or two; a batch over
 // a limit has a window of its own.
-function planWindows(batches, weigh, limits = windowLimits, classOf = () => '') {
+function planWindows(batches, weigh, limits = windowLimits, classOf = () => '', limitsOf = () => limits) {
   const total = batches.reduce((sum, batch) => sum + batch.reduce((s, number) => s + weigh(number), 0), 0);
   const files = batches.reduce((sum, batch) => sum + batch.length, 0);
   if (total <= limits.tokens && files <= limits.files) return [];
-  // Each run of one walker setting is cut on its own, so its windows come out even too.
+  // Each run of one walker setting is cut on its own, so its windows come out even too - by the
+  // limits of its class (`limitsOf`).
   const segments = [];
   for (const batch of batches) {
     const cls = classOf(batch);
@@ -433,7 +478,7 @@ function planWindows(batches, weigh, limits = windowLimits, classOf = () => '') 
     if (last && last.cls === cls) last.batches.push(batch);
     else segments.push({ cls, batches: [batch] });
   }
-  return segments.flatMap((segment) => evenWindows(segment.batches, weigh, limits));
+  return segments.flatMap((segment) => evenWindows(segment.batches, weigh, limitsOf(segment.cls)));
 }
 
 // One run of batches as even windows: one window when it fits one. A share a window cannot hold
@@ -700,4 +745,5 @@ module.exports = {
   crossBriefName, crossReplies, questionsOpen, questionIds, crossQuestions, walkRulesPath, bundleCaps,
   bindFile, renderBinding, renderBundle, renderCrossBundle, renderCrossBrief, renderRulebookNotes, factsDocument, fitBundle, renderSkeleton,
   planBatches, planWindows, walkTokens, readsOf, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
+  mechanicalLimits, mechanicalClass, limitsOfClass, renderMechanical,
 };

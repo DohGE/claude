@@ -327,6 +327,13 @@ test('compact: where the run stands - the next file or batch with its Reads, the
     `  - ${f.target.crossBundlePath}`,
     `  - ${skillDir}/references/cross-file.md`,
   ]);
+  // A small target makes the pass in the conversation that walked it; any other sends a fresh walker.
+  f.target.crossBriefPath = `${f.target.workDir}/cross-file.brief.md`;
+  f.target.crossInline = true;
+  assert.strictEqual(at()[head.length + 1], '- mały cel (`crossInline`): przejście robisz sam, w tej rozmowie:');
+  delete f.target.crossInline;
+  assert.match(at()[head.length + 1], /^- robi je świeży agent: /);
+  delete f.target.crossBriefPath;
   fs.writeFileSync(f.part(3), '');
   assert.deepStrictEqual(at().slice(head.length, -1), [
     `- następne: złożenie - przeczytaj (Read) ${skillDir}/references/assembly.md i uruchom \`target.commands.assemble\`:`,

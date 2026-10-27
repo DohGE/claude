@@ -183,6 +183,16 @@ test('the repo-search answer of a spec compares its literals and pairs with the 
   assert.match(answer, /literał "Order history page" L2 - w 1 innym pliku testowym i w 1 pliku kodu; para pageSize: 25 L3 - w 1 pliku kodu; literał "Only in this spec" L4 - nigdzie indziej\./);
   assert.doesNotMatch(answer, /L1\b/, 'the title of a test names a case, no value');
   assert.doesNotMatch(result.answers.get('src/app/a/tests/b.spec.ts')['repo-search'], /renders/, 'nor does the title of a table-driven one');
+  assert.doesNotMatch(answer, /unit-tests#12/, 'a spec that repeats nothing of its own is told nothing about it');
+});
+
+test('a spec\'s own repeated test data is unit-tests#12\'s, and its answer says so', () => {
+  const result = collect({
+    'src/app/a/tests/c.spec.ts': "it('a', () => {\n  run('local-volume');\n  run('local-volume');\n  expect(x).toBe('local-volume');\n});\n",
+  });
+  const answer = result.answers.get('src/app/a/tests/c.spec.ts')['repo-search'];
+  assert.match(answer, /literał "local-volume" L2, L3, L4 - 3× w tym pliku, nigdzie indziej\./);
+  assert.match(answer, / Powtórzenie w obrębie jednego specu to dane testowe: unit-tests#12 \(Medium\), nie code-quality#1\. /);
 });
 
 test('a models module imported past its barrel is a fact on the barrel, on the line that exports the module', () => {

@@ -434,17 +434,41 @@ function parseLocalMarkdown(text, fallbackId) {
   }
   flush();
   const id = typeof fields.id === 'string' && fields.id ? fields.id : fallbackId;
+  // `item-severity` and `same-as` are lists of `<item number>: <value>`: what a kind file says in
+  // an item's `severity` and `sameAs`. readItemExtras validates the values, as for a kind file;
+  // an entry that names no item of this rule is reported here.
+  const extras = items.map(() => ({}));
+  const problems = [];
+  const perItem = (key, prop, value) => {
+    for (const entry of [].concat(fields[key] || [])) {
+      const m = String(entry).match(/^(\d+)\s*:\s*(.+)$/);
+      if (!m) {
+        problems.push(`${key} ${JSON.stringify(entry)} is not "<item number>: <value>" - ignored.`);
+        continue;
+      }
+      const n = Number(m[1]);
+      if (n < 1 || n > items.length) {
+        problems.push(`${key} ${JSON.stringify(entry)} names no item of this rule (it has ${items.length}) - ignored.`);
+        continue;
+      }
+      extras[n - 1][prop] = value(m[2].trim());
+    }
+  };
+  perItem('item-severity', 'severity', (v) => v);
+  perItem('same-as', 'sameAs', (v) => v.split(',').map((address) => address.trim()).filter(Boolean));
   return {
     entry: {
       id,
       name: typeof fields.name === 'string' && fields.name ? fields.name : id,
       preamble,
       checklistSize: items.length,
-      items: items.map((itemText, i) => ({ id: `${id}#${i + 1}`, text: itemText })),
+      items: items.map((itemText, i) => ({ id: `${id}#${i + 1}`, text: itemText, ...extras[i] })),
       ...(fields['applies-to'] !== undefined ? { appliesTo: [].concat(fields['applies-to']) } : {}),
       ...(fields['applies-when'] !== undefined ? { appliesWhen: [].concat(fields['applies-when']) } : {}),
+      ...(typeof fields.severity === 'string' && fields.severity ? { severity: fields.severity } : {}),
     },
     aliases: [].concat(fields.aliases || []).map(String).filter(Boolean),
+    problems,
   };
 }
 
@@ -473,6 +497,7 @@ function loadLocalInstructions(dir, warnings = []) {
       warnings.push(`local/${name}: no checklist item (bullets under a "## ...checklist..." or "## ...conventions..." section) - skipped.`);
       continue;
     }
+    for (const problem of parsed.problems) warnings.push(`local/${name}: ${problem}`);
     const aliases = parsed.aliases.filter((alias) => reInstructionId.test(alias) && alias !== parsed.entry.id);
     out.push({ ...parsed, aliases, file: path.join(dir, name), where: `local/${name}` });
   }
@@ -641,6 +666,21 @@ function loadRulebook(dirs, { localDir = null } = {}) {
       items,
       extras,
     });
+  }
+  // A local rule cannot edit the skill's kind files, so the item its `same-as` names is given
+  // the link back here - in the run's rulebook only.
+  for (const local of locals) {
+    const own = instructions.get(local.entry.id);
+    if (!own) continue;
+    for (const [n, extra] of own.extras) {
+      for (const target of extra.sameAs || []) {
+        const [, otherId, otherN] = target.match(reItemId);
+        const other = instructions.get(otherId);
+        if (!other || !other.items.has(Number(otherN))) continue;
+        const back = other.extras.get(Number(otherN)) || {};
+        if (!(back.sameAs || []).includes(`${own.id}#${n}`)) other.extras.set(Number(otherN), { ...back, sameAs: [...(back.sameAs || []), `${own.id}#${n}`] });
+      }
+    }
   }
   // A pair is one defect seen from two instructions, so each side names the other:
   // a one-sided or dangling `sameAs` is an edit that reached one side only.

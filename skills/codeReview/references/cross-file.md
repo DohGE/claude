@@ -44,7 +44,7 @@ A `NARUSZENIE` points at its finding — `path:lines` of this part's finding, or
      Renamed local variables and parameters over the same operations are still a copy.
      Report every other one.
      A target without the list was not scanned (its warning says why), and the other two sources then carry the question alone.
-   - A search for what a token scan cannot see: for every exported function, class, pipe, directive, validator, util or constant the diff ADDS, look for an existing equivalent in the reviewed revision with `target.commands.grep` (Read the file it names) — by its name, a synonym and the characteristic expression of its body — in the shared folders first (`shared/`, `utils/`, `common/`, `core/`, or wherever this project keeps them).
+   - A search for what a token scan cannot see: for every exported function, class, pipe, directive, validator, util or constant the diff ADDS, look for an existing equivalent in the reviewed revision with the Grep tool over `target.snapshotDir` (or, for a target without one, with `target.commands.grep`, whose file you Read) — by its name, a synonym and the characteristic expression of its body — in the shared folders first (`shared/`, `utils/`, `common/`, `core/`, or wherever this project keeps them).
    - What the file parts already report (`## Już zgłoszone w częściach plików`): a duplication a file's walk named is confirmed here against its other copies.
 
    Report every copy the diff adds under the code-quality instruction as 🔴 High, anchored on a line of the copy that the diff changed, and name the other copies (`path:lines`).

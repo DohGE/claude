@@ -218,6 +218,45 @@ test('a target too long for one conversation is cut into even windows of whole b
   assert.strictEqual(rb.walkTokens(30000), rb.windowLimits.fileTokens + 10000, 'a third of the characters Reads bring');
 });
 
+test('files the script found mechanical share bigger windows of their own, at a lighter cost per file', () => {
+  const alone = (count) => Array.from({ length: count }, (_, k) => [k + 1]);
+  const mech = (batch) => (batch[0] > 4 ? `${rb.mechanicalClass}sonnet|medium` : '');
+  const windows = rb.planWindows(alone(30), (number) => (number > 4 ? rb.walkTokens(3000, rb.mechanicalLimits.fileTokens) : 20000), undefined, mech, rb.limitsOfClass);
+  assert.deepStrictEqual(windows.map((window) => window.flat().length), [4, 26 / 2, 26 / 2], 'twenty-six mechanical files in two windows, not three');
+  assert.ok(rb.mechanicalLimits.files > rb.windowLimits.files && rb.mechanicalLimits.fileTokens < rb.windowLimits.fileTokens);
+  assert.deepStrictEqual(rb.limitsOfClass(''), rb.windowLimits);
+});
+
+test('the bundle of a file the script found mechanical says so, with the learned words and where the old ones are left', () => {
+  const file = { path: 'src/s3/s3.service.ts', oldPath: 'src/minio/minio.service.ts', status: 'R', changedLines: '3', checklistTotal: 0, contentPath: 'w/01-s3.service.ts', diffPath: 'w/01-s3.service.ts.diff' };
+  const text = rb.renderBundle({
+    file, kind: null, instructions: new Map(),
+    mechanical: { reason: 'substitution', map: { minio: 's3' }, leftovers: { total: 2, hits: [{ path: 'src/a.ts', line: 4, text: 'goToMinIO()' }] } },
+  });
+  assert.match(text, /## Zmiana mechaniczna \(wykryta przez skrypt\)\n\nCały diff tego pliku: podmiana słów `minio` → `s3`\./);
+  assert.match(text, /`<!-- coverage: src\/s3\/s3\.service\.ts mechanical -->`/);
+  assert.match(text, /Stare słowa w przeglądanej rewizji \(2, pokazane 1\):\n- src\/a\.ts:4: goToMinIO\(\)/);
+  assert.ok(text.indexOf('## Zmiana mechaniczna') < text.indexOf('## Plan'), 'read before the plan');
+  assert.ok(!rb.renderBundle({ file, kind: null, instructions: new Map() }).includes('## Zmiana mechaniczna'));
+});
+
+test('a mechanical file\'s bundle is short: the gate, the plan\'s addresses and the way to the full bundle', () => {
+  const instructions = new Map([['general', { id: 'general', name: 'General', items: new Map([[1, 'Full names.'], [2, 'No magic numbers.']]), extras: new Map(), preamble: [] }]]);
+  const kind = { name: 'ts', role: 'TS file', notes: [], plan: [{ id: 'general', numbers: [1, 2] }] };
+  const file = { path: 'src/s3.ts', oldPath: 'src/minio.ts', status: 'R', changedLines: '1', checklistTotal: 2, contentPath: 'w/01-s3.ts', diffPath: 'w/01-s3.ts.diff' };
+  const mechanical = { reason: 'substitution', map: { minio: 's3' }, leftovers: { total: 0, hits: [] } };
+  const next = ['Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:', '- w/02.bundle.md'];
+  const short = rb.renderBundle({ file, kind, instructions, mechanical, fullPath: 'w/01-s3.ts.full.bundle.md', partPath: 'r/raport.part01.md', next });
+  assert.match(short, /## Plan \(skrót\)\n\nPełny plan z treścią pozycji: w\/01-s3\.ts\.full\.bundle\.md/);
+  assert.match(short, /- General \(`general:1-2`\)/);
+  assert.ok(!short.includes('Full names.'), 'no item text');
+  assert.match(short, /## Zapis części\n\n- Zmiana mechaniczna: jeden Write - znaleziska dwóch pytań bramki \(o ile są\) i marker `<!-- coverage: src\/s3\.ts mechanical -->`, bez bloku checklisty\./);
+  assert.match(short, /## Dalej\n\nZ zapisem części tej partii/);
+  const full = rb.renderBundle({ file, kind, instructions, mechanical, partPath: 'r/raport.part01.md', next });
+  assert.ok(full.includes('- general#1: Full names.') && full.includes('<!-- checklist: src/s3.ts'), 'the full bundle walks the checklist');
+  assert.ok(short.length < full.length);
+});
+
 test('the last batch of a window tells its walker to stop and keeps the lines for a reviewer walking alone', () => {
   const nextFiles = [{ bundlePath: 'w/05.bundle.md', contentPath: 'w/05.ts', diffPath: null }];
   assert.deepStrictEqual(rb.renderNext({ nextFiles, window: { first: 3, last: 4 } }), [

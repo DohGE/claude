@@ -18,11 +18,12 @@ You produce review REPORTS only: never fix code, commit, checkout or edit the re
 files. Staged mode is the single exception — its context script runs `git add .` to stage every
 pending change before reviewing, the index only.
 
-Execute every step in the current conversation, targets sequentially. Two things you may hand to
-sub-agents, both to `doh:codereview-walker` with the brief the script wrote: the walk of a window of
-files and the cross-file pass (Step 3, Windows) — through the Workflow tool when this session has it
-(these instructions are the opt-in it asks for), else the Agent tool — so that no conversation grows
-until it is compacted and this one hears from the walk once.
+Execute every step in the current conversation; the targets this conversation walks itself, one
+after another. Two things you may hand to sub-agents, both to `doh:codereview-walker` with the brief
+the script wrote: the walk of a window of files and the cross-file pass (Step 3, Windows) — through
+ONE Workflow run for every target with windows when this session has the tool (these instructions
+are the opt-in it asks for), else the Agent tool — so that no conversation grows until it is
+compacted and this one hears from the walk once.
 Never dispatch any other sub-agent (Agent/Task/Explore) for any part of a run: not per branch, not per
 file, not for a large diff, not to save time.
 
@@ -33,8 +34,8 @@ scope gate of `references/walk.md`).
 
 **Run order.** This file is not in run order: what the walk of every file needs comes first, because a compaction of the session re-attaches only the head of this file.
 1. Steps 1–2 run once per run, before anything else, and stand at the end of this file, after the one-time marker.
-2. Step 3 has each target's files walked and every file's part written in the Step 4 format — window by window through `doh:codereview-walker` sub-agents when `target.windows` lists windows, else in this conversation by the rules of `references/walk.md`.
-3. The cross-file pass follows the last file: a fresh `doh:codereview-walker` with `target.crossBriefPath`, or this conversation by `references/cross-file.md`.
+2. Step 3 has each target's files walked and every file's part written in the Step 4 format: right after Step 1 the summary's one `workflow` starts the windows of every target that has some, in the background; then this conversation walks each target without windows by the rules of `references/walk.md`.
+3. The cross-file pass follows the last file: the workflow's fresh walker for a windowed target; this conversation for a target with `crossInline` (its last bundle says so); else a fresh `doh:codereview-walker` with `target.crossBriefPath`.
 4. The assembly, then the next target, and after the last target Step 5: `references/assembly.md`, which the cross-file reference names.
 
 After a compaction, this skill's hook names where the run stands and what to read again: continue from there, and never write a finished part anew.
@@ -107,13 +108,13 @@ A target with an empty diff (`files` empty) has no per-file parts and no cross-f
 **Windows.** `target.windows` (a FIXED IDENTIFIER, like every key of the context JSON) cuts the files into runs of whole batches, `{ files: [first, last], brief, lastPart, model, effort }` each (`model` and `effort` only when set), sized so that one conversation walks a window without being compacted: a compaction drops every bundle read before it, and a conversation that keeps growing re-reads all of it with every response.
 A window made only of files whose kind declares a `walker` setting — the models kinds (enums, interfaces, types, constants, model barrels) — carries that setting (`sonnet`, `medium`); every other window carries `--walker-model` / `--walker-effort`, or nothing, which is "inherit".
 The windows are independent: each walker writes the parts of its own files, in order, and the part check asks each part only for the parts before it in its window.
-`target.windows` is empty for a target small enough to walk here, under `--no-windows` (Step 1) and for a resume with `resume.drafts`: walk it yourself — Step 2, then `target.start`, whose Reads open the first batch, in ONE message.
+A target has no windows (the summary's `windows` is 0) when it is small enough to walk here, under `--no-windows` (Step 1) and for a resume with `resume.drafts`: walk it yourself — Step 2, then `target.start`, whose Reads open the first batch, in ONE message.
 With windows you do not walk the files yourself. Take the first way this session has:
-1. **The Workflow tool.** Call `Workflow` with `scriptPath` and `args` exactly as `target.workflow` gives them — this skill's instructions are the opt-in the tool asks for, so do not ask the user again.
-   The workflow walks `target.parallel` windows at once, starts a stopped walker once more (it skips every part on disk), then sends the cross-file pass to a fresh walker, and notifies you once, with `{ windows, failed, cross }`.
-   End your turn after the call: nothing in between needs you.
-   When the notification arrives: `failed` empty and `cross` is `CROSS DONE` → the assembly (`references/assembly.md`); a window in `failed` → walk it yourself (Step 2 first) from its first file without a part — each bundle's `## Dalej` names what you read next — then the cross-file pass below; any other `cross` → the cross-file pass below.
-2. **The Agent tool.** Dispatch the windows in order, up to `target.parallel` at once — one message with that many calls: `Agent(subagent_type: "doh:codereview-walker", description: "window <k>/<n>", model: <window.model>, effort: <window.effort>, prompt: "Read <window.brief> and follow it.")`, leaving out `model` and `effort` when the window has none.
+1. **The Workflow tool.** Right after Step 1, before you walk any target yourself, call `Workflow` ONCE with `scriptPath` and `args` exactly as the summary's `workflow` gives them: one run for every target with windows, its script copied into the run folder — this skill's instructions are the opt-in the tool asks for, so do not ask the user again.
+   The workflow walks `args.lanes` windows at once over all its targets, starts a stopped walker once more (it skips every part on disk), sends each target's cross-file pass to a fresh walker as soon as that target's windows are done, and notifies you once, with `{ targets: [{ dir, windows, failed, cross }] }` (`dir` is the target's `workDir`).
+   Then walk the targets without windows here and assemble each; end your turn once only the workflow is left.
+   When the notification arrives, per target: `failed` empty and `cross` is `CROSS DONE` → the assembly (`references/assembly.md`); a window in `failed` → walk it yourself (Step 2 first) from its first file without a part — each bundle's `## Dalej` names what you read next — then the cross-file pass below; any other `cross` → the cross-file pass below.
+2. **The Agent tool.** Read the target's `windows` from the context file (the summary counts them) and dispatch them in order, up to `target.parallel` at once — one message with that many calls: `Agent(subagent_type: "doh:codereview-walker", description: "window <k>/<n>", model: <window.model>, effort: <window.effort>, prompt: "Read <window.brief> and follow it.")`, leaving out `model` and `effort` when the window has none.
    An Agent tool without an `effort` parameter gets one more prompt line instead: `medium` → `Effort: medium — think before each non-trivial decision.`, `high` → `Effort: high — think hard before each non-trivial decision.`, `xhigh` and `max` → `Effort: max — ultrathink before each non-trivial decision.` (`think`, `think hard`, `ultrathink` are FIXED IDENTIFIERS, English verbatim); `low` adds nothing.
    A walker's reply is the one line `WINDOW DONE <first>-<last>` or `WINDOW STOPPED <file>: <reason>` (FIXED IDENTIFIERS).
    Walkers run in the background, so do NOT end your turn to wait for them: run (Bash tool) `node "<SKILL_DIR>/scripts/wait-part.cjs" --path="<lastPart>"`, the option repeated for every window still running; it waits under four minutes and prints one line per path, `PART_READY <path>` or `PART_PENDING <path>` (FIXED IDENTIFIERS), as soon as one of them is on disk.
@@ -127,6 +128,7 @@ With windows you do not walk the files yourself. Take the first way this session
 Under the Workflow tool it already ran.
 Otherwise it goes to a fresh walker like a window: `Agent(subagent_type: "doh:codereview-walker", description: "cross-file", model: <walker.model>, effort: <walker.effort>, prompt: "Read <target.crossBriefPath> and follow it.")`, then `wait-part.cjs --path="<part N+1>"` (`N` = `target.files.length`) as above; its reply is `CROSS DONE` or `CROSS STOPPED: <reason>` (FIXED IDENTIFIERS).
 A walk that ends in this conversation dispatches it the same way, in the message that writes the last part (the last bundle's `## Dalej` says so): a fresh conversation makes the pass better than the tail of a long walk.
+A target with `crossInline` (four files or fewer, walked here) is no long walk: make its pass here, with the Reads its last bundle's `## Dalej` names in the message that writes the last part.
 Without the Agent tool, or when the agent stopped, make the pass yourself: `references/cross-file.md`, read with `target.crossBundlePath` (Step 2 first).
 Then the assembly: `references/assembly.md` in this skill's directory.
 
@@ -160,7 +162,7 @@ After a compaction, the hook names what of them to read again.
      Without it they inherit this session's model. A window made only of files whose kind declares a `walker` setting (the models kinds: `sonnet`, effort `medium`) is spawned with that one instead.
    - `--walker-effort=<low|medium|high|xhigh|max>` → pass it through to the context script (`walker.effort`): the `effort` every walker is spawned with (Step 3, Windows).
      Without it they inherit this session's.
-   - `--parallel=<n>` → pass it through to the context script (`target.parallel`): how many windows are walked at once, 1-6 (default 3).
+   - `--parallel=<n>` → pass it through to the context script (`workflow.args.lanes`, `target.parallel`): how many windows are walked at once over all targets, 1-6 (default 4).
    - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read
      and — in staged mode — staged, where the reports land, and which `CLAUDE.md` and
      `.claude/doh/instructions/` bind. A caller whose work lives somewhere other than the current
@@ -193,11 +195,14 @@ After a compaction, the hook names what of them to read again.
    - No targets / exit code 1 → stop after reporting the errors.
    - Report every top-level `warnings[]` entry, in Polish.
    - The file at `contextPath` IS the context every later step calls "the context JSON"; the scripts
-     and hooks read it. Its keys you use — `rulebookNotesPath`, `claudeMd`, `walker`, and per target `start`, `windows`,
-     `parallel`, `workflow`, `commands`, `reportPath`, `htmlReportPath`, `workDir`, `crossBundlePath`,
-     `crossBriefPath`, `resume`, `skipped`, `paths` (the reviewed files in order) — are in this summary: do not Read the file, whose
+     and hooks read it. Its keys you use — `rulebookNotesPath`, `claudeMd`, `walker`, `workflow` (the one
+     call for every target with windows, null when none has any), and per target `files` and `windows`
+     (counts), `parallel`, `start` (a target walked here), `crossInline`, `snapshotDir`, `commands.assemble`,
+     `reportPath`, `htmlReportPath`, `workDir`, `crossBundlePath`, `crossBriefPath`, `baseBranch`,
+     `baseSource`, `prNumber`, `resume`, `skipped` (a count) — are in this summary: do not Read the file, whose
      60–75 kB would stay in your context until the first compaction. Read it (Read tool, never
-     `cat`) only for a key the summary lacks (`instructionsCatalog`, `checklistPlans`).
+     `cat`) only for a key the summary lacks (`instructionsCatalog`, `checklistPlans`, a target's list of
+     `files` or of `windows`).
      `targets[].resumed` true means the target continues an interrupted run (Step 3).
 
 ## Step 2 — Load the rulebook (before you walk a file yourself)

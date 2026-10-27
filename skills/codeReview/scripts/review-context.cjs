@@ -15,6 +15,7 @@ const rulebook = require('./rulebook.cjs');
 const repoFacts = require('./repo-facts.cjs');
 const reviewBundle = require('./review-bundle.cjs');
 const reviewScope = require('./review-scope.cjs');
+const mechanical = require('./mechanical.cjs');
 
 const defaultSkillDir = path.resolve(__dirname, '..');
 const baseBranchNames = ['main', 'master', 'develop', 'dev'];
@@ -67,8 +68,16 @@ function isSkippedPath(filePath) {
 // The effort levels a walker's prompt can carry, worded in SKILL.md Step 3 (Windows).
 const walkerEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Windows walked at once (`--parallel=<n>`): each walker writes parts of its own files only.
-const defaultParallel = 3;
+const defaultParallel = 4;
 const maxParallel = 6;
+// The most files a target walked in the main conversation may have to make its cross-file pass there.
+const crossInlineMax = 4;
+// Where a branch target's reviewed revision is kept for the run's searches (`snapshotDir`): next
+// to runs/ and cache/, one short folder per target - the assembly removes it.
+const snapshotsDirName = 's';
+// What walks a window of files the script found mechanical (mechanical.cjs): two questions per
+// file need no deeper model - the same setting the models kinds declare.
+const mechanicalWalker = { model: 'sonnet', effort: 'medium' };
 // The fewest consecutive files of a kind with a `walker` setting that get windows of their own.
 const lightRunMin = 3;
 
@@ -1119,6 +1128,16 @@ function buildContext(options) {
   // known on every run: a resume across the two settings is safe only while it is none.
   const light = rulebook.lightRulebook(loaded);
   const rules = options.light ? light.rules : loaded;
+  // `options.timing(phase, ms)` hears how long each phase took (DOH_TIMING=1 in main): the build
+  // took 213 s on four branches, and only the duplication scan had ever been measured.
+  let lastMark = Date.now();
+  const mark = (phase) => {
+    if (typeof options.timing !== 'function') return;
+    const at = Date.now();
+    options.timing(phase, at - lastMark);
+    lastMark = at;
+  };
+  mark('rulebook');
   const ts = formatTimestamp(now);
   // When the reviewed project already has a `.claude/` folder, write into
   // `<project>/.claude/doh/codeReview/` (created on demand) instead of the skill's
@@ -1233,8 +1252,9 @@ function buildContext(options) {
       result.warnings.push(`[${target.branch}] Resuming the interrupted review from ${run.stamp} without a content check (folder mode keeps no snapshot of file contents) - if files of this folder changed since, delete its run folder (rm -rf "${runDir}") and run again.`);
     }
     if (Array.isArray(previous.reviewed)) {
-      const reviewed = new Set(previous.reviewed);
-      target.files = target.files.filter((f) => reviewed.has(f.path));
+      // In the order that run numbered its parts: a file's part number is its position.
+      const reviewed = new Map(previous.reviewed.map((p, i) => [p, i]));
+      target.files = target.files.filter((f) => reviewed.has(f.path)).sort((a, b) => reviewed.get(a.path) - reviewed.get(b.path));
     }
     if (previous.sinceLast) {
       target.unchangedSinceLastReview = previous.sinceLast.unchanged;
@@ -1474,6 +1494,8 @@ function buildContext(options) {
     }
   }
 
+  mark('targets');
+
   // Each target's reviewed files as the review reads them (path -> text, without deleted and
   // binary ones), and the projects its whole-repository reads cover (revisionScope) - both
   // decided once and shared by the duplication scan and the facts.
@@ -1514,22 +1536,50 @@ function buildContext(options) {
   // Copy/paste detection over each reviewed revision (duplication-scan.cjs). Runs
   // only when the caller hands the scanner in - main() does - because it spawns
   // jscpd through npx, which tests and library callers must not pay for.
-  if (options.scanDuplicates) {
+  // `scanTargets` scans every target in one call, side by side, and keeps a branch target's
+  // exported tree as its `snapshotDir`: the reviewed revision as plain files, which a walker
+  // searches with the Grep tool. A `git grep <commit>` per question cost a walker 30-250 s each
+  // with seven agents at work (2026-10-27), against 1.6 s alone. The working tree of a staged
+  // (after `git add .`) or folder review is its revision already.
+  const applyScan = (target, scan) => {
+    if (scan.tree) {
+      target.snapshotDir = scan.tree.replace(/\\/g, '/');
+      target.snapshotOwned = true;
+    }
+    if (scan.error) {
+      result.warnings.push(`[${target.branch}] Duplication scan (jscpd) did not run: ${scan.error}. Duplicated code is searched for by the review alone.`);
+      return;
+    }
+    target.duplicationCandidates = scan.candidates;
+    if (scan.omitted > 0) {
+      result.warnings.push(`[${target.branch}] Duplication scan: ${scan.omitted} more duplication candidate(s) found than the ${scan.candidates.length} listed - they are not in this review.`);
+    }
+    if (scan.boilerplate > 0) {
+      result.warnings.push(`[${target.branch}] Duplication scan: ${scan.boilerplate} changed block(s) repeat a pattern found more than ${duplication.maxCopies} times in the codebase - boilerplate, not listed as candidates.`);
+    }
+  };
+  const jobOf = (target, i) => ({
+    project,
+    source: scanSources.get(target),
+    files: target.files,
+    isSkipped: isSkippedPath,
+    scope: target.files.length > 0 ? scopeOf(target).scope : null,
+    // Short: the tree's own paths go deep, and a path past 260 characters is a trap on Windows.
+    treeRoot: target.kind === 'branch' && target.files.length > 0 ? path.join(root, snapshotsDirName, `${ts.time}-${ts.seconds}-${i + 1}`) : null,
+  });
+  if (options.scanTargets) {
+    const scans = options.scanTargets(result.targets.map(jobOf));
+    result.targets.forEach((target, i) => applyScan(target, (scans && scans[i]) || { error: 'no scan result' }));
+  } else if (options.scanDuplicates) {
     for (const target of result.targets) {
-      const scan = options.scanDuplicates({ project, source: scanSources.get(target), files: target.files, isSkipped: isSkippedPath, scope: target.files.length > 0 ? scopeOf(target).scope : null });
-      if (scan.error) {
-        result.warnings.push(`[${target.branch}] Duplication scan (jscpd) did not run: ${scan.error}. Duplicated code is searched for by the review alone.`);
-        continue;
-      }
-      target.duplicationCandidates = scan.candidates;
-      if (scan.omitted > 0) {
-        result.warnings.push(`[${target.branch}] Duplication scan: ${scan.omitted} more duplication candidate(s) found than the ${scan.candidates.length} listed - they are not in this review.`);
-      }
-      if (scan.boilerplate > 0) {
-        result.warnings.push(`[${target.branch}] Duplication scan: ${scan.boilerplate} changed block(s) repeat a pattern found more than ${require('./duplication-scan.cjs').maxCopies} times in the codebase - boilerplate, not listed as candidates.`);
-      }
+      const { treeRoot, ...job } = jobOf(target, 0);
+      applyScan(target, options.scanDuplicates(job));
     }
   }
+  for (const target of result.targets) {
+    if (!target.snapshotDir && target.kind !== 'branch') target.snapshotDir = project.replace(/\\/g, '/');
+  }
+  mark('scan');
 
   // The import ledger the cross-file layering question walks, collected here from the
   // reviewed revision instead of by the reviewer while each file is open - a step that
@@ -1579,10 +1629,41 @@ function buildContext(options) {
     // shell's pid) keeps two searches of one run from overwriting each other. git grep exits 1
     // on no match, which is an answer ("0 match(es)", exit 0), and 2 or more on a pattern it
     // rejects, which is not: printed as `0 match(es)` it read as "nothing exists".
-    target.commands.grep = `f=${q(`${target.workDir}/grep-`)}$$.txt; ${target.commands.grep} > "$f" 2> "$f.err"; s=$?; if [ "$s" -le 1 ]; then echo "$(wc -l < "$f") match(es) -> $f"; else echo "grep failed (exit $s - is the pattern a valid extended regex?): $(head -c 300 "$f.err")" >&2; (exit "$s"); fi`;
+    // In a repository of several projects it searches the ones the review reaches, like the
+    // scan and the facts: half the files, half the time.
+    const reach = target.files.length > 0 ? scopeOf(target).scope : null;
+    const searched = reach && reach.roots.length > 0
+      ? target.commands.grep.replace(/ --$/, ` -- ${reach.roots.map(q).join(' ')}`)
+      : target.commands.grep;
+    target.commands.grep = `f=${q(`${target.workDir}/grep-`)}$$.txt; ${searched} > "$f" 2> "$f.err"; s=$?; if [ "$s" -le 1 ]; then echo "$(wc -l < "$f") match(es) -> $f"; else echo "grep failed (exit $s - is the pattern a valid extended regex?): $(head -c 300 "$f.err")" >&2; (exit "$s"); fi`;
     const diffArgs = pendingDiffArgs.get(target);
     const patchFlags = ['--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/'];
     const patches = diffArgs ? splitPatchByPath(tryGit(project, [...quiet, 'diff', ...patchFlags, ...diffArgs]) || '') : new Map();
+    // The files the diff changed only mechanically (mechanical.cjs): what each one's diff did, the
+    // words the target's renames replaced, and where the old ones are still in the reviewed revision.
+    const learned = mechanical.substitutionMap(target.files);
+    const mechanicalOf = new Map();
+    for (const f of diffArgs ? target.files : []) {
+      if (f.status === 'A' || f.status === 'D') continue;
+      const reason = mechanical.classify({ status: f.status, ...mechanical.diffLines(patches.get(f.path) || '') }, learned);
+      if (reason) mechanicalOf.set(f.path, reason);
+    }
+    const leftOver = mechanicalOf.size > 0 && Object.keys(learned).length > 0
+      ? mechanical.leftovers(learned, universe.files)
+      : { total: 0, hits: [] };
+    // The files of one walker setting walk together: a window is a run of consecutive files, and a
+    // rename branch whose mechanical files lay between the others by path was cut into eleven
+    // windows (2026-10-27). Behaviour first - it carries the findings - then the files of a light
+    // kind, then the mechanical ones; a resumed run keeps the order its parts were numbered in.
+    // A group shorter than `lightRunMin` stays among its neighbours, which it is walked with anyway:
+    // moved to the end it was a window of its own for one file.
+    if (!target.resume) {
+      const lightKind = (f) => !!(planCatalog[f.plan] && planCatalog[f.plan].walker);
+      const mechanicalGroup = mechanicalOf.size >= lightRunMin;
+      const lightGroup = target.files.filter((f) => lightKind(f) && !mechanicalOf.has(f.path)).length >= lightRunMin;
+      const rank = (f) => (mechanicalOf.has(f.path) ? (mechanicalGroup ? 2 : 0) : lightKind(f) && lightGroup ? 1 : 0);
+      target.files = target.files.map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map(({ f }) => f);
+    }
     // The part files' own width (check-part.cjs), so `03-a.ts` pairs with `part03.md`.
     const width = Math.max(2, String(target.files.length + 2).length);
     const writes = [];
@@ -1592,6 +1673,7 @@ function buildContext(options) {
       const stem = `${target.workDir}/${String(i + 1).padStart(width, '0')}-${path.basename(f.path).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')}`;
       f.contentPath = null;
       f.diffPath = null;
+      if (mechanicalOf.has(f.path)) f.mechanical = mechanicalOf.get(f.path);
       let diffChars = 0;
       if (f.status !== 'D') {
         if (!blobs) {
@@ -1657,6 +1739,7 @@ function buildContext(options) {
           candidates: (target.duplicationCandidates || []).filter((c) => c.path === f.path),
           factRoot: universe.factRoot,
           partial: partialHere,
+          mechanical: f.mechanical ? { reason: f.mechanical, map: learned, leftovers: leftOver } : null,
         },
       });
     });
@@ -1673,19 +1756,22 @@ function buildContext(options) {
     const done = new Set(target.resume ? target.resume.doneFiles : []);
     const pending = bundles.filter((b) => !done.has(b.file.path));
     // The bundle as rendered below, less its `partia:` and `## Dalej` lines, and the Reads beside it.
-    const charsOf = new Map(pending.map((b) => [b.number, b.readChars + reviewBundle.renderBundle({ ...b.render, lineCount: b.lineCount }).length]));
+    // A mechanical file is read through its short bundle (`fullPath`, review-bundle.cjs).
+    const charsOf = new Map(pending.map((b) => [b.number, b.readChars + reviewBundle.renderBundle({ ...b.render, lineCount: b.lineCount, ...(b.file.mechanical ? { fullPath: b.file.bundlePath } : {}) }).length]));
     // The kind's `walker` (rulebook.cjs readWalker): files that need no deep reasoning share
     // batches and windows only with their like, so a window of them runs on the lighter model.
     // A run shorter than `lightRunMin` files stays with its neighbours: a walker's start costs
     // more than the lighter model saves on one or two files.
     const bundleOf = new Map(bundles.map((b) => [b.number, b]));
+    // A file the script found mechanical is walked like a models kind's, in windows of its own class.
+    const isMechanical = (number) => !!bundleOf.get(number).file.mechanical;
     const ownWalker = (number) => {
       const kind = planCatalog[bundleOf.get(number).file.plan];
-      return (kind && kind.walker) || null;
+      return (kind && kind.walker) || (isMechanical(number) ? mechanicalWalker : null);
     };
     const keyOf = (walker) => (walker ? `${walker.model || ''}|${walker.effort || ''}` : '');
     const order = pending.map((b) => b.number);
-    const keys = new Map(order.map((number) => [number, keyOf(ownWalker(number))]));
+    const keys = new Map(order.map((number) => [number, `${isMechanical(number) ? reviewBundle.mechanicalClass : ''}${keyOf(ownWalker(number))}`]));
     for (let start = 0, i = 1; i <= order.length; i++) {
       if (i < order.length && keys.get(order[i]) === keys.get(order[start]) && order[i] === order[i - 1] + 1) continue;
       if (keys.get(order[start]) && i - start < lightRunMin) for (let j = start; j < i; j++) keys.set(order[j], '');
@@ -1707,13 +1793,24 @@ function buildContext(options) {
     const drafts = target.resume && Array.isArray(target.resume.drafts) && target.resume.drafts.length > 0;
     const windows = options.windows === false || drafts
       ? []
-      : reviewBundle.planWindows(batches, (number) => reviewBundle.walkTokens(charsOf.get(number)), undefined, (batch) => walkerKey(batch[0]));
+      : reviewBundle.planWindows(
+        batches,
+        (number) => reviewBundle.walkTokens(charsOf.get(number), isMechanical(number) ? reviewBundle.mechanicalLimits.fileTokens : undefined),
+        undefined,
+        (batch) => walkerKey(batch[0]),
+        reviewBundle.limitsOfClass,
+      );
     const windowSpans = windows.map((window) => [window[0][0], window[window.length - 1][window[window.length - 1].length - 1]]);
     const windowEnds = new Map(windowSpans.map(([first, last]) => [last, { first, last }]));
     const byNumber = new Map(bundles.map((b) => [b.number, b]));
     const crossPartPath = reviewBundle.partPathOf(target.reportPath, n + 1, n);
     // The cross-file pass's own brief (SKILL.md Step 3, Windows): a fresh agent makes the pass.
     target.crossBriefPath = n > 0 ? `${target.workDir}/${reviewBundle.crossBriefName}` : null;
+    // A target the conversation walks itself in a few files is no long walk to escape: it makes
+    // the pass too, with every file still in its context. A fresh agent re-read 0.4M tokens of its
+    // own to answer the pass over three files of one component, and found nothing (2026-10-27).
+    const crossInline = windows.length === 0 && n > 0 && n <= crossInlineMax;
+    if (crossInline) target.crossInline = true;
     const batchOf = new Map();
     batches.forEach((batch, k) => {
       const next = k + 1 < batches.length ? batches[k + 1].map((number) => byNumber.get(number).file) : [];
@@ -1721,14 +1818,22 @@ function buildContext(options) {
     });
     for (const b of bundles) {
       const at = batchOf.get(b.number);
-      const last = at && at.batch[at.batch.length - 1] === b.number;
-      writes.push([b.file.bundlePath, reviewBundle.renderBundle({
+      const last = at && at.batch.length > 0 && at.batch[at.batch.length - 1] === b.number;
+      const rendered = {
         ...b.render,
         lineCount: b.lineCount,
         partPath: reviewBundle.partPathOf(target.reportPath, b.number, n),
         batch: at && at.batch.length > 1 ? at.batch.map((number) => byNumber.get(number).file.path) : null,
-        next: last ? reviewBundle.renderNext({ nextFiles: at.next, crossBundlePath: target.crossBundlePath, crossPartPath, crossBriefPath: target.crossBriefPath, window: windowEnds.get(b.number) || null }) : null,
-      })]);
+        next: last ? reviewBundle.renderNext({ nextFiles: at.next, crossBundlePath: target.crossBundlePath, crossPartPath, crossBriefPath: crossInline ? null : target.crossBriefPath, window: windowEnds.get(b.number) || null }) : null,
+      };
+      // A mechanical file: the short bundle is the one its walk reads, the full one waits beside it.
+      if (b.file.mechanical) {
+        b.file.fullBundlePath = b.file.bundlePath.replace(/\.bundle\.md$/, '.full.bundle.md');
+        writes.push([b.file.fullBundlePath, reviewBundle.renderBundle(rendered)]);
+        writes.push([b.file.bundlePath, reviewBundle.renderBundle({ ...rendered, fullPath: b.file.fullBundlePath })]);
+      } else {
+        writes.push([b.file.bundlePath, reviewBundle.renderBundle(rendered)]);
+      }
     }
     // A window's brief is the one thing its sub-agent is sent: the main conversation passes the path.
     const settings = {
@@ -1739,6 +1844,7 @@ function buildContext(options) {
       withRuleText: target.withRuleText,
       light: target.light,
       dedupItems: target.dedupItems,
+      ...(target.snapshotDir ? { snapshotDir: target.snapshotDir } : {}),
       commands: { grep: target.commands.grep },
     };
     target.windows = windows.map((window, k) => {
@@ -1767,21 +1873,6 @@ function buildContext(options) {
         ...(effort ? { effort } : {}),
       };
     });
-    // How many windows walk at once: their parts are independent files, and the part check
-    // asks each for the parts before it in its own window only (check-part.cjs).
-    target.parallel = target.windows.length > 1 ? Math.min(options.parallel || defaultParallel, target.windows.length) : 1;
-    // The Workflow tool's call (SKILL.md Step 3, Windows): the windows, then the cross-file pass,
-    // as one background run the main conversation hears from once. `args` stays small - the
-    // script derives each brief's path from `dir` and the window's number.
-    target.workflow = target.windows.length > 0 ? {
-      scriptPath: `${skillDir.replace(/\\/g, '/')}/workflows/review-windows.js`,
-      args: {
-        dir: target.workDir,
-        lanes: target.parallel,
-        windows: target.windows.map((w) => [`${w.files[0]}-${w.files[1]}`, w.model || '', w.effort || '']),
-        cross: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
-      },
-    } : null;
     target.batches = batches.filter((batch) => batch.length > 1).map((batch) => [batch[0], batch[batch.length - 1]]);
     target.start = batches.length > 0
       ? reviewBundle.readsOf(batches[0].map((number) => byNumber.get(number).file))
@@ -1798,6 +1889,7 @@ function buildContext(options) {
     });
     pendingWork.set(target, writes);
   }
+  mark('bundles');
 
   // Only the plans a reviewed file still points at are handed out - a file dropped
   // by `--since-last` or by the reviewed subset takes its kind's plan with it - and
@@ -1871,6 +1963,7 @@ function buildContext(options) {
           workDir: target.workDir,
           importLedger: target.importLedger,
           ...(target.light ? { light: true } : {}),
+          ...(target.snapshotDir ? { snapshotDir: target.snapshotDir } : {}),
           commands: { grep: target.commands.grep },
         },
         crossBundlePath: target.crossBundlePath,
@@ -1901,6 +1994,7 @@ function buildContext(options) {
     if (useProjectDoh) ensureDohGitignore(legacyDir);
     // Pruning runs in both locations and only ever inside runs/ (see pruneRuns).
     pruneRuns(runsDir, result.targets.map((target) => path.dirname(target.reportPath)));
+    pruneSnapshots(path.join(root, snapshotsDirName), result.targets.map((target) => target.snapshotOwned && target.snapshotDir));
     // Rewritten whole every run, so a copy never outlives a change to its instruction.
     try {
       fs.rmSync(rulesDir, { recursive: true, force: true });
@@ -1979,14 +2073,75 @@ function buildContext(options) {
       result.contextPath = path.join(runCacheDir, `.review-context-${result.targets[0].kind}.json`);
       for (const target of result.targets) target.commands.assemble = assembleCommand(target, result.contextPath, project, skillDir);
     }
+    result.workflow = runWorkflow(result, options);
   }
+  mark('write');
   return result;
+}
+
+// The snapshots a run left behind: the assembly removes its own, so one older than a day is a
+// run that never assembled - except the ones this run itself is about to be read from.
+function pruneSnapshots(dir, keep = [], maxAgeMs = 24 * 60 * 60 * 1000) {
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  const stale = Date.now() - maxAgeMs;
+  for (const name of names) {
+    const full = path.join(dir, name);
+    if (keep.some((k) => k && samePath(k, full))) continue;
+    try {
+      if (fs.statSync(full).mtimeMs < stale) fs.rmSync(full, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+// The Workflow tool's call (SKILL.md Step 3, Windows): the windows of every target, each target's
+// cross-file pass after its own, as one background run the main conversation hears from once.
+// The windows walk at once over all targets, `--parallel` of them (each target's `parallel` is the
+// same number, for a session that dispatches them through the Agent tool). The script is copied
+// into the run folder: the Workflow tool runs a `scriptPath` only from a folder of the project,
+// and the plugin's own lies outside it. `args` stays small - the script derives each brief's
+// path from `dir` and the window's number.
+function runWorkflow(result, options) {
+  const windowed = result.targets.filter((target) => (target.windows || []).length > 0);
+  const total = windowed.reduce((sum, target) => sum + target.windows.length, 0);
+  const lanes = Math.max(1, Math.min(options.parallel || defaultParallel, total));
+  for (const target of result.targets) target.parallel = target.windows && target.windows.length > 0 ? lanes : 1;
+  if (windowed.length === 0) return null;
+  const source = path.join(defaultSkillDir, 'workflows', 'review-windows.js');
+  let scriptPath = source.replace(/\\/g, '/');
+  try {
+    const copy = path.join(path.dirname(path.dirname(windowed[0].reportPath)), 'review-windows.js');
+    fs.copyFileSync(source, copy);
+    scriptPath = copy.replace(/\\/g, '/');
+  } catch (err) {
+    result.warnings.push(`Could not copy the workflow script into the run folder (${(err && err.message) || err}) - the Workflow tool may refuse ${scriptPath}; pass its text as \`script\` instead.`);
+  }
+  return {
+    scriptPath,
+    args: {
+      lanes,
+      targets: windowed.map((target) => ({
+        dir: target.workDir,
+        windows: target.windows.map((w) => [`${w.files[0]}-${w.files[1]}`, w.model || '', w.effort || '']),
+        cross: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
+      })),
+    },
+  };
 }
 
 function main() {
   let context;
   try {
-    context = buildContext({ ...parseArgs(process.argv.slice(2)), scanDuplicates: duplication.scanDuplicates });
+    context = buildContext({
+      ...parseArgs(process.argv.slice(2)),
+      scanTargets: duplication.scanTargets,
+      // DOH_TIMING=1: each phase's time on stderr, which the reviewer never reads as the context.
+      timing: process.env.DOH_TIMING ? (phase, ms) => process.stderr.write(`[doh-timing] ${phase} ${ms} ms\n`) : null,
+    });
   } catch (err) {
     context = { targets: [], errors: [String((err && err.message) || err)] };
   }
@@ -2027,38 +2182,40 @@ function writeContext(context) {
     warnings: warnings || [],
     // What the review itself uses, so the reviewer never reads the whole context file: the
     // scripts and hooks read that one. Keys a step needs beyond these stay in `contextPath`.
+    // Counts, not lists: a 115-file run printed 31 kB here - more than the harness shows inline,
+    // so it went to a file and cost a round trip to read back.
     outputFormat: context.outputFormat,
     walker: context.walker || { model: '', effort: '' },
     rulebookNotesPath: context.rulebookNotesPath,
     claudeMd: context.claudeMd,
-    targets: context.targets.map((t) => ({
-      branch: t.branch,
-      kind: t.kind,
-      baseBranch: t.baseBranch,
-      prNumber: t.prNumber,
-      files: t.files.length,
-      paths: t.files.map((f) => f.path),
-      reportPath: t.reportPath,
-      htmlReportPath: t.htmlReportPath,
-      workDir: t.workDir,
-      crossBundlePath: t.crossBundlePath,
-      crossBriefPath: t.crossBriefPath || null,
-      batches: (t.batches || []).length,
-      windows: t.windows || [],
-      parallel: t.parallel || 1,
-      workflow: t.workflow || null,
-      withChecklist: t.withChecklist,
-      withRuleText: t.withRuleText,
-      light: t.light,
-      dedupItems: t.dedupItems,
-      skipped: t.skipped,
-      unchangedSinceLastReview: t.unchangedSinceLastReview,
-      previousReportPath: t.previousReportPath,
-      start: t.start,
-      commands: t.commands,
-      resumed: !!t.resume,
-      resume: t.resume || null,
-    })),
+    workflow: context.workflow || null,
+    targets: context.targets.map((t) => {
+      const windows = (t.windows || []).length;
+      const unchanged = t.unchangedSinceLastReview;
+      return {
+        branch: t.branch,
+        kind: t.kind,
+        baseBranch: t.baseBranch === undefined ? null : t.baseBranch,
+        baseSource: t.baseSource === undefined ? null : t.baseSource,
+        prNumber: t.prNumber === undefined ? null : t.prNumber,
+        files: t.files.length,
+        reportPath: t.reportPath,
+        htmlReportPath: t.htmlReportPath,
+        workDir: t.workDir,
+        ...(t.snapshotDir ? { snapshotDir: t.snapshotDir } : {}),
+        crossBundlePath: t.crossBundlePath,
+        crossBriefPath: t.crossBriefPath || null,
+        ...(t.crossInline ? { crossInline: true } : {}),
+        windows,
+        ...(windows > 0 ? { parallel: t.parallel || 1 } : { start: t.start }),
+        ...(t.light ? { light: true } : {}),
+        skipped: (t.skipped || []).length,
+        ...(unchanged ? { unchangedSinceLastReview: Array.isArray(unchanged) ? unchanged.length : unchanged, previousReportPath: t.previousReportPath || null } : {}),
+        commands: { assemble: t.commands && t.commands.assemble },
+        resumed: !!t.resume,
+        resume: t.resume || null,
+      };
+    }),
   };
 }
 

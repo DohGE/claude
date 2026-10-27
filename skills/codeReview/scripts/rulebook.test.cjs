@@ -401,6 +401,30 @@ test('an alias reads a kind that still names the old id as the rule itself', (t)
   assert.deepStrictEqual(rulebook.planOf(component, 'src/app/x.component.ts', 'x', rules.instructions).skipped, ['ui-wording']);
 });
 
+test('a local rule fixes its severity, the severity of single items and its same-defect links in its front matter', (t) => {
+  const skill = writeLayer(tempDir(t, 'rb-skill-'), [kind('component', '<name>.component.ts', [instruction('general', ['a', 'b'])])]);
+  const local = tempDir(t, 'rb-local-');
+  fs.writeFileSync(path.join(local, 'ui-wording.md'), localRule('name: UI wording\nid: ui-wording\nseverity: low\nitem-severity:\n  - 2: medium\nsame-as:\n  - 1: general#2'));
+  const rules = rulebook.loadRulebook([skill], { localDir: local });
+  assert.deepStrictEqual(rules.warnings, []);
+  const rule = rules.instructions.get('ui-wording');
+  assert.strictEqual(rulebook.fixedSeverity(rule, 1), 'low', 'the rule\'s own severity');
+  assert.strictEqual(rulebook.fixedSeverity(rule, 2), 'medium', 'an item\'s severity outranks the rule\'s');
+  assert.deepStrictEqual(rule.extras.get(1).sameAs, ['general#2']);
+  assert.deepStrictEqual(rules.instructions.get('general').extras.get(2).sameAs, ['ui-wording#1'], 'the skill\'s item names the local one back');
+  assert.deepStrictEqual(rulebook.lightRulebook(rules).dropped, ['ui-wording#1'], '--light leaves out the low items of a local rule');
+});
+
+test('a local rule\'s item severity or link that names no item of it, or no level, is a warning', (t) => {
+  const skill = writeLayer(tempDir(t, 'rb-skill-'), [kind('component', '<name>.component.ts', [instruction('general', ['a'])])]);
+  const local = tempDir(t, 'rb-local-');
+  fs.writeFileSync(path.join(local, 'ui-wording.md'), localRule('name: UI wording\nid: ui-wording\nitem-severity:\n  - 9: medium\n  - 1: urgent\nsame-as:\n  - 2 general#1'));
+  const rules = rulebook.loadRulebook([skill], { localDir: local });
+  assert.strictEqual(rules.warnings.length, 3, rules.warnings.join('\n'));
+  assert.ok(rules.warnings.every((w) => w.startsWith('local/ui-wording.md:')), rules.warnings.join('\n'));
+  assert.strictEqual(rulebook.fixedSeverity(rules.instructions.get('ui-wording'), 1), null);
+});
+
 test('the user-text gate: translations, templates, translation keys, label literals', () => {
   const gate = rulebook.contentGates['user-text'];
   assert.ok(gate('src/assets/i18n/en.json', '{}'));

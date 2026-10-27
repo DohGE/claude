@@ -1797,10 +1797,13 @@ function shellReviewRead(command, cwd, sessionId = null, env = process.env) {
   ].join('\n');
 }
 
-// Two findings of one part over the same lines whose addresses are the two sides of a `sameAs`
-// pair: one defect reported twice, most likely. Named, not refused - the lines may hold two.
+// Two findings of one part over the same lines: under the two sides of a `sameAs` pair, one
+// defect reported twice, most likely; under two instructions no pair links, possibly one defect
+// seen from two rules (a hard-coded label is an i18n, a general and a models finding at once).
+// Named, not refused - the lines may hold two. Two items of one instruction are two requirements.
 function sameDefectNotes(report, rules) {
   const notes = [];
+  const idsOf = (addresses) => new Set(addresses.map((address) => address.split('#')[0]));
   for (const section of report.files) {
     const findings = section.findings;
     for (let i = 0; i < findings.length; i++) {
@@ -1808,11 +1811,16 @@ function sameDefectNotes(report, rules) {
         const a = lineSet(findings[i].lines);
         const b = lineSet(findings[j].lines);
         if (a.size === 0 || a.size !== b.size || ![...a].every((k) => b.has(k))) continue;
+        const mine = addressesOf(findings[i]);
         const other = addressesOf(findings[j]);
-        const pair = addressesOf(findings[i]).flatMap((x) => (rules.sameAs[x] || []).filter((y) => other.includes(y)).map((y) => `${x} i ${y}`));
+        const pair = mine.flatMap((x) => ((rules.sameAs || {})[x] || []).filter((y) => other.includes(y)).map((y) => `${x} i ${y}`));
         if (pair.length) {
           notes.push(`${section.path}: dwa znaleziska z pola Linia "${findings[i].lines}" pod ${pair[0]} - paczka oznacza te pozycje "ta sama wada". Jeśli to jedna wada, scal je jednym Edit tej części: jedno znalezisko, oba adresy w polu Reguła (najbardziej szczegółowy pierwszy).`);
+          continue;
         }
+        const otherIds = idsOf(other);
+        if (mine.length === 0 || other.length === 0 || [...idsOf(mine)].some((id) => otherIds.has(id))) continue;
+        notes.push(`${section.path}: dwa znaleziska z tym samym polem Linia "${findings[i].lines}" (${mine.join('; ')} oraz ${other.join('; ')}). Jeśli to jedna wada widziana z dwóch instrukcji, scal je jednym Edit tej części: jedno znalezisko, wszystkie adresy w polu Reguła (najbardziej szczegółowy pierwszy); dwie różne wady na tych samych liniach zostaw.`);
       }
     }
   }
@@ -2081,6 +2089,9 @@ function finishAssembly(context, target) {
   for (const part of parts) fs.rmSync(path.join(dir, part), { force: true });
   if (target.importLedger) fs.rmSync(target.importLedger, { force: true });
   if (target.workDir) fs.rmSync(target.workDir, { recursive: true, force: true });
+  // The reviewed revision exported for the walkers' searches - never a staged or folder
+  // review's `snapshotDir`, which is the project itself.
+  if (target.snapshotOwned && target.snapshotDir) fs.rmSync(target.snapshotDir, { recursive: true, force: true });
   const rendered = spawnSync(process.execPath, [path.join(__dirname, 'render-report.cjs'), ...renderArgsOf(target, context.project)], { encoding: 'utf8' });
   process.stdout.write(rendered.stdout || '');
   process.stderr.write(rendered.stderr || '');
@@ -2143,6 +2154,7 @@ module.exports = {
   checkPart, checkAssembly, findContextFor, hookResult, normalizePart, fillPart, checkQuestions, windowOf, scanPart, planItems, compact,
   rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellWrites, expandWord,
   promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName, noSpecConflicts,
+  sameDefectNotes, partReport,
 };
 
 if (require.main === module) {
