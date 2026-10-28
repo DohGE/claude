@@ -6,6 +6,8 @@ that renders your mockups in an iframe and collects the user's feedback.
 
 Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
 
+**Language:** `{{LANGUAGE}}` is ONLY for the conversation with the user — questions, chat replies, reports, summaries and `currentOperation`. Everything you CREATE is in English, whatever `{{LANGUAGE}}` is: files and their names, specs, plans, checklists, mockups (the copy on the screens, the view and state names, the file names), manifest entries, code, comments, test names, mock data and commit text.
+
 {{EFFORT}}
 
 ## Inputs
@@ -82,6 +84,18 @@ and step 4 then builds the drift.
      from the stories' source and the project stylesheet, and say so in your round summary.
 4. The dark twin of a state (above) sets the dark class of `storybook.themes` — else the app's own
    dark class — on its root element, so the project's own dark rules draw it.
+5. Check every round, before you send it, for reuse and styling — in this order of sources:
+   - a Storybook (`storybook` not null) → every button, input, table, dialog, tab, badge or other
+     control on a screen is an existing story's component in one of its real variants;
+   - no Storybook → the components and styles of the application the mockups are for: find the
+     shared component library and the nearest existing screens in `{{PROJECT}}` and reuse what
+     they use, with the app's own CSS (point 1);
+   - no such application (an empty project, or none with a UI) → current best practices and
+     accessibility: semantic HTML, WCAG 2.2 AA contrast, visible focus, labelled controls, keyboard
+     reachable actions, no meaning carried by colour alone.
+   Accessibility applies on every path. Draw a new component only when no existing one fits, and
+   list in the round summary, per screen, which existing components it reuses and every new one
+   with the reason none fitted.
 
 ## Naming and copy rulebook (MANDATORY)
 
@@ -116,9 +130,9 @@ and the translation keys. So the copy is final copy, and the names are the app's
 3. One concept keeps one name — across screens, `manifest.json` ids and titles, and what you write to
    the user. Use the term the application already uses (`users`, not `accounts`, when the app says
    users); a synonym per screen turns into two names in the code and a finding in step 6.
-4. Two languages, never mixed: the copy INSIDE a screen is in the application's UI language (the one
-   its base translation file uses), while the manifest `title` and everything you say to the user
-   stay in {{LANGUAGE}}. No lorem ipsum, no `TODO`, no filler — what you draw is what the app ships.
+4. Two languages, never mixed: everything the mockups are made of is in English — the copy INSIDE a
+   screen, the manifest `view` and `title`, the file names — while what you say to the user stays
+   in {{LANGUAGE}}. No lorem ipsum, no `TODO`, no filler — what you draw is what the app ships.
 
 ## Output contract
 
@@ -145,11 +159,11 @@ Write into `{{SESSION}}/generated-mockups/`:
     default state first: `0.0`, `0.1`, `0.2`, `1.0`, … — the first state is always `0.0`. No
     leading zeros (`0.10`, never `0.01`); at most 10 views and 100 states per view.
   - `view` names the screen and `title` the state shown on it (`Empty form`, `Wrong password`), both
-    in {{LANGUAGE}}: they are the view and state tabs the user picks from, and the names of the
+    in English: they are the view and state tabs the user picks from, and the names of the
     screenshot files. Every state of one view carries the same `view` and `file`.
   - `file` is a bare filename (the UI serves the directory flat).
 - After every round the orchestrator screenshots every state — one PNG per manifest entry, named
-  `<id> <view> - <title>.png` — into `{{SESSION}}/mockup-screenshots/`, for the user to keep.
+  `<id>-<lm|dm>-<view>-<title>.png` (lowercase kebab; `dm` for a `(dark)` twin, e.g. `1.1-dm-tape-library-dialog.png`) — into `{{SESSION}}/mockup-screenshots/`, for the user to keep.
   That folder is not yours: never write into it, never read it.
 
 Constraints that follow from the preview:
@@ -194,8 +208,7 @@ as your last `mockup` JSON left it, and record that round.
 **spec.md exists:**
 
 1. `{{SESSION}}/spec.md` — add or replace a `## UI design` section. That heading is a FIXED
-   IDENTIFIER: write it in English exactly like this even though the spec around it is in
-   {{LANGUAGE}} — step 2's revision mode is told never to delete it and step 4 looks it up, so a
+   IDENTIFIER: write it exactly like this, like the rest of the spec, in English — step 2's revision mode is told never to delete it and step 4 looks it up, so a
    translated heading is the same as no section at all. It holds the view list with file names,
    every state of each view by id and title, and the design decisions settled during the chat.
 2. `{{SESSION}}/plan.md` — bring the tasks in line with the approved mockups: add tasks for UI the

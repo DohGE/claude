@@ -22,10 +22,16 @@ session when there is none) — the agent's brief says how.
      leave the panel locked. The chat is not part of the round at all — it belongs to step 3 and
      the server appends `mockupChat` to it, which is why clearing `mockupReview` never erases the
      conversation.
+     When `artifact(T)` is set — the user created the artifact on an earlier round — every new
+     round updates it, before the round is posted: the same `mockup-artifact.cjs` call and the same
+     publish from the same `page` path, so the artifact always shows the round on screen; then put
+     `"mockupArtifact":"<url>"` in the round's POST (the publish may return a new url) and add
+     `\nClaude artifact updated: <url>` to the round's `mockupChat` text (or the failure reason).
+     The approved round is the last one the artifact shows: nothing changes it after approval.
      Take the screenshots with `node "<SKILL_DIR>/scripts/screenshot-mockups.cjs" "<SESSION>/tasks/T"`.
      It refills `<SESSION>/tasks/T/mockup-screenshots/` with one full-page PNG per manifest entry —
      every state of every view, each loaded through its `#<id>` fragment — at desktop width
-     (1280 px), named `<id> <view> - <title>.png`, the id numbered `{0-9}.{0-99}` (view, then
+     (1280 px), named `<id>-<lm|dm>-<view>-<title>.png` (lowercase kebab; `dm` for a `(dark)` twin, e.g. `1.1-dm-tape-library-dialog.png`), the id numbered `{0-9}.{0-99}` (view, then
      state, both from 0); the panel's "Open screenshots folder"
      button opens that folder for the user. It prints one line, a FIXED IDENTIFIER:
      `SCREENSHOTS <count> <dir>`, or `SCREENSHOTS_FAILED <reason>` — then post the round anyway,
@@ -56,7 +62,9 @@ session when there is none) — the agent's brief says how.
        state at desktop and mobile width, and the screens and stylesheets it frames. Publish it with
        the Artifact tool - `file_path` = `page`, `files` = `files`, a one-sentence description naming
        the feature - always from that same `page` path, so a later press updates the same artifact.
-       Then POST `{"taskId":"T","step":3,"mockupChat":{"role":"agent","text":"Claude artifact: <url>"}}`
+       Then POST `{"taskId":"T","step":3,"mockupArtifact":"<url>","mockupChat":{"role":"agent","text":"Claude artifact: <url>"}}`
+       and keep the url as `artifact(T)`. `mockupArtifact` is what the page pins to the top of the
+       screen — the button is gone once pressed, so this bar is the only way back to the artifact.
        - or, when the script or the publish failed, the reason in the same field - and keep waiting
        for the round.
    - `{"type":"result","summary","screens":[…]}` (only ever arrives after the approval message) →

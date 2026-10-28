@@ -182,3 +182,39 @@ test('lista modeli jest z sesji, a zapamiętany model spoza niej to dziedziczeni
   await page.locator('#agentOverrides summary').click();
   await expect(page.locator('#agentModel-6')).toHaveValue('sonnet');
 });
+
+test('kroki, oba code review i ich runy wracają na kolejnym pustym formularzu', async ({ page }) => {
+  await page.goto(base);
+  await page.waitForSelector('#refinement');
+  await page.locator('label[for="refinement"]').click();
+  await page.locator('label[for="genMockups"]').click();
+  await page.locator('label[for="storyDesc"]').click();
+  await page.click('#addRun');
+  await page.locator('label[for="finalReview"]').click();
+  const runs = await page.evaluate(() => document.querySelectorAll('#reviewRuns .run').length);
+  await page.click('#createEmptyTask');
+  await expect.poll(async () => (await getState()).tasks.length).toBe(2);
+  await page.waitForSelector('#refinement');
+  await expect(page.locator('#refinement')).not.toBeChecked();
+  await expect(page.locator('#genMockups')).toBeChecked();
+  await expect(page.locator('#storyDesc')).toBeChecked();
+  await expect(page.locator('#finalReview')).not.toBeChecked();
+  await expect(page.locator('#finalReviewBox')).toBeHidden();
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(runs);
+});
+
+test('opis podziału na części leży pod branchem i idzie w zgłoszeniu', async ({ page }) => {
+  await page.goto(base);
+  await page.waitForSelector('#taskSplit');
+  const below = await page.evaluate(() => {
+    const y = sel => document.querySelector(sel).getBoundingClientRect().top;
+    return y('#taskSplit') > y('#branch') && y('#taskSplit') > y('#commitMessage');
+  });
+  expect(below).toBe(true);
+  await fillRequired(page);
+  await page.fill('#taskSplit', '1. API\n2. UI');
+  await expect(page.locator('#taskSplitHint')).toContainText('feature/zaproszenia-part-1');
+  await page.click('#next');
+  await page.click('#confirmOk');
+  await expect.poll(async () => ((await getState()).tasks[0].step1 || {}).taskSplit).toBe('1. API\n2. UI');
+});

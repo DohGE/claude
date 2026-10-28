@@ -18,12 +18,8 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview feature/a,feature/b;hotfix/c` | each listed branch (`,` or `;` separated) vs its own detected base; one report per branch |
 | `/codeReview folder src/app/user-panel` | every file currently in that folder of the working tree — no diff needed, so every line counts as changed |
 | `/codeReview [target] --only-md` | any of the above, but the report stays Markdown and no HTML is rendered |
-| `/codeReview [target] --with-checklist` | any of the above, but the report keeps every file's walked checklist and coverage marker (the page's **Pokrycie checklist** section) |
-| `/codeReview [target] --with-rule-text` | `--with-checklist`, plus the full text of its rule under every checklist item (on the page) or after ` — Reguła: ` on the item's line (in an `--only-md` Markdown) |
+| `/codeReview [target] --with-checklist` | any of the above, but the report keeps every file's walked checklist and coverage marker (the page's **Pokrycie checklist** section), with the full text of its rule under every checklist item (on the page) or after ` — Reguła: ` on the item's line (in an `--only-md` Markdown) |
 | `/codeReview [target] --light` | any of the above, but no checklist walks an item of severity `low`, the report keeps no ⚪ Low finding, and the page shows no code snippet (see [Light runs](#light-runs)) |
-| `/codeReview [target] --no-batch` | any of the above, but every file is walked in a message of its own instead of small files together (see [Token cost](#token-cost)) |
-| `/codeReview [target] --no-windows` | any of the above, but no sub-agent walks a window of files: the invoking conversation walks every file itself (for a session that cannot dispatch one; see [Token cost](#token-cost)) |
-| `/codeReview [target] --no-dedup-items` | any of the above, but every bundle shows every item in full, instead of an item an earlier bundle already showed arriving as a reference to that bundle (see [Token cost](#token-cost)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
 | `/codeReview [target] --walker-model=<model>` | any of the above, but every window walker and the cross-file agent are spawned on that model (e.g. `sonnet`) instead of inheriting this session's; a window of light kinds keeps its own setting (see [Token cost](#token-cost)) |
 | `/codeReview [target] --walker-effort=<low\|medium\|high\|xhigh\|max>` | any of the above, but every walker is spawned with that effort |
@@ -34,7 +30,7 @@ literally called `feature/a,b` cannot be named in that list — it would be read
 reported as two "Branch not found" errors for names you never typed. Check that branch out and run
 `/codeReview` with no arguments instead: auto mode reviews the current branch without naming it.
 
-`--only-md`, `--with-checklist`, `--with-rule-text`, `--light`, `--no-batch`, `--no-windows` and `--no-dedup-items` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
+`--only-md`, `--with-checklist` and `--light` may sit anywhere in the arguments and are stripped before the rest is mapped to a mode.
 The two formats are mutually exclusive: HTML mode leaves no `.md` behind, `--only-md` renders no HTML.
 `--with-checklist` changes only what the finished report keeps: every file is walked, written and checked with its checklist either way, and without the flag the renderer cuts the checklists, the coverage markers and the cross-file `<!-- unverified:` block from it — from the page and from an `--only-md` Markdown alike.
 The run's summary still states the coverage, read off the line the assembly prints.
@@ -95,7 +91,6 @@ The size cap matters because a small file's bundle is most of what its batch rea
 One message reads a whole batch — every file's bundle, content and diff — and one message writes its parts, together with the Reads of the next batch, which the batch's last bundle names under `## Dalej`.
 Inside a batch every file is still walked on its own, one after another, against its own checklist, and every part is checked as before.
 The context lists the batches in `target.batches`, and a bundle's `partia:` line names the files of its batch.
-`--no-batch` makes every file a batch of its own.
 
 A large target is walked in windows: runs of whole batches that one `doh:codereview-walker` sub-agent walks, `--parallel` of them at once over all the targets of the run (4 by default).
 A file's walk adds about 14,000 tokens to a conversation — the thinking blocks of a response stay in it until the run ends — plus a third of the characters its Reads bring, and a conversation that grows past about 165,000 tokens is compacted: it loses every bundle it read, and every response re-reads all of it.
@@ -112,7 +107,7 @@ Without the Workflow tool the invoking conversation dispatches the windows with 
 The walker is sent the path of its brief (`<workDir>/windowNN.md`) and nothing else: the brief names the target settings the steps name and every batch of the window with its parts and Reads.
 The rules of the walk are in the walker's system prompt: `agents/codereview-walker.md` carries `references/walk.md` (Step 3, the report format of Step 4, the rationalizations), copied by `scripts/sync-walker.cjs` and checked by a test, so every walker starts from the same cached prompt instead of reading 70 kB of `SKILL.md` as its first tool call.
 The last bundle of a window ends its `## Dalej` with an instruction to stop: the walker replies with one line, `WINDOW DONE <first>-<last>`.
-A window that does not come back done — a refused dispatch, a refused Write, `WINDOW STOPPED` — is walked by the invoking conversation from its first missing part, and a session with no Agent tool passes `--no-windows`.
+A window that does not come back done — a refused dispatch, a refused Write, `WINDOW STOPPED` — is walked by the invoking conversation from its first missing part, and a session with no Agent tool walks every window itself, in order.
 The context lists the windows in `target.windows`, as `{ files: [first, last], brief, lastPart, model, effort }`; the resume of an interrupted run builds them from the files still to walk, and a resume that carries drafts of refused parts has none.
 Walkers side by side share a session id: item dedup (below) keys what was shown by the agent id a hook input carries, and is off for parallel windows whose hook inputs carry none.
 
@@ -123,7 +118,7 @@ The context script writes the report header itself, and the bundle's `## Zapis c
 
 Item dedup shortens every bundle read after the first: an item an earlier bundle of the run already showed arrives as a reference to that bundle, while the facts and probe hits under it stay this file's own.
 A compaction resets it, so the bundles read after one show every item in full again.
-It is on by default since the A/B run of 2026-10-01 (`scripts/score-review.cjs --compare`); `--no-dedup-items` turns it off.
+It is on by default since the A/B run of 2026-10-01 (`scripts/score-review.cjs --compare`), and always on.
 
 A compaction re-attaches only the head of `SKILL.md`, so that file is ordered by need rather than by step, and since 0.26 it holds the orchestration only (21 kB instead of 86 kB): it fits in the re-attached head whole.
 The walk is `references/walk.md`, read only by a conversation that walks a file itself; Steps 1–2, which run once, stand after a `<!-- one-time:start -->` marker; the cross-file pass and the assembly are `references/cross-file.md` and `references/assembly.md`, read when the run reaches them.
@@ -507,8 +502,8 @@ It names the target and where it stands, the Reads that resume it (the next batc
 Its state is one small JSON file per session.
 
 `scripts/render-report.cjs` (Node, zero dependencies) parses the assembled Markdown report and renders the HTML page, then removes the Markdown — but only after a warning-free parse.
-Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source] [--only-md] [--with-checklist] [--with-rule-text] [--light]`.
-`--with-rule-text` implies `--with-checklist` and adds each item's rule text from the rulebook, after the verdicts are parsed, so a rule's own wording never reads as a verdict.
+Run it by hand with `node scripts/render-report.cjs --report=<path.md> [--project=<repo root>] [--mode=branch|staged|folder] [--branch=<name>] [--base=<name>] [--out=<path.html>] [--keep-source] [--only-md] [--with-checklist] [--light]`.
+`--with-checklist` also adds each item's rule text from the rulebook, after the verdicts are parsed, so a rule's own wording never reads as a verdict.
 Without `--with-checklist` it first cuts the checklist blocks, coverage markers and the `<!-- unverified:` block, so the page has no **Pokrycie checklist** section and a Markdown it leaves behind (a drift, `--keep-source`) carries none either; `--only-md` does only that cut, in place, and renders nothing.
 `--light` then cuts every ⚪ **Low** finding and a file section that loses its last finding to the cut — before the parse, so the page, the warnings' line numbers and a Markdown left behind (or the `--only-md` report) read the same text — and attaches no snippet (see [Light runs](#light-runs)).
 Under `--with-checklist` it reads the per-file checklist blocks and coverage markers too, and reconciles them: the ticks are recounted, and a short walk, a missing or malformed block or a marker the ticks contradict warns (and keeps the Markdown), while `<!-- coverage: <path> mechanical -->` is the complete proof for a file the mechanical-change gate narrowed to its two questions. Any other multi-line HTML comment in the report is swallowed whole instead of being read as findings.

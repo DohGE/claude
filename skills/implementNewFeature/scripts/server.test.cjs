@@ -2313,7 +2313,7 @@ test('shutdown with a pull request reaches every finished task, and leaves a req
     'nothing finished, nothing to open');
   await post(base, '/api/tasks', {});
   await post(base, '/api/tasks', {});
-  await step1(base, { commitMessage: 'feat: hosts' });
+  await step1(base, { commitMessage: 'feat: hosts', taskSplit: '1. model\n2. UI' });
   assert.strictEqual((await (await fetch(`${base}/api/answer?taskId=t1`)).json()).answer.kind, 'step1');
   await postState(base, { branch: 'feature/x', base: 'master', root: '/w/x', summary: { finalStatus: 'Completed' } });
   await post(base, '/api/state', { taskId: 't2', summary: { finalStatus: 'Failed at Implementation' } });
@@ -2321,7 +2321,8 @@ test('shutdown with a pull request reaches every finished task, and leaves a req
   assert.deepStrictEqual(res, { ok: true, tasks: ['t1'] });
   const request = JSON.parse(fs.readFileSync(path.join(dir, 'tasks', 't1', 'pr-request.json'), 'utf8'));
   assert.deepStrictEqual({ ...request, requestedAt: undefined },
-    { requestedAt: undefined, taskId: 't1', branch: 'feature/x', base: 'master', root: '/w/x', commitMessage: 'feat: hosts' });
+    { requestedAt: undefined, taskId: 't1', branch: 'feature/x', base: 'master', root: '/w/x', commitMessage: 'feat: hosts',
+      taskSplit: '1. model\n2. UI', splitBranch: 'feature/x' });
   assert.ok(!fs.existsSync(path.join(dir, 'tasks', 't2', 'pr-request.json')), 'a failed task gets no pull request');
   assert.deepStrictEqual(await (await fetch(`${base}/api/answer?taskId=t1`)).json(),
     { answer: { kind: 'summary', decision: 'shutdown_pr', taskId: 't1' } });
@@ -2343,4 +2344,30 @@ test('the last mockup round can be approved while the agent reworks it', async t
   const approved = await nextAnswer(base);
   assert.strictEqual(approved.decision, 'approve');
   assert.strictEqual(approved.duringRework, true, 'the orchestrator stops the rework first');
+});
+
+test('the task split is kept, and a change to it revises the branches', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, { commitMessage: 'feat: hosts' });
+  let task = await task0(base);
+  assert.strictEqual(task.step1.taskSplit, '', 'empty unless filled');
+  await postState(base, { step: 1, status: 'completed' });
+  const res = await (await step1(base, { commitMessage: 'feat: hosts', taskSplit: '  1. API\n2. UI  ' })).json();
+  assert.deepStrictEqual(res.revision.changed, ['branch']);
+  task = await task0(base);
+  assert.strictEqual(task.step1.taskSplit, '1. API\n2. UI');
+});
+
+test('a mockup artifact request and its link stay on the task', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await post(base, '/api/answer', { taskId: 't1', kind: 'mockup', decision: 'artifact' });
+  let task = await task0(base);
+  assert.deepStrictEqual(task.mockupArtifact, { requested: true, url: null });
+  await postState(base, { mockupArtifact: 'https://claude.ai/artifact/abc' });
+  task = await task0(base);
+  assert.deepStrictEqual(task.mockupArtifact, { requested: true, url: 'https://claude.ai/artifact/abc' });
 });

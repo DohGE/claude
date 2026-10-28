@@ -149,8 +149,9 @@ test('parseArgs requires a report and derives the html path', () => {
     { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false, light: false },
   );
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--light']).light, true);
-  const withRuleText = rr.parseArgs(['--report=a.md', '--with-rule-text']);
-  assert.deepStrictEqual([withRuleText.withRuleText, withRuleText.withChecklist], [true, true], 'the rule text keeps the checklists');
+  const withRuleText = rr.parseArgs(['--report=a.md', '--with-checklist']);
+  assert.deepStrictEqual([withRuleText.withRuleText, withRuleText.withChecklist], [true, true], 'the checklists come with their rules');
+  assert.throws(() => rr.parseArgs(['--report=a.md', '--with-rule-text']), /Unknown argument/);
   assert.strictEqual(rr.parseArgs(['--report=a.MD']).out, 'a.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--out=/tmp/x.html']).out, '/tmp/x.html');
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--keep-source']).keepSource, true);
@@ -585,14 +586,14 @@ test('main writes the html next to the report and removes the source', (t) => {
   assert.match(page, /id="coverage"/, '--with-checklist keeps the Pokrycie section');
 });
 
-test('main --with-rule-text shows each checklist item with its rule text', (t) => {
+test('main --with-checklist shows each checklist item with its rule text', (t) => {
   const dir = tempDir(t, 'cr-render-rules-');
   const md = path.join(dir, 'raport.md');
   const proof = [...checklistOf('src/app/user.service.ts', ['[x] general#2-3 — OK (brak wystąpień)']), '<!-- coverage: src/app/user.service.ts 2/2 -->'];
   const source = `${REPORT}\n${proof.join('\n')}\n`;
   fs.writeFileSync(md, source, 'utf8');
 
-  const result = runMain([`--report=${md}`, '--with-rule-text']);
+  const result = runMain([`--report=${md}`, '--with-checklist']);
   assert.strictEqual(result.code, 0);
   const items = embeddedPayload(fs.readFileSync(path.join(dir, 'raport.html'), 'utf8')).coverage[0].items;
   assert.deepStrictEqual(items.map((item) => item.id), ['general#2', 'general#3']);
@@ -600,7 +601,7 @@ test('main --with-rule-text shows each checklist item with its rule text', (t) =
   assert.notStrictEqual(items[0].rule, items[1].rule);
 
   fs.writeFileSync(md, source, 'utf8');
-  assert.strictEqual(runMain([`--report=${md}`, '--only-md', '--with-rule-text']).code, 0);
+  assert.strictEqual(runMain([`--report=${md}`, '--only-md', '--with-checklist']).code, 0);
   const line = fs.readFileSync(md, 'utf8').split('\n').find((text) => text.startsWith('[x] general#2-3'));
   assert.match(line, / — Reguła: general#2: .+ \| general#3: .+/, 'the Markdown carries the rules on the item line');
 });
@@ -645,7 +646,11 @@ test('main --only-md leaves the checklists out of the Markdown report and render
   const kept = runMain([`--report=${md}`, '--only-md', '--with-checklist']);
   assert.strictEqual(kept.code, 0);
   assert.deepStrictEqual(kept.out.trim().split('\n'), [md, 'severity: critical=1 high=1 medium=1 low=1 missing-unit-test=1']);
-  assert.strictEqual(fs.readFileSync(md, 'utf8'), source, '--with-checklist leaves the report as it is');
+  const withRules = fs.readFileSync(md, 'utf8');
+  assert.strictEqual(rr.stripChecklists(withRules), rr.stripChecklists(source), '--with-checklist keeps the findings as they are');
+  assert.ok(withRules.includes('<!-- coverage: src/app/user.service.ts 2/2 -->'), 'and the checklists');
+  assert.match(withRules, / — Reguła: /, 'each item with its rule\'s words');
+  fs.writeFileSync(md, source, 'utf8');
 
   const result = runMain([`--report=${md}`, '--only-md']);
   assert.strictEqual(result.code, 0);
@@ -1599,8 +1604,12 @@ test('the report title carries the pull request title, in the tab too', () => {
   const html = rr.renderHtml(report, 'r.html');
   // The tab is where the branch names alone say the least, so the title goes there as well.
   assert.match(html, /<title>Code Review: feature\/x → master — Panel &lt;użytkownika&gt;<\/title>/);
-  assert.match(html, /<h1>Code Review: feature\/x → master<span class="h1-pr">Panel &lt;użytkownika&gt; <span class="h1-pr-n">#7<\/span><\/span><\/h1>/,
-    'a PR title is someone else\'s text: it reaches the page escaped');
+  assert.match(html, /<h1>Code Review: feature\/x → master<a class="h1-pr" href="https:\/\/example.test\/pull\/7" target="_blank" rel="noopener">Panel &lt;użytkownika&gt; <span class="h1-pr-n">#7<\/span><\/a><\/h1>/,
+    'a PR title is someone else\'s text: it reaches the page escaped, as a link to the pull request');
+  delete report.pr.title;
+  assert.match(rr.renderHtml(report, 'r.html'),
+    /<a class="h1-pr" href="https:\/\/example.test\/pull\/7"[^>]*>Pull request <span class="h1-pr-n">#7<\/span><\/a>/,
+    'the link is there without a title too');
 });
 
 test('the accepted pool is copyable as bare ids and the command takes ordinary selection', () => {

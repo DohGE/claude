@@ -138,7 +138,7 @@ For each file:
    `sed -n '<N>p' "<contentPath>"` — the one read from the shell the hook lets through.
    Small files are walked in batches.
    `target.batches` (a FIXED IDENTIFIER) lists, as `[first, last]` positions in `target.files` (from 1), every run of two or more consecutive small files whose Reads come in ONE message and whose parts are written in ONE message; the bundle's `partia:` line names the files of its batch.
-   Every other file is a batch of its own, and `--no-batch` (Step 1) makes every file one.
+   Every other file is a batch of its own.
    Inside a batch the walks stay sequential and separate: file k is walked to its end — every item, both sweeps of point 3, its block — before file k+1's walk starts, and only file k's own Reads are its evidence.
    The last bundle of a batch ends with `## Dalej`: the Reads of the next batch, which ride in the message that writes this batch's parts because neither depends on the other, or, after the last file, the cross-file pass.
    The next batch's walk starts only after both have returned.
@@ -182,7 +182,7 @@ For each file:
    nothing by themselves. `## Użycia składowych` and `## Spec` are the whole-word searches a usage
    or a test-coverage item would otherwise run: where each public member's name falls, and the
    specs importing the file with their `describe`/`it` cases.
-   While `target.dedupItems` is true (the default; `--no-dedup-items` turns it off), an item an earlier bundle of the run already showed reaches you as `- <address>: treść jak w paczce <bundle>, przeczytanej wcześniej`: its text is the one under the same address in that bundle, and the lines under it are this file's own.
+   While `target.dedupItems` is true (always, in a run of this version), an item an earlier bundle of the run already showed reaches you as `- <address>: treść jak w paczce <bundle>, przeczytanej wcześniej`: its text is the one under the same address in that bundle, and the lines under it are this file's own.
    After a compaction every bundle shows its items in full again.
 2. Evaluate the file against every point below, checklist-driven — never holistically. For points
    1 and 2, walk that ticking list top-to-bottom: read an item, check the file's code against that

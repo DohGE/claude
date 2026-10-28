@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Screenshots of every state of one task's mockups, for the user to keep or share outside
-// the stepper: <taskDir>/mockup-screenshots/<id> <view> - <state>.png, one per entry of
+// the stepper: <taskDir>/mockup-screenshots/<id>-<lm|dm>-<view>-<state>.png, one per entry of
 // generated-mockups/manifest.json - every state of every view, numbered <view>.<state> from
 // 0.0 - at desktop width and the whole page long. A view's file renders all of its states
 // and the URL fragment picks one (references/mockup-agent.md). The folder is emptied
@@ -46,15 +46,21 @@ function screenIds(screens) {
   });
 }
 
-// `0.0 Login - Empty form.png`. Windows refuses a handful of characters and a trailing dot
-// or space, so they go; the id in front keeps two states with the same titles apart.
+// The dark twin of a state: its title ends in `(dark)` (mockup-agent.md).
+const DARK = /\s*\(dark\)\s*$/i;
+
+// `0.0-lm-login-empty-form.png`, `1.1-dm-tape-library-dialog.png`: the id, the theme (lm light,
+// dm dark), then the view and state as lowercase ASCII kebab - nothing any file system refuses,
+// and the id in front keeps two states with the same titles apart.
 function fileNameOf(screen, id) {
-  const words = [screen.view, screen.title].map(v => String(v || '').trim()).filter(Boolean);
+  const title = String(screen.title || '');
+  const mode = DARK.test(title) ? 'dm' : 'lm';
+  const words = [screen.view, title.replace(DARK, '')].map(v => String(v || '').trim()).filter(Boolean);
   const label = words.length === 2 && words[0] === words[1] ? [words[0]] : words;
-  const name = `${id} ${label.join(' - ')}`
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
-    .replace(/\s+/g, ' ').trim().slice(0, 150).replace(/[. ]+$/, '');
-  return `${name}.png`;
+  const slug = label.join(' ').replace(/ł/g, 'l').replace(/Ł/g, 'L').normalize('NFD')
+    .replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '').slice(0, 120).replace(/-+$/, '');
+  return `${[id, mode, slug].filter(Boolean).join('-')}.png`;
 }
 
 // Thrown, never process.exit(): on a pipe the line printed just before an exit can be lost.

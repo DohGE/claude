@@ -37,7 +37,7 @@
 
 `{"kind":"summary","decision":"shutdown_pr","taskId":"T"}` reaches every task whose pipeline ended
 `Completed`, and the server writes `<SESSION>/tasks/T/pr-request.json` — `branch`, `base`, `root`,
-`commitMessage` — before the page shuts it down. The server is gone moments later, so everything
+`commitMessage`, `taskSplit`, `splitBranch` — before the page shuts it down. The server is gone moments later, so everything
 below runs from the terminal and posts nothing. An orchestrator that was not listening finds the
 file when its waiter next says `SERVER_GONE` (or at "Attach"): the same flow, from the file.
 
@@ -61,5 +61,14 @@ file when its waiter next says `SERVER_GONE` (or at "Attach"): the same flow, fr
    `WORKTREE_REMOVED <root>`, or `WORKTREE_KEPT <reason>` (uncommitted work, or git refused — say
    so; never `--force`). It unlinks every link inside the worktree first, so a `node_modules`
    linked in from the main checkout keeps its files. The branch and its commits stay.
+   A split task (`taskSplit` in `pr-request.json` not empty; its parts and `N` as in step 4,
+   "Split task", `<branch>` = `splitBranch`): step 2 runs `split-fixups.cjs` first (step 4,
+   "Split task") so whatever is still staged lands in its own part, and step 3 commits only what
+   `FIXUPS_KEPT` left, amended into the last part (`git -C "<ROOT>" commit --amend --no-edit`,
+   never `--no-verify`) — a split task gets no commit beyond its parts' own, and nothing staged
+   does not skip to 6, since the parts are already committed; step 4 pushes every part branch, `<branch>-part-1` to `<branch>-part-N`;
+   step 5 writes one description per part (what THAT part does) and opens one pull request per
+   part, in order — part 1 into `BASE`, part `n` into `<branch>-part-<n-1>`, titled
+   `<the message's first line> (part n/N)` — so each one shows only its own part's diff.
 7. Delete `pr-request.json`, and print in the terminal: the commit, the pull request URL, and
    whether the worktree went. Then stop: the server is down, the run is over.

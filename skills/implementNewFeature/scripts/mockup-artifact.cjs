@@ -22,6 +22,18 @@ const VIEWPORTS = { Desktop: { width: 1280, height: 800 }, Mobile: { width: 390,
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const bare = (name) => typeof name === 'string' && name !== '' && name === path.basename(name) && !name.startsWith('.');
 
+// The state buttons of one view: a view drawn in both themes splits them into a Light mode and a
+// Dark mode row (a dark twin's title ends in `(dark)`, shown without it), else one unlabelled row.
+// Embedded in the page as source, so the gallery and the tests group the same way.
+function stateGroups(list) {
+  const dark = /\s*\(dark\)\s*$/i;
+  const item = (s) => [s.id, s.id + ' ' + String(s.title || '').replace(dark, '')];
+  const twins = list.filter((s) => dark.test(String(s.title || '')));
+  if (!twins.length) return [[null, list.map(item)]];
+  return [['Light mode', list.filter((s) => !twins.includes(s)).map(item)], ['Dark mode', twins.map(item)]]
+    .filter(([, items]) => items.length);
+}
+
 function galleryPage({ title, screens }) {
   const data = JSON.stringify({ screens, viewports: VIEWPORTS }).replace(/</g, '\\u003c');
   return `<!doctype html>
@@ -43,7 +55,10 @@ h1 { font-size: 20px; margin: 0 0 4px; overflow-wrap: anywhere; }
 header p { margin: 0; color: var(--muted); }
 nav { max-width: 1312px; margin: 0 auto 8px; display: flex; flex-wrap: wrap; gap: 6px; }
 nav button { border: 1px solid var(--border); background: var(--surface); color: var(--fg); border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
-nav button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.group { max-width: 1312px; margin: 0 auto 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.group > span { min-width: 86px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+.group button { border: 1px solid var(--border); background: var(--surface); color: var(--fg); border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+.group button[aria-pressed="true"], nav button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 .stage { max-width: 1312px; margin: 0 auto; overflow-x: auto; }
 iframe { display: block; margin: 0 auto; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
 </style>
@@ -54,11 +69,12 @@ iframe { display: block; margin: 0 auto; max-width: 100%; border: 1px solid var(
 <p>${screens.length} state${screens.length === 1 ? '' : 's'} of ${new Set(screens.map((s) => s.file)).size} view${new Set(screens.map((s) => s.file)).size === 1 ? '' : 's'} - pick a view, a state and a width.</p>
 </header>
 <nav id="views" aria-label="Views"></nav>
-<nav id="states" aria-label="States"></nav>
+<div id="states"></div>
 <nav id="widths" aria-label="Width"></nav>
 <div class="stage"><iframe id="screen" title="Mockup" sandbox="allow-scripts"></iframe></div>
 <script>
 const { screens, viewports } = ${data};
+${stateGroups.toString()}
 const views = [...new Map(screens.map((s) => [s.file, s.view])).entries()];
 let file = views.length ? views[0][0] : null;
 let id = screens.length ? screens[0].id : null;
@@ -75,7 +91,14 @@ const buttons = (el, items, pressed, pick) => {
 };
 function draw() {
   buttons(document.getElementById('views'), views, file, (key) => { file = key; id = screens.find((s) => s.file === key).id; draw(); });
-  buttons(document.getElementById('states'), screens.filter((s) => s.file === file).map((s) => [s.id, s.id + ' ' + s.title]), id, (key) => { id = key; draw(); });
+  document.getElementById('states').replaceChildren(...stateGroups(screens.filter((s) => s.file === file)).map(([label, items]) => {
+    const row = document.createElement('nav');
+    row.className = 'group';
+    row.setAttribute('aria-label', label || 'States');
+    buttons(row, items, id, (key) => { id = key; draw(); });
+    if (label) { const l = document.createElement('span'); l.textContent = label; row.prepend(l); }
+    return row;
+  }));
   buttons(document.getElementById('widths'), Object.keys(viewports).map((k) => [k, k]), width, (key) => { width = key; draw(); });
   const frame = document.getElementById('screen');
   frame.width = viewports[width].width;
@@ -120,7 +143,7 @@ function buildArtifact(taskDir, { title = null } = {}) {
   return { page, files, screens: screens.length };
 }
 
-module.exports = { buildArtifact, galleryPage, ARTIFACT_DIR };
+module.exports = { buildArtifact, galleryPage, stateGroups, ARTIFACT_DIR };
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
