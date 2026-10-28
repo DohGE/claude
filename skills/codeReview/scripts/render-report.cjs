@@ -113,13 +113,8 @@ function parseArgs(argv) {
       args.onlyMd = true;
       continue;
     }
+    // The walked checklists, with the rule's words under every item.
     if (arg === '--with-checklist') {
-      args.withChecklist = true;
-      continue;
-    }
-    // The rule's words under every checklist item; without the checklists there is
-    // nothing to put them under, so the flag keeps them.
-    if (arg === '--with-rule-text') {
       args.withChecklist = true;
       args.withRuleText = true;
       continue;
@@ -142,7 +137,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist, --with-rule-text, --light).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist, --light).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.md").');
   if (!args.out) args.out = args.report.replace(/\.md$/i, '') + '.html';
@@ -935,7 +930,7 @@ function resolveRuleAddresses(report, projectRoot) {
   return report;
 }
 
-// `--with-rule-text`: a checklist line carries only the address and its verdict; the
+// `--with-checklist`: a checklist line carries only the address and its verdict; the
 // item gets the rule's words from the same rulebook a finding's `**Reguła:**` reads.
 // An unknown id is already a warning (warnUnknownChecklistIds), so it just stays bare.
 function ruleTextOf(instructions, itemId) {
@@ -1145,7 +1140,8 @@ button{font:inherit;color:inherit}
 .ctxmenu button:disabled{color:var(--muted);cursor:default}
 /* Its own line under the branch names: a pull request title is prose, and long
    enough to push everything else off the first one. */
-.head .h1-pr{display:block;margin-top:5px;font-size:15.5px;font-weight:500;letter-spacing:0}
+.head .h1-pr{display:block;margin-top:5px;font-size:15.5px;font-weight:500;letter-spacing:0;color:inherit;text-decoration:underline;text-underline-offset:3px}
+.head .h1-pr:hover{color:var(--accent,inherit)}
 .head .h1-pr-n{color:var(--muted);font-weight:400}
 .head .meta{margin-top:6px;color:var(--muted);font-size:13.5px}
 .head .skipped{margin-top:8px;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
@@ -2384,8 +2380,10 @@ function renderHtml(report, reportName) {
   // where that matters most, so it goes into both.
   const prTitle = (report.pr && report.pr.title) || '';
   const docTitle = (report.title || 'Code Review') + (prTitle ? ` — ${prTitle}` : '');
-  const prTitleLine = prTitle
-    ? `<span class="h1-pr">${escapeHtml(prTitle)} <span class="h1-pr-n">#${escapeHtml(String(report.pr.number))}</span></span>`
+  // A link from the first screen: the pull request is where the findings end up, and the reader
+  // should not have to press the comment button to learn where that is.
+  const prTitleLine = report.pr && report.pr.url
+    ? `<a class="h1-pr" href="${escapeHtml(report.pr.url)}" target="_blank" rel="noopener">${escapeHtml(prTitle || 'Pull request')} <span class="h1-pr-n">#${escapeHtml(String(report.pr.number))}</span></a>`
     : '';
   const toolbar = report.emptyState ? '' : `
     <section class="toolbar" id="toolbar">
@@ -2623,7 +2621,7 @@ function main(argv) {
   if (args.light) text = stripLowFindings(text);
   if (args.onlyMd) {
     // The Markdown is the report: nothing to render, only the checklists and, under
-    // --light, the Low findings to leave out or, under --with-rule-text, the rules'
+    // --light, the Low findings to leave out or, under --with-checklist, the rules'
     // words to add.
     const written = args.withRuleText ? appendRuleTexts(text, projectRootFor(args.report, args.project)) : text;
     if (written !== markdown) {

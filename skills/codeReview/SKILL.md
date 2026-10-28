@@ -1,7 +1,7 @@
 ---
 name: codeReview
 description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist; --light skips the rules of severity low and leaves Low findings and code snippets out) with severity, real line numbers, violated rule and expected result
-argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--with-rule-text] [--since-last] [--no-batch] [--no-windows] [--no-dedup-items] [--walker-model=<model>] [--walker-effort=<low|medium|high|xhigh|max>] [--parallel=<n>] [--project=<path>]"
+argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--since-last] [--walker-model=<model>] [--walker-effort=<low|medium|high|xhigh|max>] [--parallel=<n>] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -108,7 +108,7 @@ A target with an empty diff (`files` empty) has no per-file parts and no cross-f
 **Windows.** `target.windows` (a FIXED IDENTIFIER, like every key of the context JSON) cuts the files into runs of whole batches, `{ files: [first, last], brief, lastPart, model, effort }` each (`model` and `effort` only when set), sized so that one conversation walks a window without being compacted: a compaction drops every bundle read before it, and a conversation that keeps growing re-reads all of it with every response.
 A window made only of files whose kind declares a `walker` setting — the models kinds (enums, interfaces, types, constants, model barrels) — carries that setting (`sonnet`, `medium`); every other window carries `--walker-model` / `--walker-effort`, or nothing, which is "inherit".
 The windows are independent: each walker writes the parts of its own files, in order, and the part check asks each part only for the parts before it in its window.
-A target has no windows (the summary's `windows` is 0) when it is small enough to walk here, under `--no-windows` (Step 1) and for a resume with `resume.drafts`: walk it yourself — Step 2, then `target.start`, whose Reads open the first batch, in ONE message.
+A target has no windows (the summary's `windows` is 0) when it is small enough to walk here and for a resume with `resume.drafts`: walk it yourself — Step 2, then `target.start`, whose Reads open the first batch, in ONE message.
 With windows you do not walk the files yourself. Take the first way this session has:
 1. **The Workflow tool.** Right after Step 1, before you walk any target yourself, call `Workflow` ONCE with `scriptPath` and `args` exactly as the summary's `workflow` gives them: one run for every target with windows, its script copied into the run folder — this skill's instructions are the opt-in the tool asks for, so do not ask the user again.
    The workflow walks `args.lanes` windows at once over all its targets, starts a stopped walker once more (it skips every part on disk), sends each target's cross-file pass to a fresh walker as soon as that target's windows are done, and notifies you once, with `{ targets: [{ dir, windows, failed, cross }] }` (`dir` is the target's `workDir`).
@@ -122,7 +122,7 @@ With windows you do not walk the files yourself. Take the first way this session
    Every path `PART_PENDING` → run the same command again, up to six times in a row; after that end your turn and act on the walkers' replies when they arrive.
    A turn ended while a walker runs is paid twice: whoever spawned this session is woken for nothing, and this conversation's context is re-read in full once its cache has expired.
    Any other reply, or a refused dispatch, means that window is NOT done: walk it yourself (Step 2 first) from its first file without a part, then go on with the others.
-3. **No sub-agent at all.** Pass `--no-windows` in Step 1 instead.
+3. **No sub-agent at all** (no Workflow and no Agent tool, e.g. this session is itself a sub-agent): walk every window yourself, in order (Step 2 first), from its first file without a part.
 
 **The cross-file pass** follows the last file part of the target, every window done.
 Under the Workflow tool it already ran.
@@ -146,18 +146,11 @@ After a compaction, the hook names what of them to read again.
    be mapped below as a branch name:
    - `--only-md` → `OUTPUT=md`; otherwise `OUTPUT=html`.
    - `--with-checklist` → pass it through to the context script (`target.withChecklist`).
-     The finished report then keeps every file's walked checklist and coverage marker (the HTML page's "Pokrycie checklist" section); without it the report carries the findings only.
+     The finished report then keeps every file's walked checklist and coverage marker (the HTML page's "Pokrycie checklist" section), with the full text of its rule under every checklist item; without it the report carries the findings only.
      The review itself is the same either way: every part is still written with its checklist and checked (Step 3).
-   - `--with-rule-text` → pass it through to the context script (`target.withRuleText`); it implies `--with-checklist`.
-     The renderer adds the full text of its rule to every checklist item of the finished report; the parts are written exactly as without it.
    - `--light` → pass it through to the context script (`target.light`).
      Every checklist leaves out the items whose fixed severity is low (the item's own `severity`, else its instruction's), so the review walks every other rule.
      The renderer cuts every ⚪ **Low** finding from the finished report, and the HTML page shows no code snippet.
-   - `--no-batch` → pass it through to the context script: every file is walked alone, its part in a message of its own (`target.batches` stays empty).
-   - `--no-windows` → pass it through to the context script: `target.windows` stays empty and this conversation walks every file.
-     Pass it only when this session cannot dispatch a sub-agent (it has no Agent tool), e.g. when it is itself a sub-agent.
-   - `--no-dedup-items` → pass it through to the context script: every bundle shows every item in full.
-     Without it `target.dedupItems` is true, and an item an earlier bundle of the run already showed is shown again only by reference (`references/walk.md` Step 3 point 1).
    - `--walker-model=<model>` → pass it through to the context script (`walker.model`): the `model` every window walker and the cross-file agent are spawned with (Step 3, Windows), e.g. `sonnet`.
      Without it they inherit this session's model. A window made only of files whose kind declares a `walker` setting (the models kinds: `sonnet`, effort `medium`) is spawned with that one instead.
    - `--walker-effort=<low|medium|high|xhigh|max>` → pass it through to the context script (`walker.effort`): the `effort` every walker is spawned with (Step 3, Windows).
@@ -187,7 +180,7 @@ After a compaction, the hook names what of them to read again.
      INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
      instead, which is how you review a folder of another repository.
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--with-rule-text] [--light] [--no-batch] [--no-dedup-items] [--walker-model=<model>] [--walker-effort=<effort>] [--parallel=<n>]`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--light] [--walker-model=<model>] [--walker-effort=<effort>] [--parallel=<n>]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
 5. Parse the JSON from stdout — the part of the context the review uses:

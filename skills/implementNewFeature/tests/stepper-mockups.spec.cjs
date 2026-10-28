@@ -166,7 +166,7 @@ test('przycisk zleca Claude artifact z makiet, a runda zostaje do przeglądu', a
   await page.click('#mockupArtifact');
   expect(await takeAnswer()).toMatchObject({ kind: 'mockup', decision: 'artifact' });
   await expect(page.locator('#shotsHint')).toHaveText(
-    'Requested — the orchestrator publishes these mockups as a Claude artifact and posts its link in the chat below.');
+    'Requested — the orchestrator publishes these mockups as a Claude artifact; its link appears at the top of the screen.');
   await expect(page.locator('#approveMockup')).toBeEnabled();
   await expect(page.frameLocator('#mockupFrame').locator('#mk')).toBeVisible();
 });
@@ -274,4 +274,46 @@ test('Approve zatwierdza makiety', async ({ page }) => {
   await openMockupPanel(page);
   await submit(page, '#approveMockup');
   expect(await takeAnswer()).toMatchObject({ kind: 'mockup', decision: 'approve' });
+});
+
+test('po zleceniu artefaktu przycisk znika, a link wisi przyklejony na górze ekranu', async ({ page }) => {
+  await openMockupPanel(page);
+  await page.click('#mockupArtifact');
+  expect(await takeAnswer()).toMatchObject({ kind: 'mockup', decision: 'artifact' });
+  await expect(page.locator('#mockupArtifact')).toHaveCount(0);
+  await expect(page.locator('#artifactBar')).toContainText('Creating the Claude artifact');
+  await postState({ taskId: 't1', mockupArtifact: 'https://claude.ai/artifact/abc' });
+  const link = page.locator('#artifactBar a');
+  await expect(link).toHaveAttribute('href', 'https://claude.ai/artifact/abc');
+  await expect(page.locator('#artifactBar')).toHaveCSS('position', 'sticky');
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await expect(link).toBeInViewport();
+  await expect(page.locator('#mockupArtifact')).toHaveCount(0);
+});
+
+test('stany widoku z ciemnymi bliźniakami dzielą się na grupy Light mode i Dark mode', async ({ page }) => {
+  const screens = [
+    { id: '0.0', view: 'Login', title: 'Empty form', file: '0-login.html' },
+    { id: '0.1', view: 'Login', title: 'Empty form (dark)', file: '0-login.html' },
+    { id: '0.2', view: 'Login', title: 'Wrong password', file: '0-login.html' },
+    { id: '0.3', view: 'Login', title: 'Wrong password (dark)', file: '0-login.html' },
+    { id: '1.0', view: 'List', title: 'Loaded', file: '1-list.html' }
+  ];
+  const d = path.join(dir, 'tasks', 't1', 'generated-mockups');
+  fs.mkdirSync(d, { recursive: true });
+  for (const file of new Set(screens.map(s => s.file))) fs.writeFileSync(path.join(d, file), VIEW_HTML);
+  await postState({ step: 3, enabled: true, status: 'in_progress', activeStep: 3,
+    mockupReview: { rev: 1, text: 'Two themes', screens } });
+  await page.goto(base);
+  await page.waitForSelector('#mockupFrame');
+  await expect(page.locator('#caseTabs .case-group-label')).toHaveText(['Light mode', 'Dark mode']);
+  await expect(page.locator('#caseTabs [data-mode="light"] button')).toHaveText(['0.0 Empty form', '0.2 Wrong password']);
+  await expect(page.locator('#caseTabs [data-mode="dark"] button')).toHaveText(['0.1 Empty form', '0.3 Wrong password']);
+  await page.click('#caseTabs [data-screen="0.3"]');
+  await expect(page.frameLocator('#mockupFrame').locator('#mk')).toHaveText('0.3');
+  await expect(page.locator('#caseTabs [data-screen="0.3"]')).toHaveClass(/selected/);
+  // Widok bez ciemnych stanów zostaje płaską listą.
+  await page.click('#viewTabs [data-view="1"]');
+  await expect(page.locator('#caseTabs .case-group-label')).toHaveCount(0);
+  await expect(page.locator('#caseTabs button')).toHaveText(['1.0 Loaded']);
 });

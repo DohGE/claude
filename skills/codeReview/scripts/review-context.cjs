@@ -88,21 +88,14 @@ function parseArgs(argv) {
     // Incremental review: only the files whose content moved since the previous
     // review of this target (see the snapshot written next to the report).
     if (arg === '--since-last') { args.sinceLast = true; continue; }
-    // The finished report keeps the walked checklists (render-report.cjs cuts them otherwise).
-    if (arg === '--with-checklist') { args.withChecklist = true; continue; }
-    // Each checklist item also shows its rule's words; it needs the checklists, so it keeps them.
-    if (arg === '--with-rule-text') { args.withChecklist = true; args.withRuleText = true; continue; }
+    // The finished report keeps the walked checklists (render-report.cjs cuts them otherwise),
+    // each item with its rule's words under it.
+    if (arg === '--with-checklist') { args.withChecklist = true; args.withRuleText = true; continue; }
     // No item of severity low is walked, and the report keeps no Low finding and no code snippet.
     if (arg === '--light') { args.light = true; continue; }
-    // Every file walked in a response of its own, light ones included (review-bundle.cjs batches).
-    if (arg === '--no-batch') { args.batch = false; continue; }
-    // The target is walked by the conversation that runs the review, not by a sub-agent per
-    // window (review-bundle.cjs planWindows): for a session that cannot dispatch one.
-    if (arg === '--no-windows') { args.windows = false; continue; }
-    // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), by
-    // default; `--dedup-items` is the old opt-in, kept so a caller that still passes it works.
+    // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), always;
+    // `--dedup-items` is the old opt-in, kept so a caller that still passes it works.
     if (arg === '--dedup-items') { args.dedupItems = true; continue; }
-    if (arg === '--no-dedup-items') { args.dedupItems = false; continue; }
     const m = arg.match(/^--([a-z][a-z-]*)=(.*)$/);
     // Anything unrecognised is refused rather than skipped: the user-facing flag
     // is `--only-md` while the script takes `--output=md`, so a silently dropped
@@ -123,7 +116,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --with-rule-text, --light, --no-batch, --no-windows, --no-dedup-items, --dedup-items, --walker-model, --walker-effort, --parallel; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --light, --dedup-items, --walker-model, --walker-effort, --parallel; the skill's own --only-md maps to --output=md)`);
   }
   if (args.walkerModel && !/^[A-Za-z0-9][\w.[\]-]{0,63}$/.test(args.walkerModel)) {
     throw new Error(`Unknown --walker-model=${args.walkerModel} (expected a value the Agent tool's model parameter takes, e.g. sonnet)`);

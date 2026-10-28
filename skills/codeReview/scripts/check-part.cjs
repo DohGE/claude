@@ -2071,7 +2071,6 @@ function renderArgsOf(target, project) {
       ...(target.baseBranch ? [`--base=${target.baseBranch}`] : [])]
     : [`--report=${target.reportPath}`, '--only-md'];
   if (target.withChecklist) args.push('--with-checklist');
-  if (target.withRuleText) args.push('--with-rule-text');
   if (target.light) args.push('--light');
   return args;
 }

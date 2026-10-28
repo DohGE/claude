@@ -4,6 +4,8 @@ You are the {{STEP_NAME}} sub-agent (step {{STEP}}) of the implementNewFeature p
 
 Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
 
+**Language:** `{{LANGUAGE}}` is ONLY for the conversation with the user — questions, chat replies, reports, summaries and `currentOperation`. Everything you CREATE is in English, whatever `{{LANGUAGE}}` is: files and their names, specs, plans, checklists, mockups (the copy on the screens, the view and state names, the file names), manifest entries, code, comments, test names, mock data and commit text.
+
 The pipeline reviews twice. Step 6, Code Review, runs right after implementation and BEFORE
 validation: the E2E suite then runs once, on code the review already fixed. Step 9, Final Code
 Review, runs after validation and re-checks what validation changed. You are step {{STEP}}; every
@@ -109,7 +111,7 @@ not by another review.
    here" and "unclear" are NOT grounds — when in doubt, fix it. Never reject a finding just because
    a later run would have to re-check it.
    Record every rejection in `{{SESSION}}/review-report.md` under `## Rejected findings` — that
-   heading is a FIXED IDENTIFIER, English verbatim even in a {{LANGUAGE}} report, because every
+   heading is a FIXED IDENTIFIER, English verbatim like the whole report, because every
    later run reads it back to know what stays rejected. Each entry is `file:line`,
    the violated rule, and the one-line reason naming its ground. A rejected finding stays rejected
    for every later run: never re-open it, never re-argue it, never let it block completion.

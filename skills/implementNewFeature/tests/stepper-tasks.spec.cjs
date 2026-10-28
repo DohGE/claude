@@ -258,9 +258,10 @@ test('New empty task zakłada task bez kopiowania formularza', async ({ page }) 
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
   await expect(page.locator('#task')).toHaveValue('');
   await expect(page.locator('#contractsText')).toHaveValue('');
-  await expect(page.locator('#refinement')).toBeChecked();
+  // Przełączniki są zapamiętane w przeglądarce, więc pusty task startuje z ostatnio wybranymi.
+  await expect(page.locator('#refinement')).not.toBeChecked();
   await expect(page.locator('#branch')).toHaveValue('');
-  await expect(page.locator('#genMockups')).not.toBeChecked();
+  await expect(page.locator('#genMockups')).toBeChecked();
   await expect(picked(page, 'hints')).toHaveCount(0);
   // Formularz źródła czeka nietknięty pod swoją zakładką — pusty task go nie zabiera.
   await page.click('#tabs .tab[data-task=t1]');

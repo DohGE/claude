@@ -24,13 +24,16 @@ test('parseArgs defaults and parsing', () => {
   );
   assert.throws(() => rc.parseArgs(['--walker-effort=extreme']), /Unknown --walker-effort/);
   assert.throws(() => rc.parseArgs(['--walker-model=a b']), /Unknown --walker-model/);
-  assert.strictEqual(rc.parseArgs(['--no-windows']).windows, false, 'windows are on unless turned off');
   assert.deepStrictEqual(
-    [rc.parseArgs(['--with-rule-text']).withRuleText, rc.parseArgs(['--with-rule-text']).withChecklist],
+    [rc.parseArgs(['--with-checklist']).withRuleText, rc.parseArgs(['--with-checklist']).withChecklist],
     [true, true],
-    'the rule text needs the checklists, so it keeps them',
+    'one flag keeps the checklists and their rules\' words',
   );
-  assert.strictEqual(rc.parseArgs(['--no-dedup-items']).dedupItems, false, 'item dedup is on unless turned off');
+  for (const gone of ['--with-rule-text', '--no-batch', '--no-windows', '--no-dedup-items']) {
+    assert.throws(() => rc.parseArgs([gone]), /Unknown argument/, `${gone} is gone`);
+  }
+  assert.deepStrictEqual([rc.parseArgs([]).batch, rc.parseArgs([]).windows, rc.parseArgs([]).dedupItems],
+    [true, true, true], 'batches, windows and item dedup are always on');
   assert.strictEqual(rc.parseArgs(['--dedup-items']).dedupItems, true, 'the old opt-in still parses');
   assert.strictEqual(rc.parseArgs([]).mode, 'auto');
   assert.strictEqual(rc.parseArgs(['--since-last']).sinceLast, true);
@@ -782,7 +785,6 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   assert.deepStrictEqual(alone.targets[0].windows, []);
   assert.ok(!fs.readFileSync(alone.targets[0].files[3].bundlePath, 'utf8').includes('Koniec okna'), 'without windows nothing stops');
   assert.ok(!fs.existsSync(`${alone.targets[0].workDir}/window01.md`));
-  assert.deepStrictEqual(rc.parseArgs(['--no-windows']).windows, false);
   assert.deepStrictEqual(rc.parseArgs([]).windows, true);
 });
 

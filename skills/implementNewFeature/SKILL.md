@@ -93,7 +93,7 @@ Without that tool, re-read the file or re-run the command with narrower output.
   stops claiming work, and a plan, story or mockup gate the user's feedback took off the screen
   comes back, since no revised one is coming (see "A send takes its gate off the screen").
 - Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND, on the model and effort step 1 asked for (see "Model and effort"); continue an existing one with SendMessage (its context is preserved) — unless it went cold ("Talking to a running agent").
-- The pipeline NEVER commits in the target project, with one exception: the summary screen's "Shut down and create pull request", which the user presses (`references/steps/final-summary.md`). Each task works on its own branch; stage its changes at the very end.
+- The pipeline NEVER commits in the target project, with one exception: the summary screen's "Shut down and create pull request", which the user presses (`references/steps/final-summary.md`), and the part commits of a split task (`references/steps/4-implementation.md`, "Split task"). Each task works on its own branch; stage its changes at the very end.
 - Update the stepper before and after every phase so the browser always reflects reality.
 
 ## The run is an event loop, not a walk
@@ -144,8 +144,9 @@ Each kind carries its own fields, and they are what you read — never guess a n
 round carries `duringRework: true`); `message` has `step` and `text`; `stop` has `step`;
 `delete` has `step`, the line's `id` and its `text`; `summary` has `decision`; `step1` carries the form as the server normalised it — `refinement`,
 `generateMockups`, `storyDescription` and `finalReview` are booleans, `codeReview` and
-`finalCodeReview` are lists of one to three runs, each `{"flags":[…]}`, `commitMessage` is text
-and `agents` holds every agent's model and effort — and every `step1` after the first adds
+`finalCodeReview` are lists of one to three runs, each `{"flags":[…]}`, `commitMessage` is text,
+`taskSplit` is text (empty, or one part per line: the task is built part by part, each on its own
+branch `<branch>-part-<n>` — `references/steps/4-implementation.md`, "Split task") and `agents` holds every agent's model and effort — and every `step1` after the first adds
 `revision` (`references/steps/1-requirements.md`, "Revising step 1"). An `answer`, a `message`, a `feedback` and a `delete` may also carry `attachments`, the
 absolute paths of images the user attached in steps 2, 3 and 8: the key is there only when there
 is at least one, and then the text may be empty (see "Talking to a running agent"). An `answer`, a
@@ -246,7 +247,7 @@ that still holds a placeholder; a hand-made one hands `{{ROOT}}` to the agent as
 | `{{ROOT}}` | the task's working directory. Before step 4 it is `PROJECT`, which agents only read; step 4 fixes it to the task's own worktree — every task gets one, the only task of a run too |
 | `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}` | the values from Setup (points 3 and 1) |
 | `{{EFFORT}}` | the thinking directive for THIS step, from the table in "Model and effort" — often the empty string, which makes the paragraph disappear |
-| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation` — all but `story.md`, which the story agent writes in English whatever it is. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on |
+| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation` — the conversation with the user only. Everything an agent CREATES is in English whatever it is: files and their names, `story.md`, specs, plans, mockups (screen copy, view and state names, file names, so the screenshots too), code, comments and tests; every agent brief says so. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on |
 
 ## Model and effort
 
@@ -406,7 +407,7 @@ the panel only notes that the agent was stopped. It reaches you as
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
-  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","base":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
+  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","base":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"mockupArtifact":"<url>","chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
   Several bodies in ONE tool call — a step completed and the next one started, say — go through
   `node "<SKILL_DIR>/scripts/post-state.cjs" --port PORT '<json>' '<json>'`, in order, stopping at the
   first refusal (it prints `OK` or `ERROR <status> <message>` per body). Every curl is a turn that

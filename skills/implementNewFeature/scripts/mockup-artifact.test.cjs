@@ -64,3 +64,19 @@ test('a task with no round has nothing to publish, and says so', (t) => {
   const task = tempDir(t, 'ma-empty-');
   assert.throws(() => ma.buildArtifact(task), /no readable generated-mockups\/manifest\.json/);
 });
+
+test('a view drawn in both themes groups its states under Light mode and Dark mode', () => {
+  const login = [
+    { id: '0.0', view: 'Login', title: 'Empty form' },
+    { id: '0.1', view: 'Login', title: 'Empty form (dark)' },
+    { id: '0.2', view: 'Login', title: 'Wrong password' },
+  ];
+  assert.deepStrictEqual(ma.stateGroups(login), [
+    ['Light mode', [['0.0', '0.0 Empty form'], ['0.2', '0.2 Wrong password']]],
+    ['Dark mode', [['0.1', '0.1 Empty form']]],
+  ]);
+  assert.deepStrictEqual(ma.stateGroups([login[0]]), [[null, [['0.0', '0.0 Empty form']]]],
+    'one theme only: one unlabelled row, as before');
+  const page = ma.galleryPage({ title: 'x', screens: login.map(s => ({ ...s, file: '0-login.html' })) });
+  assert.match(page, /function stateGroups/, 'the page groups with the same code');
+});

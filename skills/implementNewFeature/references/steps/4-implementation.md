@@ -56,4 +56,43 @@
    project had not committed it, a file the TDD gate listed that needs no spec. Nothing else in the
    run reports any of that, so an orchestrator that parses the field and drops it hides exactly the
    part a reviewer needs. `error` → failure protocol.
-4. Stop what the step left running: `node "<SKILL_DIR>/scripts/task-processes.cjs" cleanup --task-dir="<SESSION>/tasks/T"` (`NONE` is the usual answer).
+4. Split task — only when step 1's `taskSplit` is not empty, else skip this point. The parts are its
+   non-empty lines, in order; `N` is their count and part `n`'s branch is `<branch>-part-<n>`, where
+   `<branch>` is the form's branch. Point 1 then creates the worktree on `<branch>-part-1` (the slug
+   is that branch's) and POSTs `{"taskId":"T","branch":"<branch>-part-1"}` with its records.
+   Point 2 runs once per part, in order: the prompt of part `n` adds, after the brief, "Implement
+   ONLY part n of N: <its line>. Parts 1..n-1 are already committed on this branch; the parts after
+   it are not yours — leave them out even where the plan describes them." After EVERY part reports
+   its result, the last one too: `git -C "<ROOT>" add -A`, `git -C "<ROOT>" commit -m "<commitMessage> (part n/N)"`
+   (never `--no-verify`; a refused commit goes to the failure protocol with the hook's output) — the
+   subject's ` (part n/N)` suffix is how the fixes find their part, so it is exactly that. Then, for
+   `n` < `N`, `git -C "<ROOT>" checkout -b <branch>-part-<n+1>` and POST `{"taskId":"T","branch":"<branch>-part-<n+1>"}`.
+   Point 3 posts once, after the last part, with every part's summary and deviations, each prefixed
+   `Part n:`.
+   Every fix after this — the code review (step 6), validation (step 5), the final code review
+   (step 9) — is AMENDED into the part whose lines it touches, never committed on its own.
+   The reviews run `doh:codeReview staged`, which reviews only what the index holds over HEAD —
+   nothing, once every part is committed. So right BEFORE spawning the agent of step 6 or 9, run:
+
+       node "<SKILL_DIR>/scripts/split-fixups.cjs" --root="<ROOT>" --base="<BASE>" --branch="<branch>" --parts=N --stage-all
+
+   → `STAGED_ALL <files>`: HEAD is detached at the commit part 1 starts from, the index and the
+   working tree untouched, so the review sees the whole feature, every part, as one staged
+   change, exactly like an unsplit task. No branch moves. `FIXUPS_KEPT <reason>` → failure
+   protocol for that step. Then, as each of steps 6, 5 and 9 completes, and before the pull
+   request flow, run ONE call:
+
+       node "<SKILL_DIR>/scripts/split-fixups.cjs" --root="<ROOT>" --base="<BASE>" --branch="<branch>" --parts=N
+
+   It first puts HEAD back on `<branch>-part-<N>` (the index holds the fixes over it), then
+   gives every staged hunk to the latest part that wrote the lines it changes (`git blame`; an
+   inserted line goes with the line above it, a line older than the task and a new file with the
+   latest part that touched the file, else the last part), rebuilds each part's commit with its
+   own fixes — the part's own message and author, as `git commit --amend` would — and moves
+   every `<branch>-part-<n>` onto it. One line, a FIXED IDENTIFIER:
+   `FIXUPS_APPLIED {"<part>":<hunks>}` (keep it for the summary), `NOTHING_STAGED`, or
+   `FIXUPS_KEPT <reason>` — HEAD is on `<branch>-part-<N>` with the fixes still staged on it:
+   say so in the step's report and the summary; never move them by hand. Validation (step 5)
+   needs no `--stage-all`: it runs the suites on the working tree, which already is the whole
+   feature.
+5. Stop what the step left running: `node "<SKILL_DIR>/scripts/task-processes.cjs" cleanup --task-dir="<SESSION>/tasks/T"` (`NONE` is the usual answer).

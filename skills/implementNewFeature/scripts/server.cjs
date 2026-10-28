@@ -138,7 +138,7 @@ const READERS = { [REFINEMENT_STEP]: [MOCKUP_STEP, STORY_STEP], [MOCKUP_STEP]: [
 // orchestrator, and what travels through it belongs to whoever reads it.
 const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
   'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root', 'base',
-  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate']);
+  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate', 'mockupArtifact']);
 // What the "Shut down and create pull request" button leaves in each finished task's folder:
 // the orchestrator of a task that was not listening when the server went down finds it there.
 const PR_REQUEST_FILE = 'pr-request.json';
@@ -376,6 +376,8 @@ function formOf(body, models, reviewFlags) {
     // page requires it; a form saved before the field existed has none, and the button then
     // asks for nothing - the orchestrator falls back to the branch name.
     commitMessage: text(body.commitMessage).trim(),
+    // How the task is cut into parts, one branch each (`<branch>-part-<n>`). Empty: one branch.
+    taskSplit: text(body.taskSplit).trim(),
     contractsText: text(body.contractsText),
     hintsNote: text(body.hintsNote),
     mockups: names(body.mockups), contracts: names(body.contracts), hints: names(body.hints),
@@ -431,7 +433,7 @@ function revisionOf(task, before, after) {
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const groups = new Set(files.map(f => FILE_GROUP[f.category]));
   if (before.taskDescription !== after.taskDescription) groups.add('description');
-  if (before.branch !== after.branch) groups.add('branch');
+  if (before.branch !== after.branch || (before.taskSplit || '') !== (after.taskSplit || '')) groups.add('branch');
   if (switchedOn.length || switchedOff.length) groups.add('steps');
   if (before.hintsNote !== after.hintsNote) groups.add('materials');
   if (before.contractsText !== after.contractsText) groups.add('contracts');
@@ -849,6 +851,8 @@ function createApp(sessionDir, opts = {}) {
         // A Claude artifact of the round on screen: the orchestrator builds and publishes it and
         // posts its link in the chat, while the round stays up for review.
         if (step) pushLog(step, 'Claude artifact of the mockups requested');
+        // Requested once per task: the page drops the button and shows the link bar instead.
+        task.mockupArtifact = { requested: true, url: (task.mockupArtifact && task.mockupArtifact.url) || null };
       }
     }
   }
@@ -937,6 +941,10 @@ function createApp(sessionDir, opts = {}) {
     if (body.root !== undefined) task.root = body.root == null ? null : String(body.root);
     // The branch the task's branch was started from (SKILL.md step 4): the pull request's base.
     if (body.base !== undefined) task.base = body.base == null ? null : String(body.base);
+    // The published Claude artifact of the mockups, updated with every round (step 3).
+    if (body.mockupArtifact !== undefined) {
+      task.mockupArtifact = { requested: true, url: body.mockupArtifact == null ? null : text(body.mockupArtifact) };
+    }
     if (body.question !== undefined) {
       task.question = body.question;
       // Monotonic, server-owned: the UI keys its re-render on this counter, so a
@@ -1196,7 +1204,9 @@ function createApp(sessionDir, opts = {}) {
             fs.mkdirSync(taskDir(t.id), { recursive: true });
             fs.writeFileSync(path.join(taskDir(t.id), PR_REQUEST_FILE), JSON.stringify({
               requestedAt: new Date().toISOString(), taskId: t.id, branch: t.branch, base: t.base || null,
-              root: t.root || null, commitMessage: (t.step1 && t.step1.commitMessage) || ''
+              root: t.root || null, commitMessage: (t.step1 && t.step1.commitMessage) || '',
+              // A split task names its part branches after the form's branch, not the last part's.
+              taskSplit: (t.step1 && t.step1.taskSplit) || '', splitBranch: (t.step1 && t.step1.branch) || ''
             }, null, 2));
             pushAnswer({ kind: 'summary', decision: 'shutdown_pr', taskId: t.id });
           }

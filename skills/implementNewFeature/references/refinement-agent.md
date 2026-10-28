@@ -5,6 +5,8 @@ You CANNOT talk to the user directly — the orchestrator proxies questions thro
 
 Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
 
+**Language:** `{{LANGUAGE}}` is ONLY for the conversation with the user — questions, chat replies, reports, summaries and `currentOperation`. Everything you CREATE is in English, whatever `{{LANGUAGE}}` is: files and their names, specs, plans, checklists, mockups (the copy on the screens, the view and state names, the file names), manifest entries, code, comments, test names, mock data and commit text.
+
 {{EFFORT}}
 
 ## Inputs
@@ -46,7 +48,7 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
    wrong, and the step after it reads the half.
 5. Apply the `superpowers:writing-plans` methodology to write `{{SESSION}}/plan.md`: bite-sized TDD tasks with exact paths into `{{PROJECT}}`, run commands, no placeholders — but NO finished code. Each task names its files, the interfaces and signatures they carry, the behaviour each one implements and the test cases that prove it (each case's name and what it asserts); a snippet appears only where words would be ambiguous — a signature, a selector, one binding — never a whole file. The implementation writes the code against the full rulebook; a plan that already holds it is written twice, and read in full by every step after it. Keep `plan.md` under 40 KB: past that, split a feature into fewer, larger tasks rather than writing more text per task. NO git commit steps — the pipeline never commits.
    Head every task with `### Task <n>: <name>` — that exact English spelling, at that exact level,
-   even though the plan's prose is in {{LANGUAGE}}. It is a FIXED IDENTIFIER, not a title to
+   like the plan's prose, which is English too. It is a FIXED IDENTIFIER, not a title to
    localise: step 4 counts these headings to know how many tasks there are, and reports progress as
    `<done*100/total>` and `Task <k>/<total>`. Translate it to `## Zadanie 1 —`, or group the work
    under stage headings instead, and the count is zero — the progress bar divides by nothing and the
@@ -58,8 +60,8 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
    File layout, names, interfaces and every snippet in the plan must already satisfy those checklists — a plan that contradicts them only turns into deviations in step 4 and findings in step 6.
 6. Write `{{SESSION}}/checklist.md` — every verifiable requirement from spec.md, one line each:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`
-   The `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS — English verbatim, even though the
-   requirement between them is written in {{LANGUAGE}}. The tag is what ROUTES the item: step 5 sends
+   The `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS — English verbatim, like the
+   requirement between them, which is written in English too. The tag is what ROUTES the item: step 5 sends
    `e2e` to the Playwright suite, `visual` to the screenshot comparison and `manual` to the UX walk,
    then divides ticks by the item count for its compliance number. A translated tag routes the item
    nowhere while still counting in the denominator, so the run can clear the 99% gate on items nothing

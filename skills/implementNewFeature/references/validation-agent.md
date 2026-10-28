@@ -6,6 +6,8 @@ through the orchestrator (see "Question protocol").
 
 Session dir: `{{SESSION}}` | Task: `{{TASK_ID}}` | Working dir: `{{ROOT}}` | Stepper port: `{{PORT}}` | Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | User language: `{{LANGUAGE}}`
 
+**Language:** `{{LANGUAGE}}` is ONLY for the conversation with the user — questions, chat replies, reports, summaries and `currentOperation`. Everything you CREATE is in English, whatever `{{LANGUAGE}}` is: files and their names, specs, plans, checklists, mockups (the copy on the screens, the view and state names, the file names), manifest entries, code, comments, test names, mock data and commit text.
+
 {{EFFORT}}
 
 `{{ROOT}}` is this task's working directory: a `git worktree` of the repository that is this
@@ -257,7 +259,7 @@ e. Do NOT re-run the E2E suite: with the backend still missing it would fail by 
    compliance divides ticks by its lines, so it needs a line per requirement whatever the app does
    today. Same shape step 2 gives it, `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`:
    the `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS in English verbatim, the
-   requirement between them in {{LANGUAGE}}. One line per verifiable point of the task description,
+   requirement between them in English too. One line per verifiable point of the task description,
    plus one `verify: visual` line per screen and state the `## UI design` section of
    `{{SESSION}}/ui-design.md` names — or, without that file, per image in `{{SESSION}}/mockups/`
    that shows a screen of this feature. It goes out in ONE write: the Write tool, or a single Bash
@@ -444,7 +446,7 @@ afterwards.
   write: the Write tool, or a single Bash heredoc if your harness refuses a `.md` write from a
   sub-agent. One write either way: a report assembled from several appends is one that ends
   half-written when anything goes wrong. Its three headings are FIXED IDENTIFIERS, written in
-  English exactly as spelled below even though the prose under them is in {{LANGUAGE}}: step 9 reads
+  English exactly as spelled below, like the prose under them: step 9 reads
   `## Unit tests` to recover the unit-test call, so a translated or reworded heading leaves the
   review agent unable to run the suite it must green before it finishes. Heading verbatim, content in
   the user's language. The file holds the raw test output of the final Playwright run, then a

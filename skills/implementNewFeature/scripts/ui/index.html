@@ -256,10 +256,24 @@
   /* The × that takes back a line of the user's own, while its step is live. */
   .msg { position:relative; }
   .msg .rm { position:absolute; top:8px; right:0; margin:0; padding:0; width:20px; height:20px;
+          display:inline-flex; align-items:center; justify-content:center; white-space:normal;
           font-size:13px; line-height:1; border-radius:50%; color:var(--muted);
           background:var(--card-2); border:1px solid var(--border); }
   .msg .rm:hover:not(:disabled) { color:var(--failed); transform:none; filter:none; }
   .chat:empty { display:none; }
+  /* The states of a view drawn in both themes, one labelled row per theme. */
+  .tabs.cases:has(.case-group) { flex-direction:column; align-items:stretch; }
+  .case-group { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .case-group-label { min-width:86px; font-size:11px; font-weight:700; text-transform:uppercase;
+          letter-spacing:.8px; color:var(--muted); }
+  /* The mockups' Claude artifact: always in view, whatever the step or the scroll. */
+  .artifact-bar { position:sticky; top:0; z-index:20; display:flex; gap:10px; align-items:center;
+          flex-wrap:wrap; margin:0 0 12px; padding:10px 14px; border:1px solid var(--border-hi);
+          border-radius:10px; background:var(--card-2); font-size:13px; overflow-wrap:anywhere; }
+  .artifact-bar[hidden] { display:none; }
+  .artifact-bar .k { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.8px;
+          color:var(--accent); }
+  .artifact-bar a { color:var(--text); }
   .gate-actions { display:flex; gap:10px; flex-wrap:wrap; }
   /* What the step asks of the user, between its progress and its log: the question or the
      review is the one thing to act on, and what led up to it stays on screen around it. */
@@ -383,6 +397,7 @@
   </div>
 </aside>
 <div class="wrap">
+  <div class="artifact-bar" id="artifactBar" hidden></div>
   <h1>implementNewFeature</h1>
   <div class="usage" id="usage" hidden></div>
   <div class="tabs-bar" id="tabs" hidden></div>
@@ -510,13 +525,14 @@ const STEP1_FILES = ['images', 'hints', 'mockups', 'contracts'];
 // (or to the files) sends the pipeline back over what it touches, and implementation
 // freezes them. The rest - code review, agents, credentials - are settings the steps
 // read when they start, open until the summary is written.
-const STEP1_FLOW = ['taskDescription', 'branch', 'contractsText', 'hintsNote',
+const STEP1_FLOW = ['taskDescription', 'branch', 'taskSplit', 'contractsText', 'hintsNote',
   'refinement', 'generateMockups', 'storyDescription'];
 // Everything else the step-1 form holds, as one list: the draft below and the copy
 // that seeds a new task both carry exactly these, so neither can quietly drift from
 // the form. Credentials are among them — which is why the copy is a page-side affair.
 const STEP1_INPUTS = {
-  taskDescription: '#task', branch: '#branch', commitMessage: '#commitMessage', finalReview: '#finalReview',
+  taskDescription: '#task', branch: '#branch', taskSplit: '#taskSplit', commitMessage: '#commitMessage',
+  finalReview: '#finalReview',
   contractsText: '#contractsText', hintsNote: '#hintsNote',
   refinement: '#refinement', generateMockups: '#genMockups', storyDescription: '#storyDesc',
   authLogin: '#authLogin', authPassword: '#authPassword', rememberAuth: '#rememberAuth',
@@ -595,6 +611,19 @@ function runsHtml(runs, what = '') {
 // project key the server serves: without it, project A's login would prefill
 // project B's form.
 const LS_AGENTS = 'inf.agents';
+// The steps before implementation and both code reviews, as last picked: like the agents,
+// they are how this user works, not what one task is.
+const LS_OPTIONS = 'inf.options';
+const optionsOnScreen = () => ({
+  refinement: $('#refinement').checked, generateMockups: $('#genMockups').checked,
+  storyDescription: $('#storyDesc').checked, codeReview: runsOnScreen(),
+  finalReview: $('#finalReview').checked, finalCodeReview: runsOnScreen('#finalRuns')
+});
+// The part branches a split task gets, from its branch and how many parts the text lists.
+const splitBranches = (branch, split) => {
+  const parts = String(split || '').split('\n').filter(l => l.trim()).length;
+  return branch && parts ? Array.from({ length: parts }, (_, i) => `${branch}-part-${i + 1}`) : [];
+};
 const authKey = () => `inf.auth.${(lastState && lastState.project) || 'unknown'}`;
 
 // Storage can throw (private window, blocked site data) and can come back empty at
@@ -915,10 +944,24 @@ async function tick() {
   }
   const task = state.tasks.find(t => t.id === activeTask);
   renderUsage((state.usage || {})[activeTask], (state.orchestrators || {})[activeTask], task);
+  renderArtifactBar(task);
   renderTabs(state);
   renderStepper(task);
   renderViewBar(task);
   renderPanel(state, task);
+}
+
+// The Claude artifact of the task's mockups, once asked for: pinned to the top of the screen, so
+// its link stays in reach on every step and at any scroll.
+function renderArtifactBar(task) {
+  const bar = $('#artifactBar');
+  const a = task && task.mockupArtifact;
+  bar.hidden = !a;
+  if (!a) return;
+  const html = a.url
+    ? `<span class="k">Claude artifact</span><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.url)}</a>`
+    : '<span class="k">Claude artifact</span><span>Creating the Claude artifact of the mockups…</span>';
+  if (bar.innerHTML !== html) bar.innerHTML = html;
 }
 
 // The active task's orchestrator - every task has a Claude Code session of its own - and that
@@ -1331,8 +1374,10 @@ function renderStep1(task) {
   // An unsubmitted draft outranks the last submission for the text fields; the
   // file lists always come from the server, which is what actually holds them.
   const v = viewOf(task.id);
-  const d = { ...(task.step1 || {}), ...(v.draft || {}) };
   const revisit = !!task.step1Submitted;
+  // A form that was never submitted starts from the options picked last time; its own
+  // values (a copy's, a draft's) still win.
+  const d = { ...(revisit ? {} : readStore(LS_OPTIONS, {})), ...(task.step1 || {}), ...(v.draft || {}) };
   // The agent settings and the credentials are the two things this browser carries
   // over from the last run; both only ever fill a form that has nothing of its own.
   const ag = agentsForForm(task, d);
@@ -1405,6 +1450,12 @@ function renderStep1(task) {
         <p class="hint">The one commit "Shut down and create pull request" makes at the end, and its
           pull request's title.</p></div>
     </div>
+    <label for="taskSplit">Split into parts (optional)</label>
+    <textarea id="taskSplit" placeholder="One part per line, in order, e.g.&#10;1. API service and state&#10;2. The list view">${
+  esc(d.taskSplit || '')}</textarea>
+    <p class="hint" id="taskSplitHint">Each line is one part, built in order on a branch of its own named after
+      the branch above with <code>-part-1</code>, <code>-part-2</code>…, each started from the one before
+      it, with one pull request per part; review and validation fixes go to the part they touch. Empty: the whole task on one branch.</p>
     <h3>Steps before implementation</h3>
     <div class="switch-row">
       ${toggle('refinement', d.refinement !== false, 'Feature refinement',
@@ -1613,7 +1664,7 @@ function renderStep1(task) {
   // After implementation has started only the settings are live; the server refuses
   // anything else with a 409, so the form does not offer it.
   if (frozen) {
-    ['#task', '#branch', '#refinement', '#genMockups', '#storyDesc', '#contractsText', '#hintsNote',
+    ['#task', '#branch', '#taskSplit', '#refinement', '#genMockups', '#storyDesc', '#contractsText', '#hintsNote',
       '#attachImages', ...STEP1_FILES.map(cat => `#${cat}`)].forEach(sel => { $(sel).disabled = true; });
     document.querySelectorAll('#panel .rm').forEach(el => { el.disabled = true; });
   }
@@ -1640,7 +1691,7 @@ function renderStep1(task) {
     const prev = task.step1 || {};
     const same = (sel, key) => $(sel).value.trim() === String(prev[key] || '').trim();
     return !(same('#task', 'taskDescription')
-      && same('#branch', 'branch') && same('#contractsText', 'contractsText')
+      && same('#branch', 'branch') && same('#taskSplit', 'taskSplit') && same('#contractsText', 'contractsText')
       && same('#hintsNote', 'hintsNote')
       && $('#refinement').checked === (prev.refinement !== false)
       && $('#genMockups').checked === !!prev.generateMockups
@@ -1681,8 +1732,18 @@ function renderStep1(task) {
   // The draft is kept in step with every edit rather than only at the redraws we know
   // about: a removed file, a failing step, a question arriving — any of them replaces
   // the panel, and only what was put away survives it.
-  const onEdit = () => { snapshotStep1(); gate(); };
-  ['#task', '#branch', '#commitMessage', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
+  const showSplit = () => {
+    const names = splitBranches($('#branch').value.trim(), $('#taskSplit').value);
+    $('#taskSplitHint').innerHTML = names.length
+      ? `Branches: ${names.map(n => `<code>${esc(n)}</code>`).join(', ')} — each started from the one`
+        + ' before it, with one pull request per part.'
+      : $('#taskSplitHint').dataset.idle;
+  };
+  $('#taskSplitHint').dataset.idle = $('#taskSplitHint').innerHTML;
+  showSplit();
+  // Remembered on every edit, not on submit: the next blank form starts here either way.
+  const onEdit = () => { snapshotStep1(); gate(); showSplit(); if (!finished) writeStore(LS_OPTIONS, optionsOnScreen()); };
+  ['#task', '#branch', '#taskSplit', '#commitMessage', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
     .forEach(sel => $(sel).addEventListener('input', onEdit));
   ['#refinement', '#genMockups', '#storyDesc']
     .forEach(sel => $(sel).addEventListener('change', onEdit));
@@ -1777,6 +1838,7 @@ function renderStep1(task) {
     const sent = await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
       branch: $('#branch').value.trim(),
+      taskSplit: $('#taskSplit').value.trim(),
       contractsText: $('#contractsText').value.trim(),
       hintsNote: $('#hintsNote').value.trim(),
       mockups: keep('mockups'), contracts: keep('contracts'), hints: keep('hints'),
@@ -2201,7 +2263,8 @@ function renderMockupReview(review, step) {
     <div class="gate-actions">
       <button id="approveMockup">Approve mockups</button>
       ${screenshotsButton()}
-      <button type="button" id="mockupArtifact" class="secondary">Create Claude artifact</button>
+      ${currentTask() && currentTask().mockupArtifact ? ''
+        : '<button type="button" id="mockupArtifact" class="secondary">Create Claude artifact</button>'}
       ${backButton()}
     </div>
     <p class="hint" id="shotsHint" hidden></p>
@@ -2222,9 +2285,18 @@ function renderMockupReview(review, step) {
     $('#viewTabs').innerHTML = views.map(g => `<button data-view="${esc(g.key)}"${
       g === open ? ' class="selected"' : ''}>${esc(g.label)}</button>`).join('')
       || '<span class="muted">No screens yet</span>';
-    $('#caseTabs').innerHTML = open && open.numbered ? open.screens.map(s =>
-      `<button data-screen="${esc(screenKey(s))}"${s === shown ? ' class="selected"' : ''}>${
-        esc([s.id, s.title].filter(Boolean).join(' '))}</button>`).join('') : '';
+    // A view drawn in both themes splits its states into a light and a dark group: the dark twin
+    // is the state whose title ends in `(dark)` (mockup-agent.md), shown there without the suffix.
+    const DARK = /\s*\(dark\)\s*$/i;
+    const caseButton = s => `<button data-screen="${esc(screenKey(s))}"${s === shown ? ' class="selected"' : ''}>${
+      esc([s.id, String(s.title || '').replace(DARK, '')].filter(Boolean).join(' '))}</button>`;
+    const dark = open && open.numbered ? open.screens.filter(s => DARK.test(s.title || '')) : [];
+    $('#caseTabs').innerHTML = !(open && open.numbered) ? ''
+      : !dark.length ? open.screens.map(caseButton).join('')
+        : [['light', 'Light mode', open.screens.filter(s => !dark.includes(s))], ['dark', 'Dark mode', dark]]
+          .filter(([, , list]) => list.length)
+          .map(([mode, label, list]) => `<div class="case-group" data-mode="${mode}"><span
+            class="case-group-label">${label}</span>${list.map(caseButton).join('')}</div>`).join('');
     const pick = key => {
       v.mockupScreen = key;
       drawTabs();
@@ -2304,8 +2376,15 @@ function wireArtifact() {
     const hint = $('#shotsHint');
     if (!hint) return;
     hint.classList.toggle('error', !ok);
+    // Asked once: the bar at the top of the screen carries the link from here on.
+    if (ok) {
+      btn.remove();
+      const t = currentTask();
+      if (t) t.mockupArtifact = t.mockupArtifact || { requested: true, url: null };
+      renderArtifactBar(t);
+    }
     hint.textContent = ok
-      ? 'Requested — the orchestrator publishes these mockups as a Claude artifact and posts its link in the chat below.'
+      ? 'Requested — the orchestrator publishes these mockups as a Claude artifact; its link appears at the top of the screen.'
       : 'Could not reach the server.';
     hint.hidden = false;
   });
@@ -2738,12 +2817,14 @@ async function newTask(copy, btn) {
   // state document. The server copies the source task's auth.json instead, and what
   // was typed but not submitted rides across in the draft below.
   const { id } = await postJson('/api/tasks', copy ? { copyFrom: task.id, values: {
-    taskDescription: from.taskDescription,
+    taskDescription: from.taskDescription, taskSplit: from.taskSplit,
     contractsText: from.contractsText, hintsNote: from.hintsNote,
     refinement: from.refinement, generateMockups: from.generateMockups,
     storyDescription: from.storyDescription, codeReview: from.codeReview,
     commitMessage: from.commitMessage, finalReview: from.finalReview, finalCodeReview: from.finalCodeReview,
-    agents: agentsOf(from) } } : {});
+    agents: agentsOf(from) } }
+    // A blank task starts on the options picked last time, so its tiles match its form.
+    : { values: readStore(LS_OPTIONS, {}) });
   if (id) {
     // The server copies what it holds — the form and the uploaded files. What only the
     // page holds, typed credentials and files picked but not uploaded yet, is carried

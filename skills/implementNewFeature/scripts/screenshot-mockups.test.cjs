@@ -28,13 +28,15 @@ function tempDir(t) {
 
 const run = taskDir => spawnSync(process.execPath, [SCRIPT, taskDir], { encoding: 'utf8', timeout: 120000 });
 
-test('a screenshot is named <id> <view> - <state>, without what Windows refuses', () => {
-  assert.strictEqual(fileNameOf({ view: 'Login', title: 'Empty form' }, '0.0'), '0.0 Login - Empty form.png');
+test('a screenshot is named <id>-<lm|dm>-<view>-<state>, lowercase ASCII kebab', () => {
+  assert.strictEqual(fileNameOf({ view: 'Login', title: 'Empty form' }, '0.0'), '0.0-lm-login-empty-form.png');
+  assert.strictEqual(fileNameOf({ view: 'Tape library', title: 'Dialog (dark)' }, '1.1'), '1.1-dm-tape-library-dialog.png',
+    'a dark twin says dm, and loses its (dark) suffix');
   assert.strictEqual(fileNameOf({ view: 'Lista: zamówienia', title: 'Błąd <500>?' }, '1.12'),
-    '1.12 Lista zamówienia - Błąd 500.png');
-  assert.strictEqual(fileNameOf({ view: 'Raport', title: 'Raport' }, '2.0'), '2.0 Raport.png',
+    '1.12-lm-lista-zamowienia-blad-500.png');
+  assert.strictEqual(fileNameOf({ view: 'Raport', title: 'Raport' }, '2.0'), '2.0-lm-raport.png',
     'a view with one state is not named twice');
-  assert.strictEqual(fileNameOf({ title: 'Stary manifest.' }, '3.0'), '3.0 Stary manifest.png');
+  assert.strictEqual(fileNameOf({ title: 'Stary manifest.' }, '3.0'), '3.0-lm-stary-manifest.png');
 });
 
 test('ids are the manifest\'s own while they are <view>.<state> from 0.0, else numbered afresh', () => {
@@ -76,12 +78,12 @@ test('every state of the manifest becomes one PNG, and the folder holds only thi
   assert.strictEqual(res.status, 0, res.stdout + res.stderr);
   assert.strictEqual(res.stdout.trim(), `SCREENSHOTS 3 ${shots}`);
   assert.deepStrictEqual(fs.readdirSync(shots).sort(),
-    ['0.0 Login - Empty.png', '0.1 Login - Error.png', '1.0 List.png']);
+    ['0.0-lm-login-empty.png', '0.1-lm-login-error.png', '1.0-lm-list.png']);
   for (const f of fs.readdirSync(shots)) {
     assert.ok(fs.readFileSync(path.join(shots, f)).subarray(0, 4).equals(PNG), `${f} is a PNG`);
   }
-  assert.strictEqual(pngHeight(path.join(shots, '0.0 Login - Empty.png')), 800);
-  assert.ok(pngHeight(path.join(shots, '0.1 Login - Error.png')) > 2000, 'the error state is the one shot');
+  assert.strictEqual(pngHeight(path.join(shots, '0.0-lm-login-empty.png')), 800);
+  assert.ok(pngHeight(path.join(shots, '0.1-lm-login-error.png')) > 2000, 'the error state is the one shot');
 });
 
 test('without a manifest the script says so on its one line', t => {
