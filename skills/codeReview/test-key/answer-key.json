@@ -4250,23 +4250,6 @@
    }
   },
   {
-   "id": "v347",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "feature-component"
-   ],
-   "items": [
-    "feature-component#13"
-   ],
-   "severity": null,
-   "text": "the on-exit flush (`facade.clearUsers()`) lives in `ngOnDestroy` instead of `inject(DestroyRef).onDestroy(...)`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "279, 281"
-   }
-  },
-  {
    "id": "v349",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
@@ -5693,7 +5676,7 @@
     "directives#4"
    ],
    "severity": null,
-   "text": "`document.addEventListener('scroll', …)` is never removed through `inject(DestroyRef).onDestroy(...)`.",
+   "text": "`document.addEventListener('scroll', …)` is never removed in the `ngOnDestroy` hook.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts": "36"
    }

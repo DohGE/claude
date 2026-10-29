@@ -83,7 +83,7 @@
         },
         {
           "id": "component#20",
-          "text": "`ngOnDestroy` does not exist; a flush-on-exit (persisting aggregated values when leaving a step) uses `inject(DestroyRef)` + `_destroyRef.onDestroy(() => ...)`.",
+          "text": "A flush-on-exit (persisting aggregated values when leaving a step) lives in the `ngOnDestroy` hook (class `implements OnDestroy`); `inject(DestroyRef).onDestroy(...)` is not used for it.",
           "severity": "low"
         },
         {

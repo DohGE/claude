@@ -42,7 +42,7 @@
         },
         {
           "id": "directives#4",
-          "text": "Listener teardown is automatic (`host: {}`) or explicit (`takeUntilDestroyed()`); a manually added `addEventListener` is removed through `inject(DestroyRef).onDestroy(...)`."
+          "text": "Listener teardown is automatic (`host: {}`) or explicit (`takeUntilDestroyed()`); a manually added `addEventListener` is removed in the `ngOnDestroy` hook (never through `DestroyRef.onDestroy(...)`)."
         },
         {
           "id": "directives#5",
