@@ -21,7 +21,9 @@ write there, and never assume the two are the same path.
 ## Mission
 
 Review ALL pipeline changes, fix every finding, and prove no regressions (step 6: the specs your
-fixes touch; step 9: the whole unit suite and the E2E suite).
+fixes touch; step 9: the whole unit suite — the task's one full run — and the E2E suite). Either
+step ends with the project's own pre-commit gate green on the staged work, so the commit of
+"Create pull request" never meets a hook the review did not.
 The review itself runs EXCLUSIVELY through the `doh:codeReview` skill — you never judge the code yourself.
 
 ## Process (the runs the user set)
@@ -55,6 +57,18 @@ task's tree. Pass it on every run, even when `{{ROOT}}` happens to equal `{{PROJ
   if any, is judged on its own.
 There is never an extra run: the last run's own fixes are proven by the regression guard (step 4),
 not by another review.
+
+**Checkpoints.** Each phase you finish gets one line appended to
+`{{SESSION}}/review-progress-step{{STEP}}.md`: `<phase> <tree>`, where `<phase>` is one of
+`run<r>-reviewed`, `run<r>-fixed`, `unit-passed`, `e2e-passed`, and `<tree>` the output of
+`git -C "{{ROOT}}" add -A && git -C "{{ROOT}}" write-tree` taken right after it. Before step 1,
+read that file. It exists when an earlier attempt of this step failed or was cut off — a dead
+dev server, a backend that went away, a session that ended — and every phase in it whose `<tree>`
+equals the tree you see now is done: do not review, fix or run it again, continue at the first
+phase after the last one that still matches, and say in your report which phases you took over.
+A line whose `<tree>` differs (somebody changed the tree since) and every line after it count for
+nothing. Without them, a retry after an E2E suite failed at the login redoes a finished review and
+its fixes - in one run about 25 minutes and 20 million tokens - for a result it already has.
 
 1. Stage everything: `git -C "{{ROOT}}" add -A`. Progress 10.
 2. Review: invoke the `doh:codeReview` skill via the Skill tool — ONCE per agent, on run 1. Its
@@ -144,31 +158,42 @@ not by another review.
    `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<marker>"` (`PART_PENDING` →
    run it again), then check their edits yourself before `git add -A`. A turn ended while a helper
    works wakes the orchestrator for nothing and costs this whole context again.
-4. Regression guard — what step {{STEP}} proves before you continue:
+   With the run's fixes staged, append its `run<r>-fixed` checkpoint (see "Checkpoints"); its
+   `run<r>-reviewed` one goes in as soon as the run's report exists, before the first fix.
+4. Regression guard — what step {{STEP}} proves before you continue (a suite that passes appends
+   its `unit-passed` or `e2e-passed` checkpoint):
    - **Step 6** — the specs of every file your fixes touched and every spec you added, through
-     `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=test --command="<the narrowest command the project runs those specs with>"`
-     (its CLAUDE.md or test config names one; without one, leave `--command` out and the whole
-     suite runs). No E2E and no full suite here: validation runs both right after you, on the code
-     you leave. Then continue at 5.
-   - **Step 9** — BOTH suites below, the E2E one in the E2E slot. A run whose fixes changed no
-     file needs neither: continue at 5. Otherwise run the unit suite first, then end your turn with
-     `{"type":"e2e"}` (a FIXED IDENTIFIER): the suite needs the app's port and the browser, which
-     one task holds at a time. The orchestrator answers `E2E slot granted` once the slot is
-     yours — then run the E2E suite and carry on.
+     `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=test --command="<the runner's related-tests command over those files>"`
+     (`jest --findRelatedTests <files>`, `vitest related <files>`, or the narrowest command the
+     project's CLAUDE.md or test config names). Never the whole suite and never `--runInBand`: the
+     whole suite runs once per task, at the end, and one process that grows for the whole run is
+     what ran a machine out of memory. No E2E here either: validation runs it right after you, on
+     the code you leave. Then continue at 5.
+   - **Step 9** — BOTH suites below. A run whose fixes changed no file needs no E2E run, but the
+     unit suite still runs once at the end of the review: it is the task's one full run. Run the
+     unit suite first, then the E2E suite on a dev server of your own (no other task waits for
+     it, and you wait for none).
    The suites:
-   - the project's own unit suite, through the exact `checks.cjs` call step 5 recorded under
-     `## Unit tests` in `{{SESSION}}/validation-report.md` — run it verbatim, never rebuild the
-     command yourself (`## Unit tests` says `n/a` when the project has none). The verdict is the
+   - the project's own unit suite, through the exact full-suite `checks.cjs` call step 5 recorded
+     under `## Unit tests` in `{{SESSION}}/validation-report.md` — run it verbatim, never rebuild
+     the command yourself (`## Unit tests` says `n/a` when the project has none). Failures listed by
+     `node "{{SKILL_DIR}}/scripts/unit-baseline.cjs" list --run-dir=<the run folder: two levels above {{SESSION}}> --base=<the merge-base of HEAD and the base branch>`
+     predate the task: note them, never investigate them again. The verdict is the
      `status` of its `test` step, the exit code, never your reading of any output: `passed` → there
      is nothing to read; `failed` → Read that step's `errorsPath`, the failing tests alone, and never
      `logPath` — Grep `logPath` for one test name only when the excerpt leaves its cause out. The
      unit tests you just added for 🔵 Missing Unit Test findings run here too.
    - the step-5 Playwright suite, always the `doh` plugin's own runner pinned by path, through
      `checks.cjs` (E2E below stands for this whole command):
-     `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=e2e --env=NODE_PATH="{{SKILL_DIR}}/node_modules" --env=E2E_TEST_DIR="{{SESSION}}/e2e" --command="node \"{{SKILL_DIR}}/node_modules/@playwright/test/cli.js\" test --config \"{{SKILL_DIR}}/playwright.config.cjs\""`
-     — never `npx playwright`, never the project's copy (toolchain in the skill folder, tests in
-     the session folder). The verdict is the `e2e` step's `status`: `failed` → Read its
-     `errorsPath` only, exactly like the unit suite.
+     `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=e2e --env=NODE_PATH="{{SKILL_DIR}}/node_modules" --env=E2E_TEST_DIR="{{SESSION}}/e2e" --auth-file="{{SESSION}}/auth.json" --command="node \"{{SKILL_DIR}}/node_modules/@playwright/test/cli.js\" test --config \"{{SKILL_DIR}}/playwright.config.cjs\" --grep-invert @visual"`
+     (leave `--auth-file` out when that file does not exist; the login never goes on a command
+     line any other way) — never `npx playwright`, never the project's copy (toolchain in the skill
+     folder, tests in the session folder). `--grep-invert @visual` leaves out the tests step 5 only
+     shot its mockup comparison with: they prove nothing about a regression. The verdict is the
+     `e2e` step's `status`: `failed` → Read its `errorsPath` only, exactly like the unit suite. A
+     run that stopped at the runner's failure limit (most tests failing the same way, at the
+     login or the first page) is the environment, not your fixes: run the preflight below again
+     before anything else.
      When `{{SESSION}}/mocks/mocks.patch` exists, step 5 faked endpoints the backend does not serve
      yet, so those tests need them back. Apply, run and revert as ONE Bash command from `{{ROOT}}`,
      separated by `;` and never by `&&`, so the revert runs whether the suite passed or failed:
@@ -190,18 +215,29 @@ not by another review.
    A new failure = your fix broke something: repair it before continuing. A failure that only
    appears without the mocks applied is the missing backend, not a regression.
    Before the E2E suite, check what it needs in seconds rather than after a cold build:
-   `node "{{SKILL_DIR}}/scripts/e2e-preflight.cjs" --root="{{ROOT}}" --project="{{PROJECT}}" --port=<the dev port you will use> --url=<the backend or mock URL the app proxies to> --fix`
-   → `PREFLIGHT_OK`, or `PREFLIGHT_FAILED` and the reasons: fix those first. A dev server you
-   start is registered by its port, and stopped when you are done:
-   `node "{{SKILL_DIR}}/scripts/task-processes.cjs" register --task-dir="{{SESSION}}" --port=<port> --what=dev-server`
-   and, before your final JSON, `node "{{SKILL_DIR}}/scripts/task-processes.cjs" cleanup --task-dir="{{SESSION}}"`.
+   `node "{{SKILL_DIR}}/scripts/e2e-preflight.cjs" --root="{{ROOT}}" --project="{{PROJECT}}" --port=<the dev port you will use> --url=<the backend URL the app proxies to> --fix`
+   → `PREFLIGHT_OK`, or `PREFLIGHT_FAILED` and the reasons: fix those first. A backend that does
+   not answer is not yours to fake: end with the `error` JSON saying so — the user starts it and
+   retries. Start the dev server after the unit suite, never during it, through the process record:
+   `node "{{SKILL_DIR}}/scripts/task-processes.cjs" start --task-dir="{{SESSION}}" --root="{{ROOT}}" --port=<port> --command="<the project's dev-server command, with that port>"`,
+   wait with `node "{{SKILL_DIR}}/scripts/task-processes.cjs" wait --task-dir="{{SESSION}}" --port=<port>`
+   (`READY`, `PENDING` → again, `EXITED` → read the log lines it prints), and before your final
+   JSON stop it: `node "{{SKILL_DIR}}/scripts/task-processes.cjs" cleanup --task-dir="{{SESSION}}"`.
 5. The next run — or the end of the review. Write `review-report.md` after every run made (see
    Rules), then take the next listed run unless "Process" skips it: step 2 with its arguments (a
    fresh `doh:codeReview` run on the re-staged changes), step 3 for its findings and step 4 after
    them. A finding it lists that already sits on your `## Rejected findings` list stays rejected
    and needs nothing. A skipped run gets a line in the report naming the reason, and a skipped
    `--since-last` run does not end the review — the run after it is judged on its own.
-   When no listed run is left, POST progress 100 with
+   When no listed run is left, run the project's own pre-commit gate on the staged work — what
+   `git commit` will run when the user presses "Create pull request" (lint-staged, or the hook
+   itself), with rules the review's checklists may not know:
+   `git -C "{{ROOT}}" add -A`, then
+   `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=precommit`.
+   `passed` or `skipped` (the project has no such gate) → done. `failed` → Read its `errorsPath`,
+   fix every error it lists in the files it names — under the same rulebook as any fix — then
+   `git add -A` and run it again, until it passes. Its errors are findings like any other: list
+   them in the report and the summary. Then POST progress 100 with
    `"currentOperation":"review complete (<m> of <n> runs made)"` and end with the `result` JSON —
    `<n>` counts the `Run` lines of your last read of the section.
 
@@ -242,8 +278,6 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
-- Step 9, fixes made and the unit suite green: `{"type":"e2e"}` first (step 4), then, once the
-  E2E suite has run, the result below.
 - Success: `{"type":"result","findingsFixed":<N>,"findingsRejected":<N>,"reviewSummary":"<categories, counts, notable fixes, and every rejected finding with its ground, in {{LANGUAGE}}>"}`.
   The counts and the summary cover every run made, and the summary names the runs skipped and why.
 - A finding you left neither fixed nor rejected, or unrecoverable regression:

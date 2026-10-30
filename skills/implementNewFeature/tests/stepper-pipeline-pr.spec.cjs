@@ -1,5 +1,5 @@
 // Testy UI steppera implementNewFeature — commit message i końcowa recenzja w kroku 1, model
-// każdego sub-agenta, akceptacja makiet w trakcie poprawek i "Shut down and create pull request".
+// każdego sub-agenta, akceptacja makiet w trakcie poprawek, "Create pull request" i "Shut down server" w pasku bocznym.
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -58,7 +58,8 @@ test('końcowa recenzja ma własny przełącznik i własne przebiegi, a formular
   await expect(page.locator('#finalRuns .run')).toHaveCount(1);
   await page.click('#addFinalRun');
   await expect(page.locator('#finalRuns .run')).toHaveCount(2);
-  await expect(page.locator('#reviewRuns .run')).toHaveCount(2, { timeout: 2000 });
+  // One review run by default: the final review's --since-last run re-checks its fixes.
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(1, { timeout: 2000 });
   // Every helper a step's agent spawns has its own row under that step.
   await page.locator('#agentOverrides summary').click();
   await page.selectOption('#agentModel-reviewWalker', 'sonnet');
@@ -99,30 +100,60 @@ test('makiety w trakcie poprawek można zaakceptować w wersji, którą widział
   expect(answer).toMatchObject({ kind: 'mockup', decision: 'approve', duringRework: true });
 });
 
-test('przycisk PR stoi obok zamknięcia serwera, a bez ukończonego zadania jest wyłączony', async ({ page }) => {
+test('podsumowanie ma przycisk Create pull request, a zamknięcie serwera jest w pasku bocznym', async ({ page }) => {
   await postState({ summary: { finalStatus: 'Failed at Implementation', changes: [] } });
   await page.goto(base);
   await page.waitForSelector('.summary');
-  const section = page.locator('#shutdown-section');
-  await expect(section.locator('button')).toHaveText(['Shut down and create pull request', 'Shut down server']);
-  await expect(page.locator('#shutdownPr')).toBeDisabled();
+  await expect(page.locator('#pr-section #createPr')).toHaveText('Create pull request');
+  await expect(page.locator('#pr-section #createPr')).toBeEnabled();
+  await expect(page.locator('#pr-section')).toContainText('did not finish its pipeline');
+  await expect(page.locator('.summary #shutdown')).toHaveCount(0);
+  await expect(page.locator('#sidebar #shutdown')).toHaveText('Shut down server');
+  await expect(page.locator('h1')).toHaveCount(0);
 });
 
-test('Shut down and create pull request powiadamia orkiestratora i zamyka serwer', async ({ page }) => {
+test('Create pull request pyta orkiestratora zadania, a serwer zostaje', async ({ page }) => {
   await post('/api/answer', { taskId: 't1', kind: 'step1', taskDescription: 'Opis', branch: 'feature/hosts', commitMessage: 'feat: hosts' });
   await takeAnswer();
   await postState({ branch: 'feature/hosts', base: 'master', summary: { finalStatus: 'Completed', changes: ['src/a.ts'] } });
   await page.goto(base);
   await page.waitForSelector('.summary');
-  // The task's orchestrator is listening, as after its summary: its poll must hear the answer
-  // before the server goes down.
   const listening = fetch(`${base}/api/answer?taskId=t1&wait=30`).then(r => r.json());
-  await page.click('#shutdownPr');
+  await page.click('#createPr');
   await expect(page.locator('#confirmText')).toContainText('feature/hosts → master');
   await page.click('#confirmOk');
-  expect((await listening).answer).toEqual({ kind: 'summary', decision: 'shutdown_pr', taskId: 't1' });
-  await expect(page.locator('#shutdown-section')).toContainText('Server stopped', { timeout: 10000 });
+  expect((await listening).answer).toEqual({ kind: 'summary', decision: 'create_pr', taskId: 't1' });
+  await expect(page.locator('#pr-section')).toContainText('Creating the pull request');
+  await expect(page.locator('#createPr')).toBeDisabled();
   const request = JSON.parse(fs.readFileSync(path.join(dir, 'tasks', 't1', 'pr-request.json'), 'utf8'));
   expect(request).toMatchObject({ branch: 'feature/hosts', base: 'master', commitMessage: 'feat: hosts' });
+  expect(shutdowns).toBe(0);
+  // The orchestrator reports the pull request back; the link shows up in place.
+  await postState({ pr: { status: 'created', url: 'https://github.com/o/r/pull/7', commit: 'abc1234' } });
+  await expect(page.locator('#pr-section a')).toHaveAttribute('href', 'https://github.com/o/r/pull/7');
+  await expect(page.locator('#createPr')).toBeDisabled();
+});
+
+test('nieudany PR pokazuje powód i pozwala spróbować ponownie', async ({ page }) => {
+  await postState({ branch: 'feature/hosts', summary: { finalStatus: 'Completed', changes: [] } });
+  await post('/api/answer', { taskId: 't1', kind: 'summary', decision: 'create_pr' });
+  await postState({ pr: { status: 'failed', reason: 'pre-commit hook refused the commit' } });
+  await page.goto(base);
+  await page.waitForSelector('.summary');
+  await expect(page.locator('#pr-section .pr-status')).toContainText('pre-commit hook refused the commit');
+  await expect(page.locator('#createPr')).toHaveText('Try again');
+  await expect(page.locator('#createPr')).toBeEnabled();
+});
+
+test('Shut down server z paska bocznego pyta o potwierdzenie i zamyka serwer', async ({ page }) => {
+  await page.goto(base);
+  await page.waitForSelector('#sidebar #shutdown');
+  await page.click('#shutdown');
+  await expect(page.locator('#confirmTitle')).toHaveText('Shut down the server?');
+  await page.click('#confirmCancel');
+  expect(shutdowns).toBe(0);
+  await page.click('#shutdown');
+  await page.click('#confirmOk');
+  await expect(page.locator('#shutdownHint')).toContainText('Server stopped', { timeout: 10000 });
   expect(shutdowns).toBe(1);
 });

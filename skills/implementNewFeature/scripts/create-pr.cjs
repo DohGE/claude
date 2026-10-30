@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Opens the pull request of a finished task (SKILL.md, Final summary: "Shut down and create pull
-// request"). The token, the owner/repo slug and the request itself are codeReview's github.cjs -
+// Opens the pull request of a finished task (SKILL.md, Final summary: "Create pull request",
+// through finish-pr.cjs; a split task's parts call it one by one). The token, the owner/repo slug and the request itself are codeReview's github.cjs -
 // the same six token sources the review and fixPr use - so the button needs no `gh` installed.
 // A branch that already has an open pull request gets that one back, not a second.
 //
@@ -32,6 +32,13 @@ function parseArgs(argv) {
 // `origin/master` and `refs/heads/x` are what a pipeline has to hand; GitHub wants the branch name.
 const branchName = (ref) => String(ref).trim().replace(/^refs\/heads\//, '').replace(/^(?:refs\/remotes\/)?origin\//, '');
 
+// The description is the feature's, never a tool's: no "Generated with Claude Code" footer, no
+// co-author trailer, whatever template or habit put one into the file. Users asked for none.
+const ATTRIBUTION = /^\s*(?:🤖\s*)?(?:generated (?:with|by)\b.*\bclaude\b.*|co-authored-by:.*\b(?:claude|anthropic)\b.*)$/i;
+function withoutAttribution(body) {
+  return String(body).split(/\r?\n/).filter((line) => !ATTRIBUTION.test(line)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function createPr(options, { send = github.request, findPr = github.findOpenPr, slugOf = github.repoSlug } = {}) {
   const root = path.resolve(options.root);
   const head = branchName(options.head);
@@ -50,7 +57,7 @@ function createPr(options, { send = github.request, findPr = github.findOpenPr, 
     }
   }
   const res = send(root, { path: `/repos/${slug.owner}/${slug.repo}/pulls`, method: 'POST',
-    body: { title: options.title.trim(), head, base, body } });
+    body: { title: options.title.trim(), head, base, body: withoutAttribution(body) } });
   if (res.ok && res.json && res.json.html_url) return `PR_CREATED ${res.json.html_url}`;
   // Opened between the lookup and the request, by the user or another session.
   if (res.status === 422) {
@@ -73,4 +80,4 @@ if (require.main === module) {
   process.exitCode = line.startsWith('PR_FAILED') ? 1 : 0;
 }
 
-module.exports = { parseArgs, createPr, branchName };
+module.exports = { parseArgs, createPr, branchName, withoutAttribution };

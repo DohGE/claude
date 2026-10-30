@@ -48,8 +48,12 @@ const stepNames = gateSteps.map((s) => s.step);
 // Steps outside the fixPr gate, run only as `--only=<step> --command=<line>`: implementNewFeature's
 // Playwright suite, whose verdict is the exit code and whose failures reach the agent as
 // `errorsPath` like any other step. A full gate pass never runs them.
+// `precommit` is the exception that needs no `--command`: it runs what `git commit` would run on
+// the staged files - the project's lint-staged with no backup stash, else its own pre-commit hook -
+// so a red hook shows up while the pipeline can still fix it, not as a refused commit at the end.
 const commandSteps = [
   { step: 'e2e', label: 'e2e', scripts: [], timeoutMs: 30 * minute },
+  { step: 'precommit', label: 'pre-commit hook', scripts: [], timeoutMs: 15 * minute },
 ];
 const commandStepNames = commandSteps.map((s) => s.step);
 
@@ -64,7 +68,7 @@ const watchFlags = [
 ];
 
 function parseArgs(argv) {
-  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {} };
+  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '' };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -75,10 +79,13 @@ function parseArgs(argv) {
     else if (m[1] === 'command') args.command = m[2].trim();
     else if (m[1] === 'env' && /^[A-Za-z_]\w*=/.test(m[2])) args.env[m[2].split('=')[0]] = m[2].slice(m[2].indexOf('=') + 1);
     else if (m[1] === 'timeout-ms') args.timeoutMs = Number(m[2]) || 0;
+    // The E2E login, read from the file here so it never sits on a command line: those land in
+    // the agent's transcript and in every process listing of the machine.
+    else if (m[1] === 'auth-file') args.authFile = m[2];
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --timeout-ms).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms).`);
   }
   // One command line is one step's command. Without the step named, its log, its
   // label and its verdict would belong to no step at all.
@@ -93,7 +100,7 @@ function parseArgs(argv) {
   // A misspelled step would run nothing at all and report a green gate for it,
   // which is the one answer this script must never give by accident.
   for (const name of args.only) {
-    if (commandStepNames.includes(name) && args.command !== null) continue;
+    if (commandStepNames.includes(name) && (args.command !== null || name === 'precommit')) continue;
     if (!stepNames.includes(name)) {
       throw new Error(`Unknown step in --only: ${name} (expected ${stepNames.join(', ')}).`);
     }
@@ -397,20 +404,85 @@ function readPackageJson(root) {
   }
 }
 
-// Jest starts one worker per core but one by default, and each worker of a large Angular suite
-// holds its own copy of the compiled modules: on a 16-core machine with a dev server and a browser
-// already up, that is what ran the machine out of memory mid-run. Half the cores keeps the run
-// fast and leaves room - unless the project's script already says how many it wants.
-const jestWorkers = '--maxWorkers=50%';
+// Jest starts one worker per core, and each worker of a large Angular suite holds its own copy of
+// the compiled modules: on a 16-core machine with a dev server and a browser already up, half the
+// cores still ran it out of memory mid-run - and an agent then fell back to `--runInBand`, one
+// process that grows for the whole suite and is never recycled. Two workers, each recycled once
+// it holds more than 1 GB between test files (Jest 29 and later), keep a large suite's memory flat
+// and still run it twice as fast as one process - unless the project's script says how many it
+// wants. Several tasks validate at once now, so this is per task, not per machine.
+const jestWorkers = '--maxWorkers=2';
+const jestMemory = '--workerIdleMemoryLimit=1GB';
 
-function extraArgsFor(step, scriptText) {
+// The major version of the Jest the project has installed, 0 when it cannot be read.
+function jestMajorOf(root) {
+  for (const name of ['jest', 'jest-cli']) {
+    try {
+      const { version } = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', name, 'package.json'), 'utf8'));
+      const major = Number(String(version).split('.')[0]);
+      if (major > 0) return major;
+    } catch {
+      // not this one
+    }
+  }
+  return 0;
+}
+
+function extraArgsFor(step, scriptText, jestMajor = 0) {
   if (step !== 'test') return [];
   for (const { match, args } of watchFlags) {
     if (!match.test(scriptText)) continue;
     const own = /--maxWorkers|(^|\s)-w(\s|=|$)|--runInBand|(^|\s)-i(\s|$)/.test(scriptText);
-    return match.test('jest') && !own ? [...args, jestWorkers] : args;
+    if (!match.test('jest') || own) return args;
+    const memory = jestMajor >= 29 && !/--workerIdleMemoryLimit/.test(scriptText) ? [jestMemory] : [];
+    return [...args, jestWorkers, ...memory];
   }
   return [];
+}
+
+// What `git commit` would run on the staged files, as one command line, or null when the project
+// has no such gate. lint-staged first, with no backup stash: a failing run then leaves the tree as
+// it is instead of restoring a stash - restoring is what once dropped every staged file of a task
+// when a refused commit was tried again. Otherwise the hook itself, wherever core.hooksPath puts it.
+// `--concurrent false`: several globs, and the chunks a long file list is cut into, otherwise start
+// several `eslint_d` at once, and one of them can fail to spawn ("Task failed to spawn", every
+// other "Task killed") - a commit of 118 files was refused that way with nothing said about the
+// code, and went through in smaller batches. One at a time also leaves the daemon warm for the
+// commit's own hook.
+const lintStagedFiles = ['.lintstagedrc', '.lintstagedrc.json', '.lintstagedrc.yaml', '.lintstagedrc.yml',
+  '.lintstagedrc.js', '.lintstagedrc.cjs', '.lintstagedrc.mjs', 'lint-staged.config.js', 'lint-staged.config.cjs',
+  'lint-staged.config.mjs', 'lint-staged.config.ts'];
+
+function precommitCommandFor(root, git = (args) => spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })) {
+  let pkg = {};
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) || {};
+  } catch {
+    pkg = {};
+  }
+  if (pkg['lint-staged'] || lintStagedFiles.some((name) => fs.existsSync(path.join(root, name)))) {
+    const manager = detectPackageManager(root) || 'npm';
+    const run = manager === 'pnpm' ? 'pnpm exec lint-staged' : manager === 'yarn' ? 'yarn lint-staged' : 'npx --no-install lint-staged';
+    return `${run} --no-stash --concurrent false`;
+  }
+  const hook = git(['rev-parse', '--git-path', 'hooks/pre-commit']);
+  const hookPath = hook && hook.status === 0 ? String(hook.stdout || '').trim() : '';
+  if (hookPath && fs.existsSync(path.resolve(root, hookPath))) return 'git hook run pre-commit';
+  return null;
+}
+
+// The messages never quote the file: a JSON parse error does, and this one holds a password.
+function readAuthFile(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error(err && err.code === 'ENOENT' ? 'it does not exist' : 'it is not readable JSON');
+  }
+  if (!parsed || typeof parsed.login !== 'string' || typeof parsed.password !== 'string') {
+    throw new Error('it holds no login and password');
+  }
+  return { E2E_LOGIN: parsed.login, E2E_PASSWORD: parsed.password };
 }
 
 // A --command line that runs a package.json script (`npm test -- <spec>`, `pnpm run
@@ -431,12 +503,12 @@ function invocationFor(spec, source) {
       const name = flag.split('=')[0];
       return tokens.some((token) => token === name || token.startsWith(`${name}=`));
     };
-    const missing = extraArgsFor(spec.step, `${source.command} ${script || ''}`).filter((flag) => !carries(flag));
+    const missing = extraArgsFor(spec.step, `${source.command} ${script || ''}`, source.jestMajor).filter((flag) => !carries(flag));
     const handOn = script !== null && missing.length > 0 && !tokens.includes('--') ? ['--'] : [];
     const line = [source.command, ...handOn, ...missing].join(' ');
     return { exec: line, args: [], shell: true, script, display: line };
   }
-  const extra = extraArgsFor(spec.step, source.scripts[source.name]);
+  const extra = extraArgsFor(spec.step, source.scripts[source.name], source.jestMajor);
   const args = ['run', source.name, ...(extra.length > 0 ? ['--', ...extra] : [])];
   return {
     exec: source.packageManager,
@@ -491,7 +563,7 @@ function runChecks(options) {
   const root = path.resolve(options.root);
   const outDir = path.resolve(options.outDir);
   const only = options.only || [];
-  const command = options.command || '';
+  let command = options.command || '';
   const run = options.run || defaultRun;
   const result = {
     root, packageManager: null, gate: 'skipped', steps: [], errors: [], warnings: [],
@@ -511,6 +583,26 @@ function runChecks(options) {
   if (!stat || !stat.isDirectory()) {
     result.errors.push(`Not a directory: ${root}`);
     return allSkipped('the worktree could not be read');
+  }
+
+  // The pre-commit gate brings its own command line when the caller gives none.
+  if (!command && only.length === 1 && only[0] === 'precommit') {
+    command = (options.precommitCommand || precommitCommandFor)(root) || '';
+    if (!command) {
+      result.steps.push(skippedStep(commandSteps.find((s) => s.step === 'precommit'),
+        'the project has no lint-staged config and no pre-commit hook', outDir));
+      return result;
+    }
+  }
+
+  let auth = {};
+  if (options.authFile) {
+    try {
+      auth = readAuthFile(options.authFile);
+    } catch (err) {
+      result.errors.push(`Could not read the credentials file ${options.authFile}: ${err.message}`);
+      return allSkipped('the credentials file could not be read');
+    }
   }
 
   // A --command line brings its own command, so it needs no package.json - which is
@@ -534,7 +626,7 @@ function runChecks(options) {
   if (only.length === 0) clearLogs(outDir);
 
   // --env sets a variable for the command without a shell of its own (cmd.exe knows no VAR=x cmd).
-  const env = { ...process.env, ...(options.env || {}), CI: '1', FORCE_COLOR: '0' };
+  const env = { ...process.env, ...(options.env || {}), ...auth, CI: '1', FORCE_COLOR: '0' };
   const commandStep = commandSteps.find((spec) => only.includes(spec.step));
   for (const spec of commandStep ? [commandStep] : gateSteps) {
     if (only.length > 0 && !only.includes(spec.step)) {
@@ -548,7 +640,8 @@ function runChecks(options) {
       continue;
     }
 
-    const call = invocationFor(spec, { command, scripts, name, packageManager: result.packageManager });
+    const call = invocationFor(spec, { command, scripts, name, packageManager: result.packageManager,
+      jestMajor: spec.step === 'test' ? jestMajorOf(root) : 0 });
     const timeoutMs = options.timeoutMs || spec.timeoutMs;
     const startedAt = Date.now();
     const outcome = run(call.exec, call.args, {
@@ -650,6 +743,7 @@ function main() {
 
 module.exports = {
   parseArgs, defaultRun, truncateLog, extractErrors, extraArgsFor, runChecks, exitCodeFor, gateSteps, reapTree,
+  precommitCommandFor, jestMajorOf,
 };
 
 if (require.main === module) main();

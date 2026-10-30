@@ -59,14 +59,14 @@ function fixture(t, { tasks = null, e2e = undefined, serverPid = process.pid, wa
   };
 }
 
-test('compact: names the run, where each task stands, the E2E slot and the sections to read again', (t) => {
-  // A run from before the server recorded orchestrators and kept the slot: one session for all.
+test('compact: names the run, where each task stands and the sections to read again', (t) => {
+  // A run from before the server recorded orchestrators: one session for all.
   const f = fixture(t, {
     waiters: { t1: process.pid },
     tasks: [
       task('t1', 4, { 4: { status: 'in_progress', currentOperation: 'Writing tests' } }, { branch: 'feature/a' }),
       task('t2', 5, { 5: { status: 'in_progress' } }),
-      task('t3', 5, { 5: { status: 'waiting', currentOperation: 'Waiting for the E2E slot' } }, { question: { id: 'q1' } }),
+      task('t3', 5, { 5: { status: 'waiting', currentOperation: 'Waiting for the backend' } }, { question: { id: 'q1' } }),
     ],
   });
   const note = noteOf(hooks.onCompact(f.input, f.env));
@@ -74,8 +74,8 @@ test('compact: names the run, where each task stands, the E2E slot and the secti
   assert.ok(note.includes(`- session: ${slash(f.session)}, server on port 9999 (pid ${process.pid})`), note);
   assert.ok(note.includes('- t1 on `feature/a`: step 4 Implementation - in_progress, "Writing tests"'), note);
   assert.ok(note.includes('- t2 on no branch yet: step 5 Validation & E2E - in_progress'), note);
-  assert.ok(note.includes('- t3 on no branch yet: step 5 Validation & E2E - waiting, "Waiting for the E2E slot"; a question is open'), note);
-  assert.ok(note.includes('- E2E slot: held by t2; queued: t3'), note);
+  assert.ok(note.includes('- t3 on no branch yet: step 5 Validation & E2E - waiting, "Waiting for the backend"; a question is open'), note);
+  assert.ok(!note.includes('E2E slot'), 'every task validates on its own: there is no slot to report');
   assert.ok(note.includes(`- waiter for t1: listening (pid ${process.pid}) - do not start a second one`), note);
   assert.ok(note.includes('- waiter for t2: none is listening'), note);
   assert.ok(!note.includes('- you orchestrate'), note);
@@ -102,22 +102,20 @@ test('compact: a failed step adds the failure protocol; a shown summary the fina
   assert.ok(note.includes('- waiter for t1: none is listening - start one (loop card point 1) before you end this turn'), note);
 });
 
-test('compact: a session hears only of the task it orchestrates, and of the server\'s E2E slot', (t) => {
+test('compact: a session hears only of the task it orchestrates', (t) => {
   const own = (session) => ({ orchestrator: { session, claimedAt: '2026-10-01T12:00:00.000Z' } });
   const f = fixture(t, {
     waiters: { t1: process.pid, t2: process.pid },
-    e2e: { holder: 't3', queue: ['t2'] },
     tasks: [
       task('t1', 4, { 4: { status: 'in_progress' } }, own('s0')),
-      task('t2', 5, { 5: { status: 'waiting', currentOperation: 'Waiting for the E2E slot' } }, own('s1')),
+      task('t2', 5, { 5: { status: 'waiting', currentOperation: 'Waiting for the backend' } }, own('s1')),
       task('t3', 5, { 5: { status: 'in_progress' } }, own('s3')),
     ],
   });
   const note = noteOf(hooks.onCompact(f.input, f.env));
   assert.ok(note.includes('- you orchestrate t2 only: every other task has an orchestrator of its own'), note);
-  assert.ok(note.includes('- t2 on no branch yet: step 5 Validation & E2E - waiting, "Waiting for the E2E slot"'), note);
+  assert.ok(note.includes('- t2 on no branch yet: step 5 Validation & E2E - waiting, "Waiting for the backend"'), note);
   assert.ok(!/- t[13] on /.test(note), note);
-  assert.ok(note.includes('- E2E slot: held by t3; queued: t2 (the server hands it on in this order)'), note);
   assert.ok(note.includes(`- waiter for t2: listening (pid ${process.pid})`), note);
   assert.ok(!note.includes('waiter for t1'), note);
   assert.ok(note.includes(stepFile('5-validation.md')) && !note.includes('4-implementation.md'), note);
@@ -171,7 +169,7 @@ test('skillSections: only what the compaction cut, each section up to the next h
 test('loop card: short enough to ride in every compaction, and the plugin\'s compaction hook asks this part', () => {
   const card = hooks.loopCard(skillFile).join('\n');
   assert.ok(card.length <= 3000, `${card.length} chars`);
-  for (const term of ['wait-answer.cjs', '--task T', 'run_in_background', 'WAITER_RUNNING', 'ORCHESTRATOR_RUNNING', '/api/e2e', '"taskId"', 'SendMessage']) {
+  for (const term of ['wait-answer.cjs', '--task T', 'run_in_background', 'WAITER_RUNNING', 'ORCHESTRATOR_RUNNING', 'task-info.cjs', '"taskId"', 'SendMessage']) {
     assert.ok(card.includes(term), term);
   }
   const shared = require('../../../scripts/compact-hook.cjs');

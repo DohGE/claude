@@ -12,6 +12,9 @@
 //
 // `claude` is the command; DOH_CLAUDE_COMMAND replaces it - a full path, or `claude
 // --permission-mode acceptEdits` for a session that does not stop at every edit.
+// DOH_ORCHESTRATOR_MODEL adds `--model <it>` when the command names no model: the event loop is
+// mechanical - post a state, read a waiter, render a brief, spawn - yet on one run its session
+// read 42M tokens on Opus, more than any agent but two. The agents keep the models step 1 gives them.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -29,7 +32,13 @@ const SESSION_VARS = new Set(['CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAU
 
 const attachPrompt = (taskId, port) => `/doh:implementNewFeature --attach ${taskId} --port ${port}`;
 
-const claudeOf = (env) => (env.DOH_CLAUDE_COMMAND || '').trim() || 'claude';
+const claudeOf = (env) => {
+  const command = (env.DOH_CLAUDE_COMMAND || '').trim() || 'claude';
+  const model = (env.DOH_ORCHESTRATOR_MODEL || '').trim();
+  // A value that is not a bare model name never reaches a shell line.
+  if (!model || !/^[A-Za-z0-9._[\]-]+$/.test(model) || /(^|\s)--model(\s|=|$)/.test(command)) return command;
+  return `${command} --model ${model}`;
+};
 
 // What the user pastes into a terminal opened in the project when none could be opened for
 // them. Double quotes mean the same in cmd, PowerShell and every POSIX shell for a prompt

@@ -33,6 +33,17 @@ test('sesja taska dostaje tylko swój task i port, komendą z DOH_CLAUDE_COMMAND
     'claude "/doh:implementNewFeature --attach t3 --port 9999"');
 });
 
+test('DOH_ORCHESTRATOR_MODEL dodaje --model, chyba że komenda już go ma albo wartość nie jest nazwą modelu', () => {
+  assert.equal(manualCommand('t2', 9999, { DOH_ORCHESTRATOR_MODEL: ' sonnet ' }),
+    'claude --model sonnet "/doh:implementNewFeature --attach t2 --port 9999"');
+  assert.equal(manualCommand('t2', 9999, { DOH_CLAUDE_COMMAND: 'claude --permission-mode acceptEdits', DOH_ORCHESTRATOR_MODEL: 'claude-sonnet-5-5' }),
+    'claude --permission-mode acceptEdits --model claude-sonnet-5-5 "/doh:implementNewFeature --attach t2 --port 9999"');
+  assert.equal(manualCommand('t2', 9999, { DOH_CLAUDE_COMMAND: 'claude --model=opus', DOH_ORCHESTRATOR_MODEL: 'sonnet' }),
+    'claude --model=opus "/doh:implementNewFeature --attach t2 --port 9999"');
+  assert.equal(manualCommand('t2', 9999, { DOH_ORCHESTRATOR_MODEL: 'sonnet & calc' }),
+    'claude "/doh:implementNewFeature --attach t2 --port 9999"');
+});
+
 test('nowy terminal nie dziedziczy tożsamości sesji, która uruchomiła serwer', () => {
   const env = sessionEnv({
     PATH: '/bin', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'abc', claude_pid: '7', CLAUDE_EFFORT: 'max',

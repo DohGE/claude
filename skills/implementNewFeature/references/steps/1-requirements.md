@@ -9,7 +9,7 @@ while still writing task 2. A task's first submission is also what gives it an o
 server opens a new terminal in `PROJECT` running
 `claude "/doh:implementNewFeature --attach <id> --port PORT"`, and that session runs the task (see
 "Attach" in SKILL.md). Nothing about it is yours: a `step1` reaches you for T only. When no terminal
-opens, the stepper's top-right corner shows the task's orchestrator `closed` with an "Open session"
+opens, the stepper's sidebar shows the task's orchestrator `closed` with an "Open session"
 button that offers the command to run by hand.
 
 On a `step1` answer for task T:
@@ -18,7 +18,7 @@ On a `step1` answer for task T:
    `<SESSION>/tasks/T/auth.json` — NEVER read, quote or copy that file; only the validation agent
    and the final review's regression run use it.
 2. `branch` is the branch this task will be implemented on. Keep it; step 4 uses it verbatim.
-   `commitMessage` is the message of the one commit "Shut down and create pull request" makes
+   `commitMessage` is the message of the one commit "Create pull request" makes
    ("final-summary.md"); the page requires it, and an older form without one falls back to the
    branch name there. `agents` is the model and effort of every sub-agent of this task — the
    steps' agents and the helpers they spawn — keep it as `agents(T)` and read it at every spawn
@@ -52,7 +52,7 @@ On a `step1` answer for task T:
    <"Provided — credentials in auth.json (task dir); never copy them into spec/plan/tests" if authProvided, else "—">
 
    ## Pipeline steps
-   Refinement: <"on" if refinement, else "off">  |  Mockups: <"on" if generateMockups, else "off">  |  Story: <"on" if storyDescription, else "off">  |  Final review: <"on" if finalReview, else "off">
+   Refinement: <"on" if refinement, else "off">  |  Mockups: <"on" if generateMockups, else "off">  |  Dark mockups: <"off" if darkMockups is false, else "on">  |  Story: <"on" if storyDescription, else "off">  |  Final review: <"on" if finalReview, else "off">
 
    ## Code review
    Run 1: <the run's flags separated by spaces, or "—" when it has none>
@@ -144,7 +144,7 @@ doing, in this order:
      run in progress finishes as it started, and the next one follows the new list, so fewer runs
      end the review sooner; a final review switched off while step 9 runs finishes that run and stops;
    - the credentials when step 5 or step 9's regression run starts, a retry included;
-   - the commit message when "Shut down and create pull request" is pressed.
+   - the commit message when "Create pull request" is pressed.
 3. Drop every step in `switchedOff`, whatever it was doing — nothing it left behind may reach a
    later step:
    - its agent, when still running → stop it with the TaskStop tool (the id from `agentIds(T)`) and

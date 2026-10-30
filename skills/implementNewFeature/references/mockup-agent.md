@@ -43,7 +43,9 @@ draw every state in both: the light state as usual, and a twin manifest entry fo
 (the next state id of the same view, its `title` ending in `(dark)`), rendered by the same file
 with the app's own dark tokens on its root element. In a measured run both tasks' users asked for
 the dark versions in a second round; drawn in the first, that round never happens. An application
-with one theme gets one.
+with one theme gets one. The user can switch the twins off on the requirements form: when the
+`## Pipeline steps` line of `{{SESSION}}/requirements.md` says `Dark mockups: off`, draw the light
+states only — no `(dark)` entries — until a later message asks for them.
 
 ## The project's own styling (MANDATORY — Storybook first)
 
@@ -189,6 +191,12 @@ in your message:
 ```
 
 The `screens` list is the manifest's: every state, one entry each.
+Before that JSON, write the same summary to `{{SESSION}}/generated-mockups/round.md` (one write,
+replacing the last round's): the orchestrator posts the round from the manifest and that file, so
+it is what the user reads above the screens.
+Every screen is self-contained — CSS in a `<style>`, fonts and images as `data:` URIs: a round
+whose screens still load a stylesheet, a font or an image from a file or a URL comes back to you
+before the user sees it, with the files named.
 The user's feedback arrives as the next message: rework the files in place (same filename while the
 view still exists) and end with a fresh `mockup` JSON. Repeat for as many rounds as it takes.
 A state that stays keeps its id; a new state takes the next free state number of its view, a new
@@ -219,6 +227,17 @@ as your last `mockup` JSON left it, and record that round.
    agent must compare against a mockup, naming its id (`0.1`), and update items the design
    changed. Same format:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`.
+   **Text the user changed in the chat changes the checklist too.** Go through every piece of
+   user-visible text the approved round adds, removes or rewords against the round you started
+   from — a label, a tooltip, a message, a button, an empty-state line — and through every
+   feedback line that asked for one. For each: add a `verify: e2e` line asserting that exact text
+   where it appears (English, as on the screen), and rewrite or drop every line the change
+   contradicts — a line such as "no translation keys are added or changed" stops being true the
+   moment the user asks for a new tooltip. Write what the change now requires instead, in the
+   project's own terms: which translation key holds the new text and which language files get it
+   (read how the project adds one — a project that edits only its source-language file and leaves
+   the others to translators says "added to `en.json` only"). A checklist that still demands the
+   opposite of what the user approved fails validation on a requirement nobody holds any more.
 4. Delete `{{SESSION}}/ui-design.md` if it exists: it recorded your design from a run without
    refinement, spec.md holds the design now, and two records drift apart.
 
@@ -229,7 +248,10 @@ create none of them:
    IDENTIFIER heading in English, the view list with file names, every state of each view by id
    and title, and the design decisions settled during the chat. It is the design record of every
    step after you: step 4 builds from it, and step 5 turns each state it names into a
-   `verify: visual` check — so name every one.
+   `verify: visual` check — so name every one. Add a `### Text` list under it: every user-visible
+   text the chat added, removed or reworded, verbatim, with where it appears and how the project
+   stores it (the translation key, and which language files get it) — step 5 writes its checklist
+   from this file, and a text change missing here is one it will test the old way.
 
 Then finish with the result JSON below.
 

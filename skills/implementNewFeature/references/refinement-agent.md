@@ -55,9 +55,10 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
    whole of step 4 runs with no visible progress.
    The plan decides where every file goes, what it is called and what it holds, so it obeys the same rulebook step 4 writes against and step 6 reviews with.
    Before writing it, run `node "{{SKILL_DIR}}/scripts/match-instructions.cjs" --project="{{PROJECT}}"` for the file kinds the rulebook knows (`kinds[]`: each one's `kind`, `pattern` and `role` — where every file belongs).
-   Then re-run it with the paths the plan will create (`--files="<project-relative paths>"`) and read the `digest` file of each kind they come back with — one line per checklist item of that kind, its address `<id>#<n>` and the first clause of its rule, one file per kind however many paths share it. The `rules` file beside it holds the full wording: open it only for an item whose clause leaves your plan undecided. The implementation reads `rules` in full; a plan needs the constraints, not every example.
+   Then re-run it with every path the plan will create OR change, each one spelled out — never "and every other locale file" or "the other configs", which the matcher cannot see (`--files="<project-relative paths>"`) — and read the `digest` file of each kind they come back with — one line per checklist item of that kind, its address `<id>#<n>` and the first clause of its rule, one file per kind however many paths share it. The `rules` file beside it holds the full wording: open it only for an item whose clause leaves your plan undecided. The implementation reads `rules` in full; a plan needs the constraints, not every example.
    A path that comes back as a kind whose `role` is not the file's, or as `kind: null`, sits where the rulebook does not expect it: move it to the pattern of its kind.
    File layout, names, interfaces and every snippet in the plan must already satisfy those checklists — a plan that contradicts them only turns into deviations in step 4 and findings in step 6.
+   An item that says a file is not the feature's to change — translations another team owns, generated or vendored files — takes that file out of the plan, the spec and the checklist alike. A plan once had the new keys written to every locale file; the review's translation rule reverted them, validation then reported "keys only in en.json" as a defect, and a second task failed its compliance gate on the same line.
 6. Write `{{SESSION}}/checklist.md` — every verifiable requirement from spec.md, one line each:
    `- [ ] R<nr> | <requirement> | verify: e2e|visual|manual`
    The `R<nr>` prefix and the `verify:` tag are FIXED IDENTIFIERS — English verbatim, like the
@@ -67,6 +68,20 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
    nowhere while still counting in the denominator, so the run can clear the 99% gate on items nothing
    ever verified — and step 5 now refuses a checklist whose items carry no tag at all.
    (step 5 ticks these and appends `| evidence: <what proves it>` to each one it ticks)
+   The checklist is what step 5 tests, so it covers the feature the way a QA engineer signing it
+   off would, not only the lines the spec adds — each of these as `verify: e2e` lines of their own:
+   - the existing flows the change touches (the screens, components, state and endpoints it
+     shares), each one still working;
+   - the edge cases of every input and state: empty, one and many, limits and one past them,
+     invalid values with their messages, loading, empty and error states per documented status,
+     partial success, cancel and double submit;
+   - every place the same data or action is reachable more than one way, with a line saying the
+     ways end in the same result and send the same request;
+   - every request the feature sends, against its contract — and one line per conditional rule the
+     contracts or the user state in prose (which payload in which situation).
+   Never write a line that forbids what the spec itself requires — "no translation keys are added"
+   next to a new label is a contradiction the run will fail on; say instead how the new text is
+   stored, in the project's own way.
 7. Report progress at MILESTONES only — after reading inputs, after exploring the project, and
    after each artifact is written:
    `curl -s -X POST http://127.0.0.1:{{PORT}}/api/state -H "content-type: application/json" -d "{\"taskId\":\"{{TASK_ID}}\",\"step\":2,\"progress\":<N>,\"currentOperation\":\"<phase>\",\"logEntry\":\"<event>\"}"`

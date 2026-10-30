@@ -22,6 +22,13 @@ module.exports = defineConfig({
   // finding against the application for something the runner caused. The skill's
   // own tests each start an isolated server, so they stay parallel.
   workers: process.env.E2E_TEST_DIR ? 1 : undefined,
+  // A session suite stops at its tenth failure. A backend or mock server that went down fails
+  // every test the same way at the login, each after the full timeout: 41 of them once took
+  // twenty minutes to say what the first three already had. Ten still shows every real failure
+  // of a focused feature in one run. E2E_MAX_FAILURES=0 lifts the limit.
+  maxFailures: process.env.E2E_TEST_DIR
+    ? (process.env.E2E_MAX_FAILURES !== undefined ? Number(process.env.E2E_MAX_FAILURES) : 10)
+    : undefined,
   // Failure artifacts land next to the session's tests, so the agent reads the
   // captured page snapshot and screenshot instead of re-walking the flow live.
   outputDir: process.env.E2E_TEST_DIR

@@ -52,7 +52,7 @@ test('formularz wraca wypełniony poprzednim zgłoszeniem', async ({ page }) => 
   await expect(page.locator('#genMockups')).toBeChecked();
   await expect(page.locator('#refinement')).toBeChecked();
   await expect(page.locator('#storyDesc')).not.toBeChecked();
-  await expect(page.locator('#reviewRuns .run')).toHaveCount(2);
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(1);
   // Nic się nie zmieniło, więc nie ma czego wysyłać — agenci zostają w spokoju.
   await expect(page.locator('#next')).toBeDisabled();
   await expect(page.locator('#changeHint')).toBeVisible();
@@ -171,10 +171,10 @@ test('przełączniki refinementu i story też są zmianą i włączają kroki', 
 test('przebiegi review: dodanie, flagi z listy skilla, limit trzech i usunięcie', async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#reviewRuns .run');
-  // Domyślnie dwa przebiegi: pierwszy bez flag, drugi --since-last.
+  // Domyślnie jeden przebieg bez flag; każdy dodany startuje z --since-last.
   const run = n => page.locator(`#reviewRuns .run[data-run="${n}"]`);
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(1);
   await expect(run(0).locator('input:checked')).toHaveCount(0);
-  await expect(run(1).locator('input[data-flag="--since-last"]')).toBeChecked();
   // Lista flag przychodzi z SKILL.md codeReview — z opisem w podpowiedzi.
   await expect(run(0).locator('input[data-flag="--only-md"]')).toHaveCount(1);
   await expect(run(0).locator('input[data-flag="--project"]')).toHaveCount(0);
@@ -182,6 +182,8 @@ test('przebiegi review: dodanie, flagi z listy skilla, limit trzech i usunięcie
   await expect(page.locator('#next')).toBeDisabled();
   await page.click('#addRun');
   await expect(page.locator('#next')).toBeEnabled();
+  await expect(run(1).locator('input[data-flag="--since-last"]')).toBeChecked();
+  await page.click('#addRun');
   await expect(page.locator('#reviewRuns .run')).toHaveCount(3);
   await expect(page.locator('#addRun')).toBeDisabled();
   await run(2).locator('input[data-flag="--light"]').check();
@@ -216,7 +218,7 @@ test('po starcie implementacji przebieg jest zamrożony, a ustawienia nadal się
     await expect(page.locator('#confirmTitle')).toHaveText('Save the new settings?');
     await page.click('#confirmOk');
     const { answer } = await (await fetch(`${base}/api/answer?wait=10`)).json();
-    expect(answer.codeReview).toHaveLength(3);
+    expect(answer.codeReview).toHaveLength(2);
     expect(answer.revision).toMatchObject({ changed: ['codeReview'], restartAt: null });
     // Nic się nie powtarza: implementacja pracuje dalej i strona na nią wraca.
     await expect(page.locator('#panel h2')).toContainText('Implementation');
