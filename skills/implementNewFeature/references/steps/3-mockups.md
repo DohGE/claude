@@ -5,7 +5,11 @@ stepper never shows it, and the step before it already moved `activeStep` past i
 
 The agent designs from what refinement settled when step 2 ran, and from the requirements form
 alone when it did not — its brief tells the two apart by whether `spec.md` exists, so nothing
-about it reaches the prompt. It draws the dark theme too when the application has one.
+about it reaches the prompt. It draws the dark theme too when the application has one, unless the
+form switched "Dark theme mockups" off (`Dark mockups: off` in requirements.md's `## Pipeline steps`).
+When the user's feedback adds, removes or rewords text on a screen, the agent brings the checklist
+(or `ui-design.md`) in line at approval, so validation never measures the screens against a
+requirement the user has since changed.
 Every screen wears the project's own styling: the app's global stylesheet compiled with the
 project's Sass (`scripts/project-styles.cjs`) and, when the project has a Storybook, its components
 as their stories render them (`scripts/storybook-snapshot.cjs`, from a build it makes in the
@@ -15,31 +19,36 @@ session when there is none) — the agent's brief says how.
 2. Spawn the mockup agent from `references/mockup-agent.md`, per "Spawning a sub-agent".
 3. Keep only `mockupRounds(T)`, for the progress bar. The chat transcript and the `rev` the UI
    re-renders on are the SERVER's — never hold either in your context. Loop on the agent's final JSON:
-   - `{"type":"mockup","summary","screens":[{"id","view","title","file"}]}` → `mockupRounds(T)++`,
-     take the round's screenshots (below), then POST
-     `{"taskId":"T","step":3,"progress":<min(90, 20+10×mockupRounds)>,"currentOperation":"Waiting for your review","mockupReview":{"text":"<summary>","screens":[…]},"mockupChat":{"role":"agent","text":"<summary>"}}`.
-     Omit `rev`: the server stamps the next one itself, so a round can never reuse a number and
-     leave the panel locked. The chat is not part of the round at all — it belongs to step 3 and
-     the server appends `mockupChat` to it, which is why clearing `mockupReview` never erases the
-     conversation.
+   - `{"type":"mockup","summary","screens":[…]}` → `mockupRounds(T)++`, then put the round on
+     screen with ONE call — never copy its screens into a body yourself:
+
+         node "<SKILL_DIR>/scripts/mockup-round.cjs" --task-dir="<SESSION>/tasks/T" --port=PORT --task=T --round=<mockupRounds(T)>
+
+     It reads the screens from the manifest and the summary from the `round.md` the agent wrote
+     for the round, takes the screenshots (`screenshot-mockups.cjs`: one full-page PNG per state at
+     1280 px into `<SESSION>/tasks/T/mockup-screenshots/`, named `<id>-<lm|dm>-<view>-<title>.png`,
+     for the panel's "Open screenshots folder" button) and POSTs the round — progress, `Waiting for
+     your review`, `mockupReview`, the `mockupChat` line; the server stamps `rev` itself, so a round
+     never reuses a number. Its first line (FIXED IDENTIFIERS):
+     - `ROUND_POSTED <screens>` → the round is on screen.
+     - `ROUND_HELD <n> <file or url>…` → a screen loads a stylesheet, font or image it does not
+       inline, so the preview would show it unstyled. Nothing was posted: SendMessage the agent
+       `Your round loads files the preview cannot load: <the files>. Inline them (CSS in <style>, fonts and images as data: URIs), then end the round again.`
+       (a FIXED IDENTIFIER, English verbatim) and wait for its next `mockup` JSON. When that round
+       is held again, run the call once more with `--allow-external`: it posts the round with a
+       note saying which files are missing.
+     - `ROUND_FAILED <reason>` → the manifest is missing or the server refused the body: SendMessage
+       the reason to the agent and wait for its next round.
+     The second line is the screenshot script's own: `SCREENSHOTS_FAILED <reason>` naming a missing
+     Playwright or a Chromium that did not start → run `npm --prefix "<SKILL_DIR>" install` and
+     `node "<SKILL_DIR>/node_modules/@playwright/test/cli.js" install chromium` once, for the next
+     round. Never Read the screenshots: they are for the user.
      When `artifact(T)` is set — the user created the artifact on an earlier round — every new
-     round updates it, before the round is posted: the same `mockup-artifact.cjs` call and the same
-     publish from the same `page` path, so the artifact always shows the round on screen; then put
-     `"mockupArtifact":"<url>"` in the round's POST (the publish may return a new url) and add
-     `\nClaude artifact updated: <url>` to the round's `mockupChat` text (or the failure reason).
-     The approved round is the last one the artifact shows: nothing changes it after approval.
-     Take the screenshots with `node "<SKILL_DIR>/scripts/screenshot-mockups.cjs" "<SESSION>/tasks/T"`.
-     It refills `<SESSION>/tasks/T/mockup-screenshots/` with one full-page PNG per manifest entry —
-     every state of every view, each loaded through its `#<id>` fragment — at desktop width
-     (1280 px), named `<id>-<lm|dm>-<view>-<title>.png` (lowercase kebab; `dm` for a `(dark)` twin, e.g. `1.1-dm-tape-library-dialog.png`), the id numbered `{0-9}.{0-99}` (view, then
-     state, both from 0); the panel's "Open screenshots folder"
-     button opens that folder for the user. It prints one line, a FIXED IDENTIFIER:
-     `SCREENSHOTS <count> <dir>`, or `SCREENSHOTS_FAILED <reason>` — then post the round anyway,
-     with `Screenshots could not be taken: <reason>` at the end of the `mockupChat` text. The first
-     time the reason says the skill's Playwright is not installed or Chromium did not start, run
-     `npm --prefix "<SKILL_DIR>" install` and
-     `node "<SKILL_DIR>/node_modules/@playwright/test/cli.js" install chromium`, then try once more.
-     Never Read the screenshots: they are for the user.
+     round updates it first: the same `mockup-artifact.cjs` call and the same publish from the same
+     `page` path, so the artifact always shows the round on screen; then pass
+     `--artifact-url=<url>` to `mockup-round.cjs` (the publish may return a new url), or
+     `"--artifact-note=Claude artifact not updated: <reason>"` when the publish failed. The
+     approved round is the last one the artifact shows: nothing changes it after approval.
      Then wait for T's `kind=="mockup"`:
      - `decision=="feedback"` → SendMessage the feedback text to the agent, and post nothing: the
        server already took the round off the screen, put the step at `Reworking the mockups…` and

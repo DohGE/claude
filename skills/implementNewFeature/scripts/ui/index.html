@@ -40,9 +40,8 @@
   html[data-rail=collapsed] .sidebar-body { display:none; }
   html[data-rail=collapsed] body { padding-left:58px; }
   .wrap { max-width:980px; margin:0 auto; padding:32px 20px 72px; }
-  h1 { font-size:22px; margin:0 0 28px; letter-spacing:.2px; width:fit-content;
-       background:linear-gradient(90deg,var(--accent),var(--accent-2));
-       -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sidebar-body h2 + .usage, .sidebar-body h2 + button { margin-top:0; }
+  .sidebar-body .rail-section { margin-top:26px; }
   /* Task tabs appear only from the second task on — one task looks like it always did. */
   .tabs-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
   .tabs-bar[hidden], .viewbar[hidden] { display:none; }
@@ -197,7 +196,7 @@
           color:var(--text); cursor:pointer; }
   .flags input { margin:0; accent-color:var(--accent); cursor:pointer; }
   .hint { font-size:12.5px; color:var(--muted); margin:6px 0 0; }
-  .hint.error { color:var(--failed); }
+  .hint.error, .pr-status.error { color:var(--failed); }
   /* Files already uploaded: a file input cannot be pre-filled, so they are listed. */
   ul.files { list-style:none; margin:8px 0 0; padding:0; font-size:12.5px; }
   ul.files li { display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -351,14 +350,13 @@
           max-width:min(560px, calc(100vw - 32px)); padding:11px 16px; border-radius:12px;
           border:1px solid #7f1d1d; background:#2a1113; color:#fecaca; font-size:13px;
           box-shadow:0 20px 40px -24px rgba(0,0,0,.9); }
-  /* The orchestrator session's usage in the page's top-right corner, level with the title.
-     Where the row would reach the title it takes a line of its own under it instead. */
-  .usage { position:absolute; top:14px; right:18px; z-index:5; display:flex; flex-wrap:wrap;
-          gap:6px; font-size:12px; }
+  /* The active task's orchestrator and its session's usage, one chip per line in the rail. */
+  .usage { display:flex; flex-direction:column; align-items:stretch; gap:6px; font-size:12px; }
   .usage[hidden] { display:none; }
-  .usage .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px;
-          background:var(--card-2); border:1px solid var(--border); border-radius:99px;
-          white-space:nowrap; cursor:default; }
+  .usage .chip { display:flex; align-items:center; gap:6px; padding:5px 10px;
+          background:var(--card-2); border:1px solid var(--border); border-radius:10px;
+          white-space:nowrap; cursor:default; min-width:0; }
+  .usage .chip b { margin-left:auto; }
   .usage .chip.off { color:var(--muted); border-style:dashed; }
   .usage .k { color:var(--muted); }
   .usage b { font-weight:600; font-variant-numeric:tabular-nums; }
@@ -374,13 +372,15 @@
   .usage .dot.working { background:var(--in_progress); }
   .usage .dot.starting { background:var(--warn); }
   .usage .dot.closed { background:var(--failed); }
-  .usage button.chip { margin:0; font-weight:600; color:var(--text); cursor:pointer; }
+  .usage button.chip { width:100%; margin:0; font-weight:600; color:var(--text); cursor:pointer;
+          justify-content:center; }
   .usage button.chip:hover:not(:disabled) { border-color:var(--border-hi); transform:none; }
   .usage button.chip:disabled { color:var(--muted); }
+  .pr-status { margin:10px 0 0; }
+  .pr-status a { overflow-wrap:anywhere; }
   dialog.confirm pre.cmd { margin:12px 0 4px; padding:10px 12px; background:var(--card-2);
           border:1px solid var(--border); border-radius:10px; font-size:12.5px;
           white-space:pre-wrap; overflow-wrap:anywhere; }
-  @media (max-width:1240px) { .usage { position:static; margin:-16px 0 18px; } }
 </style>
 </head>
 <body>
@@ -394,12 +394,20 @@
     <p class="hint">A copy takes step 1 of the task you are on — its text, files and
       credentials — with an empty branch, because two tasks cannot share one. Either way
       the new task opens in its own tab and this one keeps running.</p>
+    <div class="rail-section" id="orchestratorSection" hidden>
+      <h2>Orchestrator</h2>
+      <div class="usage" id="usage" hidden></div>
+    </div>
+    <div class="rail-section" id="serverSection">
+      <h2>Server</h2>
+      <button id="shutdown" class="secondary">Shut down server</button>
+      <p class="hint" id="shutdownHint">Stops the stepper and every task's run. Press it once every
+        task is done: it also deletes the E2E credentials of every task.</p>
+    </div>
   </div>
 </aside>
 <div class="wrap">
   <div class="artifact-bar" id="artifactBar" hidden></div>
-  <h1>implementNewFeature</h1>
-  <div class="usage" id="usage" hidden></div>
   <div class="tabs-bar" id="tabs" hidden></div>
   <div class="stepper" id="stepper"></div>
   <div class="viewbar" id="viewbar" hidden></div>
@@ -526,7 +534,7 @@ const STEP1_FILES = ['images', 'hints', 'mockups', 'contracts'];
 // freezes them. The rest - code review, agents, credentials - are settings the steps
 // read when they start, open until the summary is written.
 const STEP1_FLOW = ['taskDescription', 'branch', 'taskSplit', 'contractsText', 'hintsNote',
-  'refinement', 'generateMockups', 'storyDescription'];
+  'refinement', 'generateMockups', 'darkMockups', 'storyDescription'];
 // Everything else the step-1 form holds, as one list: the draft below and the copy
 // that seeds a new task both carry exactly these, so neither can quietly drift from
 // the form. Credentials are among them — which is why the copy is a page-side affair.
@@ -534,7 +542,8 @@ const STEP1_INPUTS = {
   taskDescription: '#task', branch: '#branch', taskSplit: '#taskSplit', commitMessage: '#commitMessage',
   finalReview: '#finalReview',
   contractsText: '#contractsText', hintsNote: '#hintsNote',
-  refinement: '#refinement', generateMockups: '#genMockups', storyDescription: '#storyDesc',
+  refinement: '#refinement', generateMockups: '#genMockups', darkMockups: '#darkMockups',
+  storyDescription: '#storyDesc',
   authLogin: '#authLogin', authPassword: '#authPassword', rememberAuth: '#rememberAuth',
   agentModel: '#agentModel', agentEffort: '#agentEffort',
   // One draft key per override, so the whole form still travels as one flat record:
@@ -616,6 +625,7 @@ const LS_AGENTS = 'inf.agents';
 const LS_OPTIONS = 'inf.options';
 const optionsOnScreen = () => ({
   refinement: $('#refinement').checked, generateMockups: $('#genMockups').checked,
+  darkMockups: $('#darkMockups').checked,
   storyDescription: $('#storyDesc').checked, codeReview: runsOnScreen(),
   finalReview: $('#finalReview').checked, finalCodeReview: runsOnScreen('#finalRuns')
 });
@@ -814,19 +824,20 @@ const currentTask = () => lastState && lastState.tasks.find(t => t.id === active
 // (and any browser automation driving it), cannot be styled and cannot be asserted on.
 // Every answer submitted in steps 1-3 goes through it, so one stray click never advances
 // the pipeline. Resolves false on Cancel and on Esc.
-function askConfirm({ title, text, confirmLabel }) {
+function askConfirm({ title, text, confirmLabel, panel = true }) {
   const dlg = $('#confirmDialog');
   $('#confirmTitle').textContent = title;
   $('#confirmText').textContent = text;
   $('#confirmOk').textContent = confirmLabel || 'Confirm';
   dlg.returnValue = '';
   // The panel behind the dialog may re-render while it is open (a new question, a
-  // failure). Confirming then would answer something that is no longer on screen.
+  // failure). Confirming then would answer something that is no longer on screen. A
+  // question that is not about the panel - the rail's shutdown - passes `panel: false`.
   const openedAt = lastSig;
   return new Promise(resolve => {
     const onClose = () => {
       dlg.removeEventListener('close', onClose);
-      resolve(dlg.returnValue === 'ok' && lastSig === openedAt);
+      resolve(dlg.returnValue === 'ok' && (!panel || lastSig === openedAt));
     };
     dlg.addEventListener('close', onClose);
     dlg.showModal();
@@ -1005,6 +1016,7 @@ function renderUsage(u, o, task) {
   if (!box || box.dataset.sig === sigNow) return;
   box.dataset.sig = sigNow;
   box.hidden = !u && !orch;
+  $('#orchestratorSection').hidden = box.hidden;
   if (box.hidden) return;
   const head = orch ? orchestratorChips(orch) : '';
   if (!u) {
@@ -1308,6 +1320,8 @@ function sig(task) {
     // Same for the mockups.
     task.mockupReview ? `m${task.mockupReview.rev || 0}${task.mockupReview.answered ? 'a' : ''}` : '',
     task.summary ? '1' : '',
+    // The pull request moves on while the summary is on screen: asked, opened, failed.
+    task.pr ? `p${task.pr.status}${task.pr.at || ''}` : '',
     // The Mockoon step changes status while the summary is the visible screen,
     // and the switch between the two screens is local — both must re-render.
     mockoon ? mockoon.status : '', v.showSummary ? 'S' : '',
@@ -1415,7 +1429,7 @@ function renderStep1(task) {
         data-name="${esc(n)}" aria-label="Remove ${esc(n)}" title="Remove">×</button></li>`)
       .join('')}</ul>` : '';
   };
-  // A draft's runs, else the last submission's, else the two passes the step always ran.
+  // A draft's runs, else the last submission's, else the server's default.
   const runs = d.codeReview && d.codeReview.length ? d.codeReview : reviewRunsDefault;
   const finalRuns = d.finalCodeReview && d.finalCodeReview.length ? d.finalCodeReview : finalRunsDefault;
   const toggle = (id, on, label, hint) => `<div>
@@ -1447,7 +1461,7 @@ function renderStep1(task) {
       <div><label for="commitMessage">Commit message <span class="req">*</span></label>
         <input type="text" id="commitMessage" placeholder="feat: add the hosts inventory" autocomplete="off"
           value="${esc(d.commitMessage || '')}">
-        <p class="hint">The one commit "Shut down and create pull request" makes at the end, and its
+        <p class="hint">The one commit "Create pull request" makes at the end, and its
           pull request's title.</p></div>
     </div>
     <label for="taskSplit">Split into parts (optional)</label>
@@ -1465,6 +1479,9 @@ function renderStep1(task) {
     'An agent designs the screens from the refined plan (else from the task description) and'
     + ' the files below, and you refine them in a chat. The approved design drives the'
     + ' implementation and the visual E2E comparison.')}
+      ${toggle('darkMockups', d.darkMockups !== false, 'Dark theme mockups',
+    'When the app has a dark theme, every mockup state is drawn in it too, from the first round.'
+    + ' Off: light screens only, half the states to review.')}
       ${toggle('storyDesc', !!d.storyDescription, 'Story description',
     'An agent writes a Jira-style story, a short description with acceptance criteria, from'
     + ' what the steps before it produced, else from this form.')}
@@ -1664,7 +1681,7 @@ function renderStep1(task) {
   // After implementation has started only the settings are live; the server refuses
   // anything else with a 409, so the form does not offer it.
   if (frozen) {
-    ['#task', '#branch', '#taskSplit', '#refinement', '#genMockups', '#storyDesc', '#contractsText', '#hintsNote',
+    ['#task', '#branch', '#taskSplit', '#refinement', '#genMockups', '#darkMockups', '#storyDesc', '#contractsText', '#hintsNote',
       '#attachImages', ...STEP1_FILES.map(cat => `#${cat}`)].forEach(sel => { $(sel).disabled = true; });
     document.querySelectorAll('#panel .rm').forEach(el => { el.disabled = true; });
   }
@@ -1695,6 +1712,7 @@ function renderStep1(task) {
       && same('#hintsNote', 'hintsNote')
       && $('#refinement').checked === (prev.refinement !== false)
       && $('#genMockups').checked === !!prev.generateMockups
+      && $('#darkMockups').checked === (prev.darkMockups !== false)
       && $('#storyDesc').checked === !!prev.storyDescription);
   };
   const settingsEdited = () => {
@@ -1745,7 +1763,7 @@ function renderStep1(task) {
   const onEdit = () => { snapshotStep1(); gate(); showSplit(); if (!finished) writeStore(LS_OPTIONS, optionsOnScreen()); };
   ['#task', '#branch', '#taskSplit', '#commitMessage', '#authLogin', '#authPassword', '#contractsText', '#hintsNote']
     .forEach(sel => $(sel).addEventListener('input', onEdit));
-  ['#refinement', '#genMockups', '#storyDesc']
+  ['#refinement', '#genMockups', '#darkMockups', '#storyDesc']
     .forEach(sel => $(sel).addEventListener('change', onEdit));
   $('#finalReview').addEventListener('change', () => {
     $('#finalReviewBox').hidden = !$('#finalReview').checked;
@@ -1846,6 +1864,7 @@ function renderStep1(task) {
       authProvided: a.complete || task.authSaved,
       refinement: $('#refinement').checked,
       generateMockups: $('#genMockups').checked,
+      darkMockups: $('#darkMockups').checked,
       storyDescription: $('#storyDesc').checked,
       codeReview: runsOnScreen(),
       commitMessage: $('#commitMessage').value.trim(),
@@ -2713,14 +2732,35 @@ function renderStory(task, step) {
   loadStory();
 }
 
-// The tasks "Shut down and create pull request" opens one for: every one whose pipeline finished
-// without failing - the server picks the same ones (prReady).
-const prReadyTasks = () => ((lastState && lastState.tasks) || [])
-  .filter(t => t.summary && !/^failed/i.test(String(t.summary.finalStatus || '').trim()));
+// The pull request of the task on screen, as its orchestrator last reported it. The server keeps
+// the same rule (prReady): one request at a time, and none once one is open.
+const PR_OPEN = ['requested', 'created', 'exists'];
+function prSectionHtml(task) {
+  const pr = task.pr || null;
+  const failedTask = /^failed/i.test(String((task.summary && task.summary.finalStatus) || '').trim());
+  const links = pr && (pr.urls || (pr.url ? [pr.url] : []))
+    .map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join('<br>');
+  let status = '';
+  if (pr && pr.status === 'requested') {
+    status = '<p class="pr-status muted"><span class="spinner"></span> Creating the pull request — this task\'s orchestrator commits, pushes and opens it…</p>';
+  } else if (pr && (pr.status === 'created' || pr.status === 'exists')) {
+    status = `<p class="pr-status">${pr.status === 'exists' ? 'The branch already had a pull request' : 'Pull request opened'}${
+      pr.commit ? ` (commit <code>${esc(pr.commit)}</code>)` : ''}:<br>${links}</p>`;
+  } else if (pr && pr.status === 'failed') {
+    status = `<p class="pr-status error">The pull request could not be created: ${esc(pr.reason || 'no reason given')}</p>`;
+  }
+  const busy = pr && PR_OPEN.includes(pr.status);
+  return `<section id="pr-section"><h3>Pull request</h3>
+      <p class="muted">Commits the task's staged changes with the step-1 commit message, pushes the branch and
+        opens a pull request into the branch it was started from. The server keeps running for the other tasks.${
+  failedTask ? ' This task did not finish its pipeline: the description says so.' : ''}</p>
+      <button id="createPr"${busy ? ' disabled' : ''}>${pr && pr.status === 'failed' ? 'Try again' : 'Create pull request'}</button>
+      ${status}
+    </section>`;
+}
 
 function renderSummary(task) {
   const sum = task.summary;
-  const prTasks = prReadyTasks();
   const mockoon = task.steps.find(s => s.id === MOCKOON_STEP) || {};
   const hasMocks = mockoon.status === 'completed';
   const story = task.steps.find(s => s.id === STORY_STEP) || {};
@@ -2748,10 +2788,7 @@ function renderSummary(task) {
       <button id="generateMockoon"${hasMocks ? ' class="secondary"' : ''}>${
         hasMocks ? 'Regenerate' : 'Generate Mockoon mocks'}</button>
     </section>
-    <section id="shutdown-section">
-      <button id="shutdownPr"${prTasks.length ? '' : ` disabled title="No task finished its pipeline: there is nothing to open a pull request for"`}>Shut down and create pull request</button>
-      <button id="shutdown" class="secondary">Shut down server</button>
-    </section>
+    ${prSectionHtml(task)}
   </div>`;
   if (hasStory) loadStory();
   // Already generated: the JSON is one local switch away, no agent needed.
@@ -2765,40 +2802,40 @@ function renderSummary(task) {
     lockPanel('Requested — the agent is building the Mockoon environment…');
     sendAnswer({ kind: 'summary', decision: 'mockoon' });
   });
-  $('#shutdownPr').addEventListener('click', async () => {
-    const list = prTasks.map(t => `${t.branch || t.id} → ${t.base || 'its base branch'}`).join(', ');
+  $('#createPr').addEventListener('click', async () => {
     const ok = await askConfirm({
-      title: 'Shut down and create pull request?',
-      text: `For ${list}: commit the staged changes with the step-1 commit message, push the branch, open a pull request into the branch it was started from, and remove the task's worktree. The server stops right away; each task's orchestrator terminal does the rest and prints the pull request link.`,
-      confirmLabel: 'Shut down and create pull request' });
+      title: 'Create pull request?',
+      text: `For ${task.branch || task.id} → ${task.base || 'its base branch'}: commit the staged changes with the step-1 commit message, push the branch and open a pull request. This task's orchestrator does it and the link appears here; the server keeps running.`,
+      confirmLabel: 'Create pull request' });
     if (!ok) return;
-    serverDown = true;
-    $('#shutdownPr').disabled = true;
-    $('#shutdown').disabled = true;
-    const sent = await sendAnswer({ kind: 'summary', decision: 'shutdown_pr' });
-    if (!sent.ok) {
-      serverDown = false;
-      $('#shutdownPr').disabled = false;
-      $('#shutdown').disabled = false;
-      return;
-    }
-    // A moment for every listening orchestrator to take its answer before the socket dies.
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    try { await postJson('/api/shutdown', {}); } catch (_e) { /* server exits mid-response */ }
-    $('#shutdown-section').innerHTML = `<p class="muted">Server stopped — the orchestrator terminal of ${
-      esc(sent.tasks.join(', '))} commits, pushes and opens the pull request; the link appears there.</p>`;
-  });
-  $('#shutdown').addEventListener('click', async () => {
-    serverDown = true;
-    $('#shutdown').disabled = true;
-    if ($('#shutdownPr')) $('#shutdownPr').disabled = true;
-    // Ends the orchestrator's post-summary poll before the socket dies under it.
-    try { await sendAnswer({ kind: 'summary', decision: 'shutdown' }); } catch (_e) { /* gone */ }
-    try { await postJson('/api/shutdown', {}); } catch (_e) { /* server exits mid-response */ }
-    $('#shutdown-section').innerHTML =
-      '<p class="muted">Server stopped — you can close this tab.</p>';
+    $('#createPr').disabled = true;
+    const sent = await sendAnswer({ kind: 'summary', decision: 'create_pr' });
+    if (!sent.ok) $('#createPr').disabled = false;
+    lastSig = null;
+    tick();
   });
 }
+
+// Shutting the server down ends every task's run, so it sits in the rail - reachable from any step -
+// and asks first. Each listening orchestrator hears it before the socket goes.
+$('#shutdown').addEventListener('click', async () => {
+  const running = ((lastState && lastState.tasks) || []).filter(t => t.step1Submitted && !t.summary);
+  const ok = await askConfirm({
+    title: 'Shut down the server?',
+    text: `${running.length ? `Still running: ${running.map(t => t.branch || t.id).join(', ')}. Their runs stop too. ` : ''}`
+      + 'The stepper stops, and every task\'s E2E credentials are deleted. Staged work stays in each task\'s worktree.',
+    confirmLabel: 'Shut down server', panel: false });
+  if (!ok) return;
+  serverDown = true;
+  $('#shutdown').disabled = true;
+  // Ends the orchestrators' polls before the socket dies under them.
+  for (const t of (lastState && lastState.tasks) || []) {
+    try { await postJson('/api/answer', { taskId: t.id, kind: 'summary', decision: 'shutdown' }); } catch (_e) { /* gone */ }
+  }
+  try { await postJson('/api/shutdown', {}); } catch (_e) { /* server exits mid-response */ }
+  $('#shutdownHint').textContent = 'Server stopped — you can close this tab.';
+  $('#panel').innerHTML = '<p class="muted">Server stopped — you can close this tab.</p>';
+});
 
 // Both ways to start another task. They sit in the rail rather than in the step-1
 // panel, so they work from whatever step the open task is on — and that is also why
@@ -2819,7 +2856,7 @@ async function newTask(copy, btn) {
   const { id } = await postJson('/api/tasks', copy ? { copyFrom: task.id, values: {
     taskDescription: from.taskDescription, taskSplit: from.taskSplit,
     contractsText: from.contractsText, hintsNote: from.hintsNote,
-    refinement: from.refinement, generateMockups: from.generateMockups,
+    refinement: from.refinement, generateMockups: from.generateMockups, darkMockups: from.darkMockups,
     storyDescription: from.storyDescription, codeReview: from.codeReview,
     commitMessage: from.commitMessage, finalReview: from.finalReview, finalCodeReview: from.finalCodeReview,
     agents: agentsOf(from) } }

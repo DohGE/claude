@@ -11,6 +11,8 @@
 // Prints ONE line (FIXED IDENTIFIERS - the orchestrator matches them):
 //   SCREENSHOTS <count> <dir>
 //   SCREENSHOTS_FAILED <reason>
+// and, after SCREENSHOTS, `EXTERNAL_REFS <n> <file or url>…` when a screen reached for a file it
+// does not inline - a stylesheet, a font - that the preview will not load either.
 //
 // The browser is the skill's own Playwright, resolved from this folder, never the
 // project's. The screens are served from disk under a made-up origin and every other
@@ -97,17 +99,24 @@ async function main() {
   } catch (e) {
     fail(`Chromium did not start (${firstLine(e)})`);
   }
+  // What a screen reached for and did not get: in the review panel it renders as a gap too, so
+  // a round that would show unstyled is said to be one before the user sees it.
+  const missed = new Set();
   try {
     const page = await browser.newPage({ viewport: VIEWPORT });
     await page.route('**/*', route => {
       const url = new URL(route.request().url());
       const name = decodeURIComponent(url.pathname.slice(1));
       const type = MOCKUP_TYPES[path.extname(name).toLowerCase()];
-      if (url.origin !== ORIGIN || !type || name !== path.basename(name)) return route.abort();
+      if (url.origin !== ORIGIN || !type || name !== path.basename(name)) {
+        if (!/favicon\.ico$/i.test(url.pathname)) missed.add(url.origin === ORIGIN ? name : url.href);
+        return route.abort();
+      }
       let body;
       try {
         body = fs.readFileSync(path.join(src, name));
       } catch (_e) {
+        missed.add(name);
         return route.fulfill({ status: 404, body: '' });
       }
       return route.fulfill({ status: 200, contentType: type, body });
@@ -125,6 +134,7 @@ async function main() {
     await browser.close();
   }
   console.log(`SCREENSHOTS ${screens.length} ${out}`);
+  if (missed.size) console.log(`EXTERNAL_REFS ${missed.size} ${[...missed].slice(0, 3).join(' ')}`);
 }
 
 module.exports = { fileNameOf, screenIds };

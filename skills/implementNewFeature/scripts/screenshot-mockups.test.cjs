@@ -76,7 +76,8 @@ test('every state of the manifest becomes one PNG, and the folder holds only thi
   fs.writeFileSync(path.join(shots, 'stale.png'), 'old round');
   const res = run(task);
   assert.strictEqual(res.status, 0, res.stdout + res.stderr);
-  assert.strictEqual(res.stdout.trim(), `SCREENSHOTS 3 ${shots}`);
+  // The CDN stylesheet one screen links is blocked here as in the preview, and said so.
+  assert.strictEqual(res.stdout.trim(), `SCREENSHOTS 3 ${shots}\nEXTERNAL_REFS 1 https://cdn.example.com/x.css`);
   assert.deepStrictEqual(fs.readdirSync(shots).sort(),
     ['0.0-lm-login-empty.png', '0.1-lm-login-error.png', '1.0-lm-list.png']);
   for (const f of fs.readdirSync(shots)) {

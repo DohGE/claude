@@ -9,7 +9,7 @@
 // summary by then too - but the run's state is not: the server persists it in
 // `<SESSION>/pipeline-state.json` on every update. This reads it and names, for the task the
 // session orchestrates - every task has an orchestrator of its own, and the state records which
-// session it is - where it stands, the E2E slot and the task's waiter, the sections of SKILL.md
+// session it is - where it stands, the task's waiter, the sections of SKILL.md
 // to read again, and the loop card (references/loop-card.md).
 //
 // The run is found without any state of the hook's own. The session's transcript names its
@@ -157,24 +157,6 @@ function taskLine(task) {
   return line;
 }
 
-// SKILL.md "E2E slot", as the server keeps it - every task's, not only this session's. A run from
-// before the server kept it is read off the steps, as server.cjs's e2eFromSteps reads it.
-function e2eLine(tasks, e2e) {
-  let holder = e2e ? e2e.holder : null;
-  let queue = e2e && Array.isArray(e2e.queue) ? e2e.queue : [];
-  if (!e2e) {
-    const held = tasks.find((t) => ['in_progress', 'failed'].includes((stepOf(t, 5) || {}).status));
-    const queuedAt = (t) => (((stepOf(t, 5) || {}).log || []).filter((e) => e.text === 'Queued for the E2E slot').at(-1) || {}).time || '';
-    holder = held ? held.id : null;
-    queue = tasks.filter((t) => {
-      const s = stepOf(t, 5);
-      return s && s.status === 'waiting' && s.currentOperation === 'Waiting for the E2E slot';
-    }).sort((a, b) => queuedAt(a).localeCompare(queuedAt(b))).map((t) => t.id);
-  }
-  if (!holder && !queue.length) return '- E2E slot: free';
-  return `- E2E slot: ${holder ? `held by ${holder}` : 'free'}${queue.length ? `; queued: ${queue.join(', ')} (the server hands it on in this order)` : ''}`;
-}
-
 // The last step of a task's route that is on: once it completed, the final summary is next.
 function lastStep(task) {
   const route = Array.isArray(task.route) ? task.route : [1, 2, 3, 8, 4, 5, 6];
@@ -233,7 +215,7 @@ function compactLines(input, env = process.env, skillFile = path.join(skillDir, 
   if (tasks.length < all.length) {
     out.push(`- you orchestrate ${tasks.map((t) => t.id).join(', ')} only: every other task has an orchestrator of its own`);
   }
-  if (tasks.length) out.push(...tasks.map(taskLine), e2eLine(all, state.e2e));
+  if (tasks.length) out.push(...tasks.map(taskLine));
   else out.push('- no task state on disk yet: the run is still at Setup or step 1');
   for (const task of tasks.length ? tasks : [{ id: 't1' }]) {
     const waiter = waiterOf(run.port, task.id, env);
@@ -368,5 +350,5 @@ function onStop(input, env = process.env) {
   return { systemMessage: `doh: this orchestrator's conversation holds about ${Math.round(tokens / 1000)}k tokens, and every wake-up of its loop re-reads them. Type /compact when no question is waiting: the run's state lives in the server, and the compaction note brings back where each task stands.` };
 }
 
-module.exports = { findRun, deadRun, restartServer, skillSections, sectionsFor, stepFilesFor, taskLine, e2eLine, ownTasks,
+module.exports = { findRun, deadRun, restartServer, skillSections, sectionsFor, stepFilesFor, taskLine, ownTasks,
   loopCard, compactLines, onCompact, onResume, onStop, contextTokens, reattachedChars };

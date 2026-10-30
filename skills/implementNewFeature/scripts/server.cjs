@@ -100,12 +100,6 @@ const isImage = name => !!IMAGE_TYPES[path.extname(String(name)).toLowerCase()];
 const SCREENSHOT_DIR = 'mockup-screenshots';
 const OPEN_FOLDERS = [SCREENSHOT_DIR];
 const IMPLEMENTATION_STEP = 4;
-// The step that runs the project's E2E suite - one task at a time, through the slot this
-// server keeps (POST /api/e2e): two suites at once fight over the app's ports and the browser.
-// The final review re-runs the suite after its fixes, so it takes the same slot for that run.
-const VALIDATION_STEP = 5;
-const E2E_STEPS = [VALIDATION_STEP, FINAL_REVIEW_STEP];
-const E2E_WAITING = 'Waiting for the E2E slot';
 // Every task has an orchestrator of its own (launch-orchestrator.cjs). One is listening while
 // its waiter's poll is parked here and working between two polls; one not seen for this long,
 // or whose poll was cut off mid-wait - which is what closing its terminal does to the waiter -
@@ -138,10 +132,15 @@ const READERS = { [REFINEMENT_STEP]: [MOCKUP_STEP, STORY_STEP], [MOCKUP_STEP]: [
 // orchestrator, and what travels through it belongs to whoever reads it.
 const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
   'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root', 'base',
-  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate', 'mockupArtifact']);
-// What the "Shut down and create pull request" button leaves in each finished task's folder:
-// the orchestrator of a task that was not listening when the server went down finds it there.
+  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate', 'mockupArtifact', 'pr']);
+// What the "Create pull request" button leaves in the task's folder: an orchestrator that was not
+// listening when it was pressed finds it there.
 const PR_REQUEST_FILE = 'pr-request.json';
+// A task's pull request: `requested` is the server's own, set when the button is pressed; the
+// rest are what the orchestrator reports once the flow ran. `requested`, `created` and `exists`
+// keep the button from asking twice.
+const PR_REPORTED = ['created', 'exists', 'failed'];
+const PR_OPEN = ['requested', 'created', 'exists'];
 
 // One task is one feature on one branch with its own eight-step pipeline, its own
 // artifacts under tasks/<id>/ and its own sub-agents. A run holds one or more.
@@ -197,18 +196,7 @@ function pushLog(step, entry) {
 function initialState(starter = null) {
   const first = taskState('t1');
   first.orchestrator = { session: starter, claimedAt: starter ? new Date().toISOString() : null };
-  return { tasks: [first], nextTaskId: 2, e2e: { holder: null, queue: [] } };
-}
-
-// The slot as the steps showed it before the server kept it: held by the task whose step 5
-// runs or waits for its retry, queued in the order the waiting ones were told so.
-function e2eFromSteps(tasks) {
-  const step = t => (t.steps || []).find(s => s.id === VALIDATION_STEP) || {};
-  const holder = tasks.find(t => ['in_progress', 'failed'].includes(step(t).status));
-  const queuedAt = t => ((step(t).log || []).filter(e => e.text === 'Queued for the E2E slot').at(-1) || {}).time || '';
-  const queue = tasks.filter(t => step(t).status === 'waiting' && step(t).currentOperation === E2E_WAITING)
-    .sort((a, b) => queuedAt(a).localeCompare(queuedAt(b))).map(t => t.id);
-  return { holder: holder ? holder.id : null, queue };
+  return { tasks: [first], nextTaskId: 2 };
 }
 
 // One directory however it is spelled: separators, a trailing one, and case on Windows.
@@ -242,6 +230,20 @@ const text = (v, limit = MAX_FIELD) => {
   return `${value.slice(0, limit)} […ucięte: pole przekroczyło ${Math.round(limit / 1024)} KB…]`;
 };
 const names = v => (Array.isArray(v) ? v : []).map(safeName).filter(Boolean).slice(0, 200);
+// A pull request as the orchestrator reports it (POST /api/state `pr`); null clears it. A split
+// task opens one pull request per part, so `urls` carries all of them and `url` the first.
+function prRecordOf(raw) {
+  if (raw === null) return null;
+  if (!raw || typeof raw !== 'object' || !PR_REPORTED.includes(raw.status)) {
+    throw new Error(`pr needs a status of ${PR_REPORTED.join(', ')}`);
+  }
+  const out = { status: raw.status, at: new Date().toISOString() };
+  const urls = (Array.isArray(raw.urls) ? raw.urls : raw.url ? [raw.url] : []).map(u => brief(u, 500)).filter(Boolean).slice(0, 20);
+  if (urls.length) Object.assign(out, { url: urls[0], urls });
+  if (raw.reason) out.reason = text(raw.reason, MAX_CHAT_TEXT);
+  if (raw.commit) out.commit = brief(raw.commit, 200);
+  return out;
+}
 // One line of a step's log: an answer of a paragraph is still one entry the eye can take in.
 const brief = (v, limit = 120) => {
   const value = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
@@ -301,7 +303,9 @@ function agentsOf(raw, models) {
 // first sentence.
 const CODE_REVIEW_DIR = path.join(__dirname, '..', '..', 'codeReview');
 const MAX_REVIEW_RUNS = 3;
-const defaultReviewRuns = () => [{ flags: [] }, { flags: ['--since-last'] }];
+// One run: the final review's `--since-last` run re-checks every fix this one leaves behind, so a
+// second run here only paid for the same files twice.
+const defaultReviewRuns = () => [{ flags: [] }];
 // The final review re-checks what validation changed since the review before it.
 const defaultFinalReviewRuns = () => [{ flags: ['--since-last'] }];
 
@@ -372,9 +376,9 @@ function formOf(body, models, reviewFlags) {
   return {
     taskDescription: text(description),
     branch: text(body.branch),
-    // The message of the one commit the "Shut down and create pull request" button makes. The
-    // page requires it; a form saved before the field existed has none, and the button then
-    // asks for nothing - the orchestrator falls back to the branch name.
+    // The message of the one commit the "Create pull request" button makes. The page requires
+    // it; a form saved before the field existed has none, and the button then asks for
+    // nothing - the orchestrator falls back to the branch name.
     commitMessage: text(body.commitMessage).trim(),
     // How the task is cut into parts, one branch each (`<branch>-part-<n>`). Empty: one branch.
     taskSplit: text(body.taskSplit).trim(),
@@ -387,6 +391,9 @@ function formOf(body, models, reviewFlags) {
     // false turns it off.
     refinement: body.refinement !== false,
     generateMockups: !!body.generateMockups,
+    // The mockups' dark-theme twins, for an app that has a dark theme. On unless switched off:
+    // users who were not shown them asked for them in a second round.
+    darkMockups: body.darkMockups !== false,
     storyDescription: !!body.storyDescription,
     codeReview: reviewRunsOf(body.codeReview, known),
     // The review after validation: on unless switched off, with runs of its own.
@@ -434,7 +441,9 @@ function revisionOf(task, before, after) {
   const groups = new Set(files.map(f => FILE_GROUP[f.category]));
   if (before.taskDescription !== after.taskDescription) groups.add('description');
   if (before.branch !== after.branch || (before.taskSplit || '') !== (after.taskSplit || '')) groups.add('branch');
-  if (switchedOn.length || switchedOff.length) groups.add('steps');
+  // The dark twins are the mockup step's own business: only that step repeats for them.
+  const darkChanged = (before.darkMockups !== false) !== (after.darkMockups !== false);
+  if (switchedOn.length || switchedOff.length || darkChanged) groups.add('steps');
   if (before.hintsNote !== after.hintsNote) groups.add('materials');
   if (before.contractsText !== after.contractsText) groups.add('contracts');
   if (!same(before.codeReview, after.codeReview)) groups.add('codeReview');
@@ -461,6 +470,7 @@ function revisionOf(task, before, after) {
   for (const id of switchedOn) {
     if (route.slice(route.indexOf(id) + 1).some(started)) candidates.push(id);
   }
+  if (darkChanged && on(after, MOCKUP_STEP) && started(MOCKUP_STEP)) candidates.push(MOCKUP_STEP);
   // A step switched off takes its output with it, so whatever already read that output
   // repeats. The one the pipeline is sitting on hands over to the next step of the route.
   for (const id of switchedOff) {
@@ -580,6 +590,12 @@ function sendJson(res, code, obj) {
 function sameOrigin(req, url) {
   const host = req.headers.host || '';
   if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(host)) return false;
+  // The mockup preview is a sandboxed frame - an opaque origin - so the project stylesheet and
+  // fonts its screens link arrive cross-site, with `Origin: null`. Refused, they rendered every
+  // round unstyled (ERR_BLOCKED_BY_ORB in the panel, 200 from curl), and the user sent the same
+  // "no project styling" feedback round after round. A task's generated-mockups are read-only
+  // files of a known type; nothing else gets this pass.
+  if (req.method === 'GET' && url.pathname.startsWith(`/${MOCKUP_DIR}/`)) return true;
   const origin = req.headers.origin;
   if (origin && origin.toLowerCase() !== `http://${host.toLowerCase()}`) return false;
   const site = req.headers['sec-fetch-site'];
@@ -624,8 +640,11 @@ function createApp(sessionDir, opts = {}) {
     // A state file from before tasks existed cannot be migrated meaningfully —
     // its single run has no branch and no task dir. Start clean instead.
     if (!Array.isArray(state.tasks) || !state.tasks.length) state = initialState(starterSession);
-    if (!state.e2e || typeof state.e2e !== 'object') state.e2e = e2eFromSteps(state.tasks);
-    if (!Array.isArray(state.e2e.queue)) state.e2e.queue = [];
+    // Validation used to run one task at a time, through a slot this server kept. Every task
+    // runs it on its own now (its own dev port, its own browser tab), so the slot a resumed
+    // run still records is dropped.
+    delete state.e2e;
+    for (const t of state.tasks) delete t.e2eStep;
     // A run resumed from a state file written by an older version has no chats. The
     // field is read on every render and appended to by every agent, so it is filled
     // in here rather than defended against at each of those places.
@@ -745,26 +764,6 @@ function createApp(sessionDir, opts = {}) {
     return r;
   }
 
-  // The slot goes to the next queued task still running, whose orchestrator hears it as an
-  // answer of its own. `dequeue` also takes the task out of the queue: it no longer needs a turn.
-  function releaseE2e(taskId, dequeue) {
-    const e2e = state.e2e;
-    if (dequeue) e2e.queue = e2e.queue.filter(id => id !== taskId);
-    if (e2e.holder !== taskId) return;
-    e2e.holder = null;
-    while (e2e.queue.length && !e2e.holder) {
-      const next = findTask(e2e.queue.shift());
-      if (!next || next.summary) continue;
-      e2e.holder = next.id;
-      const step = findStep(next, next.e2eStep || VALIDATION_STEP);
-      if (step) {
-        step.currentOperation = 'Took the E2E slot';
-        pushLog(step, 'Took the E2E slot');
-      }
-      pushAnswer({ kind: 'e2e', taskId: next.id });
-    }
-  }
-
   // Uploads and removals happen before the form is sent, so they are recorded as they
   // happen and read when it arrives. The first submission has nothing to differ from.
   function touch(task, category, name, change) {
@@ -857,9 +856,10 @@ function createApp(sessionDir, opts = {}) {
     }
   }
 
-  // The tasks the "Shut down and create pull request" button opens a pull request for: every one
-  // whose pipeline finished, and did not end in a failure.
-  const prReady = task => !!task.summary && !/^failed/i.test(String(task.summary.finalStatus || '').trim());
+  // What "Create pull request" may act on: a task whose pipeline ended - completed or failed, since
+  // the staged work of a failed one is often still worth a review - with no pull request open or on
+  // its way yet. One that failed to open may be asked for again.
+  const prReady = task => !!task.summary && !(task.pr && PR_OPEN.includes(task.pr.status));
 
   function copyCategory(fromId, toId, category) {
     const from = path.join(taskDir(fromId), category);
@@ -897,6 +897,7 @@ function createApp(sessionDir, opts = {}) {
     }
     const task = findTask(body.taskId);
     if (!task) throw new Error(`unknown task ${body.taskId}`);
+    const pr = body.pr === undefined ? undefined : prRecordOf(body.pr);
     // Every task works in a worktree of its own, the only task of a run too (SKILL.md step 4): the
     // project's checkout stays the user's - its branch, its index, its uncommitted work - and no
     // task may take it. A root another task holds is refused as well: two orchestrators given one
@@ -994,17 +995,16 @@ function createApp(sessionDir, opts = {}) {
       pushChat(step, body.mockupChat);
     }
     if (body.summary !== undefined) task.summary = body.summary;
-    // The E2E slot follows its holder's step 5 or 9: done or put back, the step frees it; failed,
-    // it keeps it for the retry. A finished task neither holds it nor waits for it.
-    if (E2E_STEPS.includes(body.step) && (body.status === 'completed' || body.status === 'waiting')) {
-      releaseE2e(task.id, body.status === 'completed');
-    }
-    if (body.summary != null) releaseE2e(task.id, true);
+    // The pull request the summary screen's "Create pull request" asked for, as the task's
+    // orchestrator reports it: { status: 'created' | 'exists' | 'failed', url?, reason?, commit? }.
+    if (pr !== undefined) task.pr = pr;
     persist();
   }
 
   const answers = new Map();   // taskId -> queued answers
-  const waiters = [];          // {taskId|null, resolve, timer}
+  const waiters = [];          // {taskId|null, waiterId|null, resolve, timer}
+  // What a parked poll resolves with when a newer waiter of its task took the task over.
+  const SUPERSEDED = Symbol('superseded');
 
   const queueFor = id => {
     if (!answers.has(id)) answers.set(id, []);
@@ -1027,6 +1027,17 @@ function createApp(sessionDir, opts = {}) {
       return;
     }
     queueFor(a.taskId).push(a);
+  }
+
+  // The parked polls of a task's older waiters, ended for the one that took the task over.
+  function retireWaiters(taskId, keep) {
+    for (let i = waiters.length - 1; i >= 0; i--) {
+      const w = waiters[i];
+      if (w.taskId !== taskId || !w.waiterId || w.waiterId === keep) continue;
+      waiters.splice(i, 1);
+      clearTimeout(w.timer);
+      w.resolve(SUPERSEDED);
+    }
   }
 
   // A removed task must not leave a poll parked on it until its timeout expires.
@@ -1054,13 +1065,13 @@ function createApp(sessionDir, opts = {}) {
 
   // `sign` is the polled task's entry in `live`: while the poll is parked its orchestrator is
   // listening, and the moment the poll ends is when it was last seen.
-  function popAnswer(taskId, waitMs, req, sign) {
+  function popAnswer(taskId, waitMs, req, sign, waiterId = null) {
     const queued = takeQueued(taskId);
     if (queued) return Promise.resolve(queued);
     if (!waitMs) return Promise.resolve(null);
     return new Promise(resolve => {
       if (sign) sign.listening++;
-      const waiter = { taskId: taskId || null, timer: null, resolve: a => {
+      const waiter = { taskId: taskId || null, waiterId, timer: null, resolve: a => {
         if (sign) {
           sign.listening--;
           sign.seen = Date.now();
@@ -1194,23 +1205,30 @@ function createApp(sessionDir, opts = {}) {
           pushAnswer(answer);
           return sendJson(res, 200, { ok: true });
         }
-        // The summary screen's "Shut down and create pull request". The page shuts the server down
-        // right after this, so each finished task's orchestrator hears it now, and a request file
-        // in the task's folder keeps it for one that was not listening (SKILL.md, Final summary).
-        if (body.kind === 'summary' && body.decision === 'shutdown_pr') {
-          const targets = state.tasks.filter(prReady);
-          if (!targets.length) return sendJson(res, 409, { error: 'no task has finished its pipeline - there is nothing to open a pull request for' });
-          for (const t of targets) {
-            fs.mkdirSync(taskDir(t.id), { recursive: true });
-            fs.writeFileSync(path.join(taskDir(t.id), PR_REQUEST_FILE), JSON.stringify({
-              requestedAt: new Date().toISOString(), taskId: t.id, branch: t.branch, base: t.base || null,
-              root: t.root || null, commitMessage: (t.step1 && t.step1.commitMessage) || '',
-              // A split task names its part branches after the form's branch, not the last part's.
-              taskSplit: (t.step1 && t.step1.taskSplit) || '', splitBranch: (t.step1 && t.step1.branch) || ''
-            }, null, 2));
-            pushAnswer({ kind: 'summary', decision: 'shutdown_pr', taskId: t.id });
+        // The summary screen's "Create pull request", for the task on screen. The server stays up:
+        // the task's orchestrator commits, pushes and opens the pull request, then reports it back
+        // as `pr`. A request file in the task's folder keeps the ask for an orchestrator that is
+        // not listening right now (SKILL.md, Final summary).
+        if (body.kind === 'summary' && body.decision === 'create_pr') {
+          if (!task.summary) {
+            return sendJson(res, 409, { error: 'the task has not finished its pipeline - there is nothing to open a pull request for yet' });
           }
-          return sendJson(res, 200, { ok: true, tasks: targets.map(t => t.id) });
+          if (!prReady(task)) {
+            return sendJson(res, 409, { error: task.pr.status === 'requested'
+              ? 'the pull request is already being created' : 'the pull request is already open' });
+          }
+          fs.mkdirSync(taskDir(task.id), { recursive: true });
+          fs.writeFileSync(path.join(taskDir(task.id), PR_REQUEST_FILE), JSON.stringify({
+            requestedAt: new Date().toISOString(), taskId: task.id, branch: task.branch, base: task.base || null,
+            root: task.root || null, commitMessage: (task.step1 && task.step1.commitMessage) || '',
+            finalStatus: String(task.summary.finalStatus || ''),
+            // A split task names its part branches after the form's branch, not the last part's.
+            taskSplit: (task.step1 && task.step1.taskSplit) || '', splitBranch: (task.step1 && task.step1.branch) || ''
+          }, null, 2));
+          task.pr = { status: 'requested', at: new Date().toISOString() };
+          persist();
+          pushAnswer({ kind: 'summary', decision: 'create_pr', taskId: task.id });
+          return sendJson(res, 200, { ok: true, tasks: [task.id] });
         }
         const attached = attachmentsOf(task, body.attachments);
         if (body.kind === 'mockup' && !findStep(task, MOCKUP_STEP)) {
@@ -1266,10 +1284,28 @@ function createApp(sessionDir, opts = {}) {
             persist();
           }
         }
+        // The newest waiter of a task owns it (wait-answer.cjs): its first poll takes the task
+        // over and ends the parked poll of the one before, whose next poll is turned away. An
+        // older waiter nobody reads - started with its output thrown away, or left behind by a
+        // session that ended - took the user's answer to a question with it, and the step sat
+        // on "Processing answer…" with the orchestrator never told. A poll that names no waiter
+        // (a drain, an older waiter) is served as before.
+        const waiterId = task ? url.searchParams.get('waiter') : null;
+        if (waiterId) {
+          if (url.searchParams.get('takeover') === '1') {
+            sign.waiter = waiterId;
+            retireWaiters(task.id, waiterId);
+          } else if (sign.waiter && sign.waiter !== waiterId) {
+            return sendJson(res, 200, { answer: null, superseded: true });
+          } else {
+            sign.waiter = waiterId;
+          }
+        }
         // 300 s cap: long polls resolve instantly when an answer arrives, so a
         // high cap only reduces the number of empty polls while the user thinks.
         const waitS = Math.min(Math.max(parseInt(url.searchParams.get('wait') || '0', 10) || 0, 0), 300);
-        const answer = await popAnswer(taskId, waitS * 1000, req, sign);
+        const answer = await popAnswer(taskId, waitS * 1000, req, sign, waiterId);
+        if (answer === SUPERSEDED) return sendJson(res, 200, { answer: null, superseded: true });
         return sendJson(res, 200, { answer });
       }
       if (req.method === 'GET' && url.pathname === '/api/orchestrator') {
@@ -1295,38 +1331,6 @@ function createApp(sessionDir, opts = {}) {
             cwd: projectDir, error: 'this server opens no terminals' });
         }
         return sendJson(res, 200, await launchFor(task));
-      }
-      if (req.method === 'POST' && url.pathname === '/api/e2e') {
-        // The one E2E run at a time (VALIDATION_STEP). The reply says whether the slot is the
-        // caller's now. A task that has to wait is queued and shown waiting, and its
-        // orchestrator hears `{ "kind": "e2e" }` when the slot comes round to it.
-        const body = JSON.parse(await readBody(req, res) || '{}');
-        const task = findTask(body.taskId);
-        if (!task) return sendJson(res, 400, { error: 'unknown task' });
-        // Validation by default; the final review asks for its regression run.
-        const stepId = body.step === undefined ? VALIDATION_STEP : Number(body.step);
-        if (!E2E_STEPS.includes(stepId)) return sendJson(res, 400, { error: `step ${body.step} runs no E2E suite` });
-        task.e2eStep = stepId;
-        const e2e = state.e2e;
-        if (!e2e.holder || e2e.holder === task.id) {
-          e2e.holder = task.id;
-          e2e.queue = e2e.queue.filter(id => id !== task.id);
-          persist();
-          return sendJson(res, 200, { granted: true });
-        }
-        if (!e2e.queue.includes(task.id)) {
-          e2e.queue.push(task.id);
-          const step = findStep(task, stepId);
-          if (step) {
-            // The final review queues mid-step: its agent is waiting, so the step stays running.
-            Object.assign(step, stepId === VALIDATION_STEP ? { status: 'waiting', currentOperation: E2E_WAITING }
-              : { currentOperation: E2E_WAITING });
-            pushLog(step, 'Queued for the E2E slot');
-          }
-          task.activeStep = stepId;
-          persist();
-        }
-        return sendJson(res, 200, { granted: false, holder: e2e.holder, queue: e2e.queue });
       }
       if (req.method === 'POST' && url.pathname === '/api/tasks') {
         const body = JSON.parse(await readBody(req, res) || '{}');
@@ -1368,7 +1372,6 @@ function createApp(sessionDir, opts = {}) {
           return sendJson(res, 400, { error: 'task already started' });
         }
         state.tasks = state.tasks.filter(t => t.id !== task.id);
-        state.e2e.queue = state.e2e.queue.filter(id => id !== task.id);
         answers.delete(task.id);
         live.delete(task.id);
         releaseWaiters(task.id);
@@ -1566,6 +1569,8 @@ function createApp(sessionDir, opts = {}) {
             "font-src 'self' data:",
             "connect-src 'none'",
           ].join('; '),
+          // A font is fetched in CORS mode, and the sandboxed preview asks with `Origin: null`.
+          ...(type.startsWith('font/') ? { 'access-control-allow-origin': '*' } : {}),
         });
         return res.end(data);
       }

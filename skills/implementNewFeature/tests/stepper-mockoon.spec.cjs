@@ -107,6 +107,7 @@ test('Shut down server melduje orchestratorowi koniec czekania', async ({ page }
   const request = page.waitForRequest(r =>
     r.url().endsWith('/api/answer') && r.method() === 'POST');
   await page.click('#shutdown');
+  await page.click('#confirmOk');
   expect(JSON.parse((await request).postData()))
     .toMatchObject({ kind: 'summary', decision: 'shutdown' });
 });

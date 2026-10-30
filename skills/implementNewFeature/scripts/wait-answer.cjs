@@ -11,17 +11,29 @@
 // the task's orchestrator from a second one: the first session to poll a task holds it for as
 // long as it is alive.
 //
-// Output, one line each (FIXED IDENTIFIERS - the orchestrator matches them):
-//   ANSWER <json>                   one per answer; every answer already queued is drained with it
-//   WAIT_TIMEOUT                    nothing arrived within the window
-//   SERVER_GONE                     the server does not answer: the run is over
-//   WAITER_RUNNING <pid>            this session's other waiter for the task still listens; nothing to do
-//   ORCHESTRATOR_RUNNING <session>  another session orchestrates this task; leave it to that one
-//   TASK_GONE                       the server has no such task
+// Output, one line each (FIXED IDENTIFIERS - the orchestrator matches them), and the exit code
+// that comes with it:
+//   0  ANSWER <json>                   one per answer; every answer already queued is drained with it
+//   3  WAIT_TIMEOUT                    nothing arrived within the window
+//   4  WAITER_RUNNING <pid>            a drain while this session's waiter for the task still listens
+//   4  WAITER_SUPERSEDED               a newer waiter of this session took the task over
+//   5  ORCHESTRATOR_RUNNING <session>  another session orchestrates this task; leave it to that one
+//   6  SERVER_GONE                     the server does not answer: the run is over
+//   7  TASK_GONE                       the server has no such task
+// The task notification carries the exit code, so a 3 or a 4 needs no Read of the output at all:
+// on a run with a night in it, the wake-ups that only said WAIT_TIMEOUT were a quarter of the
+// orchestrator's tokens, a third of each one spent reading that one line.
+//
+// The newest waiter owns the task. Its first poll takes the task over (`takeover=1`), the server
+// ends the older waiter's parked poll and refuses its next one (`superseded`), and that waiter
+// leaves with WAITER_SUPERSEDED. A waiter that held the lock used to turn every later one away
+// instead, so one nobody read - started with its output thrown away - took the user's answer to
+// a question and kept the orchestrator deaf for its whole window. Hence also the refusal below
+// to start at all when the output goes nowhere.
 //
 // 50 minutes, not longer: a waiter that ends is also a turn that keeps the conversation's
 // prompt cache warm, and the orchestrator re-arms it at once. `--minutes 0` asks once without
-// waiting, for whatever is already queued.
+// waiting, for whatever is already queued, and never takes the task over.
 //
 // Usage: node wait-answer.cjs --port <port> --task <taskId> [--minutes 50] [--session <id>]
 
@@ -29,6 +41,10 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const tty = require('node:tty');
+
+const EXIT_CODES = { ANSWER: 0, WAIT_TIMEOUT: 3, WAITER_RUNNING: 4, WAITER_SUPERSEDED: 4, ORCHESTRATOR_RUNNING: 5,
+  SERVER_GONE: 6, TASK_GONE: 7 };
 
 const pollSeconds = 290;
 // After an answer, how long one more poll waits for the next: a user who sends a line and then
@@ -64,14 +80,30 @@ function isAlive(pid) {
   }
 }
 
+// Where the lines of a waiter go: a file (`run_in_background`), a pipe or a terminal reach
+// somebody; a null device - `&>/dev/null &`, `> NUL` - or a closed stdout does not.
+function outputDiscarded(fd = 1) {
+  let stat;
+  try {
+    stat = fs.fstatSync(fd);
+  } catch {
+    return true;
+  }
+  return stat.isCharacterDevice() && !tty.isatty(fd);
+}
+
 // One waiter per task: two would split its answers between them, and the orchestrator would
 // act on whichever woke it first. A lock older than its holder's window is stale whatever its
-// pid says - the pid may have been reused.
-function acquireLock(lockPath, windowMs, session) {
+// pid says - the pid may have been reused. A live holder of the same session is replaced by a
+// waiter with a window (`takeover`) - the server then retires the holder's poll - and only a
+// drain steps aside for it; another session's holder is that session's task either way.
+function acquireLock(lockPath, windowMs, session, takeover) {
   try {
     const held = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
     const heldFor = Number.isFinite(held.windowMs) ? held.windowMs : windowMs;
-    if (held.pid !== process.pid && isAlive(held.pid) && Date.now() - held.startedAt < heldFor + 60000) {
+    const otherSession = held.session && session && held.session !== session;
+    if (held.pid !== process.pid && isAlive(held.pid) && Date.now() - held.startedAt < heldFor + 60000
+      && (otherSession || !takeover)) {
       return held;
     }
   } catch {}
@@ -87,9 +119,11 @@ function releaseLock(lockPath) {
 }
 
 async function waitAnswer({ port, task, session = process.env.CLAUDE_CODE_SESSION_ID, windowMs, pollS = pollSeconds,
-  settleS = settleSeconds, lockDir = os.tmpdir(), write = (line) => process.stdout.write(`${line}\n`) }) {
+  settleS = settleSeconds, lockDir = os.tmpdir(), waiterId = String(process.pid),
+  write = (line) => process.stdout.write(`${line}\n`) }) {
   const lockPath = path.join(lockDir, `doh-answer-waiter-${port}-${task}.json`);
-  const holder = acquireLock(lockPath, windowMs, session);
+  const takeover = windowMs > 0;
+  const holder = acquireLock(lockPath, windowMs, session, takeover);
   if (holder) {
     // Another session's waiter is that session's claim on the task, made before the server
     // could be asked.
@@ -100,8 +134,17 @@ async function waitAnswer({ port, task, session = process.env.CLAUDE_CODE_SESSIO
     write(`WAITER_RUNNING ${holder.pid}`);
     return 'WAITER_RUNNING';
   }
-  const query = (waitS) => `?taskId=${encodeURIComponent(task)}`
-    + (session ? `&session=${encodeURIComponent(session)}` : '') + (waitS ? `&wait=${waitS}` : '');
+  // Only the first poll takes the task over: a later one of this waiter - the next slice, a settle
+  // poll - must not retire a waiter that started after it. A drain names no waiter: it owns
+  // nothing, so it is never retired either, and the lock above already kept it off a live one.
+  let first = takeover;
+  const query = (waitS) => {
+    const q = `?taskId=${encodeURIComponent(task)}`
+      + (session ? `&session=${encodeURIComponent(session)}` : '') + (waitS ? `&wait=${waitS}` : '')
+      + (takeover ? `&waiter=${encodeURIComponent(waiterId)}` : '') + (first ? '&takeover=1' : '');
+    first = false;
+    return q;
+  };
   // The server's no to the poll itself, as opposed to an empty one.
   const refused = (reply) => {
     if (reply.status === 409) {
@@ -127,6 +170,10 @@ async function waitAnswer({ port, task, session = process.env.CLAUDE_CODE_SESSIO
       }
       const no = refused(reply);
       if (no) return no;
+      if (reply.superseded) {
+        write('WAITER_SUPERSEDED');
+        return 'WAITER_SUPERSEDED';
+      }
       if (!reply.answer) continue;
       write(`ANSWER ${JSON.stringify(reply.answer)}`);
       // Whatever else is already queued goes out in the same wake-up, and so does what arrives
@@ -140,6 +187,7 @@ async function waitAnswer({ port, task, session = process.env.CLAUDE_CODE_SESSIO
         } catch {
           break;
         }
+        if (next.superseded) break;
         if (!next.answer) {
           if (settle || !settleFor) break;
           settle = settleFor;
@@ -174,9 +222,16 @@ if (require.main === module) {
   if (!port || !/^[A-Za-z0-9_-]+$/.test(task) || !(minutes >= 0)) {
     process.stderr.write('usage: node wait-answer.cjs --port <port> --task <taskId> [--minutes 50] [--session <id>]\n');
     process.exitCode = 2;
+  } else if (outputDiscarded()) {
+    // It would still take the answers off the server, and nobody would ever read them.
+    process.stderr.write('wait-answer: stdout goes nowhere - start it with run_in_background instead '
+      + '(never `&`, `> /dev/null`, nohup or Start-Process); nothing was taken from the server\n');
+    process.exitCode = 2;
   } else {
-    waitAnswer({ port, task, session, windowMs: minutes * 60000 });
+    waitAnswer({ port, task, session, windowMs: minutes * 60000 }).then((result) => {
+      process.exitCode = EXIT_CODES[result] ?? 0;
+    });
   }
 }
 
-module.exports = { waitAnswer };
+module.exports = { waitAnswer, outputDiscarded, EXIT_CODES };

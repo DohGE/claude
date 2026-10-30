@@ -41,16 +41,24 @@
    `node "<SKILL_DIR>/scripts/post-state.cjs" --port PORT '{"taskId":"T","root":"<ROOT>","base":"<BASE>"}' '{"taskId":"T","step":4,"status":"in_progress","activeStep":4,"progress":0}'`
    — the summary names `root`, and the pull request targets `base`.
 2. Spawn the implementation agent from `references/implementation-agent.md`, per "Spawning a
-   sub-agent" (`ROOT` is the one step 4 just fixed, `--set=BASE=<BASE>` — the TDD gate compares
-   against it). It reports progress itself via POST /api/state and writes code against the
-   `doh:codeReview` checklist of each file's kind (its "Coding rulebook" section). It builds from
-   what the optional steps left — spec and plan, the approved mockups, the story — and falls back
-   to the requirements form for each one that did not run; its brief tells them apart by which
-   files exist, so nothing about the switches goes into the prompt.
+   sub-agent" (`ROOT` is the one step 4 just fixed, and the root and base are posted first, so
+   `task-info.cjs --render` fills `BASE` — the TDD gate compares against it). It reports progress
+   itself via POST /api/state and writes code against the `doh:codeReview` checklist of each file's
+   kind (its "Coding rulebook" section). A plan of more than three tasks it does not write alone:
+   it hands each task, or each small group of tasks over the same files, to a fresh sub-agent of
+   its own and stays the coordinator, so no context carries the whole plan's worth of code. It
+   builds from what the optional steps left — spec and plan, the approved mockups, the story — and
+   falls back to the requirements form for each one that did not run; its brief tells them apart by
+   which files exist, so nothing about the switches goes into the prompt. It runs the specs of the
+   files it changed, never the whole suite (that runs once, at the end of the pipeline), and ends
+   with the project's pre-commit gate green.
 3. Final JSON `{"type":"result","filesChanged":[…],"summary","deviations":[…]}` → POST
    `{"taskId":"T","step":4,"status":"completed","progress":100,"report":"<the summary, then every
-   `deviations` entry on its own line>","activeStep":<the next step: 6>}` and start it. Keep the
-   `filesChanged` COUNT, the summary and the deviations; the path list itself stays out of your context.
+   `deviations` entry on its own line>","activeStep":<the next step: 6>}`, run
+   `node "<SKILL_DIR>/scripts/checkpoint.cjs" --root=<ROOT> --task=T --step=4` (a restore point
+   under `refs/doh/T/step-4` that touches neither the tree nor the branch), and start the next
+   step. Keep the `filesChanged` COUNT, the summary and the deviations; the path list itself stays
+   out of your context.
    `deviations` is the agent's only channel for what it had to do differently — a plan step it
    replaced, a mockup that overrode the plan, a rulebook its worktree never received because the
    project had not committed it, a file the TDD gate listed that needs no spec. Nothing else in the

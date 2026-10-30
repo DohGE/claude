@@ -58,7 +58,7 @@ test('Copy of current task kopiuje formularz, pokazuje zakładki i czyści branc
   await expect(page.locator('#refinement')).not.toBeChecked();
   await expect(page.locator('#genMockups')).toBeChecked();
   await expect(page.locator('#storyDesc')).toBeChecked();
-  await expect(page.locator('#reviewRuns .run')).toHaveCount(3);
+  await expect(page.locator('#reviewRuns .run')).toHaveCount(2);
   // Dwa taski nie mogą dzielić brancha, więc nowy startuje bez niego.
   await expect(page.locator('#branch')).toHaveValue('');
   await expect(page.locator('#next')).toBeDisabled();

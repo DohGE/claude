@@ -81,8 +81,7 @@ Without that tool, re-read the file or re-run the command with narrower output.
   An agent that finishes with NO parsable JSON — it crashed, was cut off, or answered in prose — counts
   as `{"type":"error"}` for its step: run the failure protocol with a report saying the agent ended
   without a result. Never wait for a message that is not coming, and never re-read the step as still
-  running: a step-5 agent dying this way would otherwise hold the E2E slot for the rest of the run and
-  strand every task queued behind validation.
+  running: a step left `in_progress` with no agent behind it stalls the task for the rest of the run.
   The one exception is an agent you halted with TaskStop for a Stop: it ends without JSON because
   you stopped it, so that ending moves nothing (see "Stopping a step").
 - `{"type":"noted"}` (a FIXED IDENTIFIER) is an agent's answer to a `[Stopped]` or `[Deleted]`
@@ -93,15 +92,16 @@ Without that tool, re-read the file or re-run the command with narrower output.
   stops claiming work, and a plan, story or mockup gate the user's feedback took off the screen
   comes back, since no revised one is coming (see "A send takes its gate off the screen").
 - Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND, on the model and effort step 1 asked for (see "Model and effort"); continue an existing one with SendMessage (its context is preserved) — unless it went cold ("Talking to a running agent").
-- The pipeline NEVER commits in the target project, with one exception: the summary screen's "Shut down and create pull request", which the user presses (`references/steps/final-summary.md`), and the part commits of a split task (`references/steps/4-implementation.md`, "Split task"). Each task works on its own branch; stage its changes at the very end.
+- The pipeline NEVER commits in the target project, with one exception: the summary screen's "Create pull request", which the user presses (`references/steps/final-summary.md`, always through `finish-pr.cjs`), and the part commits of a split task (`references/steps/4-implementation.md`, "Split task"). Each task works on its own branch; stage its changes at the very end.
+- Nothing the pipeline writes carries a tool's attribution: no "Generated with Claude Code" line, no `Co-Authored-By` trailer, no robot emoji footer — not in a commit, a pull request description or a comment.
 - Update the stepper before and after every phase so the browser always reflects reality.
 
 ## The run is an event loop, not a walk
 
 A run holds one or more **tasks**. A task is one feature on one branch with its own nine-step
 pipeline, its own `<SESSION>/tasks/<id>/`, its own sub-agents and its own orchestrator, a separate
-Claude Code session. Tasks share only the server, the browser page and one Validation & E2E
-slot. You orchestrate ONE task, T: `t1` when this session ran Setup, else the one `--attach` named
+Claude Code session. Tasks share only the server and the browser page: every task validates on its
+own, in parallel with the others (see "Validation runs in parallel"). You orchestrate ONE task, T: `t1` when this session ran Setup, else the one `--attach` named
 (see "Attach"). Every other task is another session's — never act on it.
 
 Hold this for T, and nothing more:
@@ -115,19 +115,31 @@ Then loop until the user shuts the server down:
    the Bash tool's `run_in_background: true`, then end your turn. Never wait in the foreground: the
    waiter's exit and each sub-agent's completion are what wake you, and a turn spent on an empty poll
    re-reads the whole conversation for nothing. Starting it when one is already listening is safe —
-   the second one exits at once with `WAITER_RUNNING`.
-2. The waiter exits → read its output lines (FIXED IDENTIFIERS, never translated):
+   the new one takes T over and the older one exits with `WAITER_SUPERSEDED`. Only ever through
+   `run_in_background`: never `&`, `nohup`, `Start-Process` or an output sent to `/dev/null` — a
+   waiter nobody reads would take the user's answers with it, so the script refuses to start
+   (exit code 2) when its output goes nowhere.
+2. The waiter exits → its exit code, in the notification, says which line it printed: `3` is
+   `WAIT_TIMEOUT` and `4` is `WAITER_RUNNING` or `WAITER_SUPERSEDED` — act on those without reading
+   the output; any other code → read its output lines (FIXED IDENTIFIERS, never translated):
    - `ANSWER <json>` — one per answer, in arrival order; act on each in that order, then back to 1.
-   - `WAIT_TIMEOUT` — 50 minutes passed with nothing: back to 1 (the new waiter is the keep-alive).
-   - `WAITER_RUNNING <pid>` — another waiter is still listening: end your turn without a new one.
+   - `WAIT_TIMEOUT` (exit 3) — 50 minutes passed with nothing: back to 1 (the new waiter is the
+     keep-alive). The second `WAIT_TIMEOUT` in a row while no agent of T runs — T waits for the
+     user, at a gate, a failure or its summary — gets a waiter with `--minutes 240` instead: an
+     idle user does not need the conversation's cache kept warm every 50 minutes, and the waiter
+     still wakes you the moment they answer.
+   - `WAITER_RUNNING <pid>` or `WAITER_SUPERSEDED` (exit 4) — another waiter of yours is listening:
+     end your turn without a new one.
    - `ORCHESTRATOR_RUNNING <session>` — another session orchestrates T: tell the user, stop looping.
    - `SERVER_GONE`, or `TASK_GONE` (T was removed) — stop looping and end your turn. When
-     `<SESSION>/tasks/T/pr-request.json` exists, the user pressed "Shut down and create pull
-     request" while you were not listening: run that flow first (`references/steps/final-summary.md`).
+     `<SESSION>/tasks/T/pr-request.json` exists, the user pressed "Create pull request" and the
+     server went down before you ran it: run that flow first (`references/steps/final-summary.md`),
+     printing what it reports instead of posting it.
 3. A sub-agent completion notification arrives → advance T's state machine, then back to 1.
-4. `{"kind":"summary","decision":"shutdown"}` → stop looping and end your turn.
-   `{"kind":"summary","decision":"shutdown_pr"}` → the pull request flow
-   (`references/steps/final-summary.md`, "Shut down and create pull request"), then stop.
+4. `{"kind":"summary","decision":"shutdown"}` → the server is going down: remove T's worktree when
+   its pull request is open (`references/steps/final-summary.md`, point 8), then stop looping and
+   end your turn. `{"kind":"summary","decision":"create_pr"}` → the pull request flow
+   (`references/steps/final-summary.md`, "Create pull request"), then back to 1: the server stays up.
 5. Once T has had its final summary, a `WAIT_TIMEOUT` ends the loop instead: do not start
    another waiter (`references/steps/final-summary.md`, point 7).
 
@@ -136,14 +148,14 @@ later one is a revision); `answer` → the question T's agent asked; `decision` 
 gate, failure gate or Mockoon gate; `mockup` → the mockup gate; `message` → a line typed on a step's
 own composer, for that step's agent (see "Talking to a running agent"); `stop` → the Stop button of
 a running step (see "Stopping a step"); `delete` → the × on one of the user's own lines in a step's
-transcript (see "Talking to a running agent"); `summary` → the summary screen; `e2e` → the E2E slot
-came round to T (see "E2E slot"): step 5 starts, or step 9's agent hears `E2E slot granted`.
+transcript (see "Talking to a running agent"); `summary` → the summary screen ("Create pull
+request", "Generate Mockoon mocks") or the sidebar's "Shut down server".
 Each kind carries its own fields, and they are what you read — never guess a name: `answer` has
 `questionId` and `value` (the answer TEXT is `value`, not `text`); `decision` and `mockup` have
 `decision` plus a `text` on `feedback` (and a mockup `approve` sent while the agent reworked the
 round carries `duringRework: true`); `message` has `step` and `text`; `stop` has `step`;
 `delete` has `step`, the line's `id` and its `text`; `summary` has `decision`; `step1` carries the form as the server normalised it — `refinement`,
-`generateMockups`, `storyDescription` and `finalReview` are booleans, `codeReview` and
+`generateMockups`, `darkMockups`, `storyDescription` and `finalReview` are booleans, `codeReview` and
 `finalCodeReview` are lists of one to three runs, each `{"flags":[…]}`, `commitMessage` is text,
 `taskSplit` is text (empty, or one part per line: the task is built part by part, each on its own
 branch `<branch>-part-<n>` — `references/steps/4-implementation.md`, "Split task") and `agents` holds every agent's model and effort — and every `step1` after the first adds
@@ -191,21 +203,32 @@ armed, keep serving whatever else arrives for T, and resume T's step when its `X
 Other tasks run in sessions of their own, so several sit in steps 2-4, 6 and 8 at once, and one
 that fails stops none of the others.
 
-**E2E slot.** Chrome, the Claude in Chrome extension, the Playwright installation and the app's dev
-port are single-instance, so only ONE task may run an E2E suite at a time — step 5, or the
-regression run of step 9 — and the SERVER keeps the slot, never your memory. POST `/api/e2e` with
-`{"taskId":"T"}` (and `"step":9` for the final review): `{"granted":true}` → T has it;
-`{"granted":false,…}` → the server queued T (first come, first served) and shows that step
-waiting: wait for T's `kind=="e2e"`. T keeps the slot through the step — a Stop and a
-failure-protocol retry included — and the server hands it on once that step is posted `completed`
-or T's summary is set. Never release it yourself.
+**Validation runs in parallel.** No task waits for another to finish step 5 or step 9: each one
+starts its own dev server on a free port of its own (`task-processes.cjs start`, which records the
+port before the process exists, so the cleanup always finds it), keeps its E2E suite and results in
+its own session folder, and drives its own tab in the user's Chrome. Nothing is requested from the
+server first. What they still share is the machine's memory, so every unit run goes through
+`checks.cjs`, whose Jest workers recycle themselves, and the full unit suite runs once per task
+(step 9, or step 5 when the final review is off).
 
 ## Spawning a sub-agent
 
 Every spawn below is the same two moves: render the agent's brief to a file, then spawn an agent
 that reads it. You never build the prompt yourself.
 
-1. **Render** (Bash tool), with every placeholder from the table below:
+The one call that does point 1 for any step, every placeholder filled from the server's own record
+of T — the models and effort directives of "Model and effort" included:
+
+    node "<SKILL_DIR>/scripts/task-info.cjs" --port=PORT --task=T --step=N --render --language=<LANGUAGE>
+
+→ one JSON line: `out` (the brief), `model` (the Agent tool's `model`; `""` = leave it out),
+`errors` (not empty → do NOT spawn; fall back to point 1 below with the missing `--set`). Without
+`--render` it prints what a retry or a spawn needs to know: every agent's resolved model, effort and
+directive, the walker flags, and with `--step=N` the user's lines of that step's chat since its
+last failure (`step.userAfterFailure`). Render again for every spawn, a retry's included: a brief
+from an earlier attempt carries the settings of that attempt.
+
+1. **Render by hand** (Bash tool), with every placeholder from the table below:
 
        node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/<name>-agent.md" --out="<SESSION>/prompts/<name>.md" --set=ROOT=<…> --set=PROJECT=<…> --set=SESSION=<…> --set=TASK_ID=<…> --set=PORT=9999 --set=SKILL_DIR=<…> --set=LANGUAGE=<…> --set=EFFORT=<…>
 
@@ -399,15 +422,17 @@ the panel only notes that the agent was stopped. It reaches you as
 4. When SendMessage cannot reach the agent any more, spawn a fresh one for the step, per
    "Spawning a sub-agent", with every `user` entry of the step's `chat` under `## What the user
    said in this step` and the forwarded text last.
-5. A stopped step 5 keeps the E2E slot. To abandon a stopped step, the user tells its agent
-   to give up: it ends with its error JSON, and the failure protocol takes it from there.
+5. To abandon a stopped step, the user tells its agent to give up: it ends with its error JSON,
+   and the failure protocol takes it from there.
 
 ## Server helpers (use exactly these shapes)
 
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
-  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","base":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"mockupArtifact":"<url>","chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...}}`
+  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","base":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"mockupArtifact":"<url>","chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...},"pr":{"status":"created|exists|failed","url":"...","urls":[...],"commit":"...","reason":"..."}}`
+  `pr` is the outcome of the "Create pull request" flow (`final-summary.md`); the summary screen
+  shows it in place of the button.
   Several bodies in ONE tool call — a step completed and the next one started, say — go through
   `node "<SKILL_DIR>/scripts/post-state.cjs" --port PORT '<json>' '<json>'`, in order, stopping at the
   first refusal (it prints `OK` or `ERROR <status> <message>` per body). Every curl is a turn that
@@ -472,32 +497,34 @@ again after a compaction, which keeps only this file's head — and never from m
 | 5 Validation & E2E | `5-validation.md` |
 | 9 Final Code Review | `9-final-code-review.md` |
 | 7 Mockoon Mocks | `7-mockoon.md` |
-| the final summary, and "Shut down and create pull request" | `final-summary.md` |
+| the final summary, and "Create pull request" | `final-summary.md` |
 
 Only the file of the step T is on is needed at a time: a session that orchestrates step 5 of a task
 never pays for the mockup protocol.
 
 ## Failure protocol (any step, any task)
 
-1. POST `{"taskId":"T","step":N,"status":"failed","report":"<report>","question":null}` — clearing
+1. POST `{"taskId":"T","step":N,"status":"failed","report":"<report>","question":null,"logEntry":"Step failed"}` — clearing
    the question matters: a step that failed while waiting for an answer would otherwise re-show that
-   stale question the moment a retry flips the status back to in_progress.
+   stale question the moment a retry flips the status back to in_progress. The `Step failed` entry
+   is what `task-info.cjs` counts the user's later lines from.
 2. Wait for T's `kind=="decision"`:
    - `retry` → the server has already put the step back `in_progress` and cleared its `report`
-     (post neither); re-spawn that step's agent **fresh**: render its brief again, then a new Agent call whose prompt carries the
-     pointer plus a note about the previous failure report path plus every `user` entry of that
-     step's `chat` later than its failure log entry, under `## What the user added after the
-     failure`. Read them back from `/api/state` rather than from memory: on a long run yours has
-     been summarised since. The re-spawn reads `agents(T)` again, so a model changed since the
-     failure takes effect here.
-   - `finish` → write that task's final summary (`final-summary.md`, including the `auth.json` cleanup) with
+     (post neither); re-spawn that step's agent **fresh**: render its brief again
+     (`task-info.cjs --render`, never the file an earlier attempt left), then a new Agent call whose
+     prompt carries the pointer plus a note about the previous failure report path plus every
+     `user` entry of that step's `chat` later than its failure (`task-info.cjs --step=N`,
+     `step.userAfterFailure`), under `## What the user added after the failure`. Read them back
+     from the server rather than from memory: on a long run yours has been summarised since. The
+     re-spawn reads `agents(T)` again, so a model changed since the failure takes effect here.
+   - `finish` → write that task's final summary (`final-summary.md`) with
      `finalStatus:"Failed at <step name>"` — the NAME (`Implementation`, `Validation & E2E`), never
      the id. The stepper numbers the tiles it shows, in pipeline order, so with only refinement on
      step 4 is the tile labelled 3 and with a story it is not even the next id: an id quoted at the
-     user points them at the wrong tile. Names never drift.
-3. The E2E slot needs nothing from you: a `finish` sets T's summary, and that frees the slot for
-   the next task in the queue.
-4. A failed task does not end the run: the other tasks go on in their own sessions.
+     user points them at the wrong tile. Names never drift. `auth.json` stays: the work of a failed
+     task can still get its pull request and a later review or retry may still need to log in; the
+     server deletes it at shutdown.
+3. A failed task does not end the run: the other tasks go on in their own sessions.
 
 <!-- one-time:start -->
 <!-- What follows runs once per run (Setup): it sits last, outside the head a compaction re-attaches. -->
@@ -541,11 +568,17 @@ never pays for the mockup protocol.
      never shut down. Do NOT look for a free port and do NOT start the pipeline anyway: show the
      launcher's message, tell the user to close the other stepper with its "Shut down server"
      button, and stop your turn there.
-   - The page's top-right corner shows THIS session's tokens, its 5-hour and weekly limits, your
-     model, effort and context in use. Only Claude Code's status line receives those, so the
+   - With the server up, start `node "<SKILL_DIR>/scripts/ensure-deps.cjs"` with
+     `run_in_background: true`: the plugin's Playwright and Chromium install while the user fills
+     in step 1, instead of at the first screenshot (a plugin upgrade arrives without
+     `node_modules`). Its notification with exit code 0 needs nothing, not even a Read; exit code 1
+     → read its `DEPS_FAILED <reason>` line and tell the user — the steps that need the runner
+     try the install again themselves.
+   - The page's sidebar shows, under "Orchestrator", THIS session's tokens, its 5-hour and weekly
+     limits, your model, effort and context in use, next to the "Shut down server" button. Only Claude Code's status line receives those, so the
      server reads the snapshot `scripts/statusline-relay.cjs` keeps of it, per session id. Until
      the user's `statusLine` command runs through the relay
-     (`node "<SKILL_DIR>/scripts/statusline-relay.cjs" <their command>`), the corner says so and
+     (`node "<SKILL_DIR>/scripts/statusline-relay.cjs" <their command>`), the sidebar says so and
      names the script. Never edit the user's settings for it yourself, and never open their
      credentials to fill it in.
 5. A run starts with one task, `t1`, and this session is its orchestrator: `T = t1`. POST
@@ -555,8 +588,10 @@ never pays for the mockup protocol.
 
 `--attach <taskId> --port <n>` in the arguments means the stepper opened this session for ONE task
 of a run that is already up — on that task's first submitted form, or from "Open session" in the
-page's corner. The terminal runs `claude`, or what `DOH_CLAUDE_COMMAND` in the server's environment
-names instead (e.g. `claude --permission-mode acceptEdits`). Do this instead of Setup:
+page's sidebar. The terminal runs `claude`, or what `DOH_CLAUDE_COMMAND` in the server's environment
+names instead (e.g. `claude --permission-mode acceptEdits`); `DOH_ORCHESTRATOR_MODEL` (e.g. `sonnet`)
+adds `--model` to it when it names none, since the loop itself needs no larger model than its
+agents. Do this instead of Setup:
 
 1. `T` = the task id, `PORT` = the port, `SKILL_DIR` as in Setup point 1. Read
    `curl -s "http://127.0.0.1:PORT/api/orchestrator?taskId=T"`: `SESSION` = its `sessionDir`,
@@ -569,11 +604,11 @@ names instead (e.g. `claude --permission-mode acceptEdits`). Do this instead of 
 3. Read T's entry of `/api/state` (its `branch` and `root` too) and go on from the first that fits:
    - a drained `step1` → `references/steps/1-requirements.md`, as for any `step1`; step 1 never sent → the event loop, where
      the form arrives as one.
-   - `<SESSION>/tasks/T/pr-request.json` exists → the pull request flow of `final-summary.md`; it
-     ends the session.
+   - `<SESSION>/tasks/T/pr-request.json` exists → the "Create pull request" flow of
+     `final-summary.md`, then the event loop.
    - a summary → `final-summary.md`, point 7.
-   - a drained `e2e` → step 5 from point 1: the slot is T's. Step 5 `Waiting for the E2E slot` →
-     POST `/api/e2e` again (the server keeps T's place) and wait for `kind=="e2e"`.
+   - step 5 `waiting` while T's `activeStep` is 5 (a run from a version that queued validation) →
+     step 5 from point 1.
    - a step `failed` → "Failure protocol" from point 2.
    - a step after 1 `in_progress` with no question or gate on screen → its agent ended with the
      session that ran it: POST `{"taskId":"T","step":N,"currentOperation":"Resuming in a new session"}`

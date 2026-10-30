@@ -39,6 +39,32 @@ record how the pipeline runs — never a requirement.
 Either way follow the `superpowers:executing-plans` discipline (TDD: red → green; verify each
 step's expected output).
 
+## One sub-agent per task (a plan of more than three tasks)
+
+Every call you make re-reads your whole context, so one agent that writes nine tasks' worth of
+code pays for all of it on every call of the last task — measured at ~200 000 tokens per call on
+one run. With more than three tasks in the plan, you are the coordinator: you write no application
+code yourself, and each task — or a small group of consecutive tasks that touch the same files, at
+most three — goes to a fresh helper (Agent tool, `general-purpose`, NOT in the background: the call
+returns with the helper's reply, so you never end your turn while it works; no `model`: it runs on
+yours), one after another, never two at once (they would edit one tree).
+
+- Its prompt names: `{{ROOT}}` as the only place it writes; the plan file and the `### Task N`
+  headings it owns (it reads them itself — never paste the plan); `spec.md`, the approved mockups
+  and `ui-design.md` when they exist; the "Running tests and builds" and "Coding rulebook" sections
+  of THIS file by path (`{{SESSION}}/prompts/implementation.md`) as rules it follows verbatim;
+  what the tasks before it left that it builds on (file paths and interfaces, two or three lines);
+  never `git commit`; and the reply it ends with, one JSON line:
+  `{"tasks":[N…],"files":["…"],"deviations":["…"],"summary":"<two sentences>"}`.
+- When its reply is back, verify before the next task: its files exist,
+  `git -C "{{ROOT}}" status --porcelain` shows them, and the specs of its files pass
+  (`checks.cjs --only=test --command="<related-tests command>"`, read as below). A red verdict goes
+  back to the same helper by SendMessage, with the `errorsPath`. Post the progress line per task.
+- Keep only the JSON lines: files, deviations, summaries. Never read the helpers' code into your
+  own context beyond what a failing verification needs.
+
+With three tasks or fewer, write them yourself.
+
 ## Running tests and builds
 
 Every test, typecheck or build you run — a plan step's `Run:` line included — goes through the gate
@@ -48,7 +74,11 @@ script, never straight through the shell:
 
 - `--only` names what the command is: `test`, `typecheck` or `build`. `--command` is the command
   itself, exactly as the plan wrote it (one spec file, one package); the script adds the flag that
-  stops a runner watching.
+  stops a runner watching and, for Jest, two workers that recycle themselves past 1 GB.
+- Run the specs of what you changed — the plan's `Run:` lines, or the runner's related-tests mode
+  (`jest --findRelatedTests <files>`, `vitest related <files>`) — never the whole suite and never
+  `--runInBand`: the whole suite runs once per task, at the end of the pipeline, and other tasks
+  may be testing on the same machine right now.
 - It prints one JSON object. The verdict is its step's `status`, the command's exit code, never
   your reading of any output. `passed` → there is nothing to read.
 - `failed` → Read that step's `errorsPath` and nothing else: the failure lines alone, cut out of the
@@ -63,9 +93,11 @@ script, never straight through the shell:
   `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` →
   `PART_READY` or `PART_PENDING` (run it again). Never one tool call that blocks longer, and never
   `sleep N`: past five idle minutes your prompt cache expires, and the next call pays for this whole
-  conversation again. A dev server you start is registered by its port —
-  `node "{{SKILL_DIR}}/scripts/task-processes.cjs" register --task-dir="{{SESSION}}" --port=<port> --what=dev-server` —
-  and stopped with `… cleanup --task-dir="{{SESSION}}"` before your final JSON.
+  conversation again. A dev server you need is started through the process record, on a free
+  port of your own —
+  `node "{{SKILL_DIR}}/scripts/task-processes.cjs" start --task-dir="{{SESSION}}" --root="{{ROOT}}" --port=<port> --command="<the project's dev-server command, with that port>"`
+  — waited for with `node "{{SKILL_DIR}}/scripts/task-processes.cjs" wait --task-dir="{{SESSION}}" --port=<port>`,
+  and stopped with `node "{{SKILL_DIR}}/scripts/task-processes.cjs" cleanup --task-dir="{{SESSION}}"` before your final JSON.
 
 ## Approved mockups (when they exist)
 
@@ -126,11 +158,18 @@ authoritative.
    this change did not touch: when its behaviour changed, extend the spec. A missing unit test the
    review finds instead costs a review run, a fix round and a re-run of the suite.
 5. Matcher exits non-zero (rulebook missing) → continue without it and record that in `deviations`.
+6. Last, the project's own pre-commit gate — what `git commit` runs at the very end, with lint
+   rules the checklists may not know (a restricted import, member ordering): stage everything,
+   `git -C "{{ROOT}}" add -A`, then
+   `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=precommit`.
+   `passed` or `skipped` (no such gate) → done. `failed` → fix every error its `errorsPath` lists,
+   `git add -A`, run it again. Never report "lint clean" from a lint you ran another way: a lint
+   run from the wrong folder answers "file ignored", which reads like a pass.
 
 ## Rules
 
 - Follow the project's existing architecture and conventions; readable code over clever code.
-- NEVER `git commit`, never change branch (you are already on the feature branch), never write into `{{SESSION}}` or the skill's runtime folders.
+- NEVER `git commit`, never change branch (you are already on the feature branch), never write into `{{SESSION}}` or the skill's runtime folders. `git add` is fine — the pre-commit gate needs the work staged.
 - Resolve blockers yourself. If a plan step is wrong or impossible, implement the minimal correct alternative and record it as a deviation.
 - Human checkpoints in the plan are replaced by progress reports.
 

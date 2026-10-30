@@ -193,7 +193,7 @@ test('the test step carries the non-interactive flag its runner understands', (t
   const cases = [
     ['vitest', ['--run']],
     ['vitest run --coverage', ['--run']],
-    ['jest --coverage', ['--ci', '--watchAll=false', '--maxWorkers=50%']],
+    ['jest --coverage', ['--ci', '--watchAll=false', '--maxWorkers=2']],
     // A script that sets its own workers keeps them.
     ['jest --runInBand', ['--ci', '--watchAll=false']],
     ['jest --maxWorkers=2', ['--ci', '--watchAll=false']],
@@ -557,11 +557,11 @@ test('a --command line still gets the flag that stops its runner watching, unles
   const cases = [
     ['npx ng test --include=src/app/foo.spec.ts', 'npx ng test --include=src/app/foo.spec.ts --watch=false'],
     ['npx vitest run src/a.spec.ts --run', 'npx vitest run src/a.spec.ts --run'],
-    ['npx jest src/foo.spec.ts', 'npx jest src/foo.spec.ts --ci --watchAll=false --maxWorkers=50%'],
+    ['npx jest src/foo.spec.ts', 'npx jest src/foo.spec.ts --ci --watchAll=false --maxWorkers=2'],
     ['npx ng test --watch=false', 'npx ng test --watch=false'],
     // A package.json script names its runner in the script, not in the line.
     ['npm test -- --include=src/app/foo.spec.ts', 'npm test -- --include=src/app/foo.spec.ts --watch=false'],
-    ['npm run test:jest', 'npm run test:jest -- --ci --watchAll=false --maxWorkers=50%'],
+    ['npm run test:jest', 'npm run test:jest -- --ci --watchAll=false --maxWorkers=2'],
     ['go test ./...', 'go test ./...'],
   ];
   for (const [line, expected] of cases) {
@@ -739,4 +739,57 @@ test('e2e runs only as a --command step: its own verdict and errors, never part 
   assert.strictEqual(green.gate, 'green');
   const gate = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner() });
   assert.ok(!gate.steps.some((s) => s.step === 'e2e'), 'a full gate pass never runs e2e');
+});
+
+test('a Jest of 29 or later also recycles a worker that holds more than 1 GB', (t) => {
+  const root = makeProject(t, { test: 'jest' });
+  fs.mkdirSync(path.join(root, 'node_modules', 'jest'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules', 'jest', 'package.json'), JSON.stringify({ version: '29.7.0' }));
+  assert.strictEqual(checks.jestMajorOf(root), 29);
+  const run = fakeRunner();
+  checks.runChecks({ root, outDir: outDirFor(t), run });
+  const call = run.calls.find((c) => c.options.step === 'test');
+  assert.deepStrictEqual(call.args.slice(call.args.indexOf('--') + 1),
+    ['--ci', '--watchAll=false', '--maxWorkers=2', '--workerIdleMemoryLimit=1GB']);
+  // A Jest too old for the flag would refuse to start with it.
+  assert.deepStrictEqual(checks.extraArgsFor('test', 'jest', 27), ['--ci', '--watchAll=false', '--maxWorkers=2']);
+});
+
+test('--auth-file hands the login to the command as env vars and never prints it', (t) => {
+  const root = makeProject(t, {});
+  const authFile = path.join(fs.realpathSync(tempDir(t, 'fpc-auth-')), 'auth.json');
+  fs.writeFileSync(authFile, JSON.stringify({ login: 'admin@example.com', password: 's3cret!' }));
+  assert.strictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', `--auth-file=${authFile}`]).authFile, authFile);
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), only: ['e2e'], command: 'node e2e.js', authFile, run });
+  assert.strictEqual(run.calls[0].options.env.E2E_LOGIN, 'admin@example.com');
+  assert.strictEqual(run.calls[0].options.env.E2E_PASSWORD, 's3cret!');
+  assert.ok(!JSON.stringify(result).includes('s3cret!'), 'the result never carries the password');
+  fs.writeFileSync(authFile, '{"login":"admin","password":"s3cret!"');
+  const broken = checks.runChecks({ root, outDir: outDirFor(t), only: ['e2e'], command: 'node e2e.js', authFile, run: fakeRunner() });
+  assert.match(broken.errors[0], /not readable JSON/);
+  assert.ok(!JSON.stringify(broken).includes('s3cret!'), 'not even when the file is broken');
+});
+
+test('precommit runs lint-staged without its backup stash, else the hook itself, else nothing', (t) => {
+  const withConfig = makeProject(t, {});
+  const pkg = JSON.parse(fs.readFileSync(path.join(withConfig, 'package.json'), 'utf8'));
+  fs.writeFileSync(path.join(withConfig, 'package.json'), JSON.stringify({ ...pkg, 'lint-staged': { '*.ts': 'eslint --fix' } }));
+  assert.strictEqual(checks.precommitCommandFor(withConfig), 'npx --no-install lint-staged --no-stash --concurrent false');
+  const run = fakeRunner({ precommit: { exitCode: 1, output: '✖ eslint --fix:\nsrc/a.ts\n  4:1  error  restricted import' } });
+  const result = checks.runChecks({ root: withConfig, outDir: outDirFor(t), only: ['precommit'], run });
+  assert.strictEqual(run.calls[0].command, 'npx --no-install lint-staged --no-stash --concurrent false');
+  assert.strictEqual(stepNamed(result, 'precommit').status, 'failed');
+  assert.strictEqual(result.gate, 'red');
+
+  const bare = makeProject(t, {});
+  const hookDir = path.join(bare, 'hooks');
+  fs.mkdirSync(hookDir);
+  fs.writeFileSync(path.join(hookDir, 'pre-commit'), '#!/bin/sh\nexit 0\n');
+  const git = () => ({ status: 0, stdout: 'hooks/pre-commit\n' });
+  assert.strictEqual(checks.precommitCommandFor(bare, git), 'git hook run pre-commit');
+  const none = checks.runChecks({ root: makeProject(t, {}), outDir: outDirFor(t), only: ['precommit'],
+    precommitCommand: () => null, run: fakeRunner() });
+  assert.strictEqual(stepNamed(none, 'precommit').status, 'skipped');
+  assert.deepStrictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', '--only=precommit']).only, ['precommit']);
 });
