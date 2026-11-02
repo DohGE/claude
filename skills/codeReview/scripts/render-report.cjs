@@ -102,7 +102,7 @@ function expandItemSpec(spec) {
 }
 
 function parseArgs(argv) {
-  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false, light: false };
+  const args = { report: '', out: '', project: '', mode: '', base: '', branch: '', stack: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false, light: false };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--keep-source') {
@@ -134,10 +134,12 @@ function parseArgs(argv) {
     else if (m[1] === 'mode') args.mode = m[2];
     else if (m[1] === 'base') args.base = m[2];
     else if (m[1] === 'branch') args.branch = m[2];
+    // The lines later parts of a stack of branches change (review-context.cjs stackOf).
+    else if (m[1] === 'stack') args.stack = m[2];
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --keep-source, --only-md, --with-checklist, --light).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --out, --project, --mode, --branch, --base, --stack, --keep-source, --only-md, --with-checklist, --light).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.md").');
   if (!args.out) args.out = args.report.replace(/\.md$/i, '') + '.html';
@@ -1010,6 +1012,29 @@ function attachSnippets(report, projectRoot, source) {
   return report;
 }
 
+// A target of a stack of branches (part-2 based on part-1, …) reviews code the later parts may
+// change again: a finding whose lines one of them changes carries the stack's tip, so the reader
+// checks it against the branch it is going to merge with. `stack` is the sidecar review-context.cjs
+// wrote, `{ tip, later, files: { <path>: [[from, to], …] } }` in this target's line numbers (`to`
+// null: to the end of the file, which a later part deletes).
+function attachStack(report, stack) {
+  if (!stack || !stack.files || !stack.tip) return 0;
+  let marked = 0;
+  for (const file of report.files) {
+    const changed = stack.files[file.path];
+    if (!Array.isArray(changed) || changed.length === 0) continue;
+    for (const finding of file.findings) {
+      const hit = parseLineRanges(finding.lines).some((range) => changed.some(([from, to]) => range.start <= (to === null ? Infinity : to) && range.end >= from));
+      if (!hit) continue;
+      finding.stack = stack.tip;
+      marked++;
+    }
+  }
+  report.stackMarked = marked;
+  report.stackTip = stack.tip;
+  return marked;
+}
+
 // The line Step 5 prints: the findings per severity, counted from the parsed report - the
 // reviewer never counts them from the page (FIXED IDENTIFIER: `severity:` and the keys).
 function severityLine(report) {
@@ -1088,6 +1113,7 @@ function buildPayload(report, reportName) {
         prExpected: finding.prExpected || '',
         prLocations: finding.prLocations || '',
         snippet: finding.snippet || null,
+        ...(finding.stack ? { stack: finding.stack } : {}),
         tagKeys: finding.tags.map((tag) => keyOf.get(`${tag.file}\n${tag.rule}`)),
       })),
     })),
@@ -1281,6 +1307,7 @@ button{font:inherit;color:inherit}
 .finding.accepted .f-body{display:none}
 .accepted-count{font-weight:650;color:var(--accepted-line)}
 .f-accepted-tag{font-size:12px;font-weight:650;color:var(--accepted-line)}
+.f-stack-tag{font-size:12px;font-weight:650;color:var(--muted)}
 .finding.accepted .f-accept{border-color:var(--accepted-line);color:var(--accepted-line)}
 
 .snipbox{margin-top:10px;border:1px solid var(--border);border-radius:8px;background:var(--snip-bg);overflow:hidden}
@@ -2203,6 +2230,13 @@ const pageJs = `
     });
     head.appendChild(lines);
 
+    if (f.stack) {
+      var stackTag = el('span', 'f-stack-tag');
+      stackTag.textContent = '↻ zmieniane dalej w stosie';
+      stackTag.title = 'Dalsze gałęzie stosu (do ' + f.stack + ') zmieniają te linie - sprawdź, czy znalezisko nadal obowiązuje w ' + f.stack + '.';
+      head.appendChild(stackTag);
+    }
+
     var isAccepted = state.accepted.has(f.id);
     if (isAccepted) {
       node.classList.add('accepted');
@@ -2640,6 +2674,13 @@ function main(argv) {
   warnUnknownChecklistIds(report, projectRoot);
   resolveRuleAddresses(report, projectRoot);
   if (args.withRuleText) attachChecklistRules(report, projectRoot);
+  if (args.stack) {
+    try {
+      attachStack(report, JSON.parse(fs.readFileSync(args.stack, 'utf8')));
+    } catch (err) {
+      process.stderr.write(`Nie można odczytać danych stosu: ${args.stack} (${(err && err.message) || err}) - znaleziska bez oznaczeń stosu.\n`);
+    }
+  }
   const source = { mode: args.mode, base: args.base, branch: args.branch };
   // A --light page carries no code: no snippet under a finding, no full view of a file.
   if (!args.light) attachSnippets(report, projectRoot, source);
@@ -2688,13 +2729,15 @@ function main(argv) {
     }
   }
   process.stdout.write(`${args.out}\n${severityLine(report)}\n`);
+  // FIXED IDENTIFIER `stos:` - the run's summary repeats the line (check-part.cjs --assemble-all).
+  if (report.stackMarked) process.stdout.write(`stos: ${report.stackMarked} ${plural(report.stackMarked, 'znalezisko', 'znaleziska', 'znalezisk')} na liniach, które zmieniają dalsze gałęzie stosu (do ${report.stackTip})\n`);
   return 0;
 }
 
 module.exports = {
   severityLine,
   parseArgs, parseRuleField, parseReport, findingId, parseLineRanges, parseDiff, buildSnippet, buildFullView,
-  projectRootFor, attachSnippets, warnUnknownChecklistIds, resolveRuleAddresses, attachChecklistRules, appendRuleTexts, buildPayload, renderHtml, reportNameOf, detectPullRequest,
+  projectRootFor, attachSnippets, attachStack, warnUnknownChecklistIds, resolveRuleAddresses, attachChecklistRules, appendRuleTexts, buildPayload, renderHtml, reportNameOf, detectPullRequest,
   changedFiles, treeEntries, stripChecklists, stripLowFindings, main,
   // check-part.cjs validates each part file against the same grammar this parser reads.
   emptyBodies, reHeader, reSeverity, reChecklistOpen, reChecklistItem, reCoverage, reUnverifiedOpen, reQuestionsOpen, reViolationVerdict, expandItemSpec,

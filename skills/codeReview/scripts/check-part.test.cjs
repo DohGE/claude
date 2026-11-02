@@ -105,7 +105,7 @@ function hook(input, env = null) {
     encoding: 'utf8',
     env: env ? { ...process.env, ...env } : process.env,
   });
-  return { status: r.status, stderr: r.stderr };
+  return { status: r.status, stderr: r.stderr, stdout: r.stdout };
 }
 
 test('a part that follows the format passes', (t) => {
@@ -402,18 +402,24 @@ test('hook: a part written from the shell is followed through cd, and judged by 
   assert.strictEqual(bash(`cd "${f.branchDir}" && echo x > notes.md`).status, 0);
 });
 
-test('hook: files go one at a time, in order, one per response', (t) => {
+test('hook: files go one at a time, in order; a part in the response of the one before lands with a note', (t) => {
   const f = fixture(t);
+  // Its earlier part missing, a part waits as a draft that lands by itself - nothing to fix.
   const early = hook({ tool_name: 'Write', tool_input: { file_path: f.part(2), content: partB } });
   assert.strictEqual(early.status, 2);
   assert.match(early.stderr, /part01 \(src\/a\.ts\)/);
+  assert.match(early.stderr, /hook zapisze ją sam/);
+  assert.doesNotMatch(early.stderr, /--promote/);
   fs.writeFileSync(f.part(1), partA());
   const same = hook({ tool_name: 'Write', tool_input: { file_path: f.part(2), content: partB } });
-  assert.strictEqual(same.status, 2);
-  assert.match(same.stderr, /jedna część na odpowiedź/);
+  assert.strictEqual(same.status, 0, same.stderr);
+  assert.match(same.stdout, /zapisana, z uwagą/);
+  assert.match(same.stdout, /jedna część na odpowiedź/);
   const old = new Date(Date.now() - 10 * 1000);
   fs.utimesSync(f.part(1), old, old);
-  assert.strictEqual(hook({ tool_name: 'Write', tool_input: { file_path: f.part(2), content: partB } }).status, 0);
+  const later = hook({ tool_name: 'Write', tool_input: { file_path: f.part(2), content: partB } });
+  assert.strictEqual(later.status, 0);
+  assert.strictEqual(later.stdout, '');
 });
 
 test('hook: a refused part waits as a draft, fixed with Edit and moved into place by --promote', (t) => {
@@ -437,17 +443,21 @@ test('hook: a refused part waits as a draft, fixed with Edit and moved into plac
   assert.strictEqual(fs.readFileSync(f.part(1), 'utf8'), partA());
   assert.ok(!fs.existsSync(draft));
 
-  // Refused only for coming too soon, the part waits unchanged for the next response; the
-  // context is found from the draft's folder as well.
-  const soon = hook({ tool_name: 'Write', tool_input: { file_path: f.part(2), content: partB } });
-  assert.strictEqual(soon.status, 2);
-  assert.match(soon.stderr, /czeka bez zmian w szkicu/);
-  const old = new Date(Date.now() - 10 * 1000);
-  fs.utimesSync(f.part(1), old, old);
+  // A draft that is gone because its part landed leaves the command nothing to do - no ENOENT.
+  r = promote(`--context=${f.contextPath}`);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /raport\.part01\.md jest już zapisana/);
+  // The context is found from the draft's folder as well, and a draft lands right after its
+  // earlier part: a promotion is never the response that wrote the part before it.
   const draft2 = path.join(f.branchDir, 'raport.work', 'raport.part02.draft.md');
+  fs.writeFileSync(draft2, partB);
   r = spawnSync(process.execPath, [script, `--promote=${draft2}`], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(fs.readFileSync(f.part(2), 'utf8'), partB);
+  // Neither the part nor its draft: still an error.
+  r = spawnSync(process.execPath, [script, `--promote=${path.join(f.branchDir, 'raport.work', 'raport.part03.draft.md')}`], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /Nie można odczytać szkicu/);
 });
 
 // A review in progress under a project's `.claude/doh/codeReview`, where the hook looks for it.
@@ -686,7 +696,8 @@ test('assembly: the coverage numbers are counted, not trusted', (t) => {
   assert.match(fs.readFileSync(f.part(1), 'utf8'), /^<!-- coverage: src\/a\.ts 6\/7 -->$/m);
   assert.strictEqual(fs.readFileSync(f.part(2), 'utf8'), partB);
   // The report keeps the markers only under --with-checklist: the run's summary reads this line.
-  assert.match(r.stdout, /^check-part: pliki z pełnym przejściem checklisty: 1\/2; niepełne: src\/a\.ts 6\/7\.$/m);
+  // An item open only for the running application is no gap of the walk.
+  assert.match(r.stdout, /^check-part: pliki z pełnym przejściem checklisty: 2\/2 \(w tym z otwartymi tylko dla narzędzia albo działającej aplikacji \(component#2\): 1\)\.$/m);
 });
 
 test('assembly: the coverage line counts a mechanical file as walked', (t) => {
@@ -857,10 +868,14 @@ test('assembly: a file whose only open items carry prepared verdicts counts as w
   const facts = withRules({ prepared: { 'component#2': preparedReason } });
   fs.writeFileSync(f.part(1), partA());
   fs.writeFileSync(f.part(2), partB);
+  fs.writeFileSync(f.part(1), partA({ component2: '[ ] component#2 walidatory — NIEZWERYFIKOWANE: poza recenzją: src/base.ts' }));
   assert.strictEqual(cp.coverageLine(f.target, null), 'check-part: pliki z pełnym przejściem checklisty: 1/2; niepełne: src/a.ts 6/7.');
   assert.strictEqual(cp.coverageLine(f.target, facts), 'check-part: pliki z pełnym przejściem checklisty: 2/2 (w tym z samymi gotowymi NIEZWERYFIKOWANE (component#2): 1).');
-  // Another item open next to it keeps the file short of full.
-  fs.writeFileSync(f.part(1), partA({ general13: '[x] general#1 — OK (brak wystąpień)\n[ ] general#3 — NIEZWERYFIKOWANE: narzędzie: brak', marker: '<!-- coverage: src/a.ts 5/7 -->' }));
+  // Open only for a tool or the running application: no gap a static walk could close.
+  fs.writeFileSync(f.part(1), partA());
+  assert.strictEqual(cp.coverageLine(f.target, null), 'check-part: pliki z pełnym przejściem checklisty: 2/2 (w tym z otwartymi tylko dla narzędzia albo działającej aplikacji (component#2): 1).');
+  // A file outside the review left unread keeps the file short of full.
+  fs.writeFileSync(f.part(1), partA({ general13: '[x] general#1 — OK (brak wystąpień)\n[ ] general#3 — NIEZWERYFIKOWANE: poza recenzją: src/base.ts', marker: '<!-- coverage: src/a.ts 5/7 -->' }));
   assert.strictEqual(cp.coverageLine(f.target, facts), 'check-part: pliki z pełnym przejściem checklisty: 1/2; niepełne: src/a.ts 5/7.');
 });
 
@@ -1007,4 +1022,222 @@ test('findContextFor reads the context the report folder names before it searche
   const found = cp.findContextFor(f.part(1));
   assert.strictEqual(found.contextPath, f.contextPath);
   assert.ok(!found.context.decoy);
+});
+
+test('an OK may name an item its item hands part of its subject to, as a remark beside its own lines', (t) => {
+  const f = fixture(t);
+  const facts = withRules({ handoff: { 'general#1': ['component#2'] } });
+  const general1 = (evidence) => partA({ general13: `[x] general#1 — OK (${evidence})\n[x] general#3 — OK (brak wystąpień)` });
+  assert.deepStrictEqual(check(f, 1, general1('L2, L7; dane testowe: component#2'), { facts }), []);
+  // The handed-off address is a remark, never the evidence; any other address stays a deferral.
+  has(check(f, 1, general1('component#2'), { facts }), 'dowód OK "(component#2)" nie wskazuje linii tego pliku');
+  const deferred = check(f, 1, general1('L2; jak component#1'), { facts });
+  has(deferred, 'OK odsyła do component#1');
+  has(deferred, 'Ta pozycja przekazuje część przedmiotu tylko do: component#2.');
+  // Without the rule, the same remark is a deferral.
+  has(check(f, 1, general1('L2, L7; dane testowe: component#2')), 'OK odsyła do component#2');
+});
+
+test('one file meeting a per-file instruction is the evidence of a range of its items', (t) => {
+  const f = fixture(t);
+  const ranged = partA({ general13: '[x] general#1,#3 — OK (src/b.ts)' });
+  has(check(f, 1, ranged), 'general#1,#3: jedno OK na 2 pozycji');
+  f.context.checklistPerFile = ['general'];
+  assert.deepStrictEqual(check(f, 1, ranged), []);
+  // Lines stay the evidence of one item.
+  has(check(f, 1, partA({ general13: '[x] general#1,#3 — OK (src/b.ts L2)' })), 'general#1,#3: jedno OK na 2 pozycji');
+});
+
+test('the items the script closed are written in: an OK line per instruction, or into its BRAMKA line', (t) => {
+  const f = fixture(t);
+  const facts = { ...withRules({}), files: { 'src/a.ts': { items: {}, info: [], closed: ['general#3', 'security#2'] } } };
+  const walked = partA({ general13: '[x] general#1 — OK (brak wystąpień)', security: '[x] security#1 — BRAMKA: plik nie przyjmuje danych z zewnątrz' });
+  const filled = cp.fillPart(f.context, f.target, f.part(1), walked, facts);
+  assert.ok(filled.text.includes(`[x] general#3 — OK (${bundle.closedEvidence})`), filled.text);
+  assert.ok(filled.text.includes('[x] security#1-2 — BRAMKA: plik nie przyjmuje danych z zewnątrz'), 'a gated instruction closes them in its gate line');
+  has(filled.fixes, 'general#3, security#2: dopisane pozycje zamknięte przez skrypt');
+  assert.deepStrictEqual(check(f, 1, filled.text, { facts }), []);
+  // The walker's own line for a closed item stays as it is.
+  assert.strictEqual(cp.fillPart(f.context, f.target, f.part(1), partA(), facts).text, partA());
+});
+
+test('a brak wystąpień range over a number the plan does not walk is narrowed to the plan', (t) => {
+  const f = fixture(t);
+  const wide = partA({ general13: '[x] general#1,#3-4 — OK (brak wystąpień)' });
+  has(check(f, 1, wide), 'pozycje spoza planu: general#4');
+  const filled = cp.fillPart(f.context, f.target, f.part(1), wide, null);
+  assert.ok(filled.text.includes('[x] general#1,#3 — OK (brak wystąpień)'), filled.text);
+  has(filled.fixes, 'general#4: spoza planu pliku - zakres zawężony do planu');
+  assert.deepStrictEqual(check(f, 1, filled.text), []);
+  // A line with evidence of its own is the walker's to fix.
+  const lined = partA({ general13: '[x] general#1 — OK (brak wystąpień)\n[x] general#3-4 — OK (L2)' });
+  assert.strictEqual(cp.fillPart(f.context, f.target, f.part(1), lined, null).text, lined);
+});
+
+test('in a spec file an item\'s severityInSpec is the severity of its finding', (t) => {
+  const f = fixture(t);
+  const facts = withRules({ severity: { 'component#1': 'high' }, severityInSpec: { 'component#1': 'medium' } });
+  fs.writeFileSync(f.part(1), partA({ rule: 'component#1' }).replace('## src/a.ts', '## src/a.spec.ts').replace('🟡 **Medium**', '🔴 **High**'));
+  assert.strictEqual(cp.rewriteSeverities(f.target, facts), 1);
+  assert.match(fs.readFileSync(f.part(1), 'utf8'), /^🟡 \*\*Medium\*\*$/m);
+  // Outside a spec the fixed severity holds.
+  fs.writeFileSync(f.part(1), partA({ rule: 'component#1' }));
+  assert.strictEqual(cp.rewriteSeverities(f.target, facts), 1);
+  assert.match(fs.readFileSync(f.part(1), 'utf8'), /^🔴 \*\*High\*\*$/m);
+});
+
+test('assembly folds one defect reported twice: a sameAs pair on the same lines, and a template finding into its class\'s', (t) => {
+  const f = fixture(t);
+  const block = (severity, lines, problem, rule, extra = []) => [severity, `- **Linia:** ${lines}`, `- **Problem:** ${problem}`, `- **Reguła:** ${rule}`, '- **Expected Result:** Poprawka.', ...extra, ''];
+  const facts = withRules({ sameAs: { 'component#1': ['general#2'], 'general#2': ['component#1'] }, companion: { 'component#2': ['general#3'] } });
+  fs.writeFileSync(f.part(1), ['## src/a.ts', '', ...block('🟡 **Medium**', '4, 9', 'Pierwsza.', 'component#1'), ...block('🔴 **High**', '4, 9', 'Druga.', 'general#2'),
+    '<!-- checklist: src/a.ts', '-->', ''].join('\n'));
+  assert.strictEqual(cp.foldFindings(f.target, facts), 1);
+  const one = fs.readFileSync(f.part(1), 'utf8');
+  assert.strictEqual((one.match(/\*\*Linia:\*\*/g) || []).length, 1, one);
+  assert.match(one, /^- \*\*Reguła:\*\* component#1; general#2$/m);
+  assert.match(one, /^🔴 \*\*High\*\*$/m, 'the higher severity stays');
+  // Two items no pair links are two defects that share lines: both stay.
+  fs.writeFileSync(f.part(1), ['## src/a.ts', '', ...block('🟡 **Medium**', '4', 'A.', 'component#1'), ...block('🟡 **Medium**', '4', 'B.', 'general#1'), ''].join('\n'));
+  assert.strictEqual(cp.foldFindings(f.target, facts), 0);
+  // A template's finding folds into its class's, about the same names.
+  fs.writeFileSync(f.part(1), ['## src/x.component.html', '', ...block('⚪ **Low**', '3', 'Szablon czyta `isLoading$ | async`.', 'component#2'),
+    '<!-- checklist: src/x.component.html', '-->', ''].join('\n'));
+  fs.writeFileSync(f.part(2), ['## src/x.component.ts', '', ...block('⚪ **Low**', '14', 'Klasa wystawia strumień `isLoading$` fasady.', 'general#3', ['- **PR Locations:** `src/x.component.ts`']),
+    '<!-- checklist: src/x.component.ts', '-->', ''].join('\n'));
+  assert.strictEqual(cp.foldFindings(f.target, facts), 1);
+  const template = fs.readFileSync(f.part(1), 'utf8');
+  assert.ok(!template.includes('**Linia:**') && !template.includes('## src/x.component.html'), template);
+  assert.ok(template.includes('<!-- checklist: src/x.component.html'), 'the checklist stays');
+  const cls = fs.readFileSync(f.part(2), 'utf8');
+  assert.match(cls, /^- \*\*Reguła:\*\* general#3; component#2$/m);
+  assert.ok(cls.includes('Ta sama przyczyna w szablonie `src/x.component.html` (linie 3)'), cls);
+  assert.match(cls, /^- \*\*PR Locations:\*\* `src\/x\.component\.ts`, `src\/x\.component\.html`$/m);
+  // Another name: the class's finding is about something else, so both stay.
+  fs.writeFileSync(f.part(1), ['## src/x.component.html', '', ...block('⚪ **Low**', '3', 'Szablon czyta `items$ | async`.', 'component#2'), ''].join('\n'));
+  assert.strictEqual(cp.foldFindings(f.target, facts), 0);
+});
+
+test('hook: while a branch review runs, a shell read of another revision is refused', (t) => {
+  const r = reviewProject(t);
+  const context = JSON.parse(fs.readFileSync(r.contextPath, 'utf8'));
+  const snapshot = path.join(r.project, '.claude', 'doh', 'codeReview', 's', '04-05-1');
+  fs.mkdirSync(snapshot, { recursive: true });
+  Object.assign(context.targets[0], { branch: 'feature', revision: 'abc1234def5678', snapshotDir: snapshot.replace(/\\/g, '/') });
+  fs.writeFileSync(r.contextPath, JSON.stringify(context));
+  const bash = (command) => hook({ session_id: 'reviewer', tool_name: 'Bash', tool_input: { command }, cwd: r.project }, r.env);
+  for (const command of ['git grep -n foo feature', 'git show feature:src/a.ts', 'git -C . diff main...feature -- src/a.ts', 'git log -p -- src/a.ts', 'grep -rn foo src', 'rg foo']) {
+    const res = bash(command);
+    assert.strictEqual(res.status, 2, command);
+    assert.match(res.stderr, /czyta inną rewizję niż recenzowana/, command);
+    assert.ok(res.stderr.includes(`feature: ${snapshot.replace(/\\/g, '/')} (abc1234de)`), res.stderr);
+  }
+  for (const command of ['git status', 'git log --oneline -3', `grep -rn foo "${snapshot}"`, 'grep -c foo src/notes.ts', `cd "${snapshot}" && grep -rn foo .`]) {
+    assert.strictEqual(bash(command).status, 0, command);
+  }
+  // Another session, or a staged review (its snapshot is the project): nothing refused.
+  assert.strictEqual(hook({ session_id: 'other', tool_name: 'Bash', tool_input: { command: 'git grep foo' }, cwd: r.project }, r.env).status, 0);
+  context.targets[0].snapshotDir = r.project.replace(/\\/g, '/');
+  fs.writeFileSync(r.contextPath, JSON.stringify(context));
+  assert.strictEqual(bash('git grep foo').status, 0);
+});
+
+test('assemble-all: every target assembled in turn, then the run\'s summary between its markers', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.part(1), partA());
+  fs.writeFileSync(f.part(2), partB);
+  fs.writeFileSync(f.part(3), answered);
+  Object.assign(f.target, { baseBranch: 'master', baseSource: 'fork' });
+  f.context.runWarnings = ['[feature] Ostrzeżenie kroku 1.'];
+  fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
+  const all = () => spawnSync(process.execPath, [script, `--context=${f.contextPath}`, '--assemble-all'], { encoding: 'utf8' });
+  const r = all();
+  assert.strictEqual(r.status, 0, r.stderr);
+  const summary = r.stdout.slice(r.stdout.indexOf(cp.summaryStart), r.stdout.indexOf(cp.summaryEnd) + cp.summaryEnd.length).split('\n');
+  assert.deepStrictEqual(summary, [
+    cp.summaryStart,
+    `feature: ${f.reportPath}`,
+    '- baza: master (gałąź, z której wyszła)',
+    '- severity: critical=0 high=0 medium=1 low=0 missing-unit-test=0',
+    '- pokrycie: pliki z pełnym przejściem checklisty: 2/2 (w tym z otwartymi tylko dla narzędzia albo działającej aplikacji (component#2): 1).',
+    'Ostrzeżenia kontekstu (Step 1):',
+    '- [feature] Ostrzeżenie kroku 1.',
+    cp.summaryEnd,
+  ]);
+  // Run again, the assembled target is skipped and still named.
+  const again = all();
+  assert.strictEqual(again.status, 0, again.stderr);
+  assert.match(again.stdout, /raport był już złożony/);
+  // A target whose parts fail its check: exit 1, no summary.
+  const g = fixture(t);
+  fs.writeFileSync(g.part(1), partA({ general13: '[x] general#1,#3 — OK' }));
+  const bad = spawnSync(process.execPath, [script, `--context=${g.contextPath}`, '--assemble-all'], { encoding: 'utf8' });
+  assert.strictEqual(bad.status, 1);
+  assert.match(bad.stderr, /Nie złożono: feature/);
+  assert.ok(!bad.stdout.includes(cp.summaryStart));
+});
+
+test('an OK naming a file the reviewed revision adds passes: the snapshot is asked before the checkout', (t) => {
+  const f = fixture(t);
+  const snapshot = path.join(f.dir, 'snapshot');
+  fs.mkdirSync(path.join(snapshot, 'src', 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(snapshot, 'src', 'tests', 'b.spec.ts'), 'x\n');
+  f.context.project = path.join(f.dir, 'checkout');
+  fs.mkdirSync(f.context.project, { recursive: true });
+  const text = partB.replace('[x] general#1 — OK (L1, L4)', '[x] general#1 — OK (tests/b.spec.ts)');
+  has(check(f, 2, text), 'nie wskazuje linii tego pliku, istniejącego pliku');
+  f.target.snapshotDir = snapshot;
+  assert.deepStrictEqual(check(f, 2, text), []);
+});
+
+test('numbers past the end name the file of the window they fit', (t) => {
+  const f = fixture(t);
+  f.target.windows = [{ files: [1, 2] }];
+  const problems = check(f, 2, partB.replace('[x] general#1 — OK (L1, L4)', '[x] general#1 — OK (L1, L14)'));
+  has(problems, 'plik ma 5 linii');
+  has(problems, 'te numery mieści src/a.ts (20 linii) z tego samego okna');
+});
+
+test('gapsOf lists the items left open for a readable file outside the review, and nothing else', (t) => {
+  const f = fixture(t);
+  f.context.project = f.dir;
+  fs.mkdirSync(path.join(f.dir, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(f.dir, 'lib', 'dialog.ts'), 'x\n');
+  const parts = {
+    1: partA({ component2: '[ ] component#2 dialog — NIEZWERYFIKOWANE: poza recenzją: lib/dialog.ts' }),
+    2: partB,
+  };
+  const gaps = cp.gapsOf(f.context, f.target, (k) => parts[k] || null);
+  assert.deepStrictEqual(gaps.map((g) => [g.number, g.open.map((o) => [o.addresses, o.outside])]), [[1, [[['component#2'], 'lib/dialog.ts']]]]);
+  assert.deepStrictEqual(cp.gapsOf(f.context, f.target, (k) => (k === 1 ? partA() : partB)), [], 'an item open for the running application is no gap');
+});
+
+test('hook: a walker of a branch review keeps the shell for the doh scripts only', (t) => {
+  const r = reviewProject(t);
+  const context = JSON.parse(fs.readFileSync(r.contextPath, 'utf8'));
+  context.targets[0].snapshotDir = path.join(r.project, 'snap').split(path.sep).join('/');
+  context.targets[0].branch = 'feature';
+  fs.mkdirSync(context.targets[0].snapshotDir, { recursive: true });
+  fs.writeFileSync(r.contextPath, JSON.stringify(context));
+  const state = path.join(r.env.DOH_REVIEW_STATE_DIR, 'reviewer.json');
+  fs.writeFileSync(state, JSON.stringify({ contextPath: r.contextPath, shown: {}, agents: { walker1: r.workDir } }));
+  const bash = (command, agent) => hook({ session_id: 'reviewer', agent_id: agent, tool_name: 'Bash', tool_input: { command }, cwd: r.project }, r.env);
+  const refused = bash('grep -n "x" src/notes.ts', 'walker1');
+  assert.strictEqual(refused.status, 2);
+  assert.match(refused.stderr, /używa Bash tylko do skryptów doh/);
+  assert.strictEqual(bash(`node "${path.join(__dirname, 'wait-part.cjs').split(path.sep).join('/')}" --help`, 'walker1').status, 0, 'a doh script runs');
+  assert.strictEqual(bash("sed -n '2p' src/a.ts", 'walker1').status, 0, 'a line Read cuts short');
+  assert.strictEqual(bash('grep -n "x" src/notes.ts', 'other-agent').status, 0, 'an agent that read no bundle of the run');
+  assert.strictEqual(bash('grep -n "x" src/notes.ts', undefined).status, 0, 'the conversation itself');
+});
+
+test('a part gets the verdicts the read hook carried from an earlier part of the stack', (t) => {
+  const f = fixture(t);
+  f.target.workDir = path.join(f.branchDir, 'raport.work').split(path.sep).join('/');
+  fs.writeFileSync(`${f.target.workDir}/carried02.json`, JSON.stringify({ lines: { 'general#1': '[x] general#1 — OK (L2; przeniesione z poprzedniej części stosu)' } }));
+  const text = ['<!-- checklist: src/b.ts', '[x] general#2-3 — OK (brak wystąpień)', '-->', '<!-- coverage: src/b.ts 2/3 -->', ''].join('\n');
+  const filled = cp.fillPart(f.context, f.target, f.part(2), text, null);
+  assert.ok(filled.text.includes('[x] general#1 — OK (L2; przeniesione z poprzedniej części stosu)'), filled.text);
+  assert.ok(filled.fixes.some((fix) => fix.includes('z poprzedniej części stosu')));
+  assert.deepStrictEqual(check(f, 2, filled.text), []);
 });

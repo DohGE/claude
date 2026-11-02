@@ -49,23 +49,13 @@ small it looks — a changed condition, argument, operator, default, lifecycle h
      snapshot) were not renamed to match; a moved file now sitting in the wrong layer or outside its
      canonical location; an import edge whose direction or form (barrel vs concrete path) now breaks
      the architecture instruction; a reformat that leaves the file against the style rules.
-- The rename pair is `oldPath → path` on the file entry; `oldPath` is there when `status` is `R`
-  and absent otherwise — that pair, not the diff, is what the naming and location checks compare. The
-  diff at `diffPath` is cut from one diff of the whole target, so it shows a rename as `rename from` /
-  `rename to` plus the hunks that really changed; still, "the diff shows the whole file as new" never
-  means "review the whole file as new" when `status` is `R`. A pure rename changes no content at
-  all: `changedLines` is `""` while `status` is `R`, which is a rename, not the deletion-only case
-  above.
+- A renamed file's bundle (`status: R (dawniej …)`) says what its rename pair is and how its diff
+  reads; a bundle that opens with `## Zmiana mechaniczna (wykryta przez skrypt)` is the script's
+  finding that the WHOLE diff is mechanical, and says how to check it.
 - Git only calls a move a rename when the content stayed similar enough; a heavily edited move arrives
   as an added file (`A`) plus a deleted one (`D`). When an added file is recognizably the moved content
   of a file deleted in the same target, treat the unchanged parts as mechanical and review only what
   the move actually changed.
-- A bundle that opens with `## Zmiana mechaniczna (wykryta przez skrypt)` is the script's finding
-  that the WHOLE diff is mechanical - a rename, import lines, formatting, or the words the target's
-  own renames replaced (named there). Check it against the diff: when it holds, the file walks the
-  two questions above and writes the `mechanical` marker; the old words the section lists in the
-  reviewed revision are where question 1 looks first. A changed line the section does not explain
-  is behaviour: walk the checklist as for any other file.
 
 **Behaviour-preserving gate — a review never asks for a functional or visual change.** Every finding
 must be fixable without changing what the working code DOES or how it LOOKS. Drop the finding, at any
@@ -105,7 +95,6 @@ The script has already excluded everything skippable → `target.skipped` (gener
 no exceptions for renames, formatting-only diffs, tests, configs, file size, diff size, or how many files remain — the mechanical-change gate narrows what a renamed or reformatted file may REPORT, never whether it is processed.
 A file whose kind walks only a few items (the catch-all `other` walks one) still gets every item of its plan and the universal points, and a file no kind describes still gets `CLAUDE.md` and the universal points — neither may be skimmed.
 A file whose part is already on disk is finished: skip it and never write it again.
-A refused part of a resumed run waits as a draft (`resume.drafts`): when its file's turn comes, run `node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --promote="<draft>"` first; a pass writes its part, and problems it names are fixed in the draft with Edit (point 4), without walking the file again.
 Before the first file, Read the rulebook notes the brief names (`rulebookNotesPath`): what binds a whole instruction of this run, its preamble.
 The walk opens with the Reads of the first batch, issued as parallel calls in ONE message: its bundles, contents and diffs.
 A walker's window ends with its last part and the one line its brief names; the cross-file pass and the assembly are never a window walker's.
@@ -128,12 +117,20 @@ For each file:
    line numbers: a line lost on the way is a line never reviewed.
    The hook refuses a Bash command that prints a reviewed file, its diff or its bundle; a search
    (`grep`) or a count (`wc`) passes.
+   A walker or cross-file agent of a branch review keeps the shell for the doh scripts
+   (`node "<SKILL_DIR>/scripts/…"`) and the one `sed -n '<N>p'` below only: it searches with the
+   Grep tool, lists with Glob and reads with Read, and its file's diff is `diffPath`, computed
+   against the target's base - never a `git diff` of its own.
+   A path the brief or a `## Dalej` lists as `<path> (Read: offset 1, limit 900; offset 901)` is
+   past what one Read returns: issue each page as its own Read, all in the same message.
    `contentPath` is `null` for a status `D` file and for a binary one — review it from the diff
    alone; `diffPath` is `null` for a status `A` file and in folder mode, where every line is new
    and the content alone is the input.
    The line numbers the Read prints are the numbers every finding, tick and range below uses.
    A file longer than 2,000 lines is read page by page (`offset`/`limit`) up to its last line,
-   never sampled.
+   never sampled - except a data file whose bundle names the ranges to read (`- odczyt treści:`, a
+   kind's `readChanged`, e.g. the base translation file): read exactly those ranges, each with its
+   `offset` and `limit`; the lines the diff left alone are the script's facts' to cover.
    A line the Read cuts short (over 2,000 characters) is read whole with
    `sed -n '<N>p' "<contentPath>"` — the one read from the shell the hook lets through.
    Small files are walked in batches.
@@ -153,7 +150,11 @@ For each file:
    git rejects prints `grep failed …` and exits non-zero - fix the pattern, never read it as
    "nothing exists".
    Use one of them, never a search of the checkout, whenever a rule asks whether something already
-   exists elsewhere in the project.
+   exists elsewhere in the project: the checkout holds whatever is checked out - in a review of
+   stacked branches, another part of the stack. While the review runs, a Grep or Glob of the
+   project's own folders goes to the same path in `snapshotDir` (the hook rewrites its `path`,
+   and refuses a path the reviewed revision lacks), and `git grep`/`git show`/`git diff` or a
+   recursive shell grep of the working tree is refused. `target.revision` is the reviewed commit.
    The searches one file needs do not depend on one another: issue them all as parallel calls in ONE message, because every message is one more request that carries the whole conversation again.
    Never `cd` and never list a folder through Bash (`ls`, `find`): a compound shell command can stop
    at a permission prompt while the walk waits. The Glob tool lists one - e.g. which parts are on
@@ -182,7 +183,22 @@ For each file:
    nothing by themselves. `## Użycia składowych` and `## Spec` are the whole-word searches a usage
    or a test-coverage item would otherwise run: where each public member's name falls, and the
    specs importing the file with their `describe`/`it` cases.
+   `- zamknięte przez skrypt (…): <addresses>` under an instruction's heading lists the items whose
+   subject - each item's own pattern of the constructs it is about - the script found nowhere in
+   the file: they are `OK (brak wystąpień)` with nothing to walk, and the part check writes their
+   line (`OK (brak wystąpień - zamknięte przez skrypt)`) - leave them out of the block. When you do
+   see such an item's subject in the file, walk it and write its line: yours wins.
+   `- <address>: werdykt z <branch> (przeniesione z poprzedniej części stosu) - wpisze go hook`
+   is an item a later part of a stack takes over: the earlier part walked this file, and no line
+   this part changed holds the item's subject, so its verdict stands, its lines moved to this
+   revision. Leave it out of the block like a closed item; the part check writes its line.
+   `- gotowy werdykt (linie dopisze hook, nie przechodzisz): <addresses>` names the items the
+   rulebook answered in advance (below): nothing of theirs is walked or written.
+   Under an item, `dowód OK:` says what its OK cites, and `przekazuje: <addresses>` names items of
+   the plan the item gives part of its subject to: its OK may name such an address next to its
+   own lines, as a remark (`OK (L26, L31; dane testowe: unit-tests#12)`).
    While `target.dedupItems` is true (always, in a run of this version), an item an earlier bundle of the run already showed reaches you as `- <address>: treść jak w paczce <bundle>, przeczytanej wcześniej`: its text is the one under the same address in that bundle, and the lines under it are this file's own.
+   A rule line of `## Zapis części` an earlier bundle showed word for word reads `- zasada zapisu jak w paczce <bundle>`.
    After a compaction every bundle shows its items in full again.
 2. Evaluate the file against every point below, checklist-driven — never holistically. For points
    1 and 2, walk that ticking list top-to-bottom: read an item, check the file's code against that
@@ -227,15 +243,17 @@ For each file:
      coverage report;
    - `poza recenzją: <path>` — the answer lives in a file outside the reviewed code (a base class, a
      module that provides the service), named by its path; the check refuses a path that does not
-     exist, or that is itself reviewed in this target — that one you open and answer from;
+     exist, or that is itself reviewed in this target — that one you open and answer from. A file
+     outside the review that `snapshotDir` holds is readable: open it and answer from it (`OK
+     (<its path>)` when it meets the item) before you leave the item open - what stays open for it
+     goes to an agent that does exactly that before the cross-file pass;
    - `działająca aplikacja: <what>` — only the running app shows it: rendered focus order, a
      message after a real submit, a response from a live server.
    A guess is not among them: look further until the answer is a verdict or one of the three.
    Neither is the project lacking what the item requires ("the project has no i18n", "there is no
    spec"): a requirement nothing satisfies is `NARUSZENIE`, never a reason to leave the item open.
-   **A prepared verdict is written by the check, not by you.** `gotowy werdykt: [ ] <address> — NIEZWERYFIKOWANE: <reason>` under an item of the bundle is the rulebook's own answer for an item no reading of the code settles.
-   Leave its line out of the block: the part check writes it in when it is missing (`check-part: … zapisana po poprawce formy`), and the bundle's skeleton leaves it out for that reason.
-   Only when the code visibly breaks the item, tick it `NARUSZENIE` with its finding; the check refuses an `OK` on it.
+   **A prepared verdict is written by the check, not by you.** The bundle's `gotowy werdykt` line under an instruction names the items the rulebook answers itself, `[ ] <address> — NIEZWERYFIKOWANE: <reason>`, because no reading of the code settles them (a test written first, a green test run); their text is not in the bundle.
+   Leave their lines out of the block: the part check writes them in (`check-part: … zapisana po poprawce formy`), and the bundle's skeleton leaves them out for that reason; the check refuses an `OK` on such an item.
    The cross-file pass does not answer such an item again.
    **The bundle may point at lines, and a verdict answers them.** Under an item of the bundle's
    `## Plan`, the script prints what it found about THIS file for that item, each line naming the
@@ -407,7 +425,7 @@ For each file:
    Earlier parts are never edited, except where a check message asks for it (the merge below, and a duplication's other side in the cross-file pass).
    The next batch is not analyzed before the current batch's parts are written: only the next batch's Reads ride in the same message as those Writes.
    **One message writes one batch.** A part is the end of one file's walk: a batch's parts are the Write calls of one message, one per file in file order, and a file walked alone writes its part alone.
-   The hook refuses a part written less than 2 seconds after the part before it — which is what two parts in one message are — unless both files lie in one range of `target.batches`.
+   A part written less than 2 seconds after the part before it — which is what two parts in one message are — unless both files lie in one range of `target.batches`, lands with a note (`jedna część na odpowiedź`): walk and write the next file in a response of its own.
    **Every part is checked as it is written.** The hook runs `scripts/check-part.cjs` on each Write
    or Edit of a part against the context and the target's facts (`target.factsPath`): the part's
    number, a block covering exactly the plan's items, every verdict's form and evidence, the answer
@@ -419,8 +437,9 @@ For each file:
    pass; the harness refuses an Edit of a file this conversation has not read - and fix exactly
    those lines with Edit. The hook checks every Edit again and writes the part once it passes
    (`check-part: <part> zapisana ze szkicu.`); only when no such note came back, run the `--promote`
-   command the refusal prints. A refusal whose only problem is the 2-second rule needs nothing but
-   that command, in the next message; only a refusal naming no draft means writing the part again.
+   command the refusal prints. A part refused only because an earlier part of the window is missing
+   (`najpierw brakujące wcześniejsze części`) needs nothing: its draft lands by itself once the
+   earlier part does - fix the earlier one. Only a refusal naming no draft means writing the part again.
    A box that contradicts its word, or a NIEZWERYFIKOWANE that lost its colon, the hook puts right
    itself (`check-part: <part> zapisana po poprawce formy`).
    A part can pass with a note, `check-part: <part> zapisana, z uwagą:`, naming two findings with
@@ -495,7 +514,9 @@ For each file:
      - `brak wystąpień` when the rule's subject does not occur in the file at all.
      `brak wystąpień` is a verdict for a PROHIBITION only — for a requirement, a missing subject is
      a finding, never an absence to wave through.
-     Lines and a path are the evidence of ONE item; only `brak wystąpień` closes a range.
+     Lines and a path are the evidence of ONE item; only `brak wystąpień` closes a range - and a
+     path closes a range of an instruction in `checklistPerFile` (`test-coverage#1-6 — OK
+     (tests/a.spec.ts)`), whose items are facets of one requirement one spec meets.
      `<where>` never names another item: `OK (pod general#6)` is no evidence, and an item the code
      breaks is `NARUSZENIE` even when another item's finding already cites the lines (point 3).
    - `[x] … — BRAMKA: <what is absent>` — the instruction's `gate` failed for this file (point 2),
@@ -576,6 +597,7 @@ After the last file of the target, the cross-file pass: `references/cross-file.m
   - 🟤 **Critical** — security vulnerability, data loss/corruption, state leaking between users or requests, runtime crash or broken build on a main path.
   - 🔴 **High** — functional bug or likely regression, memory/subscription leak, race condition, swallowed error on a user-facing path, stale UI (state change without a change-detection notification), a spec that throws or fails as written (it dereferences an input it never sets, compares against a stale snapshot, lacks a provider the code under test injects, hands one stub to several dependencies or a stub without a member the code calls, passes projector arguments in the wrong order) — a broken test, not a weak one — and every duplication finding (code-quality's duplicated-logic and copy-paste-with-a-tweak items), whether jscpd listed it or the review found it.
     Duplication is a finding from its third copy: two copies break only an item that forbids that very repeat (an `endpoints` entry written twice breaks `http-service#9`, at its own severity).
+    In a spec file the rulebook fixes it at 🟡 **Medium** (`severityInSpec`; the bundle's `ważność stała:` says so): a copied test costs maintenance, not behaviour.
     From the third copy on, such a duplication is one finding naming both (`http-service#9; code-quality#1`), and the fixed severity of `code-quality#1` then applies to it.
   - 🟡 **Medium** — performance problem, architecture/layering violation, missing null-safety on a reachable path, accessibility violation, and every other code-quality finding (unnecessary, unused or boilerplate code) — those stay Medium however cosmetic they look; only an inconsistency with the surrounding code (`code-quality#8`) is fixed Low.
   - ⚪ **Low** — readability, naming-convention or style drift with no behavioral impact and not covered by the code-quality instruction.

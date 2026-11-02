@@ -10,12 +10,12 @@ A target with an unanalyzed file is not done, regardless of diff size or session
 
 ## Assembly
 
-Run `target.commands.assemble` (a FIXED IDENTIFIER, like every key of the context JSON) verbatim, in ONE Bash call — the same line every time, never a variant of your own.
-It is `node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --report="<reportPath>" --assemble` (`<contextPath>` is the path Step 1 printed): it checks the parts against the context and only when they pass appends them to `target.reportPath` (which already holds the header), removes the parts, the import ledger and the work folder, and finishes the report with the renderer — the HTML page from the assembled Markdown, or, when `target.htmlReportPath` is null, the Markdown itself — with a code snippet under every finding, read from the revision the review read, except under `target.light`.
-When a part is missing or breaks the format, it exits 1, lists every problem by part file and leaves the parts, the ledger and the work folder on disk.
-Fix each part it names with Edit — the hook checks an Edit of a part as the file it would leave behind, and a refused one waits in a draft as in Step 3 point 4 — and run the same command again.
-Once the check passes, it rewrites the numbers of every coverage marker from the block above it and every severity a fixed one overrides (Step 4), before anything is concatenated.
-Run again after it finished, it says the report is already assembled and changes nothing.
+Once every target's cross-file part is written, run `commands.assembleAll` (a FIXED IDENTIFIER, like every key of the context JSON) verbatim, in ONE Bash call — the same line every time, never a variant of your own.
+It is `node "<SKILL_DIR>/scripts/check-part.cjs" --context="<contextPath>" --assemble-all`: it runs each target's `target.commands.assemble` in turn and, once all of them passed, prints the run's terminal summary (Step 5 below).
+Each target's assembly checks the parts against the context and only when they pass appends them to `target.reportPath` (which already holds the header), removes the parts, the import ledger and the work folder, and finishes the report with the renderer — the HTML page from the assembled Markdown, or, when `target.htmlReportPath` is null, the Markdown itself — with a code snippet under every finding, read from the revision the review read, except under `target.light`.
+When a part is missing or breaks the format, that target's assembly exits 1, lists every problem by part file and leaves its parts, ledger and work folder on disk; the command goes on with the other targets and exits 1 naming the ones it could not assemble.
+Fix each part it names with Edit — the hook checks an Edit of a part as the file it would leave behind, and a refused one waits in a draft as in Step 3 point 4 — and run the same command again: a target already assembled says so and changes nothing.
+Once a target's check passes, it rewrites the numbers of every coverage marker from the block above it and every severity a fixed one overrides (Step 4), folds a finding reported twice into one (the two sides of a `ta sama wada` pair on the same lines; a template's finding and its class's, under items the rulebook pairs), and, on a stack of branches, marks the findings on lines a later part of the stack changes.
 
 When `htmlReportPath` is null (`--only-md` was passed) the Markdown is the report: the renderer renders nothing and, without `--with-checklist`, cuts the checklists out of the Markdown.
 Under `target.light` it also cuts every ⚪ **Low** finding — from the Markdown and the page alike, after the fixed severities are set — so its `severity:` line prints `low=0`.
@@ -25,12 +25,11 @@ A `sprawdzono <checked>/<total>` warning (a `--with-checklist` run only) means t
 That one is the format working as intended; never answer it by going back and ticking an item you did not check.
 Once the check passes it also prints `check-part: pliki z pełnym przejściem checklisty: <full>/<files>`, followed by every file whose walk left an item open with its `<checked>/<total>` — Step 5 takes the coverage from this line, because only a `--with-checklist` report keeps the markers.
 
-## Next
-
-After the assembly of a target that is not the last, the next target starts at Step 3 (SKILL.md): its header and its `target.start` Reads.
-After the last target, Step 5.
-
 ## Step 5 — Terminal summary (Polish)
+
+`commands.assembleAll` prints it, once every target is assembled, between the lines `=== PODSUMOWANIE (Step 5) ===` and `=== KONIEC PODSUMOWANIA ===` (FIXED IDENTIFIERS): print that block as your final message, as it is, and nothing else — it already holds everything below, read off what each assembly printed.
+Written by hand, the summary of a five-target run left two warnings out (2026-10-30).
+Only when you assembled with `target.commands.assemble` alone (an older context without `commands.assembleAll`) write it yourself, by these rules.
 
 After writing all reports print, in Polish: each report path (`target.htmlReportPath`, or `target.reportPath` when it is null) + finding counts per severity exactly as the renderer's `severity:` line prints them (never count them from the report yourself), plus any errors/warnings from Step 1 and any warning the renderer printed.
 Also state the checklist coverage of the target: how many files walked their whole checklist, and — when any did not — every such file with its `<checked>/<total>`, so an unticked item is read as the gap it is instead of disappearing into the report.

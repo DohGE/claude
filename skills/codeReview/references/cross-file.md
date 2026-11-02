@@ -1,6 +1,6 @@
 # codeReview — the cross-file pass
 
-Read together with `target.crossBundlePath`: by the fresh `doh:codereview-walker` the cross-file brief (`target.crossBriefPath`) sends, or by the conversation that walked the target itself, in the message that writes its last file part (the last bundle's `## Dalej` names both, and after a compaction the hook does).
+Read together with `target.crossBundlePath` by the conversation that walked the target itself, in the message that writes its last file part (the last bundle's `## Dalej` names both, and after a compaction the hook does); the fresh `doh:codereview-cross` the cross-file brief (`target.crossBriefPath`) sends carries it in its system prompt.
 This is point 3 of Step 3 (`references/walk.md`), answered once for the whole target.
 
 After the per-file pass, do ONE cross-file pass over the whole diff, written as part `N+1` (`N` = `target.files.length`): its findings sections, one `<!-- questions:` block and, when the rule below asks for it, one `<!-- unverified:` block — no checklist block and no coverage marker.
@@ -45,6 +45,7 @@ A `NARUSZENIE` points at its finding — `path:lines` of this part's finding, or
      Report every other one.
      A target without the list was not scanned (its warning says why), and the other two sources then carry the question alone.
    - A search for what a token scan cannot see: for every exported function, class, pipe, directive, validator, util or constant the diff ADDS, look for an existing equivalent in the reviewed revision with the Grep tool over `target.snapshotDir` (or, for a target without one, with `target.commands.grep`, whose file you Read) — by its name, a synonym and the characteristic expression of its body — in the shared folders first (`shared/`, `utils/`, `common/`, `core/`, or wherever this project keeps them).
+     Never the working tree or a branch name: in a review of stacked branches they hold another part of the stack.
    - What the file parts already report (`## Już zgłoszone w częściach plików`): a duplication a file's walk named is confirmed here against its other copies.
 
    Report every copy the diff adds under the code-quality instruction as 🔴 High, anchored on a line of the copy that the diff changed, and name the other copies (`path:lines`).

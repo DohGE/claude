@@ -58,7 +58,7 @@ function fakeFindPr(prs) {
 test('parseArgs parses the documented flags and refuses anything else', () => {
   assert.deepStrictEqual(
     pc.parseArgs(['--branches=a;b', '--project=/tmp/x']),
-    { branches: 'a;b', project: '/tmp/x', skillDir: '', replay: '' },
+    { branches: 'a;b', project: '/tmp/x', skillDir: '', replay: '', local: null },
   );
   assert.throws(() => pc.parseArgs(['--branch=a']), /Unknown argument/);
   assert.throws(() => pc.parseArgs(['staged']), /Unknown argument/);
@@ -432,4 +432,46 @@ test('--replay reads a recorded review instead of GitHub, for its own branch onl
   const brief = fs.readFileSync(target.commentsPath, 'utf8');
   assert.ok(!brief.includes('meterId'), 'the recording\'s own fields never reach the agent');
   assert.deepStrictEqual(pc.parseArgs(['--replay=r.json']).replay, 'r.json');
+});
+
+test('--local takes the named codeReview findings of each branch instead of the pull request comments', (t) => {
+  const dir = makeRepo(t);
+  const runDir = path.join(dir, '.claude', 'doh', 'codeReview', 'runs', '2026-11-02-15-02-14', 'feat-a');
+  fs.mkdirSync(runDir, { recursive: true });
+  const report = [
+    '# Code Review: feat/a → main | 2026-11-02 15:02',
+    '',
+    '## src/a.ts',
+    '',
+    '🟡 **Medium**',
+    '- **Linia:** 12',
+    '- **Problem:** Zduplikowana logika.',
+    '- **Reguła:** code-quality#1',
+    '- **Expected Result:** Wydziel funkcję.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(runDir, 'raport.md'), report);
+  const render = require('../../codeReview/scripts/render-report.cjs');
+  const id = render.parseReport(report).files[0].findings[0].id;
+  let threadsRead = false;
+  const api = { ...fakeApi({ threads: [thread()] }), reviewThreads: () => { threadsRead = true; return { threads: [thread()] }; } };
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    local: [id, 'ffffffff'],
+    api,
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(X): y', url: 'u', base: 'main' } }),
+  });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(threadsRead, false, 'no comment of the pull request is read');
+  const [target] = result.targets;
+  assert.strictEqual(target.local, true);
+  assert.strictEqual(target.counts.findings, 1);
+  assert.strictEqual(target.commitMessage, 'feat(X): CR');
+  const payload = JSON.parse(fs.readFileSync(target.commentsPath, 'utf8'));
+  assert.deepStrictEqual([payload.threads, payload.conversation, payload.reviews], [[], [], []]);
+  assert.deepStrictEqual(payload.findings.map((f) => [f.id, f.path, f.lines, f.rule, f.expected]), [[id, 'src/a.ts', '12', 'code-quality#1', 'Wydziel funkcję.']]);
+  assert.ok(result.warnings.some((w) => w.includes('ffffffff')), 'an id found nowhere is named');
+  assert.throws(() => pc.parseArgs(['--local=']), /needs the ids/);
+  assert.throws(() => pc.parseArgs(['--local=not-an-id']), /no codeReview finding id/);
 });

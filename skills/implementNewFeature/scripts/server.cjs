@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { usageReader } = require('./usage.cjs');
+const { usageReader, ensureStableRelay } = require('./usage.cjs');
 const { manualCommand, launchOrchestrator } = require('./launch-orchestrator.cjs');
 // The session holds auth.json — the user's real credentials — and SKILL.md asks the
 // orchestrator to write the catch-all .gitignore next to it by hand. Doing it here too
@@ -626,10 +626,14 @@ function createApp(sessionDir, opts = {}) {
   const launcher = opts.launchOrchestrator || null;
   const projectDir = path.resolve(opts.project || process.cwd());
   const readers = new Map();
+  // The status line launcher no plugin update moves (usage.cjs ensureStableRelay), written once
+  // per server, on the first poll that needs it.
+  let stableRelay;
   const readUsage = opts.readUsage || (session => {
     if (!readers.has(session)) {
+      if (stableRelay === undefined) stableRelay = ensureStableRelay();
       // Only the starting session's effort is in this process's environment.
-      readers.set(session, usageReader({ sessionId: session, env: session === starterSession ? process.env : {} }));
+      readers.set(session, usageReader({ sessionId: session, env: session === starterSession ? process.env : {}, launcher: stableRelay }));
     }
     return readers.get(session)();
   });

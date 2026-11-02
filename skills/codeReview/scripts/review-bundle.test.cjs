@@ -111,6 +111,8 @@ test('the bundle lists the plan with every binding under its item, then exports,
   at('- status: M (dawniej app/src/old.ts); zmienione linie: 3-9; pozycji planu: 2');
   at('- treść: w/01-x.ts');
   at('- diff: w/01-x.ts.diff');
+  assert.ok(rb.renderBundle({ file: { path: 'a.ts', status: 'M', changedLines: '1', checklistTotal: 0, contentPath: 'w/a.ts' }, kind: null, instructions, lineCount: 42 })
+    .includes('- treść: w/a.ts (42 linii - numer większy to linia innego pliku albo diffu)'), 'the bundle names the length a line number cannot pass');
   at('- ścieżki w faktach: względem `app/`');
   at('- Widgets are special.');
   const duties = at('## Do odpowiedzi');
@@ -161,14 +163,15 @@ test('the bundle names its part and batch, the fixed severities and item rules, 
   ], 'a partner outside the plan is not named');
   const u = lines.findIndex((line) => line.startsWith('### u rules'));
   assert.deepStrictEqual(lines.slice(u + 1, u + 5), [
+    '- gotowy werdykt (linie dopisze hook, nie przechodzisz): u#2',
     '- u#1: order',
     '  - ta sama wada: q#1',
-    '- u#2: runs',
-    '  - gotowy werdykt: [ ] u#2 — NIEZWERYFIKOWANE: narzędzie: recenzja nie uruchamia testów',
-  ]);
+    '',
+  ], 'a prepared verdict is named, its text is nothing to walk');
+  assert.ok(!text.includes('- u#2: runs'));
   const rules = lines.slice(lines.indexOf('## Zapis części'), lines.indexOf('## Dalej'));
   assert.ok(rules.includes('- OK cytuje linie, z których odczytano werdykt, nigdy 20+ z 40 linii; zakres adresów tylko z `OK (brak wystąpień)` albo `BRAMKA`.'));
-  assert.ok(rules.includes('- q: jedno znalezisko na plik, pole Reguła wymienia każdą złamaną pozycję.'));
+  assert.ok(rules.includes('- q: jedno znalezisko na plik, pole Reguła wymienia każdą złamaną pozycję; OK spełnione w innym pliku może objąć zakres jej pozycji ścieżką tego pliku.'));
   assert.ok(rules.includes('- Znalezisko pod pozycją z ważnością stałą ma tę ważność (przy kilku adresach najwyższą).'));
   assert.ok(rules.includes('- Gotowy werdykt dopisuje hook, gdy linii brak; OK takiej pozycji jest odrzucane.'));
   // The block's skeleton: plan order, the prepared item left to the check, `…` for each verdict.
@@ -260,17 +263,15 @@ test('a mechanical file\'s bundle is short: the gate, the plan\'s addresses and 
 test('the last batch of a window tells its walker to stop and keeps the lines for a reviewer walking alone', () => {
   const nextFiles = [{ bundlePath: 'w/05.bundle.md', contentPath: 'w/05.ts', diffPath: null }];
   assert.deepStrictEqual(rb.renderNext({ nextFiles, window: { first: 3, last: 4 } }), [
-    'Koniec okna (3-4):',
-    '- walker okna: zapisz części tej partii, niczego więcej nie czytaj i odpowiedz jedną linią `WINDOW DONE 3-4`;',
-    '- bez okien (całość prowadzisz sam):',
-    '  Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:',
-    '  - w/05.bundle.md',
-    '  - w/05.ts',
+    'Koniec okna (3-4): walker okna zapisuje części tej partii i odpowiada jedną linią `WINDOW DONE 3-4`, niczego więcej nie czytając.',
+    'Rozmowa, która przechodzi cel sama: Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:',
+    '- w/05.bundle.md',
+    '- w/05.ts',
   ]);
   const last = rb.renderNext({ crossBundlePath: 'w/cross-file.bundle.md', crossPartPath: 'r/raport.part06.md', window: { first: 9, last: 9 } });
-  assert.strictEqual(last[0], 'Koniec okna (9):');
-  assert.ok(last[1].endsWith('`WINDOW DONE 9`;'), 'a window of one file names that file');
-  assert.ok(last.includes('  - w/cross-file.bundle.md'), 'the cross-file pass stays the alone reviewer\'s next step');
+  assert.ok(last[0].startsWith('Koniec okna (9): '));
+  assert.ok(last[0].includes('`WINDOW DONE 9`'), 'a window of one file names that file');
+  assert.ok(last.includes('- w/cross-file.bundle.md'), 'the cross-file pass stays the alone reviewer\'s next step');
 });
 
 test('a window brief names the rules to read, the target settings, every batch with its parts and Reads, and the reply', () => {
@@ -345,7 +346,7 @@ test('rulesOf hands check-part the fixed severities, the sameAs pairs and the pr
     ['u', instruction('u', ['c', 'd'], { 1: { sameAs: ['q#1'] }, 2: { unverified: 'narzędzie: x' } })],
   ]);
   const rules = rb.rulesOf(instructions);
-  assert.deepStrictEqual(rules, { severity: { q: 'medium', 'q#1': 'high' }, sameAs: { 'q#1': ['u#1'], 'u#1': ['q#1'] }, prepared: { 'u#2': 'narzędzie: x' }, noSpec: [] });
+  assert.deepStrictEqual(rules, { severity: { q: 'medium', 'q#1': 'high' }, sameAs: { 'q#1': ['u#1'], 'u#1': ['q#1'] }, prepared: { 'u#2': 'narzędzie: x' }, noSpec: [], handoff: {}, companion: {}, severityInSpec: {} });
   assert.deepStrictEqual(rb.factsDocument({ files: {}, rules }).rules, rules);
   assert.ok(!('rules' in rb.factsDocument({ files: {} })));
 });
@@ -474,9 +475,132 @@ test('a batch holds one walker setting', () => {
 
 test('the cross-file brief sends a fresh agent to the pass, never to the assembly', () => {
   const text = rb.renderCrossBrief({ target: { reportPath: 'r/raport.md', commands: { grep: 'g' } }, crossBundlePath: 'w/cross-file.bundle.md', crossPartPath: 'r/raport.part04.md', closingPartPath: 'r/raport.part05.md' });
-  assert.ok(text.includes('Read in ONE message: w/cross-file.bundle.md and '));
+  assert.ok(text.includes('1. Read w/cross-file.bundle.md. The rules of the pass are in your system prompt, the `doh:codereview-cross` definition'));
+  assert.ok(text.includes('references/cross-file.md and ') && text.includes('in the same message'), 'an agent without them reads the references');
   assert.ok(text.includes(`\`${rb.questionsOpen}\` block`), 'the questions block is named');
   assert.ok(text.includes('r/raport.part04.md in one Write, and r/raport.part05.md when the target found nothing'));
   assert.ok(text.includes('The assembly is not yours') && text.includes('`CROSS DONE`') && text.includes('`CROSS STOPPED: <reason>`'));
   assert.deepStrictEqual(JSON.parse(text.slice(text.indexOf('```json') + 7, text.lastIndexOf('```'))), { reportPath: 'r/raport.md', commands: { grep: 'g' } });
+});
+
+test('an item whose subject the file lacks is closed: a line under its heading, out of the skeleton, in the bound facts', () => {
+  const instructions = new Map([
+    ['a11y', instruction('a11y', ['Alt texts.', 'Labels.', 'Order.'], { 1: { subject: ['<img'] }, 2: { subject: ['<input'], probes: [] }, 3: { subject: ['<img'], unverified: 'działająca aplikacja: fokus' } })],
+    ['gen', instruction('gen', ['Names.'], { 1: { subject: ['<img'], secondQuestion: 'Which names?' } })],
+  ]);
+  const plan = [{ id: 'a11y', numbers: [1, 2, 3] }, { id: 'gen', numbers: [1] }];
+  const text = '<input [x]="y" />\n';
+  const bound = rb.bindFile({ plan, instructions, filePath: 'src/x.component.html', text });
+  // An item with a second question, or a prepared verdict, stays the walker's.
+  assert.deepStrictEqual(bound.closed, ['a11y#1']);
+  assert.strictEqual(rb.bindFile({ plan, instructions, filePath: 'src/x.component.html', text: null }).closed, undefined, 'no text, nothing closed');
+  const file = { path: 'src/x.component.html', status: 'A', changedLines: null, checklistTotal: 4, contentPath: 'w/x.html', diffPath: null };
+  const bundle = rb.renderBundle({ file, kind: { name: 'template', role: 'Template.', notes: [], plan }, instructions, bound, partPath: 'r/raport.part01.md' });
+  assert.ok(bundle.includes('pozycji planu: 4 (1 zamknął skrypt: przedmiotu brak w pliku)'), bundle);
+  assert.ok(bundle.includes('- zamknięte przez skrypt (przedmiotu brak w pliku; linie dopisze hook): a11y#1'));
+  assert.ok(!bundle.includes('- a11y#1: Alt texts.'), 'its text is not read');
+  assert.ok(bundle.includes('- a11y#2: Labels.'));
+  assert.ok(!/\[x\] a11y#1\b/.test(bundle.slice(bundle.indexOf('<!-- checklist:'))), 'the skeleton leaves it out');
+  assert.ok(bundle.includes(`OK (${rb.closedEvidence})`), 'the write rules say who writes it');
+});
+
+test('an item says what its OK cites, what it hands off, and its severity in a spec file', () => {
+  const instructions = new Map([
+    ['cq', instruction('cq', ['No copies.'], { 1: { okEvidence: 'pierwsza linia każdego bloku', handoff: ['ut#1', 'zz#9'], severity: 'high', severityInSpec: 'medium' } })],
+    ['ut', instruction('ut', ['Test data once.'])],
+  ]);
+  const plan = [{ id: 'cq', numbers: [1] }, { id: 'ut', numbers: [1] }];
+  const render = (filePath) => rb.renderBundle({ file: { path: filePath, status: 'A', changedLines: null, checklistTotal: 2 }, kind: { name: 'k', role: 'K.', notes: [], plan }, instructions });
+  const spec = render('src/a.spec.ts');
+  assert.ok(spec.includes('  - ważność stała: 🟡 **Medium**'), spec);
+  assert.ok(spec.includes('  - dowód OK: pierwsza linia każdego bloku'));
+  assert.ok(spec.includes('  - przekazuje: ut#1 - OK tej pozycji może wskazać ten adres'), 'only an address of this plan');
+  assert.ok(!spec.includes('zz#9'));
+  assert.ok(render('src/a.ts').includes('  - ważność stała: 🔴 **High**'), 'outside a spec its own severity');
+  assert.strictEqual(rb.itemSeverity({ severity: 'high', severityInSpec: 'medium' }, true), 'medium');
+  assert.strictEqual(rb.itemSeverity({ severity: 'high' }, true), 'high');
+});
+
+test('the Spec section lists the file\'s own spec with its cases and other specs by name only', () => {
+  const cases = (n) => Array.from({ length: n }, (_, i) => ({ kind: 'it', line: i + 1, title: `case ${i + 1}` }));
+  const spec = (p, n) => ({ path: p, cases: cases(n) });
+  const own = rb.renderSpecs([spec('src/a/tests/a.enum.spec.ts', 2), ...Array.from({ length: 12 }, (_, i) => spec(`src/c${i}.spec.ts`, 30))], '', 'src/a/a.enum.ts');
+  assert.strictEqual(own.length, 2);
+  assert.ok(own[0].startsWith('- src/a/tests/a.enum.spec.ts: it L1 "case 1", it L2 "case 2"'));
+  assert.ok(own[1].startsWith('- inne spec importujące ten plik, bez przypadków (12): src/c0.spec.ts (30)'));
+  assert.ok(own[1].endsWith('(+4)'), own[1]);
+  // A file without a spec of its own shows the cases of the one or two specs that test it.
+  const borrowed = rb.renderSpecs([spec('src/b.spec.ts', 3)], '', 'src/a.ts');
+  assert.deepStrictEqual(borrowed, ['- src/b.spec.ts: it L1 "case 1", it L2 "case 2", it L3 "case 3"']);
+  assert.deepStrictEqual(rb.renderSpecs([], '', 'src/a.ts'), ['- żaden spec nie importuje tego pliku']);
+});
+
+test('a data file is read in the ranges its diff touched, and owes answers only to the lines it reads', () => {
+  assert.deepStrictEqual(rb.readRangesOf('20-21, 30', 300, 6), [[14, 36]]);
+  assert.deepStrictEqual(rb.readRangesOf('20, 200', 300, 6), [[14, 26], [194, 206]]);
+  assert.strictEqual(rb.readRangesOf('2-90', 100, 6), null, 'most of the file is the whole file');
+  assert.strictEqual(rb.readRangesOf('', 100), null);
+  assert.strictEqual(rb.textOfRanges('a\nb\nc\nd\ne', [[2, 3], [5, 5]]), 'b\nc\ne');
+  const file = { path: 'i18n/en.json', bundlePath: 'w/1.bundle.md', contentPath: 'w/1-en.json', diffPath: 'w/1.diff', readRanges: [[14, 36]] };
+  assert.deepStrictEqual(rb.readsOf([file]), ['w/1.bundle.md', 'w/1-en.json (Read: offset 14, limit 23)', 'w/1.diff']);
+  const bundle = rb.renderBundle({ file: { ...file, status: 'M', changedLines: '20-21, 30', checklistTotal: 0 }, kind: null, instructions: new Map() });
+  assert.ok(bundle.includes('- odczyt treści: plik danych - tylko zakresy L14-36 (Read z offset i limit: offset 14, limit 23)'), bundle);
+  const bound = {
+    items: {
+      'i#2': { strong: [{ kind: 'i18n-duplicate-value', lines: [3, 20], text: 'ta sama fraza: "A" - a (L3), b (L5); "B" - c (L20), d (L21).' }] },
+      'i#3': { probes: [{ line: 100, text: 'p' }] },
+    },
+    info: [{ kind: 'x', lines: [200], text: 'far' }],
+  };
+  assert.deepStrictEqual(rb.narrowBinding(bound, [[14, 36]]), {
+    items: { 'i#2': { strong: [{ kind: 'i18n-duplicate-value', lines: [20], text: 'ta sama fraza: "B" - c (L20), d (L21).' }] } },
+    info: [],
+  });
+});
+
+test('the names a diff removed the declaration of are listed with the places the revision still uses them', () => {
+  const file = { path: 'src/a.enum.ts', status: 'M', changedLines: '1', checklistTotal: 0 };
+  const bundle = rb.renderBundle({ file, kind: null, instructions: new Map(), removed: [
+    { name: 'TapeMediaType', total: 0, hits: [] },
+    { name: 'OldThing', total: 2, hits: [{ path: 'src/b.ts', line: 4 }, { path: 'src/c.ts', line: 9 }] },
+  ] });
+  assert.ok(bundle.includes('## Usunięte deklaracje i ich użycia'));
+  assert.ok(bundle.includes('- `TapeMediaType`: nigdzie - żadne użycie nie zostało'));
+  assert.ok(bundle.includes('- `OldThing`: 2 miejsc(a) - src/b.ts:4, src/c.ts:9'), bundle);
+  // A renamed file's bundle says how its rename reads.
+  const renamed = rb.renderBundle({ file: { path: 'src/b.ts', oldPath: 'src/old-b.ts', status: 'R', changedLines: '', checklistTotal: 0 }, kind: null, instructions: new Map() });
+  assert.ok(renamed.includes('- zmiana nazwy: nazwę i miejsce porównujesz parą `src/old-b.ts → src/b.ts`'), renamed);
+  assert.ok(renamed.includes('sama zmiana nazwy, nie usunięcie treści'));
+});
+
+test('a text past one Read is cut into pages, the last one open to the end', () => {
+  assert.strictEqual(rb.pagesOf('short\ntext\n'), null);
+  const line = 'x'.repeat(992);
+  const text = `${Array.from({ length: 120 }, () => line).join('\n')}\n`;
+  const pages = rb.pagesOf(text);
+  assert.deepStrictEqual(pages, [[1, 45], [46, 90], [91, null]], '1,000 counted characters a line, 45 lines a page');
+  assert.deepStrictEqual(rb.pagesOf(Array.from({ length: 4000 }, () => 'a').join('\n')).map((p) => p[0]), [1, 1801, 3601], 'and no page past 1,800 lines');
+  const reads = rb.readsOf([{ bundlePath: 'w/01.bundle.md', bundlePages: pages, contentPath: 'w/01.ts', contentPages: [[1, 10], [11, null]], diffPath: 'w/01.diff' }]);
+  assert.deepStrictEqual(reads, [
+    'w/01.bundle.md (Read: offset 1, limit 45; offset 46, limit 45; offset 91)',
+    'w/01.ts (Read: offset 1, limit 10; offset 11)',
+    'w/01.diff',
+  ]);
+});
+
+test('the cross bundle keeps its live section last, a page of its own when the rest is long', () => {
+  const head = ['# Przejście międzyplikowe', ...Array.from({ length: 60 }, (_, i) => `- fakt ${i} ${'y'.repeat(900)}`), '## Zapis części'];
+  const text = [...head, rb.reportedStart, '- jak wyżej', rb.reportedEnd, ''].join('\n');
+  const pages = rb.crossPagesOf(text);
+  const live = head.length + 1;
+  assert.deepStrictEqual(pages[pages.length - 1], [live, null], 'the live section from its marker to the end');
+  assert.strictEqual(pages[pages.length - 2][1], live - 1);
+  assert.strictEqual(rb.crossPagesOf(['# x', rb.reportedStart, rb.reportedEnd].join('\n')), null, 'a short bundle is one Read');
+  assert.match(rb.renderCrossBrief({ target: {}, crossBundlePath: 'w/cross.md', crossPartPath: 'p.md', crossPages: pages }), /Read w\/cross\.md in \d pages, one Read each, all in ONE message \(offset 1, limit/);
+});
+
+test('the gaps brief runs the script that lists the open items and says how to settle them', () => {
+  const text = rb.renderGapsBrief({ target: { reportPath: 'r/raport.md', workDir: 'r/raport.work' } });
+  assert.ok(text.includes('check-part.cjs" --report="r/raport.md" --gaps'));
+  assert.ok(text.includes(rb.gapsReplies.none) && text.includes(rb.gapsReplies.done) && text.includes(rb.gapsReplies.stopped));
 });

@@ -184,7 +184,16 @@ function rulebookFilesUnder(dir) {
 // `sameAs` - items one defect breaks together, reported as ONE finding naming both;
 // `unverified` - the prepared NIEZWERYFIKOWANE reason of an item no review can check
 // from the files (the test order, a green spec run); `noSpec` - the item says its file has
-// no spec at all, so its finding contradicts test-coverage findings on that file.
+// no spec at all, so its finding contradicts test-coverage findings on that file;
+// `subject` - one regular expression or a list (case-insensitive) finding the construct the item
+// is about: a file none of them matches has nothing the item can bite on, and the script closes
+// it as `OK (brak wystąpień)` (subjectAbsent) - only for an item whose subject's absence IS
+// compliance; `handoff` - items a clean verdict of this one may name, because the item gives
+// that part of its subject to them (code-quality#1 hands test data to unit-tests#12);
+// `companion` - items of a template's class file whose finding on the same names is this
+// template item's defect seen from the class (check-part.cjs foldFindings joins the two);
+// `okEvidence` - what an OK of the item cites, printed under it in the bundle;
+// `severityInSpec` - the fixed severity of its findings in a spec file, over `severity`.
 function readItemExtras(item, address, where, warnings) {
   const extras = {};
   if (item.facts !== undefined) {
@@ -237,7 +246,62 @@ function readItemExtras(item, address, where, warnings) {
     if (item.noSpec === true) extras.noSpec = true;
     else warnings.push(`${where}: ${address} "noSpec" ${JSON.stringify(item.noSpec)} is not true - ignored.`);
   }
+  if (item.subject !== undefined) {
+    const list = [].concat(item.subject);
+    const bad = list.filter((pattern) => {
+      if (typeof pattern !== 'string' || pattern.trim() === '') return true;
+      try {
+        new RegExp(pattern, 'iu');
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    if (list.length === 0 || bad.length > 0) warnings.push(`${where}: ${address} "subject" ${JSON.stringify(list.length ? bad : item.subject)} is not a regular expression - ignored, the walker walks the item.`);
+    else extras.subject = list;
+  }
+  if (item.handoff !== undefined) {
+    const targets = Array.isArray(item.handoff) ? item.handoff : [];
+    const bad = targets.filter((target) => typeof target !== 'string' || !reItemId.test(target) || target === address);
+    if (!Array.isArray(item.handoff) || bad.length > 0) {
+      warnings.push(`${where}: ${address} "handoff" ${JSON.stringify(Array.isArray(item.handoff) ? bad : item.handoff)} names no other item address - ignored.`);
+    }
+    const good = [...new Set(targets.filter((target) => !bad.includes(target)))];
+    if (good.length > 0) extras.handoff = good;
+  }
+  if (item.companion !== undefined) {
+    const targets = Array.isArray(item.companion) ? item.companion : [];
+    const bad = targets.filter((target) => typeof target !== 'string' || !reItemId.test(target) || target === address);
+    if (!Array.isArray(item.companion) || bad.length > 0) {
+      warnings.push(`${where}: ${address} "companion" ${JSON.stringify(Array.isArray(item.companion) ? bad : item.companion)} names no other item address - ignored.`);
+    }
+    const good = [...new Set(targets.filter((target) => !bad.includes(target)))];
+    if (good.length > 0) extras.companion = good;
+  }
+  if (item.okEvidence !== undefined) {
+    if (typeof item.okEvidence === 'string' && item.okEvidence.trim() !== '') extras.okEvidence = item.okEvidence.trim();
+    else warnings.push(`${where}: ${address} "okEvidence" is not a text - ignored.`);
+  }
+  if (item.severityInSpec !== undefined) {
+    if (severityLevels.includes(item.severityInSpec)) extras.severityInSpec = item.severityInSpec;
+    else warnings.push(`${where}: ${address} "severityInSpec" ${JSON.stringify(item.severityInSpec)} is not one of ${severityLevels.join(', ')} - ignored.`);
+  }
   return Object.keys(extras).length > 0 ? extras : null;
+}
+
+// A spec file: what `severityInSpec` applies to.
+const reSpecFile = /\.(?:spec|test)\.[cm]?[jt]sx?$/i;
+
+// Whether an item's `subject` finds nothing in `text`, the file's whole reviewed content: true only
+// for an item that declares one and a file with content to search (a deleted or binary file has
+// none, and keeps the item for the walker).
+const subjectCache = new Map();
+function subjectAbsent(extra, text) {
+  if (!extra || !extra.subject || typeof text !== 'string') return false;
+  return !extra.subject.some((pattern) => {
+    if (!subjectCache.has(pattern)) subjectCache.set(pattern, new RegExp(pattern, 'iu'));
+    return subjectCache.get(pattern).test(text);
+  });
 }
 
 // `appliesTo`: path patterns in the kinds' own grammar, matched against the whole path;
@@ -528,7 +592,7 @@ function absorbInstruction(defs, instruction, where, warnings) {
     } else if (def.items.get(n) !== text) {
       warnings.push(`${where}: ${instruction.id}#${n} differs from ${def.from} - the one in ${def.from} is kept.`);
     } else if (JSON.stringify(def.extras.get(n) || null) !== JSON.stringify(extra)) {
-      warnings.push(`${where}: ${instruction.id}#${n} extras (facts, probe, secondQuestion, answer, severity, sameAs, unverified, noSpec) differ from ${def.from} - the ones in ${def.from} are kept.`);
+      warnings.push(`${where}: ${instruction.id}#${n} extras (facts, probe, secondQuestion, answer, severity, sameAs, unverified, noSpec, subject, handoff, companion, okEvidence, severityInSpec) differ from ${def.from} - the ones in ${def.from} are kept.`);
     }
   }
 }
@@ -605,6 +669,10 @@ function loadRulebook(dirs, { localDir = null } = {}) {
         warnings.push(`${where}: kind "${raw.kind}" replaces the skill's kind of the same name and names fact kinds this doh version does not have - it looks like a copy of an older version's kind. Delete it (a project rule that only adds to every kind belongs in .claude/doh/local/*.md) or copy the current one.`);
       }
       const walker = raw.walker === undefined && replaced ? replaced.walker : readWalker(raw.walker, where, warnings);
+      // `readChanged`: a data file (the base translation file) whose walk reads the lines its diff
+      // changed, with a margin, instead of the whole file (review-bundle.cjs readRangesOf).
+      if (raw.readChanged !== undefined && typeof raw.readChanged !== 'boolean') warnings.push(`${where}: kind "${raw.kind}" readChanged ${JSON.stringify(raw.readChanged)} is not true or false - ignored.`);
+      const readChanged = raw.readChanged === undefined && replaced ? !!replaced.readChanged : raw.readChanged === true;
       kindsByName.set(raw.kind, {
         name: raw.kind,
         pattern: raw.pattern,
@@ -615,6 +683,7 @@ function loadRulebook(dirs, { localDir = null } = {}) {
         plan,
         itemCount,
         walker,
+        readChanged,
         file,
         layer,
       });
@@ -695,6 +764,13 @@ function loadRulebook(dirs, { localDir = null } = {}) {
         }
         const back = other.extras.get(Number(otherN));
         if (!back || !(back.sameAs || []).includes(`${id}#${n}`)) warnings.push(`${id}#${n} "sameAs" names ${target}, which does not name it back.`);
+      }
+      for (const field of ['handoff', 'companion']) {
+        for (const target of extra[field] || []) {
+          const [, otherId, otherN] = target.match(reItemId);
+          const other = instructions.get(otherId);
+          if (!other || !other.items.has(Number(otherN))) warnings.push(`${id}#${n} "${field}" names ${target}, which no kind carries.`);
+        }
       }
     }
   }
@@ -819,5 +895,5 @@ function renderNumbered(instruction, numbers) {
 module.exports = {
   reInstructionId, formatItemSpec, expandAlternations, compilePattern, loadRulebook, matchKind, renderNumbered,
   severityLevels, severityRank, unverifiedReasons, fixedSeverity, lightRulebook,
-  contentGates, walkerEfforts, loadLocalInstructions, parseLocalMarkdown, appliesTo, planOf,
+  contentGates, walkerEfforts, loadLocalInstructions, parseLocalMarkdown, appliesTo, planOf, subjectAbsent, reSpecFile,
 };

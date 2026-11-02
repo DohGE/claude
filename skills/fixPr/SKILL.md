@@ -1,7 +1,7 @@
 ---
 name: fixPr
-description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title
-argument-hint: "<branch>[;<branch>…] [--dry-run] [--no-push] [--keep-worktree] [--project=<path>]"
+description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title, rebased onto the base; with --local=<ids> it fixes those findings of the branch's doh codeReview reports instead of the pull request comments
+argument-hint: "<branch>[;<branch>…] [--local=<id>[,<id>…]] [--dry-run] [--no-push] [--keep-worktree] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -92,6 +92,13 @@ Without that tool, re-read the file or re-run the command with narrower output.
   ids the agent reported as `fixed`. Resolving anything else tells every reviewer on the pull request
   that their comment was addressed when it was not.
 - One branch failing never stops the others.
+- The agent ends its work in a fixed order: it fixes the comments, checks every one of them again
+  against the final code and Greps the uses of everything it changed, reviews its own staged change
+  with `/doh:codeReview staged` and applies the findings that leave behaviour as it is, brings the
+  gate green, commits, rebases the commit onto `origin/<pr.base>` (a conflict or a red gate after the
+  rebase → it stays un-rebased) and pushes - with `--force-with-lease` pinned to the remote state it
+  started from when the rebase rewrote the branch. That rebase and that lease are the agent's only;
+  you never rebase, reset or push yourself.
 
 ## Step 1 — Parse the arguments
 
@@ -105,6 +112,12 @@ Without that tool, re-read the file or re-run the command with narrower output.
    - `--no-push` → the agent commits but does not push. Threads are then NOT resolved either: a fix
      nobody can see on GitHub is not an addressed comment.
    - `--keep-worktree` → leave every worktree in place after the run.
+   - `--local=<id>[,<id>…]` → `LOCAL=<ids>`: the work is the findings of the doh codeReview reports
+     with those ids (the 8 hex characters a finding shows on the report page), looked up in each
+     named branch's reports, newest run first, instead of the pull request's comments. Everything
+     else stays as it is: the pull request still names the base, the commit message and the push, and
+     its gate is brought green. A `--local` with no id → stop and say, in Polish, that it needs the
+     ids (`/doh:fixPr feature/a --local=da3d32cd,b4309764`).
 3. Everything REMAINING is the branch list, verbatim. The collector splits it on `,` and `;`.
    No arguments at all → stop and say, in Polish, that the skill needs at least one branch name
    (`/doh:fixPr feature/a;feature/b`). Never fall back to the current branch: a run that
@@ -114,7 +127,11 @@ Without that tool, re-read the file or re-run the command with narrower output.
 
 Run (Bash tool):
 
-    node "<SKILL_DIR>/scripts/pr-comments.cjs" --branches="<arguments verbatim>" --project="<PROJECT>"
+    node "<SKILL_DIR>/scripts/pr-comments.cjs" --branches="<arguments verbatim>" --project="<PROJECT>" [--local="<LOCAL>"]
+
+With `--local` it reads no comment of the pull request: each target's `commentsPath` holds the
+matched `findings[]`, the target carries `local: true` and `counts.findings`, and a warning names
+every id no report of the named branches holds.
 
 Parse the JSON from stdout:
 
@@ -125,13 +142,14 @@ Parse the JSON from stdout:
 - `targets` empty → stop here, after reporting. Every branch was dropped by an error.
 
 Each target carries: `branch`, `pr` (`number`, `title`, `url`, `base`), `commitMessage`,
-`commitPrefix`, `commentsPath`, `reportPath`, `promptPath`, `checksDir`, `worktree`, and `counts`
-(`openThreads`, `resolvedThreads`, `outdatedThreads`, `conversation`, `reviews`, `candidates`). Keep
+`commitPrefix`, `commentsPath`, `reportPath`, `promptPath`, `checksDir`, `worktree`, `local` (with `--local`), and `counts`
+(`openThreads`, `resolvedThreads`, `outdatedThreads`, `conversation`, `reviews`, `candidates`, and
+`findings` under `--local`). Keep
 exactly those; the comment bodies stay in the file.
 
 Tell the user, in Polish, what was found per branch — the pull request number and title, how many
 threads are open, how many were already resolved and skipped, how many conversation comments and
-review summaries there are. `candidates: 0` is reported as "no open comments; this branch runs for its
+review summaries there are — under `--local`, how many of the named findings each branch's reports held. `candidates: 0` is reported as "no open comments; this branch runs for its
 checks only", never as a skip.
 
 **`--dry-run` stops here**, after that listing. It stays comment-only on purpose: reporting on the
@@ -171,12 +189,13 @@ price. One branch → one spawn, nothing to split.
 
 ### 4a — Render the brief
 
-    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language>
+    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=BASE=<pr.base> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language>
 
 | Value | Where it comes from |
 |---|---|
 | `ROOT` | the target's `worktree` |
 | `BRANCH`, `PR_NUMBER`, `PR_URL` | from the target |
+| `BASE` | the target's `pr.base`: the branch the agent rebases its commit onto |
 | `COMMENTS`, `REPORT`, `CHECKS_DIR` | the target's `commentsPath`, `reportPath` and `checksDir` |
 | `COMMIT_MESSAGE`, `COMMIT_PREFIX` | the target's `commitMessage` and `commitPrefix`, verbatim — never re-derive either yourself. The agent picks between them: the `CR` message when it fixed a comment, the prefix plus `Fix <labels>` when it only repaired checks. |
 | `PROJECT`, `SKILL_DIR` | the values from Step 1 |
@@ -225,6 +244,7 @@ On `{"type":"result", …}`:
 
        node "<SKILL_DIR>/scripts/resolve-threads.cjs" --project="<PROJECT>" --threads="<id,id,…>" --comments="<commentsPath>" --root="<worktree>" --commit="<commit>"
 
+   A `--local` target has no thread to resolve: skip this point.
    It resolves only the threads whose file the commit changes. Report `unverified[]` in Polish: the
    agent called those threads fixed, but its commit does not touch their files, so they stay open.
    Report `failed[]` entries in Polish — usually a token that may not resolve other people's threads.
@@ -250,8 +270,11 @@ agent's report and the path of the worktree the user can go and inspect.
 After every branch has landed, print one summary, in Polish, and nothing else:
 
 - one row per branch: pull request number and title, the agent's `commitMessage` and the sha (or why
-  no commit was made), whether it was pushed, how many comments were fixed / rejected / left without
+  no commit was made), whether it was rebased onto the base (`rebased`, or why not), whether it was pushed, how many comments were fixed / rejected / left without
   action, and how many threads were resolved on GitHub;
+- under `--local`, which finding ids were fixed (`fixedFindingIds`) and which were not;
+- what the agent's `/doh:codeReview staged` found: the report path (`reviewReport`), how many findings it
+  fixed and how many it left, with the ground of each left one from the report the agent wrote;
 - for every REJECTED comment, its one-line ground — this is the part the user has to act on, and it
   exists nowhere else in their terminal;
 - the gate per branch: which commands the agent repaired (`checksFixed`), which passed, which were
@@ -271,7 +294,7 @@ the user has not been told about yet.
 | "One branch, one comment — I will just fix it here" | The fix happens in a worktree, in a background agent, always. A fix made in the user's own checkout is a change they did not ask for in a tree they were using. |
 | "Let me read the comments to see what we are dealing with" | You never read `commentsPath`. The counts in `targets[]` are what you report; the bodies are the agent's job. |
 | "The branch is checked out in the main worktree, I will just use it" | That is the user's working tree. The refusal names the branch and the checkout holding it; report it and move on. |
-| "The push was rejected, I will rebase and retry" | Every state that cannot fast-forward was refused before the agent started, so a rejection means the remote moved during the run. Leave the commit local and say so. |
+| "The push was rejected, I will rebase and retry" | The agent already rebased once, onto the base, and pushed with a lease pinned to where the remote stood when it started. A rejection means somebody pushed during the run: a second rebase or a bare force would throw their work away. Leave the commit local and say so. |
 | "The thread is obviously handled, resolve it too" | Only ids the agent returned in `fixedThreadIds`, and only after a push. Everything else is a public claim you cannot back. |
 | "The gate failed but the fixes look right" | A red gate means no commit. The worktree stays for the user to inspect — that is the outcome, not a problem to route around. |
 | "This branch has no open comments, there is nothing to do" | A run is responsible for the whole pull request. A branch with every comment resolved and a red build is precisely the one the user wants finished; it gets a worktree and an agent like any other. |

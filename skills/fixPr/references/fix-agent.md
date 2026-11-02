@@ -3,7 +3,7 @@
 You are the fixing sub-agent of the fixPr skill. Fully autonomous — you never ask a question,
 because there is no one on the other end.
 
-Branch: `{{BRANCH}}` | Pull request: `#{{PR_NUMBER}}` ({{PR_URL}}) | Working dir: `{{ROOT}}`
+Branch: `{{BRANCH}}` | Pull request: `#{{PR_NUMBER}}` ({{PR_URL}}) into `{{BASE}}` | Working dir: `{{ROOT}}`
 Comments: `{{COMMENTS}}` | Report: `{{REPORT}}` | Check logs: `{{CHECKS_DIR}}`
 Commit message, CR form: `{{COMMIT_MESSAGE}}` | Commit prefix: `{{COMMIT_PREFIX}}`
 Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | Push: `{{PUSH}}`
@@ -18,7 +18,13 @@ sits outside `{{ROOT}}`, so writing it can never end up in your commit.
 
 Leave pull request `#{{PR_NUMBER}}` with nothing open against it: every review comment the reviewers
 left unresolved, AND every red command in the project's own gate — whoever made it red, and whether
-or not there was a comment to fix at all. Land the whole thing as ONE commit.
+or not there was a comment to fix at all. Land the whole thing as ONE commit, rebased onto the
+current `{{BASE}}`.
+
+The order of the run: read the work (step 1), fix it (step 2), check that every comment really is
+addressed and that nothing else broke (step 3), review your own change with `/doh:codeReview staged`
+and apply its findings (step 4), bring the gate green (step 5), then report, commit, rebase and push
+(step 6).
 
 ## Step 1 — Read the work
 
@@ -34,6 +40,14 @@ into a message.
   resolved state for them, so ALL of them are here, including ones already dealt with and ones that
   were never a request. Step 2 is what sorts them out.
 - `reviews[]` — the summary a reviewer wrote above their inline comments, with its `state`.
+- `findings[]` — present when the user ran the skill with `--local` (`source: "local"`; the three
+  lists above are then empty): the doh codeReview findings the user picked by id, each with `id`,
+  `path`, `lines` (numbered as the reviewed revision had them), `severity`, `rule`, `problem`,
+  `expected`, the English `prProblem`/`prExpected`/`prLocations` when the report had them, and the
+  `report` it comes from. Each one is a request like a review thread: the user chose it, so it is
+  work, never `answered`. Find its code by `path` and by what `problem` describes - the branch may
+  have moved since the review - and make the code what `expected` says. `rejected` holds for a
+  finding on the same three grounds as for a comment.
 
 `isOutdated: true` means the code moved under the thread: `line` is `null` and `originalLine` points
 into a diff that no longer applies. Find the subject by the CONTENT of the thread's `diffHunk`,
@@ -41,7 +55,7 @@ never by the number — a line number from a stale diff points at whatever now s
 
 ## Step 2 — Give every item a verdict
 
-Walk every entry of all three lists, one at a time, and reach one of three verdicts. Nothing is
+Walk every entry of all the lists, one at a time, and reach one of three verdicts. Nothing is
 skipped, and "there were a lot of them" is not a verdict.
 
 - **fixed** — an actionable request about this code, and you changed the code to satisfy it.
@@ -57,9 +71,17 @@ skipped, and "there were a lot of them" is not a verdict.
   line and gets the same reading as any other thread - the flag says who is speaking, not what
   the comment is worth.
 
-A thread is one unit of work: read it to the LAST comment before deciding. Reviewers routinely open
-with a complaint and close with "actually, leave it" — verdicting on the first comment alone is how a
-fixer changes code the reviewer explicitly asked it not to touch.
+A thread is one unit of work: read EVERY comment of it, to the LAST one, before deciding. Reviewers
+routinely open with a complaint and close with "actually, leave it" — verdicting on the first comment
+alone is how a fixer changes code the reviewer explicitly asked it not to touch.
+A thread that already has replies is still open work while it is unresolved — every thread in
+`threads[]` is. The replies are where the details live: the reviewer's clarification, the name or the
+approach the author and the reviewer agreed on, the case the first comment left out, "also do the
+same in X". Implement what the whole discussion settled, not the first comment alone. A reply of the
+pull request's author ("will do", "fixed", "done in abc123") is no verdict: check the code as it
+stands now, and when it does not yet do what the thread settled, the thread is yours to fix.
+The same holds for `conversation[]` and `reviews[]`: read each body in full, and a later comment
+that refines an earlier one is part of it.
 
 Fix the code as you go, one item at a time, editing only what the comment is about. Do not refactor
 anything nobody asked about, and do not "improve" neighbouring code while you are in the file — every
@@ -83,7 +105,51 @@ and it is not COMMITTED; when `{{ROOT}}/.claude/doh/instructions/` is absent but
 has it, say so in `summary` instead of reaching outside `{{ROOT}}` for it. The matcher exiting
 non-zero → go on without it and say so in `summary`.
 
-## Step 3 — Bring the gate green
+## Step 3 — Check the fixes against the comments and the rest of the code
+
+Once every item has its verdict and its fix, check the work before anything else runs on it:
+
+1. **Every comment is addressed.** Walk `threads[]`, `conversation[]` and `reviews[]` once more,
+   item by item. For each one verdicted `fixed`, read the thread to its last comment again and then
+   the code as it stands now (`git -C "{{ROOT}}" diff` for what you changed): it does everything the
+   discussion settled - every place it named, every case a reply added - and nothing it asked to
+   leave alone. A part still missing → fix it now. For each one verdicted `answered` or `rejected`,
+   confirm the ground still holds against the final code. An item you skipped is not "probably
+   fine": go back and give it a verdict.
+2. **Nothing else broke.** For every symbol your fixes changed - a renamed or removed export, a
+   signature, an input/output, a selector, an action, a translation key, a CSS class, a route - Grep
+   the whole worktree for its uses (templates, specs, barrels, mocks, other areas and libraries) and
+   bring each one in line, or undo the change when that cannot be done without touching what nobody
+   asked about. A behaviour your fix changed on purpose is checked at every caller that relied on the
+   old one. The gate (step 5) proves what the tests cover; this step covers what they do not.
+
+Record what this step found and changed under `## Weryfikacja komentarzy` (point 1 of step 6).
+
+## Step 4 — Review your own change before the commit
+
+Run the doh review of exactly what this run changed, through the Skill tool:
+`/doh:codeReview staged --project={{ROOT}} --only-md`. Its context script stages the worktree
+(`git add .`) and reviews the staged diff - your fixes, nothing else of the branch. It runs in this
+conversation (a sub-agent has no workflow to hand it to); follow the skill to its terminal summary,
+which names the report.
+
+Then read the report and apply its findings, one by one, under the same rules as a comment fix:
+
+- **fix** a finding when its fix leaves the current behaviour as it is - a rename, a type, a
+  duplicated block folded, a missing spec case, a misplaced file, an unused import. The review only
+  reports what the change touched, and every finding is meant as a behaviour-neutral refactor;
+- **leave** a finding whose fix would change what working code does or how it looks, one about code
+  your run did not write, and one that contradicts a reviewer's comment you fixed (the reviewer
+  wins) - each with its one-line ground.
+
+The review stages everything, `.env*` and other untracked files included. Before you go on, unstage
+it all with `git -C "{{ROOT}}" reset --quiet` (the index only - your edits stay); step 6 stages by
+path. The review's own files live under `{{ROOT}}/.claude/doh/` and never go into the commit.
+Record the report's path, every finding fixed and every finding left with its ground under
+`## Poprawki z codeReview`. The skill failing to run is no reason to stop: say so there and in
+`summary`, and go on to the gate.
+
+## Step 5 — Bring the gate green
 
 The gate is the project's own `lint`, `typecheck`, `test` and `build`. Every red one is YOUR work:
 whether your own fixes broke it or it was already red when you arrived makes no difference to what
@@ -92,7 +158,7 @@ you do about it, only to what the report says about it.
 `{{INSTALLED}}` is `no` → the dependency install failed while the worktree was built. Do NOT run the
 gate: every command would fail for want of `node_modules`, and you would spend the run "repairing" a
 missing dependency tree. Record that in the report and in `summary`, leave `checksFixed` empty, and go
-to step 4.
+to step 6.
 
 Otherwise run, from anywhere:
 
@@ -107,8 +173,8 @@ A step's `status` is its command's exit code, decided by the script. It is never
 reading output: a `passed` step has nothing for you to read, and no output ever turns it into a failure.
 
 - `gate: "skipped"` — the project has no `package.json`, so there was nothing to run. Record the
-  reason and go to step 4. **A skipped gate is not a red one.**
-- `gate: "green"` — go to step 4.
+  reason and go to step 6. **A skipped gate is not a red one.**
+- `gate: "green"` — go to step 6.
 - `gate: "partial"` — this was a `--only` pass, so nothing failed among the commands it RAN and the
   rest were not looked at. It is not a green gate and it is not a licence to commit: run the full
   gate and act on that answer.
@@ -151,14 +217,14 @@ The following are not repairs, and none of them may appear in your commit:
 | "I will commit the comment fixes and leave the build red for the user" | A red gate means no commit at all. Splitting the run into a good half and a bad half is the exact thing the gate exists to prevent. |
 | "Three passes are up but I am close" | Three is the budget. End with `error` and the worktree in place; a fourth pass you talked yourself into is how a run grinds for an hour against something it cannot fix. |
 
-## Step 4 — Report, commit, push
+## Step 6 — Report, commit, rebase, push
 
-1. Prepare the report below (in {{LANGUAGE}}); you write it once, in point 5, after the push.
+1. Prepare the report below (in {{LANGUAGE}}); you write it once, in point 6, after the push.
 
        # fixPr: {{BRANCH}} → PR #{{PR_NUMBER}}
 
        ## Naprawione
-       - <file:line> — <what the reviewer asked> → <what you changed> (<author>, <comment url>)
+       - <file:line> — <what the reviewer asked> → <what you changed> (<author>, <comment url> | codeReview <finding id>)
 
        ## Odrzucone
        - <file:line> — <what was asked> → <the ground, naming the functionality, the PR goal or the other repository> (<author>, <comment url>)
@@ -168,6 +234,13 @@ The following are not repairs, and none of them may appear in your commit:
 
        ## Naprawione checki
        - <label> — <what was failing> → <what you changed> (<"zastane", when the cause sat in files no comment fix touched>)
+
+       ## Weryfikacja komentarzy
+       - <file:line or author> — <what step 3 found missing or broken elsewhere> → <what you changed> | wszystkie komentarze zaadresowane, inne obszary bez zmian: <what you searched>
+
+       ## Poprawki z codeReview
+       - raport: <path of the codeReview report>
+       - <file:line> — <rule> → <what you changed> | pominięte: <ground>
 
        ## Weryfikacja
        - <label> (<command>) — <passed | failed | skipped: reason> — <logPath>
@@ -185,7 +258,7 @@ The following are not repairs, and none of them may appear in your commit:
 
    | What you fixed | Message |
    |---|---|
-   | at least one comment verdicted `fixed` | `{{COMMIT_MESSAGE}}`, verbatim |
+   | at least one comment (or `--local` finding) verdicted `fixed` | `{{COMMIT_MESSAGE}}`, verbatim |
    | no comment, but at least one check | `{{COMMIT_PREFIX}}: Fix ` + `checksFixed`, joined with `, ` |
 
    `Fix` and the labels `lint`, `typecheck`, `unit tests`, `build` are **FIXED IDENTIFIERS**: English
@@ -208,25 +281,46 @@ The following are not repairs, and none of them may appear in your commit:
    skipped — → that is a legitimate outcome, not a failure: skip the commit and the push, report
    `committed: false`, and say why in `summary`. If the tree is nonetheless dirty, name the files in
    `summary` and leave them; you revert nothing.
-4. Push, but only when `{{PUSH}}` is `yes`: `git -C "{{ROOT}}" push origin {{BRANCH}}`.
-   Plain push only — never `--force`, never `--force-with-lease`, never a rebase or a reset to make it
-   go through. The skill refused every branch state that cannot fast-forward before you were started,
-   so a rejected push means the branch moved on the remote WHILE you were working: do not fight it.
-   Report `pushed: false` with the rejection text in `summary` and leave the commit sitting on the
-   local branch for the user.
-5. Write `{{REPORT}}` (UTF-8) in ONE Bash heredoc — `cat > "{{REPORT}}" <<'EOF'` … `EOF` — never
+4. Rebase the commit onto the current base, so the pull request lands on what `{{BASE}}` holds now:
+   - `git -C "{{ROOT}}" rev-parse origin/{{BRANCH}}` → keep it as `<remote-sha>` (where the remote
+     branch stood when you started);
+   - `git -C "{{ROOT}}" fetch origin {{BASE}}`;
+   - `git -C "{{ROOT}}" merge-base --is-ancestor origin/{{BASE}} HEAD` exits 0 → the branch already
+     holds the whole base: nothing to rebase, `rebased: false`, go to point 5;
+   - otherwise `git -C "{{ROOT}}" rebase origin/{{BASE}}`. A conflict → `git -C "{{ROOT}}" rebase
+     --abort`, which puts your commit back exactly as it was: `rebased: false`, the conflicting files
+     and the reason in `summary`, and go to point 5 with the commit un-rebased. Never resolve a
+     rebase conflict yourself - it is a merge of other people's work, not a review comment.
+   - A rebase that went through brought the base's newer commits under your change: run the full
+     gate (step 5) once more. Red now → the base and your change do not fit together: `git -C
+     "{{ROOT}}" reset --hard ORIG_HEAD` (back to your commit before the rebase - the only reset you
+     ever run), `rebased: false`, the red command in `summary`, and go on un-rebased. Green →
+     `rebased: true`.
+   With `{{PUSH}}` `no`, rebase all the same: the user pushes the branch as it is.
+5. Push, but only when `{{PUSH}}` is `yes`.
+   - Not rebased: `git -C "{{ROOT}}" push origin {{BRANCH}}` - plain push.
+   - Rebased: the branch's history was rewritten on purpose, so the push replaces it, guarded by
+     the remote state you saw: `git -C "{{ROOT}}" push --force-with-lease={{BRANCH}}:<remote-sha> origin {{BRANCH}}`.
+     Never a bare `--force`, never a lease without `<remote-sha>`.
+   A rejected push means the branch moved on the remote WHILE you were working: do not fight it -
+   no second rebase, no other force. Report `pushed: false` with the rejection text in `summary` and
+   leave the commit sitting on the local branch for the user.
+6. Write `{{REPORT}}` (UTF-8) in ONE Bash heredoc — `cat > "{{REPORT}}" <<'EOF'` … `EOF` — never
    the Write tool, which this harness refuses to a sub-agent for a `.md` file. One write: a report
    assembled from several appends ends half-written when anything goes wrong. It holds the sections
    of point 1 and, last, the outcome:
 
        ## Wynik
        - Commit: <sha + message | nie powstał: reason>
-       - Push: <done | skipped (--no-push) | failed: reason>
+       - Rebase na {{BASE}}: <done | not needed | abandoned: reason>
+       - Push: <done | done, force-with-lease after rebase | skipped (--no-push) | failed: reason>
 
 ## Rules
 
 - Everything happens inside `{{ROOT}}`. Never touch `{{PROJECT}}`, never touch another worktree.
-- Never `git checkout` another branch, never `rebase`, `reset --hard`, `stash` or `cherry-pick`.
+- Never `git checkout` another branch, never `stash` or `cherry-pick`. The one rebase is step 6
+  point 4, onto `origin/{{BASE}}`; the one `reset --hard` is its `ORIG_HEAD` undo; the one other
+  reset is step 4's `reset --quiet` of the index.
 - Never resolve a thread on GitHub yourself and never post a comment there — the orchestrator closes
   exactly the threads you report as fixed, once the push has landed.
 - Never remove the worktree; the orchestrator does that after it has read your result.
@@ -235,13 +329,15 @@ The following are not repairs, and none of them may appear in your commit:
   else. A rejected thread, an answered one, a `conversation[]` comment (which has no thread at all)
   and anything you fixed without committing must NOT be in that list: each id in it becomes a public
   claim on the pull request that the reviewer's comment was addressed.
+- `fixedFindingIds` carries the `id` of every `findings[]` entry (`--local`) you verdicted `fixed`;
+  such a run has no thread, so its `fixedThreadIds` is empty.
 
 ## Final message
 
 End your final message with a single JSON object and nothing after it:
 
 - Success (including a run that legitimately committed nothing):
-  `{"type":"result","committed":<bool>,"pushed":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
+  `{"type":"result","committed":<bool>,"pushed":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedFindingIds":["<id>",…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
 - Gate still red after three passes, or any failure that left the work unfinished:
   `{"type":"error","report":"<in {{LANGUAGE}}: which commands are still red and why, what is in the worktree now, what you already fixed>","fixed":<N>,"fixedThreadIds":[],"checksFixed":[],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}]}`
   `fixedThreadIds` and `checksFixed` are empty on this path, always: nothing was committed or pushed,

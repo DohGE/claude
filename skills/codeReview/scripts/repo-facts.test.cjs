@@ -556,3 +556,27 @@ test('hover-without-focus and action-label-mismatch probes', () => {
   assert.deepStrictEqual(facts.runProbe({ builtin: 'hover-without-focus' }, 'd.ts', "@HostListener('mouseenter') on() {}\n").map((h) => h.line), [1]);
   assert.deepStrictEqual(facts.runProbe({ builtin: 'hover-without-focus' }, 'd.ts', "@HostListener('mouseenter') on() {}\n@HostListener('focus') f() {}\n"), []);
 });
+
+test('a key-shaped literal handed to something other than translate, under an object of the base file, is a key it must hold', () => {
+  const en = JSON.stringify({ page: { area: { labels: { saved: 'Saved' } } } }, null, 2);
+  const result = collect({
+    'src/assets/i18n/en.json': en,
+    'src/app/area/data-access/area.effects.ts': [
+      "this.alerts.success('page.area.labels.saved');",
+      "this.alerts.success('page.area.labels.renamedAway');",
+      "const file = 'page.area.labels.json';",
+      "const other = 'not.a.key.at.all';",
+    ].join('\n'),
+  }, ['src/app/area/data-access/area.effects.ts']);
+  const missing = factsOf(result, 'src/app/area/data-access/area.effects.ts', 'i18n-missing-key');
+  assert.deepStrictEqual(missing.map((f) => [f.lines, f.hint]), [[[2], true]], 'only the renamed key: a file name and a literal with no parent object are none');
+  assert.match(missing[0].text, /literał "page\.area\.labels\.renamedAway" \(L2\) ma kształt klucza tłumaczenia, a jego rodzic page\.area\.labels jest w/);
+});
+
+test('a template pipe named like an Object property does not stop the facts', () => {
+  const result = collect({
+    'src/app/a/a.component.ts': "@Component({ selector: 'app-a', standalone: true, imports: [], templateUrl: './a.component.html' })\nexport class A {}\n",
+    'src/app/a/a.component.html': '<span>{{ value | toString }}</span>\n',
+  });
+  assert.ok(result.facts instanceof Map);
+});

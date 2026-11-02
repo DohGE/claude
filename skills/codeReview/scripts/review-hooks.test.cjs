@@ -14,8 +14,8 @@ const script = path.join(__dirname, 'review-hooks.cjs');
 const skillDir = path.resolve(__dirname, '..').replace(/\\/g, '/');
 const slash = (p) => p.replace(/\\/g, '/');
 
-// A file bundle cut to what the hooks read: the plan's item lines with a sub-line each, and a
-// line outside the plan shaped like an item.
+// A file bundle cut to what the hooks read: the plan's item lines with a sub-line each, a line
+// outside the plan shaped like an item, and a write rule every bundle repeats word for word.
 const bundleText = (file, addresses) => [
   `# ${file}`,
   '',
@@ -26,7 +26,8 @@ const bundleText = (file, addresses) => [
   '',
   '## Zapis części',
   '',
-  '- general#1: linia spoza planu zostaje',
+  `- general#1: linia spoza planu zostaje (${file})`,
+  '- Szkielet bloku niżej: adresy w kolejności planu.',
   '',
 ].join('\n');
 
@@ -134,7 +135,7 @@ test('read: the context ties the session to its run; a week-old state and a stal
   past(old, 8 * 24 * 60 * 60 * 1000);
   past(lock, 20 * 1000);
   assert.strictEqual(read(f, f.contextPath), null);
-  assert.deepStrictEqual(stateOf(f), { contextPath: path.resolve(f.contextPath), shown: {} });
+  assert.deepStrictEqual(stateOf(f), { contextPath: path.resolve(f.contextPath), shown: {}, agents: {} });
   assert.ok(!fs.existsSync(old) && !fs.existsSync(lock));
   // A session id unfit for a file name, or a JSON that is no review context: nothing recorded.
   assert.strictEqual(read(f, f.contextPath, '../s2'), null);
@@ -172,16 +173,25 @@ test('read under --dedup-items: an item another bundle showed since the last com
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      permissionDecisionReason: 'codeReview --dedup-items: 1 pozycji z treścią z wcześniejszej paczki',
+      permissionDecisionReason: 'codeReview --dedup-items: 2 pozycji z treścią z wcześniejszej paczki',
       updatedInput: { file_path: copy },
     },
   });
   const original = fs.readFileSync(b, 'utf8').split('\n');
   const shown = fs.readFileSync(copy, 'utf8').split('\n');
   assert.strictEqual(shown.length, original.length);
-  assert.deepStrictEqual(shown.filter((line, i) => line !== original[i]), ['- general#1: treść jak w paczce 01-a.ts.bundle.md, przeczytanej wcześniej']);
+  // The item a's bundle showed, and the write rule it showed word for word; the rule line naming
+  // this file stays.
+  assert.deepStrictEqual(shown.filter((line, i) => line !== original[i]), [
+    '- general#1: treść jak w paczce 01-a.ts.bundle.md, przeczytanej wcześniej',
+    '- zasada zapisu jak w paczce 01-a.ts.bundle.md',
+  ]);
   assert.deepStrictEqual(stateOf(f).shown, {
-    'general#1': '01-a.ts.bundle.md', 'general#2': '01-a.ts.bundle.md', 'component#1': '01-a.ts.bundle.md', 'general#3': '02-b.ts.bundle.md',
+    'general#1': '01-a.ts.bundle.md', 'general#2': '01-a.ts.bundle.md', 'component#1': '01-a.ts.bundle.md',
+    '§- general#1: linia spoza planu zostaje (src/a.ts)': '01-a.ts.bundle.md',
+    '§- Szkielet bloku niżej: adresy w kolejności planu.': '01-a.ts.bundle.md',
+    'general#3': '02-b.ts.bundle.md',
+    '§- general#1: linia spoza planu zostaje (src/b.ts)': '02-b.ts.bundle.md',
   });
   // A compaction takes the texts out of the conversation: the next Read shows them in full.
   assert.ok(compact(f));
@@ -201,7 +211,8 @@ test('subagent: a sub-agent starting or stopping empties what was shown, so the 
   assert.ok(read(f, b), 'b shows a reference to a');
   assert.notDeepStrictEqual(stateOf(f).shown, {});
   assert.strictEqual(subagent(), null);
-  assert.deepStrictEqual(stateOf(f), { contextPath: f.contextPath, shown: {} });
+  // The target each agent walks stays: it is where that agent's searches go.
+  assert.deepStrictEqual(stateOf(f), { contextPath: f.contextPath, shown: {}, agents: { '': f.workDir } });
   assert.strictEqual(read(f, b), null);
   assert.deepStrictEqual(fs.readdirSync(f.workDir).filter((name) => name.endsWith('.dedup.md')), ['02-b.ts.bundle.dedup.md']);
 });
@@ -210,7 +221,7 @@ test('read without --dedup-items: every bundle is read as written', (t) => {
   const f = fixture(t);
   for (const file of f.target.files) assert.strictEqual(read(f, file.bundlePath), null);
   assert.deepStrictEqual(fs.readdirSync(f.workDir).filter((name) => name.endsWith('.dedup.md')), []);
-  assert.deepStrictEqual(stateOf(f), { contextPath: f.contextPath, shown: {} });
+  assert.deepStrictEqual(stateOf(f), { contextPath: f.contextPath, shown: {}, agents: { '': f.workDir } });
 });
 
 test('draft: an Edit that fixes a refused part\'s draft moves it into place, and the drafts waiting behind it follow', (t) => {
@@ -339,13 +350,21 @@ test('compact: where the run stands - the next file or batch with its Reads, the
     `- następne: złożenie - przeczytaj (Read) ${skillDir}/references/assembly.md i uruchom \`target.commands.assemble\`:`,
     `  ${f.target.commands.assemble}`,
   ]);
-  // A later target waits its turn; a target with no files closes on its first part.
+  // A context with the assembly of all targets names that one command.
+  f.context.commands = { assembleAll: 'node check-part.cjs --context=c --assemble-all' };
+  assert.deepStrictEqual(at().slice(head.length, -1), [
+    `- następne: złożenie wszystkich celów - przeczytaj (Read) ${skillDir}/references/assembly.md i uruchom \`commands.assembleAll\` (na końcu drukuje podsumowanie Step 5):`,
+    '  node check-part.cjs --context=c --assemble-all',
+  ]);
+  delete f.context.commands;
+  // A target with every part written waits for the assembly of all of them: the walk goes on with
+  // the next one; a target with no files closes on its first part.
   const empty = { ...f.target, branch: 'hotfix', files: [], batches: [], reportPath: path.join(f.dir, 'runs', '2026-01-02-03-04-05', 'hotfix', 'raport.md') };
   empty.workDir = slash(empty.reportPath.replace(/\.md$/, '.work'));
   fs.mkdirSync(empty.workDir, { recursive: true });
   f.context.targets.push(empty);
-  assert.strictEqual(at()[2], `- cel 1/2: feature, raport ${f.reportPath}`);
-  assert.strictEqual(at().at(-2), '- potem cele: hotfix');
+  assert.strictEqual(at()[2], `- cel 2/2: hotfix, raport ${empty.reportPath}`);
+  assert.ok(!at().some((line) => line.startsWith('- potem cele:')), 'the finished target is no target to walk later');
   fs.rmSync(f.workDir, { recursive: true });
   assert.deepStrictEqual(at().slice(2, 5), [
     `- cel 2/2: hotfix, raport ${empty.reportPath}`,
@@ -391,13 +410,14 @@ test('registration: the plugin runs every codeReview hook, SKILL.md none of them
   assert.deepStrictEqual(config.hooks.PreToolUse, [
     { matcher: 'Write|Edit|Bash', ...run('check-part.cjs', [], 30) },
     { matcher: 'Read', ...run('review-hooks.cjs', ['--event=read'], 30) },
+    { matcher: 'Grep|Glob', ...run('review-hooks.cjs', ['--event=search'], 10) },
   ]);
   assert.deepStrictEqual(config.hooks.PostToolUse, [{ matcher: 'Write|Edit', ...run('review-hooks.cjs', ['--event=draft'], 30) }]);
   // A sub-agent starts and ends with a conversation of its own: what was shown is forgotten both times.
   const forgets = run('review-hooks.cjs', ['--event=subagent'], 10).hooks[0];
   assert.deepStrictEqual(config.hooks.SubagentStart.flatMap((group) => group.hooks).filter((h) => h.args.some((a) => a.endsWith('review-hooks.cjs'))), [forgets]);
   assert.deepStrictEqual(config.hooks.SubagentStop, [{ hooks: [forgets] }]);
-  for (const event of ['read', 'draft', 'compact', 'subagent']) assert.strictEqual(hooks.parseArgs([`--event=${event}`]).event, event);
+  for (const event of ['read', 'draft', 'compact', 'subagent', 'search']) assert.strictEqual(hooks.parseArgs([`--event=${event}`]).event, event);
 });
 
 test('CLI: prints the hook\'s JSON; a bad input is exit 0 with no output, a bad argument exit 1', (t) => {
@@ -445,4 +465,50 @@ test('read under --dedup-items with walkers side by side: per agent, or not at a
   hooks.onSubagent({ session_id: 's1', hook_event_name: 'SubagentStop', agent_id: 'w1' }, f.env);
   const shown = stateOf(f).shown;
   assert.ok(!shown['@w1'] && shown['@w2'], JSON.stringify(shown));
+});
+
+test('search: while a branch review runs, a Grep or Glob of the working tree goes to the reviewed revision', (t) => {
+  const helpers = require('./test-helpers.cjs');
+  const f = fixture(t);
+  const project = helpers.initRepo(t, 'review-hooks-project-');
+  helpers.commitFile(project, 'src/a.ts', 'export const a = 1;\n', 'a');
+  helpers.commitFile(project, 'src/later.ts', 'export const later = 1;\n', 'a later part');
+  fs.mkdirSync(path.join(project, 'node_modules', 'lib'), { recursive: true });
+  const snapshot = path.join(project, '.claude', 'doh', 'codeReview', 's', '04-05-1');
+  fs.mkdirSync(path.join(snapshot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(snapshot, 'src', 'a.ts'), 'export const a = 0;\n');
+  f.context.project = project;
+  Object.assign(f.target, { snapshotDir: slash(snapshot), revision: 'abc1234def5678' });
+  fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
+  const search = (tool, input) => hooks.onSearch({ session_id: 's1', tool_name: tool, tool_input: input, cwd: project }, f.env);
+  assert.strictEqual(search('Grep', { pattern: 'a' }), null, 'no review tied to the session yet');
+  read(f, f.target.files[0].bundlePath);
+  const moved = search('Grep', { pattern: 'a', path: 'src', output_mode: 'content' });
+  assert.strictEqual(moved.hookSpecificOutput.permissionDecision, 'allow');
+  assert.deepStrictEqual(moved.hookSpecificOutput.updatedInput, { pattern: 'a', path: `${slash(snapshot)}/src`, output_mode: 'content' });
+  assert.match(moved.hookSpecificOutput.permissionDecisionReason, /w recenzowanej rewizji \(abc1234de\): src w snapshotDir/);
+  assert.strictEqual(search('Glob', { pattern: '**/*.ts' }).hookSpecificOutput.updatedInput.path, slash(snapshot), 'no path is the project root');
+  // A path the reviewed revision lacks while the checkout tracks it belongs to another revision.
+  const denied = search('Grep', { pattern: 'x', path: 'src/later.ts' });
+  assert.strictEqual(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /src\/later\.ts nie istnieje w recenzowanej rewizji \(abc1234de\)/);
+  // The snapshot itself, an untracked folder and a path outside the project stay as they are.
+  assert.strictEqual(search('Grep', { pattern: 'x', path: slash(snapshot) }), null);
+  assert.strictEqual(search('Grep', { pattern: 'x', path: 'node_modules/lib' }), null);
+  assert.strictEqual(search('Grep', { pattern: 'x', path: f.dir }), null);
+  assert.strictEqual(search('Read', { file_path: 'src/a.ts' }), null);
+  // Assembled - its work folder gone - the review no longer redirects anything.
+  fs.rmSync(f.workDir, { recursive: true, force: true });
+  assert.strictEqual(search('Grep', { pattern: 'a', path: 'src' }), null);
+});
+
+test('draft: a part written whole lets the drafts waiting behind it land', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.draft(2), partB);
+  fs.writeFileSync(f.part(1), partA());
+  const landed = hooks.onDraft({ tool_name: 'Write', tool_input: { file_path: f.part(1), content: partA() }, cwd: f.dir });
+  assert.strictEqual(noteOf(landed), 'check-part: raport.part02.md zapisana ze szkicu.');
+  assert.strictEqual(fs.readFileSync(f.part(2), 'utf8'), partB);
+  assert.ok(!fs.existsSync(f.draft(2)));
+  assert.strictEqual(hooks.onDraft({ tool_name: 'Write', tool_input: { file_path: f.part(1), content: partA() }, cwd: f.dir }), null, 'nothing left waiting');
 });

@@ -1,0 +1,44 @@
+{
+  "kind": "jest-snapshot",
+  "pattern": "**/__snapshots__/<name>.snap",
+  "role": "Jest snapshot file, written by its spec's toMatchSnapshot calls - generated output, not code.",
+  "notes": [
+    "The snapshot is the output of its spec: its content is not reviewed line by line - a finding about what it records belongs to the spec or the code it renders. Two questions only: where it lies (unit-tests#1), and whether it changed together with what produces it (unit-tests#23)."
+  ],
+  "walker": {
+    "model": "sonnet",
+    "effort": "low"
+  },
+  "itemCount": 2,
+  "instructions": [
+    {
+      "id": "unit-tests",
+      "name": "Unit tests (common)",
+      "checklistSize": 25,
+      "selectedItems": "1,23",
+      "items": [
+        {
+          "id": "unit-tests#1",
+          "text": "Specs live in a `tests/` folder next to the code under test; snapshots in `tests/__snapshots__/`.",
+          "severity": "medium",
+          "facts": [
+            "snapshot-outside-folder",
+            "snapshot-missing"
+          ],
+          "sameAs": [
+            "i18n#12"
+          ]
+        },
+        {
+          "id": "unit-tests#23",
+          "text": "Snapshots are updated (`-u`) only after consciously reviewing the diff.",
+          "severity": "low",
+          "facts": [
+            "snapshot-field-drift",
+            "snapshot-without-change"
+          ]
+        }
+      ]
+    }
+  ]
+}

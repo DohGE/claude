@@ -144,6 +144,9 @@
             "general#7",
             "pipes#5",
             "component-template#9"
+          ],
+          "facts": [
+            "i18n-missing-key"
           ]
         }
       ]
@@ -184,7 +187,7 @@
         },
         {
           "id": "architecture#9",
-          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach. A function shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is no such element: it is never reported for not reusing, or not becoming, a shared util.",
           "severity": "medium",
           "sameAs": [
             "component-template#16"
@@ -204,7 +207,8 @@
           "severity": "medium",
           "sameAs": [
             "models#10"
-          ]
+          ],
+          "okEvidence": "linia każdej deklaracji, której nazwę sprawdziłeś (L3, L7, L12), nie zakres pliku"
         },
         {
           "id": "general#7",
@@ -258,7 +262,7 @@
       "items": [
         {
           "id": "code-quality#1",
-          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies.",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies. A function or expression shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is not duplicated logic under this item, however often it repeats: it is never reported as code to extract into a reusable util (utils#9).",
           "facts": [
             "repeated-literal",
             "repeated-condition",
@@ -272,12 +276,18 @@
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
           "answer": "repo-search",
-          "severity": "high"
+          "severity": "high",
+          "handoff": [
+            "unit-tests#12"
+          ],
+          "severityInSpec": "medium"
         },
         {
           "id": "code-quality#2",
           "text": "No copy-paste-with-a-tweak: three or more near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset). Two such blocks are not a finding under this item.",
-          "severity": "high"
+          "severity": "high",
+          "severityInSpec": "medium",
+          "okEvidence": "pierwsza linia każdego z porównanych bloków (L12, L30, L48), nie zakres obejmujący je wszystkie"
         },
         {
           "id": "code-quality#3",
@@ -326,7 +336,8 @@
         },
         {
           "id": "test-coverage#2",
-          "text": "Do not assume coverage from the spec's mere existence — enumerate the behavioral cases the changed lines introduce and cross-check each one against the spec's actual test cases."
+          "text": "Do not assume coverage from the spec's mere existence — enumerate the behavioral cases the changed lines introduce and cross-check each one against the spec's actual test cases.",
+          "okEvidence": "linia każdego zmienionego zachowania i ścieżka spec z liniami przypadków, które je sprawdzają, nie zakres pliku"
         },
         {
           "id": "test-coverage#3",

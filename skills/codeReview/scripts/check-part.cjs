@@ -55,6 +55,8 @@ const secondAnswer = bundle.linePrefix.second;
 // - The three things a NIEZWERYFIKOWANE may lack: a tool that was not run, a file outside the
 //   review, data only the running application has.
 const unverifiedReasons = ['narzędzie:', 'poza recenzją:', 'działająca aplikacja:'];
+// The two of them no static review can answer: the coverage counts such an item as walked.
+const runtimeReasons = [unverifiedReasons[0], unverifiedReasons[2]];
 // - The cross-file part's block answering, once for the target, each item left [ ] in
 //   `unverifiedMinFiles` files or more.
 const reUnverifiedOpen = render.reUnverifiedOpen;
@@ -66,8 +68,13 @@ const wholeFileMinLines = 20;
 const maxListed = 40;
 // Parts written closer together than this came from one response - allowed within one batch.
 const partGapMs = 2000;
-const noRules = { severity: {}, sameAs: {}, prepared: {}, noSpec: [] };
+const noRules = { severity: {}, sameAs: {}, prepared: {}, noSpec: [], handoff: {}, companion: {}, severityInSpec: {} };
+// The note on a part written in the response of the part before it: it lands, with this note -
+// refused, it came back unchanged one response later (5 of 32 refusals of a 188-file run, 2026-10-30).
 const timingRefusal = 'jedna część na odpowiedź';
+// The problem of a part whose earlier part of the window is not on disk yet: its draft waits and
+// lands by itself once that part does (review-hooks.cjs, promoteLater).
+const missingRefusal = 'najpierw brakujące wcześniejsze części';
 // Read cuts a line longer than this; `sed -n '<N>p'` is how the rest of it is seen.
 const readLineLimit = 2000;
 
@@ -96,6 +103,31 @@ function sameBatch(target, a, b) {
 function windowOf(target, k) {
   const window = (target.windows || []).find((w) => w && Array.isArray(w.files) && k >= w.files[0] && k <= w.files[1]);
   return window ? window.files : [1, (target.files || []).length];
+}
+
+// Where numbers past a file's end most likely came from: another file of the same window long
+// enough to hold them (its content read in the same message), or the file's own diff. 47 of 178
+// part Writes of a 174-file run were refused, most of them for such numbers (2026-11-02): the
+// refusal names the file the walker mixed up, so one fix lands the part.
+function beyondHint(target, number, highest, lineCount) {
+  if (!target || !Number.isInteger(number) || !highest) return '';
+  const files = target.files || [];
+  const [first, last] = windowOf(target, number);
+  const fits = [];
+  for (let k = first; k <= last; k++) {
+    if (k === number || !files[k - 1]) continue;
+    const count = lineCount(files[k - 1]);
+    if (count && count >= highest) fits.push(`${files[k - 1].path} (${count} linii)`);
+  }
+  const own = files[number - 1];
+  let diffLines = null;
+  try {
+    if (own && own.diffPath) diffLines = fs.readFileSync(own.diffPath, 'utf8').split('\n').length;
+  } catch {}
+  const hints = [];
+  if (fits.length) hints.push(`te numery mieści ${fits.slice(0, 2).join(' i ')} z tego samego okna - sprawdź, czy nie pochodzą z jego Read`);
+  if (diffLines && diffLines >= highest) hints.push(`albo z numeracji diffu (${diffLines} linii), która nie jest numeracją treści`);
+  return hints.length ? ` Wskazówka: ${hints.join(', ')}.` : '';
 }
 
 function rulesOf(facts) {
@@ -189,18 +221,23 @@ function citedSpans(value) {
 
 // Where a path a verdict names is looked up, in this order: the reviewed file's folder, the fact
 // root (the folder the bundle's paths are relative to), the project root.
-function pathFinder(context, file, root, factRoot) {
+// `snapshot` (the target's snapshotDir) is the reviewed revision: a spec the branch adds is there,
+// not in the checkout - a branch review run from master refused `OK (tests/x.spec.ts)` for every
+// new spec (2026-11-02). The checkout is asked second, for what the snapshot leaves out.
+function pathFinder(context, file, root, factRoot, snapshot = null) {
   const known = new Set((context.targets || []).flatMap((t) => (t.files || []).map((f) => f.path)));
   const bases = [...new Set([file ? path.posix.dirname(file.path) : '.', factRoot || '.', '.'])];
   const candidatesOf = (token) => bases
     .map((base) => path.posix.normalize(path.posix.join(base, token)).replace(/\/+$/, '') || '.')
     .filter((candidate) => candidate !== '..' && !candidate.startsWith('../'));
+  const roots = [snapshot, root].filter(Boolean);
   const statOf = (candidate) => {
-    try {
-      return root ? fs.statSync(path.resolve(root, candidate)) : null;
-    } catch {
-      return null;
+    for (const base of roots) {
+      try {
+        return fs.statSync(path.resolve(base, candidate));
+      } catch {}
     }
+    return null;
   };
   return {
     // The file an OK's evidence names when the requirement is met outside the reviewed file - its
@@ -424,7 +461,11 @@ function violationLines(after) {
   return numbersIn(listed);
 }
 
-function checkTickLine(line, gates, count, finder = null) {
+// `ctx.handoff` - the addresses the item hands part of its subject to (rulebook `handoff`): named
+// in an OK they are a remark beside its evidence, never the evidence; `ctx.perFile` - the line's
+// instruction declares `findings: per-file`, whose items are facets of one requirement, so one
+// file meeting it outside this one is the evidence of a whole range of them.
+function checkTickLine(line, gates, count, finder = null, ctx = {}) {
   const at = `${line.id}#${line.spec}`;
   const verdict = verdictOfLine(line);
   if (!verdict) {
@@ -446,27 +487,35 @@ function checkTickLine(line, gates, count, finder = null) {
   }
   if (word === 'OK') {
     const evidence = after.match(/^\((.*)\)/);
-    const inner = evidence ? evidence[1].trim() : '';
+    const whole = evidence ? evidence[1].trim() : '';
+    // A handed-off address is cut out before the evidence is read: its digits are no line.
+    const handoff = ctx.handoff || new Set();
+    const inner = handoff.size
+      ? whole.replace(new RegExp(reAddress.source, 'gi'), (address) => (handoff.has(address.toLowerCase()) ? ' ' : address)).trim()
+      : whole;
     const deferred = inner.match(reAddress);
     const absent = inner.toLowerCase().includes(noOccurrence);
     const numbered = /(^|[^\p{L}\p{N}])L?\d+/u.test(inner);
     const elsewhere = inner && !deferred ? fileNamedIn(inner) : null;
     const items = line.numbers ? line.numbers.length : 1;
-    if (!inner) {
+    if (!whole) {
       problems.push(`${at}: OK bez dowodu - zapis to "— OK (L12, L18)" z liniami tego pliku, "— OK (tests/a.spec.ts)" ze ścieżką pliku, który spełnia wymaganie, albo "— OK (${noOccurrence})".`);
     } else if (deferred) {
-      problems.push(`${at}: OK odsyła do ${deferred[0]} - kod, który łamie pozycję, nigdy jej nie spełnia: dostaje własne "— NARUSZENIE (<linie>)", a nie OK z innym uzasadnieniem, a OK ma w nawiasie tylko linie tego pliku. Adres ${at} dochodzi do pola Reguła znaleziska ${deferred[0]} (najbardziej szczegółowy pierwszy), gdy to to samo wymaganie w innej instrukcji albo obie są pozycjami instrukcji z findings: per-file; inna pozycja tej samej instrukcji to inne wymaganie i własne znalezisko.`);
+      const allowed = ctx.handoffOf && ctx.handoffOf.length ? ` Ta pozycja przekazuje część przedmiotu tylko do: ${ctx.handoffOf.join(', ')}.` : '';
+      problems.push(`${at}: OK odsyła do ${deferred[0]} - kod, który łamie pozycję, nigdy jej nie spełnia: dostaje własne "— NARUSZENIE (<linie>)", a nie OK z innym uzasadnieniem, a OK ma w nawiasie tylko linie tego pliku. Adres ${at} dochodzi do pola Reguła znaleziska ${deferred[0]} (najbardziej szczegółowy pierwszy), gdy to to samo wymaganie w innej instrukcji albo obie są pozycjami instrukcji z findings: per-file; inna pozycja tej samej instrukcji to inne wymaganie i własne znalezisko.${allowed}`);
+    } else if (items > 1 && ctx.perFile && elsewhere && !numbered) {
+      // One file meeting a per-file instruction answers each of its facets.
     } else if (items > 1 && (numbered || elsewhere || !absent)) {
       problems.push(`${at}: jedno OK na ${items} pozycji z dowodem "(${inner})" - linie i pliki są dowodem jednej pozycji. Każda pozycja, której przedmiot występuje w pliku, ma własną linię z liniami, z których odczytano jej werdykt; w jedną linię zwijają się tylko pozycje, których przedmiotu plik nie zawiera: "— OK (${noOccurrence})".`);
     } else if (!absent && !numbered && !elsewhere) {
-      problems.push(`${at}: dowód OK "(${inner})" nie wskazuje linii tego pliku, istniejącego pliku ani "${noOccurrence}".`);
+      problems.push(`${at}: dowód OK "(${whole})" nie wskazuje linii tego pliku, istniejącego pliku ani "${noOccurrence}".`);
     } else if (!elsewhere && count) {
       const spans = citedSpans(inner);
       const beyond = [...new Set(spans.flat().filter((k) => k > count))];
       const covered = new Set();
       for (const [from, to] of spans) for (let k = Math.max(1, from); k <= Math.min(to, count); k++) covered.add(k);
       if (beyond.length) {
-        problems.push(`${at}: dowód OK wskazuje linie ${beyond.join(', ')}, a plik ma ${count} linii - numery pochodzą z Read pliku contentPath.`);
+        problems.push(`${at}: dowód OK wskazuje linie ${beyond.join(', ')}, a plik ma ${count} linii - numery pochodzą z Read pliku contentPath.${ctx.beyondHint ? ctx.beyondHint(Math.max(...beyond)) : ''}`);
       } else if (!absent && count >= wholeFileMinLines && covered.size >= count * wholeFileShare) {
         problems.push(`${at}: dowód OK "(${inner})" obejmuje ${covered.size} z ${count} linii pliku - to cały plik, nie miejsce, z którego odczytano werdykt. Podaj linie, które rozstrzygają tę pozycję: deklarację, wywołanie, wiązanie, element, a przy regule kolejności pierwszą linię każdego elementu. Zakaz, którego przedmiotu plik nie zawiera, to "— OK (${noOccurrence})", a wymaganie spełnione w innym pliku (spec, trasa) wskazuje ten plik ścieżką.`);
       }
@@ -476,7 +525,7 @@ function checkTickLine(line, gates, count, finder = null) {
     const numbers = violationLines(after);
     if (numbers.length === 0) problems.push(`${at}: NARUSZENIE bez linii - zapis to "— NARUSZENIE (<linie z pola Linia znaleziska>)", linie stoją na początku nawiasu.`);
     const beyond = count ? numbers.filter((k) => k > count) : [];
-    if (beyond.length) problems.push(`${at}: NARUSZENIE wskazuje linie ${beyond.join(', ')}, a plik ma ${count} linii.`);
+    if (beyond.length) problems.push(`${at}: NARUSZENIE wskazuje linie ${beyond.join(', ')}, a plik ma ${count} linii.${ctx.beyondHint ? ctx.beyondHint(Math.max(...beyond)) : ''}`);
   }
   if (word === 'BRAMKA') {
     if (!Object.prototype.hasOwnProperty.call(gates, line.id)) {
@@ -541,7 +590,7 @@ function readFacts(target) {
   }
 }
 
-function lineBounds(report, files, lineCount) {
+function lineBounds(report, files, lineCount, target = null) {
   const problems = [];
   const byPath = new Map(files.map((f) => [f.path, f]));
   for (const section of report.files) {
@@ -551,7 +600,8 @@ function lineBounds(report, files, lineCount) {
     for (const finding of section.findings) {
       const beyond = numbersIn(finding.lines).filter((k) => k > count);
       if (beyond.length) {
-        problems.push(`${section.path}: pole Linia "${finding.lines}" wskazuje ${beyond.join(', ')}, a plik ma ${count} linii - numery pochodzą z Read pliku contentPath.`);
+        const hint = target ? beyondHint(target, files.indexOf(file) + 1, Math.max(...beyond), lineCount) : '';
+        problems.push(`${section.path}: pole Linia "${finding.lines}" wskazuje ${beyond.join(', ')}, a plik ma ${count} linii - numery pochodzą z Read pliku contentPath.${hint}`);
       }
     }
   }
@@ -600,7 +650,7 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
     // a part of another window is another walker's.
     for (let k = windowOf(target, number)[0]; k < number; k++) if (!sameBatch(target, k, number) && options.readPart(k) === null) missing.push(k);
     if (missing.length) {
-      problems.push(`najpierw brakujące wcześniejsze części: ${listParts(missing, target, digits)} - pliki okna idą po kolei, a część każdego pliku (albo partii z paczki) jest zapisana, zanim otworzysz następny.`);
+      problems.push(`${missingRefusal}: ${listParts(missing, target, digits)} - pliki okna idą po kolei, a część każdego pliku (albo partii z paczki) jest zapisana, zanim otworzysz następny.`);
     }
   }
   if (scan.markers.length === 0) {
@@ -630,16 +680,21 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
   const gates = context.checklistGates || {};
   const count = options.lineCount(file);
   const facts = options.facts;
-  const finder = pathFinder(context, file, options.root, facts && facts.factRoot);
+  const finder = pathFinder(context, file, options.root, facts && facts.factRoot, options.snapshot);
   const bound = (facts && facts.files[file.path] && facts.files[file.path].items) || {};
-  const { prepared, sameAs } = rulesOf(facts);
+  const { prepared, sameAs, handoff } = rulesOf(facts);
+  const perFileIds = new Set(context.checklistPerFile || []);
   const ownFindings = report.files.filter((section) => section.path === file.path).flatMap((section) => section.findings);
   const verdictOf = new Map();
   const wordsById = new Map();
   const firstLine = new Map();
   const doubled = new Map();
   for (const line of scan.lines) {
-    problems.push(...checkTickLine(line, gates, count, finder));
+    const handoffOf = [...new Set((line.numbers || []).flatMap((k) => handoff[`${line.id}#${k}`] || []))];
+    problems.push(...checkTickLine(line, gates, count, finder, {
+      handoff: new Set(handoffOf.map((address) => address.toLowerCase())), handoffOf, perFile: perFileIds.has(line.id),
+      beyondHint: (highest) => beyondHint(target, number, highest, options.lineCount),
+    }));
     for (const k of line.numbers || []) {
       const address = `${line.id}#${k}`;
       if (!firstLine.has(address)) {
@@ -887,7 +942,7 @@ function checkCrossPart(context, target, digits, scan, report, options) {
       for (const tag of finding.tags || []) if (tag.address) cited.add(`${tag.address.id}#${tag.address.n}`);
     }
   }
-  const finder = pathFinder(context, null, options.root, options.facts && options.facts.factRoot);
+  const finder = pathFinder(context, null, options.root, options.facts && options.facts.factRoot, options.snapshot);
   for (const line of block.lines) {
     const verdict = verdictOfLine(line);
     if (verdict && verdict.word === 'BRAMKA') {
@@ -939,6 +994,8 @@ function checkPart(context, target, partPath, text, options = {}) {
     facts: options.facts === undefined ? readFacts(target) : options.facts,
     // Where a path in OK evidence is looked up: the project the context was built for.
     root: context.project || options.root || process.cwd(),
+    // ... after the reviewed revision itself, where the target has one of its own.
+    snapshot: target.snapshotDir && fs.existsSync(target.snapshotDir) ? target.snapshotDir : null,
   };
   const problems = [];
   const width = Math.max(2, String(n + 2).length);
@@ -965,12 +1022,16 @@ function checkPart(context, target, partPath, text, options = {}) {
   if (opts.sequential && opts.timing && number >= 2 && number <= n + 1 && sameWalker && !sameBatch(target, number - 1, number)) {
     const written = opts.writtenAt(number - 1);
     if (written !== null && opts.now - written < partGapMs) {
-      problems.push(`part${pad(number - 1, digits)} zapisano ${Math.max(0, (opts.now - written) / 1000).toFixed(1)} s temu - ${timingRefusal} (razem tylko części jednej partii z paczki): ta część idzie w następnej odpowiedzi.`);
+      // A caller collecting notes lets the part land with one: the walk behind it is done, and a
+      // refusal only brought the same text back a response later.
+      const said = `part${pad(number - 1, digits)} zapisano ${Math.max(0, (opts.now - written) / 1000).toFixed(1)} s temu - ${timingRefusal} (razem tylko części jednej partii z paczki): następny plik przechodzisz i zapisujesz w osobnej odpowiedzi.`;
+      if (Array.isArray(options.notes)) options.notes.push(said);
+      else problems.push(said);
     }
   }
   const { report, warnings } = parseWarnings(context, text);
   problems.push(...warnings);
-  problems.push(...lineBounds(report, files, opts.lineCount));
+  problems.push(...lineBounds(report, files, opts.lineCount, target));
   problems.push(...bundledFindings(report, new Set(context.checklistPerFile || [])));
   const scan = scanPart(text);
   if (number <= n + 1) {
@@ -1122,8 +1183,11 @@ function fixedLevel(addresses, fixed, current) {
 }
 
 function rewriteSeverities(target, facts) {
-  const fixed = rulesOf(facts).severity;
-  if (Object.keys(fixed).length === 0) return 0;
+  const { severity: fixed, severityInSpec } = rulesOf(facts);
+  if (Object.keys(fixed).length === 0 && Object.keys(severityInSpec).length === 0) return 0;
+  // In a spec file an item's `severityInSpec` replaces its fixed severity: a copy-pasted test is a
+  // maintenance cost, not the High a duplicated production branch is (2026-10-30: 4 of 6 High).
+  const fixedIn = (spec) => (spec && Object.keys(severityInSpec).length ? { ...fixed, ...severityInSpec } : fixed);
   const n = (target.files || []).length;
   const width = Math.max(2, String(n + 2).length);
   const stem = String(target.reportPath).replace(/\.md$/i, '');
@@ -1144,6 +1208,7 @@ function rewriteSeverities(target, facts) {
     let lead = null;
     let inRule = false;
     let comment = false;
+    let section = '';
     for (let i = 0; i < chunks.length; i += 2) {
       const line = chunks[i].trim();
       if (comment) {
@@ -1157,12 +1222,13 @@ function rewriteSeverities(target, facts) {
       }
       const severity = line.match(render.reSeverity);
       if (severity) {
-        lead = { index: i, current: byEmoji.get(severity[1]).key, addresses: [] };
+        lead = { index: i, current: byEmoji.get(severity[1]).key, addresses: [], spec: rulebook.reSpecFile.test(section) };
         leads.push(lead);
         inRule = false;
         continue;
       }
       if (/^##\s/.test(line)) {
+        section = line.replace(/^##\s+/, '').trim();
         lead = null;
         inRule = false;
         continue;
@@ -1179,8 +1245,8 @@ function rewriteSeverities(target, facts) {
       }
     }
     let touched = 0;
-    for (const { index, current, addresses } of leads) {
-      const level = fixedLevel(addresses, fixed, current);
+    for (const { index, current, addresses, spec } of leads) {
+      const level = fixedLevel(addresses, fixedIn(spec), current);
       if (!level || level === current || !byKey.has(level)) continue;
       const { emoji, label } = byKey.get(level);
       chunks[index] = `${chunks[index].match(/^\s*(?:-\s+)?/)[0]}${emoji} **${label}**`;
@@ -1205,8 +1271,10 @@ function coverageLine(target, facts = readFacts(target)) {
   const gaps = [];
   const { prepared } = rulesOf(facts);
   const preparedOpen = new Set();
+  const runtimeOpen = new Set();
   let mechanical = 0;
   let withPrepared = 0;
+  let withRuntime = 0;
   files.forEach((file, i) => {
     let text;
     try {
@@ -1223,10 +1291,18 @@ function coverageLine(target, facts = readFacts(target)) {
     }
     const [checked, total] = marker.value.split('/').map((n) => Number(n.trim()));
     if (checked >= total) return;
-    const open = scan.lines.filter((line) => !line.ticked).flatMap((line) => (line.numbers || []).map((k) => `${line.id}#${k}`));
-    if (open.length > 0 && open.length === total - checked && open.every((address) => prepared[address])) {
-      withPrepared++;
-      for (const address of open) preparedOpen.add(address);
+    const openLines = scan.lines.filter((line) => !line.ticked);
+    const open = openLines.flatMap((line) => (line.numbers || []).map((k) => `${line.id}#${k}`));
+    // What no reading of the code can settle - the rulebook's prepared verdicts, and a reason of the
+    // walker's own that names a tool not run or the running application - is no gap of the walk:
+    // part-1 of a stacked run read 60/63 files over three dialog items only the app can answer.
+    const runtime = new Set(openLines
+      .filter((line) => runtimeReasons.some((prefix) => ((verdictOfLine(line) || {}).after || '').replace(/^:\s*/, '').toLowerCase().startsWith(prefix)))
+      .flatMap((line) => (line.numbers || []).map((k) => `${line.id}#${k}`)));
+    if (open.length > 0 && open.length === total - checked && open.every((address) => prepared[address] || runtime.has(address))) {
+      if (open.some((address) => prepared[address])) withPrepared++;
+      if (open.some((address) => !prepared[address])) withRuntime++;
+      for (const address of open) (prepared[address] ? preparedOpen : runtimeOpen).add(address);
       return;
     }
     gaps.push(`${file.path} ${checked}/${total}`);
@@ -1235,6 +1311,7 @@ function coverageLine(target, facts = readFacts(target)) {
   const notes = [
     ...(mechanical ? [`w tym mechaniczne: ${mechanical}`] : []),
     ...(withPrepared ? [`w tym z samymi gotowymi NIEZWERYFIKOWANE (${compact([...preparedOpen])}): ${withPrepared}`] : []),
+    ...(withRuntime ? [`w tym z otwartymi tylko dla narzędzia albo działającej aplikacji (${compact([...runtimeOpen])}): ${withRuntime}`] : []),
   ];
   return `check-part: pliki z pełnym przejściem checklisty: ${full}/${files.length}`
     + `${notes.length ? ` (${notes.join('; ')})` : ''}${gaps.length ? `; niepełne: ${gaps.join(', ')}` : ''}.`;
@@ -1797,6 +1874,147 @@ function shellReviewRead(command, cwd, sessionId = null, env = process.env) {
   ].join('\n');
 }
 
+// The targets of the run a session reviews that read a revision other than the working tree: a
+// branch target with its own snapshot (`snapshotDir` - a staged or folder review reads the
+// project itself), its work folder still on disk.
+function snapshotTargets(contextPath) {
+  let context;
+  try {
+    context = JSON.parse(fs.readFileSync(contextPath, 'utf8'));
+  } catch {
+    return { project: null, targets: [] };
+  }
+  const project = typeof context.project === 'string' ? path.resolve(context.project) : null;
+  const targets = (context.targets || []).filter((t) => t && t.workDir && t.snapshotDir && fs.existsSync(t.workDir)
+    && (!project || !samePath(t.snapshotDir, project)));
+  return { project, targets };
+}
+
+const gitReaders = new Set(['grep', 'show', 'cat-file', 'blame', 'diff', 'archive']);
+const isUnder = (file, dir) => {
+  const rel = path.relative(dir, file);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+// What git subcommand a `git …` command runs: the first word after the options of git itself.
+function gitSubcommand(words) {
+  for (let i = 1; i < words.length; i++) {
+    if (words[i] === '-C' || words[i] === '-c' || words[i] === '--git-dir' || words[i] === '--work-tree') {
+      i++;
+      continue;
+    }
+    if (words[i].startsWith('-')) continue;
+    return words[i];
+  }
+  return null;
+}
+
+// A shell read of another revision while a branch review runs: git reading content (`git grep`,
+// `git show`, `git diff`, `git log -p`, …), or a recursive grep of the project's working tree,
+// which holds whatever is checked out - in a stacked review the stack's last part. 19 lookups of a
+// 188-file run read one of them (2026-10-30). The snapshot is the reviewed commit as plain files.
+function shellOtherRevision(command, cwd, sessionId = null, env = process.env) {
+  const contextPath = boundContextPath(sessionId, env);
+  if (!contextPath) return null;
+  const { project, targets } = snapshotTargets(contextPath);
+  if (!project || targets.length === 0) return null;
+  let what = null;
+  for (const { words, cwd: dir } of shellSteps(command, cwd)) {
+    const name = path.basename(words[0]).replace(/\.exe$/i, '');
+    if (name === 'git') {
+      const sub = gitSubcommand(words);
+      if (gitReaders.has(sub) || (sub === 'log' && words.some((word) => /^(?:-p|--patch|-S.*|-G.*|-L.*)$/.test(word)))) {
+        what = `git ${sub}`;
+        break;
+      }
+      continue;
+    }
+    if (!grepNames.has(name)) continue;
+    const recursive = name === 'rg' || name === 'ag' || words.some((word) => /^-[a-zA-Z]*[rR]/.test(word) || word === '--recursive' || word === '--dereference-recursive');
+    if (!recursive) continue;
+    // The folders it searches: every word after the pattern, or the folder it runs in.
+    const operands = [];
+    let pattern = false;
+    for (let i = 1; i < words.length; i++) {
+      const word = words[i];
+      if (reShellRedirect.test(word) || word === '<') {
+        i++;
+        continue;
+      }
+      if (word === '-e' || word === '--regexp' || word === '-f') {
+        pattern = true;
+        i++;
+        continue;
+      }
+      if (word.startsWith('-')) {
+        if (/^-[ABCmdD]$|^--(?:include|exclude|exclude-dir|glob|type)$/.test(word)) i++;
+        continue;
+      }
+      if (!pattern) pattern = true;
+      else operands.push(word);
+    }
+    const folders = (operands.length ? operands : ['.']).map((word) => resolveWord(word, dir)).filter(Boolean);
+    const allowed = (file) => isUnder(file, path.join(project, '.claude')) || targets.some((t) => isUnder(file, path.resolve(t.snapshotDir)) || isUnder(file, path.resolve(t.workDir)));
+    const stray = folders.find((folder) => (isUnder(folder, project) || isUnder(project, folder)) && !allowed(folder));
+    if (stray) {
+      what = `${name} po ${path.relative(project, stray).replace(/\\/g, '/') || 'katalogu projektu'}`;
+      break;
+    }
+  }
+  if (!what) return null;
+  const where = targets.map((t) => `${t.branch}: ${String(t.snapshotDir).replace(/\\/g, '/')}${t.revision ? ` (${t.revision.slice(0, 9)})` : ''}`).join('; ');
+  return [
+    `Polecenie NIE zostało wykonane: w trakcie recenzji gałęzi ${what} czyta inną rewizję niż recenzowana - drzewo robocze albo gałąź, którą przesunął kolejny commit lub kolejna część stosu (codeReview references/walk.md, Step 3).`,
+    `Szukaj narzędziem Grep albo Glob w target.snapshotDir - recenzowanym commicie jako zwykłych plikach: ${where}. Ścieżka po snapshotDir to ścieżka w repozytorium; treść i diff pliku są w workDir.`,
+    '',
+  ].join('\n');
+}
+
+// The shell of a sub-agent that walks or crosses a branch target (review-hooks.cjs ties an agent to
+// the target whose bundle it read): the doh scripts, and `sed -n '<N>p'` of a line a Read cuts.
+// Of 248 Bash calls the walkers of a 174-file run made, 195 were greps and 16 printed files - output
+// that comes back compressed and without the line numbers a part cites, and one `git diff` named
+// the wrong base (2026-11-02). The tools do all of it: Grep over snapshotDir, Glob, Read.
+const walkerShellNames = new Set(['cd', 'echo', 'true', 'wc']);
+function shellWalkerOnly(command, cwd, input = {}, env = process.env) {
+  const agent = input && input.agent_id ? String(input.agent_id) : '';
+  if (!agent) return null;
+  let state = null;
+  try {
+    const hooks = require('./review-hooks.cjs');
+    const file = hooks.statePath(input.session_id, env);
+    state = file ? hooks.readState(file) : null;
+  } catch {}
+  const workDir = state && state.agents ? state.agents[agent] : null;
+  if (!workDir) return null;
+  const { project, targets } = snapshotTargets(state.contextPath);
+  const target = targets.find((t) => samePath(t.workDir, workDir));
+  if (!project || !target) return null;
+  const scripts = path.join(__dirname);
+  const allowed = shellSteps(command, cwd).every(({ words, cwd: dir }) => {
+    const name = path.basename(words[0]).replace(/\.exe$/i, '');
+    if (walkerShellNames.has(name)) return true;
+    if (name === 'node') {
+      const script = words.slice(1).find((word) => !word.startsWith('-'));
+      const file = script ? resolveWord(script, dir) : null;
+      return !!file && isUnder(file, scripts) && !words.some((word) => /^(?:-e|-p|--eval|--print)$/.test(word));
+    }
+    if (name === 'sed') {
+      const operands = words.slice(1).filter((word) => !word.startsWith('-'));
+      const file = operands.length === 2 ? resolveWord(operands[1], dir) : null;
+      return !!file && longLineRead(words, file);
+    }
+    return false;
+  });
+  if (allowed) return null;
+  return [
+    `Polecenie NIE zostało wykonane: agent recenzji gałęzi ${target.branch || ''} używa Bash tylko do skryptów doh (node "${scripts.replace(/\\/g, '/')}/<skrypt>.cjs") i do sed -n '<N>p' <plik> na linii dłuższej niż ${readLineLimit} znaków, którą Read ucina (codeReview references/walk.md, Step 3).`,
+    `Szukaj narzędziem Grep (path: ${String(target.snapshotDir).replace(/\\/g, '/')} - recenzowana rewizja${target.revision ? ` ${target.revision.slice(0, 9)}` : ''}), listuj Glob, czytaj Read (offset i limit). Diff pliku jest w jego diffPath, policzony względem bazy celu${target.baseBranch ? ` ${target.baseBranch}` : ''}.`,
+    'Wynik powłoki wraca skompresowany i bez numerów linii, które cytuje część.',
+    '',
+  ].join('\n');
+}
+
 // Two findings of one part over the same lines: under the two sides of a `sameAs` pair, one
 // defect reported twice, most likely; under two instructions no pair links, possibly one defect
 // seen from two rules (a hard-coded label is an i18n, a general and a models finding at once).
@@ -1872,6 +2090,12 @@ function normalizePart(text) {
 // better, and until 0.26 every walker copied it by hand), and the coverage marker after the
 // block, whose numbers the assembly counts anyway. A part with no block, or with two, is left
 // as it is - what it is missing is the walk, not a line. Returns the text and the fixes.
+// The address spec of a block line rewritten to `numbers`: `general#1-3,#5`.
+function withNumbers(line, id, numbers) {
+  const spec = rulebook.formatItemSpec([...numbers].sort((a, b) => a - b)).replace(/,/g, ',#');
+  return line.replace(new RegExp(`(\\]\\s+)${id.replace(/[-]/g, '\\-')}#[\\d,#\\s-]*\\d`), `$1${id}#${spec}`);
+}
+
 function fillPart(context, target, partPath, text, facts) {
   const m = path.basename(partPath).match(rePartName);
   const number = m ? Number(m[2]) : 0;
@@ -1881,8 +2105,6 @@ function fillPart(context, target, partPath, text, facts) {
   const scan = scanPart(text);
   if (!plan || scan.blocks.length !== 1) return { text, fixes: [] };
   const { prepared } = rulesOf(facts);
-  const covered = new Set(scan.lines.flatMap((line) => (line.numbers || []).map((k) => `${line.id}#${k}`)));
-  const missing = [...plan].filter((address) => prepared[address] && !covered.has(address));
   const lines = String(text).split('\n');
   const open = lines.findIndex((line) => render.reChecklistOpen.test(line.trim()));
   let close = -1;
@@ -1895,12 +2117,59 @@ function fillPart(context, target, partPath, text, facts) {
   if (close < 0) return { text, fixes: [] };
   const fixes = [];
   const indent = (lines[open].match(/^\s*/) || [''])[0];
-  if (missing.length) {
+  // A range a plan narrowed: `component-template#1-21` over a plan without #6 is the walker's
+  // `brak wystąpień` or `BRAMKA` written across a gap the plan has - the same verdict on the plan's
+  // items, so the line keeps only them. A line with evidence of its own stays as it is.
+  const narrowed = [];
+  for (const line of scan.lines) {
+    const verdict = verdictOfLine(line);
+    if (!verdict || !line.numbers || line.numbers.length < 2) continue;
+    const absence = verdict.word === 'BRAMKA' || (verdict.word === 'OK' && /^\(\s*brak wystąpień[^)]*\)\s*$/i.test(verdict.after));
+    const kept = line.numbers.filter((k) => plan.has(`${line.id}#${k}`));
+    if (!absence || kept.length === line.numbers.length || kept.length === 0) continue;
+    const at = line.lineNo - 1;
+    lines[at] = withNumbers(lines[at], line.id, kept);
+    narrowed.push(...line.numbers.filter((k) => !kept.includes(k)).map((k) => `${line.id}#${k}`));
+  }
+  if (narrowed.length) fixes.push(`${compact(narrowed)}: spoza planu pliku - zakres zawężony do planu`);
+  const covered = new Set(scan.lines.flatMap((line) => (line.numbers || []).map((k) => `${line.id}#${k}`)));
+  // The items the script closed (review-bundle.cjs bindFile `closed`) and the walker left out: into
+  // the instruction's BRAMKA line when it gated the instruction, else one OK line per instruction.
+  const closed = ((facts && facts.files[file.path] && facts.files[file.path].closed) || []).filter((address) => plan.has(address) && !covered.has(address));
+  const closedLines = [];
+  if (closed.length) {
+    const byId = new Map();
+    for (const address of closed) {
+      const [id, n] = address.split('#');
+      byId.set(id, [...(byId.get(id) || []), Number(n)]);
+    }
+    for (const [id, numbers] of byId) {
+      const gate = scan.lines.find((line) => line.id === id && (verdictOfLine(line) || {}).word === 'BRAMKA');
+      if (gate) {
+        lines[gate.lineNo - 1] = withNumbers(lines[gate.lineNo - 1], id, [...gate.numbers, ...numbers]);
+        continue;
+      }
+      closedLines.push(`${indent}[x] ${id}#${rulebook.formatItemSpec(numbers).replace(/,/g, ',#')} — OK (${bundle.closedEvidence})`);
+    }
+    fixes.push(`${compact(closed)}: dopisane pozycje zamknięte przez skrypt (przedmiotu brak w pliku)`);
+  }
+  const missing = [...plan].filter((address) => prepared[address] && !covered.has(address));
+  // The verdicts the read hook carried from an earlier part of the stack (stack-carry.cjs) and the
+  // walker left out - a line of the walker's own wins.
+  const record = require('./stack-carry.cjs').readCarried(target.workDir, number, m[2].length);
+  const carried = record ? Object.keys(record.lines).filter((address) => plan.has(address) && !covered.has(address) && !prepared[address]) : [];
+  const added = [
+    ...closedLines,
+    ...missing.map((address) => `${indent}[ ] ${address} — NIEZWERYFIKOWANE: ${prepared[address]}`),
+    ...carried.map((address) => `${indent}${record.lines[address]}`),
+  ];
+  if (carried.length) fixes.push(`${compact(carried)}: dopisane werdykty z poprzedniej części stosu`);
+  if (added.length) {
     // Before the closing line, or after the last item when the item and `-->` share a line.
     const at = lines[close].trim().startsWith('-->') ? close : close + 1;
     if (at === close + 1) lines[close] = lines[close].replace(/\s*-->\s*$/, '');
-    lines.splice(at, 0, ...missing.map((address) => `${indent}[ ] ${address} — NIEZWERYFIKOWANE: ${prepared[address]}`), ...(at === close + 1 ? [`${indent}-->`] : []));
-    fixes.push(`${compact(missing)}: dopisany gotowy werdykt z paczki`);
+    lines.splice(at, 0, ...added, ...(at === close + 1 ? [`${indent}-->`] : []));
+    if (missing.length) fixes.push(`${compact(missing)}: dopisany gotowy werdykt z paczki`);
   }
   if (scan.markers.length === 0) {
     const end = lines.findIndex((line, i) => i > open && line.includes('-->'));
@@ -1918,7 +2187,10 @@ function fillPart(context, target, partPath, text, facts) {
 function hookResult(input) {
   const tool = input && input.tool_name;
   const args = (input && input.tool_input) || {};
-  if (tool === 'Bash') return shellPartWrite(args.command || '', input.cwd) || shellReviewRead(args.command || '', input.cwd, input.session_id);
+  if (tool === 'Bash') {
+    return shellPartWrite(args.command || '', input.cwd) || shellReviewRead(args.command || '', input.cwd, input.session_id)
+      || shellOtherRevision(args.command || '', input.cwd, input.session_id) || shellWalkerOnly(args.command || '', input.cwd, input);
+  }
   const file = args.file_path;
   if ((tool !== 'Write' && tool !== 'Edit') || typeof file !== 'string' || !rePartName.test(path.basename(file))) return null;
   const found = findContextFor(file);
@@ -1938,10 +2210,11 @@ function hookResult(input) {
     text = args.replace_all ? current.split(args.old_string).join(replacement) : current.replace(args.old_string, () => replacement);
   }
   const facts = readFacts(found.target);
-  const problems = checkPart(found.context, found.target, file, text, { sequential: true, root: input.cwd, facts });
+  const timing = [];
+  const problems = checkPart(found.context, found.target, file, text, { sequential: true, root: input.cwd, facts, notes: timing });
   if (problems.length === 0) {
-    const notes = sameDefectNotes(partReport(text), rulesOf(facts));
-    if (fixes.length) {
+    const notes = [...timing, ...sameDefectNotes(partReport(text), rulesOf(facts))];
+    if (fixes.length && tool === 'Write') {
       return {
         updatedInput: { ...args, content: text },
         context: [`check-part: ${path.basename(file)} zapisana po poprawce formy (nic do zrobienia):`, ...fixes.map((fix) => `- ${fix}`),
@@ -1957,18 +2230,29 @@ function hookResult(input) {
       problems,
     );
   }
+  // Only an earlier part missing - one refused in the same response, most often: nothing in this
+  // part is wrong, and the hook moves it in once the earlier one lands.
+  if (problems.every((problem) => problem.startsWith(missingRefusal))) {
+    return [
+      `Część ${path.basename(file)} czeka w szkicu ${draft}: ${problems[0]}`,
+      'Nie poprawiaj jej i nie zapisuj jeszcze raz: hook zapisze ją sam, gdy brakująca część wejdzie (po Edit jej szkicu albo jej Write). Napraw tylko odrzuconą wcześniejszą część.',
+      '',
+    ].join('\n');
+  }
   return formatProblems(
     `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview references/walk.md, Step 3 point 4):`,
     withDraftLines(problems, text),
-    draftNotes(found.contextPath, draft, problems.every((problem) => problem.includes(timingRefusal))),
+    draftNotes(found.contextPath, draft, false),
   );
 }
 
 // A draft checked as the part it stands for - the same rules as the hook - and moved into place
-// when it passes. `timing` false leaves out the one-response gap: a draft an Edit fixed is a
-// response of its own. A draft older than its part is stale - the part was written again since -
-// and is removed. Resolves to `{ partName, state: 'promoted' | 'stale' | 'refused', problems }`.
-function promoteDraft(found, draft, { timing = true, root } = {}) {
+// when it passes. The one-response gap is left out unless `timing` asks for it: a draft is moved
+// by an Edit, a command or the landing of the part before it, never in the response that wrote the
+// part before it - and a cascade of drafts lands in one go. A draft older than its part is stale -
+// the part was written again since - and is removed.
+// Resolves to `{ partName, state: 'promoted' | 'stale' | 'refused', problems }`.
+function promoteDraft(found, draft, { timing = false, root } = {}) {
   const partName = path.basename(draft).replace(/\.draft\.md$/i, '.md');
   const partPath = path.join(path.dirname(found.target.reportPath), partName);
   let draftTime = null;
@@ -2018,6 +2302,14 @@ function promote(args) {
   try {
     fs.accessSync(draft, fs.constants.R_OK);
   } catch (err) {
+    // Gone because its part landed: an Edit's hook moved it in, the landing of the part before it
+    // did, or the part was written whole again and the draft removed as stale. Nothing is left to do
+    // - the ENOENT this used to print sent a walker looking for a part that was there (2026-10-30).
+    const partPath = path.join(path.dirname(path.dirname(draft)), partName);
+    if (rePartName.test(partName) && fs.existsSync(partPath)) {
+      process.stdout.write(`check-part: ${partName} jest już zapisana (szkic przeniesiony albo usunięty jako nieaktualny) - nic do zrobienia.\n`);
+      return 0;
+    }
     process.stderr.write(`Nie można odczytać szkicu ${draft} (${(err && err.message) || err}).\n`);
     return 1;
   }
@@ -2072,6 +2364,7 @@ function renderArgsOf(target, project) {
     : [`--report=${target.reportPath}`, '--only-md'];
   if (target.withChecklist) args.push('--with-checklist');
   if (target.light) args.push('--light');
+  if (target.htmlReportPath && target.stackPath && fs.existsSync(target.stackPath)) args.push(`--stack=${target.stackPath}`);
   return args;
 }
 
@@ -2092,9 +2385,233 @@ function finishAssembly(context, target) {
   // review's `snapshotDir`, which is the project itself.
   if (target.snapshotOwned && target.snapshotDir) fs.rmSync(target.snapshotDir, { recursive: true, force: true });
   const rendered = spawnSync(process.execPath, [path.join(__dirname, 'render-report.cjs'), ...renderArgsOf(target, context.project)], { encoding: 'utf8' });
+  if (target.stackPath) fs.rmSync(target.stackPath, { force: true });
   process.stdout.write(rendered.stdout || '');
   process.stderr.write(rendered.stderr || '');
   return rendered.status === null ? 1 : rendered.status;
+}
+
+// The finding blocks of a part, as line indexes into `lines`: from a severity lead line to the line
+// before the next lead, `##` heading, comment or blank line. Each with its section's path, its
+// fields by name and the addresses its Reguła names.
+function findingBlocks(lines) {
+  const byEmoji = new Map(render.severities.map((severity) => [severity.emoji, severity.key]));
+  const blocks = [];
+  let section = '';
+  let current = null;
+  let comment = false;
+  const close = (end) => {
+    if (current) {
+      current.end = end;
+      blocks.push(current);
+    }
+    current = null;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (comment) {
+      if (line.includes('-->')) comment = false;
+      continue;
+    }
+    if (line.startsWith('<!--')) {
+      close(i);
+      comment = !line.includes('-->');
+      continue;
+    }
+    if (/^##\s/.test(line)) {
+      close(i);
+      section = line.replace(/^##\s+/, '').trim();
+      continue;
+    }
+    const severity = line.match(render.reSeverity);
+    if (severity) {
+      close(i);
+      current = { start: i, section, severity: byEmoji.get(severity[1]), fields: {} };
+      continue;
+    }
+    if (!current) continue;
+    if (!line) {
+      close(i);
+      continue;
+    }
+    const field = line.match(/^-\s+\*\*([^*]+):\*\*\s?(.*)$/);
+    if (field) current.fields[field[1]] = { index: i, value: field[2] };
+  }
+  close(lines.length);
+  for (const block of blocks) {
+    block.addresses = ((block.fields['Reguła'] || {}).value || '').split(';').map((s) => s.trim()).filter((s) => /^[a-z0-9][a-z0-9-]*#\d+$/.test(s));
+    block.lines = (block.fields.Linia || {}).value || '';
+  }
+  return blocks;
+}
+
+// The names a finding is about: the identifiers in its backticks.
+const commonNames = new Set(['async', 'signal', 'tosignal', 'readonly', 'computed', 'input', 'output', 'this', 'pipe', 'subscribe', 'observable', 'string', 'number', 'boolean', 'true', 'false', 'null', 'undefined']);
+function namesOf(block, lines) {
+  const text = Object.values(block.fields).map((field) => lines[field.index]).join(' ');
+  const names = new Set();
+  for (const quoted of text.match(/`[^`]+`/g) || []) {
+    for (const word of quoted.match(/[A-Za-z_$][\w$]{2,}/g) || []) {
+      const name = word.replace(/^_+|\$+$/g, '').toLowerCase();
+      if (name.length >= 3 && !commonNames.has(name)) names.add(name);
+    }
+  }
+  return names;
+}
+
+const higher = (a, b) => ((rulebook.severityRank[a] || 0) >= (rulebook.severityRank[b] || 0) ? a : b);
+function setSeverity(lines, block, level) {
+  const severity = render.severities.find((s) => s.key === level);
+  if (!severity || level === block.severity) return;
+  lines[block.start] = `${lines[block.start].match(/^\s*(?:-\s+)?/)[0]}${severity.emoji} **${severity.label}**`;
+}
+
+// Removes a finding block, the blank line after it, and its section heading once the section of
+// that part holds no finding.
+function dropBlock(lines, block, blocks) {
+  let end = block.end;
+  if (end < lines.length && !lines[end].trim()) end++;
+  for (let i = block.start; i < end; i++) lines[i] = null;
+  const left = blocks.some((other) => other !== block && !other.dropped && other.section === block.section);
+  block.dropped = true;
+  if (left) return;
+  for (let i = block.start - 1; i >= 0; i--) {
+    if (lines[i] === null || !lines[i].trim()) continue;
+    if (/^##\s/.test(lines[i].trim()) && lines[i].trim().replace(/^##\s+/, '') === block.section) {
+      lines[i] = null;
+      if (i + 1 < lines.length && lines[i + 1] !== null && !lines[i + 1].trim()) lines[i + 1] = null;
+    }
+    break;
+  }
+}
+
+// One defect reported twice, put back together once every part passed:
+// - two findings of one file on the same lines under the two sides of a `sameAs` pair - one
+//   requirement written into two instructions, so one finding naming both;
+// - a template's finding and its class's finding under items the rulebook names `companion`
+//   (an `async` pipe in the template and the facade stream the class hands it), about the same
+//   names - the class's fix removes both, so the template's folds into it. A stacked run reported
+//   two such pairs as four findings (2026-10-30).
+// Returns how many findings were folded into another.
+function foldFindings(target, facts) {
+  const { sameAs, companion } = rulesOf(facts);
+  const files = target.files || [];
+  const width = Math.max(2, String(files.length + 2).length);
+  const stem = String(target.reportPath).replace(/\.md$/i, '');
+  const parts = [];
+  for (let k = 1; k <= files.length + 1; k++) {
+    const file = `${stem}.part${pad(k, width)}.md`;
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    parts.push({ file, eol, text, lines, blocks: findingBlocks(lines) });
+  }
+  let folded = 0;
+  const merge = (into, part, from, fromPart, note) => {
+    const rule = into.fields['Reguła'];
+    const extra = from.addresses.filter((address) => !into.addresses.includes(address));
+    if (rule && extra.length) part.lines[rule.index] = `${part.lines[rule.index]}; ${extra.join('; ')}`;
+    if (note && into.fields.Problem) part.lines[into.fields.Problem.index] = `${part.lines[into.fields.Problem.index]} ${note}`;
+    setSeverity(part.lines, into, higher(into.severity, from.severity));
+    dropBlock(fromPart.lines, from, fromPart.blocks);
+    folded++;
+  };
+  for (const part of parts) {
+    for (const a of part.blocks) {
+      for (const b of part.blocks) {
+        if (a === b || a.dropped || b.dropped || a.section !== b.section || a.start > b.start) continue;
+        const sa = lineSet(a.lines);
+        const sb = lineSet(b.lines);
+        if (sa.size === 0 || sa.size !== sb.size || ![...sa].every((k) => sb.has(k))) continue;
+        if (a.addresses.some((x) => (sameAs[x] || []).some((y) => b.addresses.includes(y)))) merge(a, part, b, part, null);
+      }
+    }
+  }
+  const sections = parts.flatMap((part) => part.blocks.map((block) => ({ part, block })));
+  for (const { part: fromPart, block: from } of sections) {
+    if (from.dropped || !/\.html?$/i.test(from.section)) continue;
+    const wanted = new Set(from.addresses.flatMap((address) => companion[address] || []));
+    if (wanted.size === 0) continue;
+    const classPath = from.section.replace(/\.html?$/i, '.ts');
+    const names = namesOf(from, fromPart.lines);
+    const host = sections.find(({ part, block }) => !block.dropped && block.section === classPath
+      && block.addresses.some((address) => wanted.has(address)) && [...namesOf(block, part.lines)].some((name) => names.has(name)));
+    if (!host) continue;
+    const note = `Ta sama przyczyna w szablonie \`${from.section}\` (linie ${from.lines}): poprawka w klasie usuwa oba miejsca.`;
+    const locations = host.block.fields['PR Locations'];
+    const templateName = path.posix.basename(from.section);
+    if (locations && !host.part.lines[locations.index].includes(templateName)) host.part.lines[locations.index] = `${host.part.lines[locations.index]}, \`${from.section}\``;
+    merge(host.block, host.part, from, fromPart, note);
+  }
+  for (const part of parts) {
+    const next = part.lines.filter((line) => line !== null).join(part.eol);
+    if (next !== part.text) fs.writeFileSync(part.file, next);
+  }
+  return folded;
+}
+
+// FIXED IDENTIFIERS: what `--gaps` prints first, and the replies of the agent that closes them.
+const gapsReplies = bundle.gapsReplies;
+
+// The items the file parts on disk left open for a file outside the review (`poza recenzją:`) that
+// the reviewed revision holds - readable, so an agent of its own can still give them a verdict
+// before the cross-file pass. 26 of the open items of a 174-file run named one shared component
+// that every walker could have opened (2026-11-02). A prepared verdict, an item open for a tool or
+// for the running application stays as it is: no reading answers those.
+function gapsOf(context, target, readPart) {
+  const facts = readFacts(target);
+  const { prepared } = rulesOf(facts);
+  const snapshot = target.snapshotDir && fs.existsSync(target.snapshotDir) ? target.snapshotDir : null;
+  const root = context.project || process.cwd();
+  const n = (target.files || []).length;
+  const out = [];
+  for (let k = 1; k <= n; k++) {
+    const text = readPart(k);
+    if (text === null) continue;
+    const file = target.files[k - 1];
+    const finder = pathFinder(context, file, root, facts && facts.factRoot, snapshot);
+    const open = [];
+    for (const line of scanPart(text).lines) {
+      const verdict = verdictOfLine(line);
+      if (!verdict || verdict.word !== 'NIEZWERYFIKOWANE' || !line.numbers) continue;
+      const addresses = line.numbers.map((number) => `${line.id}#${number}`).filter((address) => !prepared[address]);
+      const reason = verdict.after.replace(/^:\s*/, '').trim();
+      if (!addresses.length || !reason.toLowerCase().startsWith(unverifiedReasons[1])) continue;
+      const found = finder.outside(leadingPath(reason.slice(unverifiedReasons[1].length)));
+      if (!found || found.reviewed) continue;
+      const where = [snapshot, root].filter(Boolean).map((base) => path.join(base, found.path)).find((p) => fs.existsSync(p));
+      if (where) open.push({ addresses, outside: found.path, read: where.replace(/\\/g, '/'), line: line.raw || '' });
+    }
+    if (open.length) out.push({ number: k, file, partPath: bundle.partPathOf(target.reportPath, k, n), open });
+  }
+  return out;
+}
+
+function printGaps(context, target) {
+  const n = (target.files || []).length;
+  const gaps = gapsOf(context, target, (k) => {
+    try {
+      return fs.readFileSync(bundle.partPathOf(target.reportPath, k, n), 'utf8');
+    } catch {
+      return null;
+    }
+  });
+  if (gaps.length === 0) {
+    process.stdout.write(`${gapsReplies.none}\n`);
+    return 0;
+  }
+  const out = [`GAPS ${gaps.reduce((sum, g) => sum + g.open.reduce((s, o) => s + o.addresses.length, 0), 0)} pozycji w ${gaps.length} częściach`];
+  for (const gap of gaps) {
+    out.push('', `## ${gap.file.path}`, `- część: ${gap.partPath}`, `- paczka: ${gap.file.bundlePath || '-'}`, `- treść: ${gap.file.contentPath || '-'}`);
+    for (const open of gap.open) out.push(`- ${open.addresses.join(', ')}: poza recenzją ${open.outside} - czytaj ${open.read}`);
+  }
+  process.stdout.write(`${out.join('\n')}\n`);
+  return 0;
 }
 
 function assemble(argv) {
@@ -2103,12 +2620,24 @@ function assemble(argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
     if (m && (m[1] === 'context' || m[1] === 'report' || m[1] === 'promote')) args[m[1]] = m[2];
     else if (arg === '--assemble') args.assemble = true;
+    else if (arg === '--gaps') args.gaps = true;
+    else if (arg === '--assemble-all') args.all = true;
     else {
-      process.stderr.write(`Nieznany argument: ${arg} (oczekiwano --context=<contextPath> --report=<reportPath> [--assemble] albo --promote=<szkic>).\n`);
+      process.stderr.write(`Nieznany argument: ${arg} (oczekiwano --context=<contextPath> --report=<reportPath> [--assemble], --context=<contextPath> --assemble-all albo --promote=<szkic>).\n`);
       return 1;
     }
   }
   if (args.promote) return promote(args);
+  if (args.all) return assembleAll(args.context);
+  // The gaps of a target need only its report: the context is the one named next to it.
+  if (args.gaps && args.report && !args.context) {
+    const found = findContextFor(String(args.report).replace(/\.md$/i, '.part01.md'));
+    if (!found) {
+      process.stderr.write(`Brak kontekstu dla raportu ${args.report}.\n`);
+      return 1;
+    }
+    return printGaps(found.context, found.target);
+  }
   if (!args.context || !args.report) {
     process.stderr.write('Brak --context=<contextPath> albo --report=<reportPath>.\n');
     return 1;
@@ -2125,7 +2654,8 @@ function assemble(argv) {
     process.stderr.write(`Kontekst ${args.context} nie ma celu z reportPath ${args.report}.\n`);
     return 1;
   }
-  if (args.assemble && !fs.existsSync(target.workDir || '') && !fs.readdirSync(path.dirname(target.reportPath)).some((name) => rePartName.test(name))) {
+  if (args.gaps) return printGaps(context, target);
+  if (args.assemble &&!fs.existsSync(target.workDir || '') && !fs.readdirSync(path.dirname(target.reportPath)).some((name) => rePartName.test(name))) {
     process.stdout.write(`check-part: raport ${path.basename(args.report)} jest już złożony - nie ma czego składać.\n`);
     return 0;
   }
@@ -2143,15 +2673,82 @@ function assemble(argv) {
   const facts = readFacts(target);
   const severities = rewriteSeverities(target, facts);
   if (severities) process.stdout.write(`check-part: ważność stała z rulebooka ustawiona w ${severities} ${severities === 1 ? 'znalezisku' : 'znaleziskach'}.\n`);
+  const folded = foldFindings(target, facts);
+  if (folded) process.stdout.write(`check-part: scalono ${folded} ${folded === 1 ? 'znalezisko' : 'znaleziska'} z drugim zgłoszeniem tej samej wady (ta sama wada na tych samych liniach albo szablon i jego klasa).\n`);
   const coverage = coverageLine(target, facts);
   if (coverage) process.stdout.write(`${coverage}\n`);
   return args.assemble ? finishAssembly(context, target) : 0;
 }
 
+// Every target of a run assembled in turn - each by its own `--assemble`, in a child process, so
+// one that fails leaves its parts and the next one still runs - and, once all of them are, the
+// run's terminal summary (references/assembly.md Step 5) between its two FIXED IDENTIFIER lines,
+// to print as it is: what the renderer and the coverage line said, the base of each target, the
+// warnings of Step 1. Written by hand, the summary of a five-target run dropped two warnings
+// (2026-10-30). Exit 1 while any target is not assembled.
+const summaryStart = '=== PODSUMOWANIE (Step 5) ===';
+const summaryEnd = '=== KONIEC PODSUMOWANIA ===';
+function assembleAll(contextPath) {
+  let context;
+  try {
+    context = JSON.parse(fs.readFileSync(contextPath, 'utf8'));
+  } catch (err) {
+    process.stderr.write(`Nie można odczytać kontekstu ${contextPath} (${(err && err.message) || err}).\n`);
+    return 1;
+  }
+  const results = [];
+  for (const target of context.targets || []) {
+    const run = spawnSync(process.execPath, [__filename, `--context=${contextPath}`, `--report=${target.reportPath}`, '--assemble'], { encoding: 'utf8' });
+    const result = { target, status: run.status === null ? 1 : run.status, stdout: run.stdout || '', stderr: run.stderr || '' };
+    results.push(result);
+    process.stdout.write(`--- ${target.branch || path.basename(target.reportPath)} ---\n${result.stdout}`);
+    if (result.stderr) process.stderr.write(`--- ${target.branch || path.basename(target.reportPath)} ---\n${result.stderr}`);
+  }
+  const failed = results.filter((result) => result.status !== 0);
+  if (failed.length > 0) {
+    process.stderr.write(`Nie złożono: ${failed.map((result) => result.target.branch || result.target.reportPath).join(', ')} - popraw części, które wskazano wyżej, i uruchom to polecenie jeszcze raz (złożone cele pomija).\n`);
+    return 1;
+  }
+  process.stdout.write(`${runSummary(context, results)}\n`);
+  return 0;
+}
+
+const baseSources = { pr: (target) => `PR #${target.prNumber}`, fork: () => 'gałąź, z której wyszła', candidate: () => 'domyślna gałąź (main/master/develop/dev)' };
+
+// The Step 5 summary, in Polish, from what each assembly printed - never from the report: a
+// report without --with-checklist keeps no coverage marker.
+function runSummary(context, results) {
+  const out = [summaryStart];
+  for (const { target, stdout, stderr } of results) {
+    const already = /jest już złożony/.test(stdout);
+    const report = target.htmlReportPath && fs.existsSync(target.htmlReportPath) ? target.htmlReportPath : target.reportPath;
+    out.push(`${target.branch || path.basename(target.reportPath)}: ${report}`);
+    if (target.baseBranch) out.push(`- baza: ${target.baseBranch} (${(baseSources[target.baseSource] || (() => target.baseSource || 'nieznane'))(target)})`);
+    const severity = stdout.match(/^severity: .*$/m);
+    out.push(`- ${severity ? severity[0] : already ? 'raport był już złożony - liczby znalezisk w jego wcześniejszym podsumowaniu' : 'severity: (renderer nie podał)'}`);
+    const stack = stdout.match(/^stos: .*$/m);
+    if (stack) out.push(`- ${stack[0]}`);
+    const coverage = stdout.match(/^check-part: pliki z pełnym przejściem checklisty: .*$/m);
+    if (coverage) out.push(`- pokrycie: ${coverage[0].replace(/^check-part: /, '')}`);
+    for (const line of stdout.split(/\r?\n/).filter((l) => /^check-part: (ważność stała|scalono)/.test(l))) out.push(`- ${line.replace(/^check-part: /, '')}`);
+    for (const line of stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) out.push(`- ostrzeżenie renderera: ${line}`);
+    if (target.light) out.push('- --light: checklisty bez pozycji ważności low, raport bez znalezisk Low (strona bez fragmentów kodu) - krótki raport nie znaczy czysty.');
+    if (target.unchangedSinceLastReview) {
+      const count = Array.isArray(target.unchangedSinceLastReview) ? target.unchangedSinceLastReview.length : target.unchangedSinceLastReview;
+      out.push(`- --since-last: pominięto ${count} niezmienionych plików; poprzedni raport: ${target.previousReportPath || 'nieznany'} - raport obejmuje tylko to, co się zmieniło.`);
+    }
+    if (target.resume) out.push(`- wznowiony przebieg z ${target.resume.from}; przejęte pliki: ${(target.resume.doneFiles || []).length}.`);
+  }
+  const warnings = context.runWarnings || [];
+  if (warnings.length) out.push('Ostrzeżenia kontekstu (Step 1):', ...warnings.map((warning) => `- ${warning}`));
+  out.push(summaryEnd);
+  return out.join('\n');
+}
+
 module.exports = {
-  renderArgsOf, withDraftLines,
+  renderArgsOf, withDraftLines, findingBlocks, foldFindings, assembleAll, runSummary, summaryStart, summaryEnd,
   checkPart, checkAssembly, findContextFor, hookResult, normalizePart, fillPart, checkQuestions, windowOf, scanPart, planItems, compact,
-  rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellWrites, expandWord,
+  rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellOtherRevision, shellWalkerOnly, beyondHint, pathFinder, gapsOf, gapsReplies, shellWrites, expandWord,
   promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName, noSpecConflicts,
   sameDefectNotes, partReport,
 };

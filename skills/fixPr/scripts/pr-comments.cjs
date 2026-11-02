@@ -24,7 +24,7 @@ const defaultSkillDir = path.resolve(__dirname, '..');
 const artifactsRetain = 30;
 
 function parseArgs(argv) {
-  const args = { branches: '', project: process.cwd(), skillDir: '', replay: '' };
+  const args = { branches: '', project: process.cwd(), skillDir: '', replay: '', local: null };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -33,12 +33,92 @@ function parseArgs(argv) {
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'skill-dir') args.skillDir = m[2];
     else if (m[1] === 'replay') args.replay = m[2];
+    else if (m[1] === 'local') args.local = m[2].split(/[\s,;]+/).map((id) => id.trim().toLowerCase()).filter(Boolean);
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir, --replay).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir, --replay, --local).`);
+  }
+  if (args.local !== null && args.local.length === 0) {
+    throw new Error('--local needs the ids of the codeReview findings to fix (--local="da3d32cd,b4309764").');
+  }
+  const bad = (args.local || []).filter((id) => !reFindingId.test(id));
+  if (bad.length > 0) {
+    throw new Error(`--local: ${bad.join(', ')} is no codeReview finding id - an id is the 8 hex characters the report shows on a finding (e.g. da3d32cd, or da3d32cd-2 for a repeat).`);
   }
   return args;
+}
+
+// A finding's id in a codeReview report (render-report.cjs findingId): 8 hex characters, and a
+// `-<n>` suffix for the second identical finding of a file.
+const reFindingId = /^[0-9a-f]{8}(?:-\d+)?$/;
+
+// The codeReview reports of one branch, newest run first: `<root>/runs/<stamp>/<branch>/raport.html`
+// (its findings in the page's `report-data` JSON) or `raport.md` (parsed the way the renderer does).
+function reportFilesOf(project, branch, skillDir) {
+  const dir = sanitizeBranchName(branch);
+  const roots = [path.join(project, '.claude', 'doh', 'codeReview'), path.join(skillDir, '..', 'codeReview', 'reports')];
+  const out = [];
+  for (const root of roots) {
+    let stamps = [];
+    try {
+      stamps = fs.readdirSync(path.join(root, 'runs'));
+    } catch {
+      continue;
+    }
+    for (const stamp of stamps) {
+      for (const name of ['raport.html', 'raport.md']) {
+        const file = path.join(root, 'runs', stamp, dir, name);
+        if (fs.existsSync(file)) out.push({ stamp, file });
+      }
+    }
+  }
+  return out.sort((a, b) => (a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : a.file.endsWith('.html') ? -1 : 1));
+}
+
+function findingsOfReport(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  if (file.endsWith('.html')) {
+    const m = text.match(/<script id="report-data"[^>]*>([\s\S]*?)<\/script>/);
+    if (!m) return [];
+    const data = JSON.parse(m[1].replace(/<\\\/script/gi, '</script'));
+    return (data.files || []).flatMap((f) => (f.findings || []).map((finding) => ({ ...finding, file: finding.file || f.path })));
+  }
+  const report = require('../../codeReview/scripts/render-report.cjs').parseReport(text);
+  return report.files.flatMap((f) => f.findings.map((finding) => ({ ...finding, file: f.path })));
+}
+
+// The findings of `ids` the branch's reports hold, each from the newest report that has it,
+// as the agent reads them: where, how bad, what is wrong, what is expected, and which report.
+function localFindings(project, branch, ids, skillDir) {
+  const wanted = new Set(ids);
+  const found = new Map();
+  for (const { file } of reportFilesOf(project, branch, skillDir)) {
+    let findings = [];
+    try {
+      findings = findingsOfReport(file);
+    } catch {
+      continue;
+    }
+    for (const f of findings) {
+      const id = String(f.id || '').toLowerCase();
+      if (!wanted.has(id) || found.has(id)) continue;
+      found.set(id, {
+        id,
+        path: f.file,
+        lines: f.lines,
+        severity: f.severity,
+        rule: f.rule,
+        problem: f.problem,
+        expected: f.expected,
+        ...(f.prProblem ? { prProblem: f.prProblem } : {}),
+        ...(f.prExpected ? { prExpected: f.prExpected } : {}),
+        ...(f.prLocations ? { prLocations: f.prLocations } : {}),
+        report: file.replace(/\\/g, '/'),
+      });
+    }
+  }
+  return ids.filter((id) => found.has(id)).map((id) => found.get(id));
 }
 
 // A recorded review in place of the GitHub API - the fixPr meter (test-key/README.md) runs the
@@ -168,6 +248,73 @@ function pruneArtifacts(branchDir, retain = artifactsRetain) {
   }
 }
 
+function artifactPaths(branch, reportsDir, stamp) {
+  const dir = sanitizeBranchName(branch);
+  const branchDir = path.join(reportsDir, dir);
+  fs.mkdirSync(branchDir, { recursive: true });
+  pruneArtifacts(branchDir);
+  return {
+    commentsPath: path.join(branchDir, `${dir}-fix-pr-${stamp}.json`),
+    reportPath: path.join(branchDir, `${dir}-fix-pr-${stamp}.md`),
+    // Where the branch's agent brief is rendered. Deliberately unstamped: one file
+    // per branch, overwritten by each run, so the orchestrator never computes a
+    // path of its own and the folder does not grow a prompt per run. Two runs
+    // cannot race for it - the worktree guard refuses a second run on one branch.
+    promptPath: path.join(branchDir, `${dir}-fix-pr-agent-prompt.md`),
+    // Where checks.cjs writes one log per gate step. Unstamped for the same reason
+    // as the brief, and outside the worktree for the same reason as the report: a
+    // build log written inside the checkout is a file the commit could pick up.
+    checksDir: path.join(branchDir, `${dir}-fix-pr-checks`),
+  };
+}
+
+// `--local`: the branch's work is the codeReview findings whose ids the user named, read from the
+// branch's reports, in place of the pull request's comments. The pull request still names the
+// base, the commit message and where the push goes; nothing is read from or resolved on its threads.
+function collectLocal(branch, pr, commitMessage, ctx) {
+  const { project, reportsDir, stamp, result } = ctx;
+  const findings = localFindings(project, branch, ctx.local, ctx.skillDir);
+  for (const f of findings) ctx.matched.add(f.id);
+  if (findings.length === 0) {
+    result.warnings.push(`${branch}: none of the --local ids is in a codeReview report of this branch; this run will only bring its checks green.`);
+  }
+  const { commentsPath, reportPath, promptPath, checksDir } = artifactPaths(branch, reportsDir, stamp);
+  const payload = {
+    branch,
+    pr: { number: pr.number, title: pr.title, url: pr.url, base: pr.base },
+    commitMessage,
+    generatedAt: new Date(ctx.now).toISOString(),
+    source: 'local',
+    threads: [],
+    conversation: [],
+    reviews: [],
+    findings,
+  };
+  fs.writeFileSync(commentsPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return {
+    branch,
+    pr: payload.pr,
+    commitMessage,
+    commitPrefix: commitPrefixFor(pr.title),
+    commentsPath,
+    reportPath,
+    promptPath,
+    checksDir,
+    worktree: worktreePathFor(project, branch),
+    local: true,
+    counts: {
+      findings: findings.length,
+      openThreads: 0,
+      resolvedThreads: 0,
+      outdatedThreads: 0,
+      conversation: 0,
+      reviews: 0,
+      candidates: findings.length,
+      humanCandidates: findings.length,
+    },
+  };
+}
+
 // One branch, start to finish. Every failure that stops THIS branch is pushed to
 // `errors` and the branch is dropped; a run over three branches keeps going for
 // the other two, because one missing pull request is no reason to abandon work
@@ -194,6 +341,9 @@ function collectBranch(branch, ctx) {
     result.errors.push(`${branch}: pull request #${pr.number} has a title (${JSON.stringify(pr.title)}) that yields no commit message.`);
     return null;
   }
+
+  // `--local`: the work is the codeReview findings named by id, not the pull request's comments.
+  if (ctx.local) return collectLocal(branch, pr, commitMessage, ctx);
 
   const threads = api.reviewThreads(project, found.slug, pr.number);
   if (threads.error) {
@@ -244,21 +394,7 @@ function collectBranch(branch, ctx) {
     result.warnings.push(`${branch}: every open comment on #${pr.number} came from a GitHub App - no reviewer has written one. They are still fixed on their merits; nobody is waiting on the result.`);
   }
 
-  const dir = sanitizeBranchName(branch);
-  const branchDir = path.join(reportsDir, dir);
-  fs.mkdirSync(branchDir, { recursive: true });
-  pruneArtifacts(branchDir);
-  const commentsPath = path.join(branchDir, `${dir}-fix-pr-${stamp}.json`);
-  const reportPath = path.join(branchDir, `${dir}-fix-pr-${stamp}.md`);
-  // Where the branch's agent brief is rendered. Deliberately unstamped: one file
-  // per branch, overwritten by each run, so the orchestrator never computes a
-  // path of its own and the folder does not grow a prompt per run. Two runs
-  // cannot race for it - the worktree guard refuses a second run on one branch.
-  const promptPath = path.join(branchDir, `${dir}-fix-pr-agent-prompt.md`);
-  // Where checks.cjs writes one log per gate step. Unstamped for the same reason
-  // as the brief, and outside the worktree for the same reason as the report: a
-  // build log written inside the checkout is a file the commit could pick up.
-  const checksDir = path.join(branchDir, `${dir}-fix-pr-checks`);
+  const { commentsPath, reportPath, promptPath, checksDir } = artifactPaths(branch, reportsDir, stamp);
   const payload = {
     branch,
     pr: { number: pr.number, title: pr.title, url: pr.url, base: pr.base },
@@ -342,10 +478,17 @@ function collect(options) {
   }
 
   const ts = formatTimestamp(now);
-  const ctx = { project, reportsDir, stamp: `${ts.date}-${ts.time}`, api, findPr, result, now };
+  const local = Array.isArray(options.local) ? options.local : null;
+  const ctx = { project, reportsDir, stamp: `${ts.date}-${ts.time}`, api, findPr, result, now, skillDir, local, matched: new Set() };
   for (const branch of names) {
     const target = collectBranch(branch, ctx);
     if (target) result.targets.push(target);
+  }
+  if (local) {
+    const missing = local.filter((id) => !ctx.matched.has(id));
+    if (missing.length > 0) {
+      result.warnings.push(`--local: ${missing.join(', ')} found in no codeReview report of ${names.join(', ')} - check the id on the report page, and that its branch is among the named ones.`);
+    }
   }
   return result;
 }
@@ -365,6 +508,6 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource };
+module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf };
 
 if (require.main === module) main();

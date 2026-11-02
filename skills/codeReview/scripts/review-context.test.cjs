@@ -548,7 +548,8 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.strictEqual(t0.baseSource, 'fork');
   assert.strictEqual(t0.prNumber, null);
   assert.strictEqual(t0.reportPath, path.join(skillDir, 'reports', 'runs', '2026-07-08-10-00-00', 'feature-auto', 'raport.md'));
-  assert.deepStrictEqual(t0.files.map((f) => f.path), ['config/app.json', 'src/a.ts']);
+  // Files of one kind walk together; a file no kind describes comes last.
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['src/a.ts', 'config/app.json']);
   assert.deepStrictEqual(t0.skipped, ['README.md'], 'prose is skipped, not reviewed');
   const added = t0.files.find((f) => f.path === 'src/a.ts');
   assert.strictEqual(added.status, 'A');
@@ -557,13 +558,13 @@ test('auto mode reviews the current branch against its detected base', (t) => {
   assert.strictEqual(added.showCommand, undefined, 'per-file command strings are gone');
   assert.deepStrictEqual(Object.keys(t0.commands), ['grep', 'assemble'], 'content and diff are files to Read, not commands');
   assert.strictEqual(t0.workDir, t0.reportPath.replace(/\.md$/, '.work').replace(/\\/g, '/'));
-  assert.ok(added.contentPath.startsWith(`${t0.workDir}/`) && added.contentPath.endsWith('/02-a.ts'), added.contentPath);
+  assert.ok(added.contentPath.startsWith(`${t0.workDir}/`) && added.contentPath.endsWith('/01-a.ts'), added.contentPath);
   assert.strictEqual(fs.readFileSync(added.contentPath, 'utf8'), 'const a = 1;\n', 'the reviewed revision, from the work folder');
   assert.strictEqual(added.diffPath, null, 'an added file has no diff - every line is new');
   const modified = t0.files.find((f) => f.path === 'config/app.json');
   assert.strictEqual(modified.status, 'M');
   assert.strictEqual(modified.changedLines, '2', 'script precomputes new-file changed lines');
-  assert.ok(modified.contentPath.endsWith('/01-app.json'), 'numbered like the part the file is reviewed into');
+  assert.ok(modified.contentPath.endsWith('/02-app.json'), 'numbered like the part the file is reviewed into');
   assert.strictEqual(fs.readFileSync(modified.contentPath, 'utf8'), '{\n  "a": 2\n}\n');
   assert.strictEqual(modified.diffPath, `${modified.contentPath}.diff`);
   const patch = fs.readFileSync(modified.diffPath, 'utf8');
@@ -600,7 +601,7 @@ test('auto mode diffs against the open PR base and names its source', (t) => {
   assert.strictEqual(t0.baseBranch, 'main', 'the PR base wins over the forked-from develop');
   assert.strictEqual(t0.baseSource, 'pr');
   assert.strictEqual(t0.prNumber, 42);
-  assert.deepStrictEqual(t0.files.map((f) => f.path), ['d.json', 'src/a.ts'], 'develop`s commit is part of the PR diff');
+  assert.deepStrictEqual(t0.files.map((f) => f.path), ['src/a.ts', 'd.json'], 'develop`s commit is part of the PR diff');
 });
 
 test('buildContext warns once when the GitHub lookup fails', (t) => {
@@ -732,7 +733,7 @@ test('light files share a batch: their bundles name the batch and the part, the 
   assert.ok(cross.includes(`- część: ${report}.part04.md\n`) && cross.includes(`${report}.part05.md`));
   assert.ok(cross.includes('PR Problem'), 'an HTML run writes the PR fields');
   assert.ok(cross.includes(`## Pliki celu\n\nTreść i diff pliku, w \`${t0.workDir}/\`, o ile nazwa nie zaczyna się od \`/\` albo litery dysku:\n- 1 src/a.ts: ${a.contentPath}\n- 2 src/b.ts: ${b.contentPath}\n- 3 src/c.ts: ${c.contentPath}\n`), 'the cross pass opens the files from this list');
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(t0.factsPath, 'utf8')).rules, { severity: {}, sameAs: {}, prepared: {}, noSpec: [] });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(t0.factsPath, 'utf8')).rules, { severity: {}, sameAs: {}, prepared: {}, noSpec: [], handoff: {}, companion: {}, severityInSpec: {} });
 
   const alone = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 13), batch: false });
   assert.deepStrictEqual(alone.targets[0].batches, []);
@@ -753,9 +754,9 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   const bundle = (k) => fs.readFileSync(t0.files[k - 1].bundlePath, 'utf8');
   assert.ok(!bundle(3).includes('Koniec okna'), 'a bundle inside a window points on as before');
   assert.ok(bundle(3).includes('## Dalej\n\nZ zapisem części tej partii'));
-  assert.ok(bundle(4).includes('## Dalej\n\nKoniec okna (1-4):\n- walker okna: zapisz części tej partii, niczego więcej nie czytaj i odpowiedz jedną linią `WINDOW DONE 1-4`;\n'));
-  assert.ok(bundle(4).includes(`  - ${t0.files[4].bundlePath}\n`), 'the lines for a reviewer walking alone name the next window\'s first Reads');
-  assert.ok(bundle(8).includes('Koniec okna (5-8):') && bundle(8).includes(`  - ${t0.crossBundlePath}\n`), 'the last window ends at the cross-file pass, which stays the main conversation\'s');
+  assert.ok(bundle(4).includes('## Dalej\n\nKoniec okna (1-4): walker okna zapisuje części tej partii i odpowiada jedną linią `WINDOW DONE 1-4`, niczego więcej nie czytając.\n'));
+  assert.ok(bundle(4).includes(`\n- ${t0.files[4].bundlePath}\n`), 'the lines for a reviewer walking alone name the next window\'s first Reads');
+  assert.ok(bundle(8).includes('Koniec okna (5-8): ') && bundle(8).includes(`\n- ${t0.crossBundlePath}\n`), 'the last window ends at the cross-file pass, which stays the main conversation\'s');
   const brief = fs.readFileSync(t0.windows[1].brief, 'utf8');
   assert.ok(brief.startsWith('# Window 2 of 2: files 5-8\n'), brief);
   assert.match(brief, /1\. The rules of the walk \(codeReview Step 3\) and of a part \(Step 4\) are in your system prompt/);
@@ -763,10 +764,14 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   const settings = JSON.parse(brief.slice(brief.indexOf('```json') + 7, brief.lastIndexOf('```')));
   // The windows walk side by side, and the Workflow tool gets the same plan in a few bytes.
   assert.strictEqual(t0.parallel, 2);
-  assert.deepStrictEqual(ctx.workflow.args, { lanes: 2, targets: [{ dir: t0.workDir, windows: [['1-4', '', ''], ['5-8', '', '']], cross: { model: '', effort: '' } }] });
+  assert.deepStrictEqual(workflowArgs(ctx), { lanes: 2, targets: [{ dir: t0.workDir, windows: [['1-4', '', ''], ['5-8', '', '']], cross: { model: '', effort: '' }, gaps: { model: 'sonnet', effort: 'medium' } }] });
   const runDir = path.dirname(path.dirname(t0.reportPath)).replace(/\\/g, '/');
   assert.strictEqual(ctx.workflow.scriptPath, `${runDir}/review-windows.js`, 'inside the project, where the Workflow tool may read it');
-  assert.strictEqual(fs.readFileSync(ctx.workflow.scriptPath, 'utf8'), fs.readFileSync(path.join(__dirname, '..', 'workflows', 'review-windows.js'), 'utf8'));
+  // The skill's script with the run's args on its `baked` line, and nothing else changed.
+  const copied = fs.readFileSync(ctx.workflow.scriptPath, 'utf8').split(/\r?\n/);
+  const shipped = fs.readFileSync(path.join(__dirname, '..', 'workflows', 'review-windows.js'), 'utf8').split(/\r?\n/);
+  assert.strictEqual(copied.length, shipped.length);
+  assert.deepStrictEqual(copied.filter((line, i) => line !== shipped[i]), [`const baked = ${JSON.stringify(workflowArgs(ctx))}`]);
   assert.ok(!('workflow' in t0), 'one workflow for the run, not one per target');
   assert.ok(fs.existsSync(t0.crossBriefPath), 'the cross-file pass has a brief of its own');
   assert.strictEqual(settings.reportPath, t0.reportPath);
@@ -1356,7 +1361,7 @@ test('folder mode reviews every file under the folder as added', (t) => {
     assert.strictEqual(f.diffPath, null, 'folder mode has no diffs');
     assert.strictEqual(f.contentPath, `${dir.replace(/\\/g, '/')}/${f.path}`, 'working-tree files are read in place');
   }
-  assert.deepStrictEqual(fs.readdirSync(t0.workDir), ['01-a.component.ts.bundle.md', '02-b.scss.bundle.md', 'cross-file.brief.md', 'cross-file.bundle.md', 'facts.json'],
+  assert.deepStrictEqual(fs.readdirSync(t0.workDir), ['01-a.component.ts.bundle.md', '02-b.scss.bundle.md', 'cross-file.brief.md', 'cross-file.bundle.md', 'facts.json', 'gaps.brief.md'],
     'so the work folder holds no copy of a file, only what the review reads next to it');
   assert.deepStrictEqual(t0.skipped, ['src/app/logo.png']);
   const comp = t0.files.find((f) => f.path === 'src/app/a.component.ts');
@@ -1746,7 +1751,7 @@ test('the context build reports how long each phase took when asked to', (t) => 
   commitFile(dir, 'src/a.ts', 'export const a = 1;\n', 'a');
   const phases = [];
   rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir: makeSkillDir(t, [TS_KIND]), now: new Date(2026, 6, 8, 10, 0), timing: (phase, ms) => phases.push([phase, typeof ms]) });
-  assert.deepStrictEqual(phases.map(([phase]) => phase), ['rulebook', 'targets', 'scan', 'bundles', 'write']);
+  assert.deepStrictEqual(phases.map(([phase]) => phase), ['rulebook', 'targets', 'scan', 'bundles', 'stack', 'write']);
   assert.ok(phases.every(([, type]) => type === 'number'));
 });
 
@@ -1975,7 +1980,8 @@ test('writeContext puts the context in a file and prints a summary', (t) => {
   assert.ok(!('paths' in summary.targets[0]), 'the file list stays in the file');
   assert.ok(!('checklistPlans' in summary) && !('instructionsCatalog' in summary), 'the plans stay in the file');
   const written = fs.readFileSync(summary.contextPath, 'utf8');
-  assert.deepStrictEqual(JSON.parse(written), { outputFormat: 'md', targets: context.targets });
+  // Step 1's warnings stay in the file for the run's summary (check-part.cjs --assemble-all).
+  assert.deepStrictEqual(JSON.parse(written), { outputFormat: 'md', targets: context.targets, runWarnings: ['w'] });
   assert.ok(written.split('\n').length > 5, 'laid out one element per line');
   const failed = { targets: [], errors: ['x'] };
   assert.strictEqual(rc.writeContext(failed), failed, 'no target, nothing to put in a file');
@@ -2194,7 +2200,7 @@ test('files of a kind with a walker setting fill windows of their own, spawned w
   assert.deepStrictEqual(window.files, [enums[0], enums[enums.length - 1]], 'the enums share one window, alone');
   assert.deepStrictEqual([window.model, window.effort], ['sonnet', 'medium']);
   assert.ok(t0.windows.filter((w) => w !== window).every((w) => w.effort === 'high' && !w.model), 'every other window carries --walker-effort');
-  assert.ok(ctx.workflow.args.targets[0].windows.some(([range, model, effort]) => range === `${window.files[0]}-${window.files[1]}` && model === 'sonnet' && effort === 'medium'));
+  assert.ok(workflowArgs(ctx).targets[0].windows.some(([range, model, effort]) => range === `${window.files[0]}-${window.files[1]}` && model === 'sonnet' && effort === 'medium'));
 });
 
 test('files a rename only renamed are found mechanical by the script and walked in a light window of their own', (t) => {
@@ -2257,6 +2263,13 @@ test('a lone mechanical file stays among its neighbours: no window of its own', 
   assert.ok(t0.windows.length > 1 && t0.windows.every((w) => w.files[1] > w.files[0]), JSON.stringify(t0.windows.map((w) => w.files)));
 });
 
+// The args the run's workflow walks with, as its copy of the script carries them.
+function workflowArgs(ctx) {
+  if (ctx.workflow.args) return ctx.workflow.args;
+  const line = fs.readFileSync(ctx.workflow.scriptPath, 'utf8').split(/\r?\n/).find((l) => l.startsWith('const baked = '));
+  return JSON.parse(line.slice('const baked = '.length));
+}
+
 test('every windowed target of a run goes to one workflow, whose lanes the targets share', (t) => {
   const dir = makeRepo(t);
   const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
@@ -2267,8 +2280,104 @@ test('every windowed target of a run goes to one workflow, whose lanes the targe
   run(dir, ['checkout', '-q', 'main']);
   const ctx = rc.buildContext({ mode: 'branches', branches: 'feature/a;feature/b', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 12) });
   assert.deepStrictEqual(ctx.errors, []);
-  assert.deepStrictEqual(ctx.workflow.args.targets.map((x) => x.dir), ctx.targets.map((x) => x.workDir));
-  assert.strictEqual(ctx.workflow.args.lanes, 4, 'four windows of two targets, four lanes by default');
+  // The run folder's copy of the script carries the args: the call names only its path.
+  assert.deepStrictEqual(Object.keys(ctx.workflow), ['scriptPath']);
+  assert.deepStrictEqual(workflowArgs(ctx).targets.map((x) => x.dir), ctx.targets.map((x) => x.workDir));
+  assert.strictEqual(workflowArgs(ctx).lanes, 4, 'four windows of two targets, four lanes by default');
   assert.deepStrictEqual(ctx.targets.map((x) => x.parallel), [4, 4], 'the Agent tool dispatches as many at once');
-  assert.strictEqual(rc.buildContext({ mode: 'branches', branches: 'feature/a;feature/b', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 13), parallel: 2 }).workflow.args.lanes, 2);
+  assert.strictEqual(workflowArgs(rc.buildContext({ mode: 'branches', branches: 'feature/a;feature/b', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 13), parallel: 2 })).lanes, 2);
+  // Every target is assembled by one command, which ends with the run's summary.
+  assert.match(ctx.commands.assembleAll, /check-part\.cjs" --context=".*" --assemble-all$/);
+});
+
+test('oldSideRanges reads the old side of every hunk, and a file a later part deletes to its end', () => {
+  const diff = [
+    'diff --git a/src/a.ts b/src/a.ts', '--- a/src/a.ts', '+++ b/src/a.ts', '@@ -3,2 +3,2 @@', '-x', '-y', '+x', '+y', '@@ -10,0 +11 @@', '+z',
+    'diff --git a/src/b.ts b/src/b.ts', 'deleted file mode 100644', '--- a/src/b.ts', '+++ /dev/null', '@@ -1,2 +0,0 @@', '-a', '-b',
+    'diff --git a/src/c.ts b/src/c.ts', 'new file mode 100644', '--- /dev/null', '+++ b/src/c.ts', '@@ -0,0 +1 @@', '+n',
+  ].join('\n');
+  assert.deepStrictEqual(rc.oldSideRanges(diff), { 'src/a.ts': [[3, 4], [10, 11]], 'src/b.ts': [[1, null], [1, 2]] });
+});
+
+test('a stack of branches: each part knows the lines its later parts change, next to its report', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 10 }, (_, i) => `export const v${i} = ${i === n ? 'changed' : i};`).join('\n')}\n`;
+  run(dir, ['checkout', '-q', '-b', 'part-1']);
+  commitFile(dir, 'src/a.ts', body(-1), 'a');
+  run(dir, ['checkout', '-q', '-b', 'part-2']);
+  commitFile(dir, 'src/a.ts', body(4), 'line 5 changes');
+  commitFile(dir, 'src/b.ts', 'export const b = 1;\n', 'b');
+  run(dir, ['checkout', '-q', 'main']);
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'part-1;part-2', project: dir, skillDir: makeSkillDir(t, [TS_KIND]), now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const [p1, p2] = ctx.targets;
+  assert.strictEqual(p2.baseBranch, 'part-1', 'part-2 was branched off part-1');
+  assert.match(p1.revision, /^[0-9a-f]{40}$/);
+  assert.strictEqual(p1.stackTip, 'part-2');
+  assert.strictEqual(p2.stackTip, undefined, 'the tip has nothing after it');
+  assert.strictEqual(p1.stackPath, p1.reportPath.replace(/\.md$/, '.stack.json').replace(/\\/g, '/'));
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(p1.stackPath, 'utf8')), { tip: 'part-2', later: ['part-2'], files: { 'src/a.ts': [[5, 5]] } });
+  // The window walkers search the reviewed commit, which their brief names.
+  assert.strictEqual(rc.stackOf(ctx.targets.slice(1), dir).size, 0, 'one branch is no stack');
+});
+
+test('a snapshot changed without its spec is pointed at, and the items whose subject a file lacks are closed in its facts', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, 'src/app/tests/a.component.spec.ts', "it('renders', () => expect(x).toMatchSnapshot());\n", 'spec');
+  commitFile(dir, 'src/app/tests/__snapshots__/a.component.spec.ts.snap', 'exports[`renders 1`] = `<a></a>`;\n', 'snap');
+  run(dir, ['checkout', '-q', '-b', 'feature']);
+  commitFile(dir, 'src/app/tests/__snapshots__/a.component.spec.ts.snap', 'exports[`renders 1`] = `<b></b>`;\n', 'snapshot alone');
+  commitFile(dir, 'src/app/x.html', '<div>{{ text }}</div>\n', 'template');
+  const snapKind = kind('jest-snapshot', '**/__snapshots__/<name>.snap', [instruction('snap', ['moves with its spec'])]);
+  snapKind.instructions[0].items[0].facts = ['snapshot-without-change'];
+  const htmlKind = kind('html', '*.html', [instruction('a11y', ['images have alt', 'buttons typed', 'text readable'])]);
+  htmlKind.instructions[0].items[0].subject = '<img';
+  htmlKind.instructions[0].items[1].subject = '<button';
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature', project: dir, skillDir: makeSkillDir(t, [snapKind, htmlKind]), now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const facts = JSON.parse(fs.readFileSync(ctx.targets[0].factsPath, 'utf8'));
+  const snap = facts.files['src/app/tests/__snapshots__/a.component.spec.ts.snap'];
+  assert.strictEqual(snap.items['snap#1'].hints[0].kind, 'snapshot-without-change');
+  assert.match(snap.items['snap#1'].hints[0].text, /a jego spec \(src\/app\/tests\/a\.component\.spec\.ts\) ani kod obok niego się nie zmienił/);
+  assert.deepStrictEqual(facts.files['src/app/x.html'].closed, ['a11y#1', 'a11y#2']);
+  const html = ctx.targets[0].files.find((f) => f.path === 'src/app/x.html');
+  assert.ok(fs.readFileSync(html.bundlePath, 'utf8').includes('- zamknięte przez skrypt (przedmiotu brak w pliku; linie dopisze hook): a11y#1-2'));
+});
+
+test('a data file its kind reads where the diff touched it gets those ranges, in its bundle and its Reads', (t) => {
+  const dir = makeRepo(t);
+  const lines = Array.from({ length: 400 }, (_, i) => `  "k${i}": "v${i}",`);
+  const json = () => `{\n${lines.join('\n')}\n  "end": "e"\n}\n`;
+  commitFile(dir, 'src/i18n/en.json', json(), 'en');
+  run(dir, ['checkout', '-q', '-b', 'feature']);
+  lines[200] = '  "k200": "changed",';
+  commitFile(dir, 'src/i18n/en.json', json(), 'one key');
+  const source = kind('i18n-source', 'i18n/en.json', [instruction('i18n', ['keys'])], { readChanged: true });
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'feature', project: dir, skillDir: makeSkillDir(t, [source]), now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const file = ctx.targets[0].files[0];
+  assert.strictEqual(file.changedLines, '202');
+  assert.deepStrictEqual(file.readRanges, [[196, 208]]);
+  assert.ok(ctx.targets[0].start.includes(`${file.contentPath} (Read: offset 196, limit 13)`), ctx.targets[0].start.join('\n'));
+  assert.ok(fs.readFileSync(file.bundlePath, 'utf8').includes('- odczyt treści: plik danych - tylko zakresy L196-208'));
+});
+
+test('a later part of a stack carries the verdicts of the items its diff cannot have changed', (t) => {
+  const dir = makeRepo(t);
+  const page = (label) => `${['<img src="a.png" alt="a">', '<p>one</p>', '<p>two</p>', '<p>three</p>', '<p>four</p>', '<p>five</p>', '<p>six</p>', '<p>seven</p>', `<button type="button">${label}</button>`].join('\n')}\n`;
+  run(dir, ['checkout', '-q', '-b', 'part-1']);
+  commitFile(dir, 'src/app/x.html', page('ok'), 'page');
+  run(dir, ['checkout', '-q', '-b', 'part-2']);
+  commitFile(dir, 'src/app/x.html', page('save'), 'button label');
+  run(dir, ['checkout', '-q', 'main']);
+  const htmlKind = kind('html', '*.html', [instruction('a11y', ['images have alt', 'buttons typed', 'text readable'])]);
+  htmlKind.instructions[0].items[0].subject = '<img';
+  htmlKind.instructions[0].items[1].subject = '<button';
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'part-1;part-2', project: dir, skillDir: makeSkillDir(t, [htmlKind]), now: new Date(2026, 6, 8, 10, 0) });
+  assert.deepStrictEqual(ctx.errors, []);
+  const [p1, p2] = ctx.targets;
+  assert.strictEqual(p1.files[0].carry, undefined, 'the bottom of the stack carries nothing');
+  const carried = p2.files[0].carry;
+  assert.deepStrictEqual([carried.target, carried.number, carried.eligible], [0, 1, ['a11y#1']], 'the image is far from the changed button line; the button and the item without subject are walked');
+  assert.deepStrictEqual(carried.hunks, [[9, 1, 9, 1]]);
 });
