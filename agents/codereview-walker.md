@@ -104,10 +104,11 @@ general instruction owns it) because it expresses layering, and so does everythi
 itself: naming, structure, duplication, typing, logic.
 
 **Endpoint names are out of scope.** Never report the wording, spelling, casing, versioning, path
-segments, leading/trailing slashes, key names or CHANGES of REST endpoint paths and their `endpoints`
-constants — the backend contract decides them, not this review. The one exception is an absolute URL
-inside the value: protocol + domain (`https://api.example.com/...`), `localhost`, or an IP with a port —
-that is reported as a hard-coded environment/base URL. Everything else about such a file (typing,
+segments, trailing slashes, key names or CHANGES of REST endpoint paths and their `endpoints`
+constants — the backend contract decides them, not this review. Two exceptions: an absolute URL
+inside the value — protocol + domain (`https://api.example.com/...`), `localhost`, or an IP with a
+port — is reported as a hard-coded environment/base URL, and a path starting with `/` is reported
+under `http-service#4` (endpoint paths stay relative). Everything else about such a file (typing,
 method naming, layering, `.pipe(...)` usage, secrets in query params) stays reviewable as usual.
 
 **Precedence — one rule wins a conflict.** The project `CLAUDE.md` outranks a checklist item, and within a plan the narrower instruction wins.

@@ -145,6 +145,16 @@ Once every item has its verdict and its fix, check the work before anything else
    never another locale's - the translation team owns those (rule i18n#1), even when a key you renamed
    leaves that language on its fallback until they catch up. Two runs of 2026-11-03 renamed keys in
    five locale files, and the user had them taken back by hand.
+3. **Every rename is verified by a sub-agent.** When your fixes renamed anything - a file or folder,
+   a symbol, a class member, an input/output, a selector, an action, a translation key, a CSS class,
+   a `data-test` value, a route path - dispatch a fresh verification sub-agent (Agent tool,
+   `general-purpose`, not in the background: it only searches) once the renames are written. Its
+   prompt lists every old and new name and `{{ROOT}}` as the only tree it reads; it Greps that tree
+   for every old name - whole words, string literals, dotted translation-key paths and the key's leaf
+   inside the nested `en.json` - skips every other locale file (an old key path there is the
+   translation team's, no leftover), and replies with each leftover `path:line`. Fix every leftover
+   and dispatch it again until it finds none. Without the Agent tool, make that search yourself and
+   say so in `summary`. This is the codeReview rulebook's `general#14`.
 
 Record what this step found and changed under `## Weryfikacja komentarzy` (point 1 of step 6).
 

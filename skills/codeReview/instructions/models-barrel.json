@@ -12,13 +12,13 @@
       "text": "The barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`), contains only `export * from '...'` lines, lists **every** model file, and holds no declarations; consumers outside `models/` import only through the barrel."
     }
   ],
-  "itemCount": 4,
+  "itemCount": 5,
   "instructions": [
     {
       "id": "models",
       "name": "Models folder",
       "selectedItems": "7",
-      "checklistSize": 24,
+      "checklistSize": 25,
       "items": [
         {
           "id": "models#7",
@@ -34,12 +34,27 @@
       "id": "architecture",
       "name": "Feature architecture",
       "selectedItems": "7",
-      "checklistSize": 12,
+      "checklistSize": 13,
       "items": [
         {
           "id": "architecture#7",
-          "text": "An `index.ts` barrel is allowed ONLY in `models/`. Everywhere else — `shared/` included, whatever it re-exports — a barrel `index.ts` is forbidden: it bundles guards, utils, routes and directives into one import surface, so every consumer drags the whole folder into its bundle, the import path stops naming the layer it depends on, and a `@defer`-loaded target reached through it lands in the eager bundle anyway. Consumers import the concrete file (`shared/utils/build-user-table.util`, `shared/guards/users-loaded.guard`).",
+          "text": "An `index.ts` barrel is allowed ONLY in `models/` - and as a shared library's public entry point, which consumers may import from. Everywhere else - `shared/`, `data-access/`, `components-<area>/` and the component folders of a library included, whatever it re-exports - a barrel `index.ts` is forbidden: it bundles guards, utils, routes and directives into one import surface, so every consumer drags the whole folder into its bundle, the import path stops naming the layer it depends on, and a `@defer`-loaded target reached through it lands in the eager bundle anyway. Facades and services are never exported through a barrel. An `export` line added to an existing forbidden barrel, or a new import through one, is the same finding as creating it. Consumers import the concrete file (`shared/utils/build-user-table.util`, `shared/guards/users-loaded.guard`).",
           "severity": "low"
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "14",
+      "checklistSize": 18,
+      "items": [
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
+          ]
         }
       ]
     },

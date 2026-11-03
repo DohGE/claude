@@ -224,6 +224,8 @@ The assembly sets that severity on every finding, whatever the part said, and pr
 A finding the reviewer marked 🔵 Missing Unit Test keeps it, since a missing spec is 🔵 whichever item flags it.
 
 Performance, security, architecture, accessibility (WCAG 2.2 level AA — always 🟡 Medium), code quality (duplication from its third copy, dead/unnecessary/boilerplate code, inconsistency — always 🟡 Medium) and test coverage have instructions of their own, walked by every kind they concern.
+State follows one approach: a view's state - a page, the steps of one wizard, a dialog - lives in an `@ngrx/signals` `signalStore()` (the `signal-store` instruction, walked by the `component-signal-store` kind, and `signal-store-unit-test` by its spec, `signal-store-spec`), and an NgRx slice exists only for data several independent views share (`architecture#13`).
+Renames have an item of their own, `general#14`: a rename leaves no use of the old name anywhere - the base-language `en.json` included, while the other locale files stay the translation team's and keep the old key (i18n#1) - and whoever renames has a fresh sub-agent search the tree for leftovers (fixPr's fix agent does it in its Step 3); the review reports each leftover it finds.
 The reviewed project's own `CLAUDE.md` (repo root, if present) is one more rulebook: its rules decide verdicts and override conflicting checklist items, but get no `<id>#<n>` of their own.
 Every file is also reviewed against the universal points (cross-file consistency incl. architecture and naming, regressions, readability), whatever its kind.
 A regression there is behavior the change breaks — a crash, a wrong result, a flow the user cannot finish.

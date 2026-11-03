@@ -11,7 +11,7 @@
   "notes": [
     "Inline `styles` are walked as CSS (component-styles gate), so component-styles and the style-related accessibility items apply to this TS file too."
   ],
-  "itemCount": 100,
+  "itemCount": 114,
   "instructions": [
     {
       "id": "ui-component",
@@ -26,7 +26,7 @@
         },
         {
           "id": "ui-component#2",
-          "text": "Purely presentational: exchanges data exclusively through `input()`/`output()`; never injects a facade, the store, or HTTP/data services; holds no business/domain logic and performs no data fetching, navigation, or state mutation — it only renders its inputs and emits user interactions as outputs, leaving all decisions to the parent feature component.",
+          "text": "Purely presentational: exchanges data exclusively through `input()`/`output()`; never injects the view's signal store, the NgRx store, a facade or HTTP/data services (a store it provides for its own self-contained presentational state, such as a shared filters store, is the one exception); holds no business/domain logic and performs no data fetching, navigation, or state mutation - it only renders its inputs and emits user interactions as outputs, leaving all decisions to the parent feature component.",
           "severity": "low"
         },
         {
@@ -71,8 +71,8 @@
       "preamble": [
         "This instruction OWNS the component TS file: file separation, the `@Component` metadata, DI fields, visibility, form wiring and subscription teardown. The signals/DI/host APIs themselves are owned by the global best-practices instruction, rendering cost by the performance instruction, and everything inside the template by the component-template instruction."
       ],
-      "selectedItems": "1,4-5,7,9-12,14-25",
-      "checklistSize": 26,
+      "selectedItems": "1,4-5,7,9-12,14-25,27",
+      "checklistSize": 27,
       "items": [
         {
           "id": "component#1",
@@ -105,12 +105,12 @@
         },
         {
           "id": "component#11",
-          "text": "A derivation whose operands ALL come from store state is added as a selector, not computed in the component; `computed()` is reserved for purely presentational composition (e.g. building table UI data from an input signal) and for derivations that ALSO read data the NgRx state does not hold — a component `input()`, a local `signal()`, a route value, an injected runtime value — which cannot become a selector and therefore stay in the component.",
+          "text": "A derivation whose operands ALL come from store state is added to the store - `withComputed` in a signal store, a selector in an NgRx slice - not computed in the component; `computed()` in a component is reserved for purely presentational composition (e.g. building table UI data from an input signal) and for derivations that ALSO read data the store does not hold - a component `input()`, a local `signal()`, a route value, an injected runtime value - which therefore stay in the component.",
           "severity": "medium"
         },
         {
           "id": "component#12",
-          "text": "The constructor contains only `effect()` calls; loads, dispatches and subscriptions belong to `ngOnInit`.",
+          "text": "`effect()` is created only in the constructor - never in a field initializer or `ngOnInit` - and only to propagate state to a layout facade, patch a form from state, or react to a change by calling a store or facade method; never to write other signals or to log. The constructor holds nothing but those `effect()` calls: loads, dispatches and subscriptions belong to `ngOnInit`.",
           "severity": "low"
         },
         {
@@ -167,6 +167,28 @@
           "id": "component#25",
           "text": "Single `as Type` casts only where required; no double casting where a single cast suffices.",
           "severity": "medium"
+        },
+        {
+          "id": "component#27",
+          "text": "The template and the styles are separate files (`templateUrl`, `styleUrl`/`styleUrls`, paths relative to the `.ts`) - no inline `template` or `styles`.",
+          "severity": "low",
+          "subject": [
+            "\\btemplate\\s*:",
+            "\\bstyles\\s*:"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "components-folder",
+      "name": "Components folder contents",
+      "selectedItems": "4",
+      "checklistSize": 4,
+      "items": [
+        {
+          "id": "components-folder#4",
+          "text": "Every component owns a folder named after it, holding its `.component.{ts,html,scss}` files and a `tests/` folder - even when it is alone in `feature/` or `ui/`: `.component.*` files lying directly in `feature/`, `ui/` or any folder another component shares are a finding, and a second component added next to them gets, together with the first, a folder of its own.",
+          "severity": "medium"
         }
       ]
     },
@@ -174,8 +196,8 @@
       "id": "component-styles",
       "name": "Component styles",
       "gate": "the file declares CSS - a stylesheet, or a component TS whose decorator carries an inline `styles: [...]` array",
-      "selectedItems": "3-7",
-      "checklistSize": 7,
+      "selectedItems": "3-11",
+      "checklistSize": 11,
       "items": [
         {
           "id": "component-styles#3",
@@ -189,7 +211,7 @@
         },
         {
           "id": "component-styles#5",
-          "text": "`::ng-deep` is used only wrapped in `:host { ::ng-deep { ... } }`."
+          "text": "`::ng-deep` is used only when nothing else reaches the element, and then only wrapped in `:host { ::ng-deep { ... } }`."
         },
         {
           "id": "component-styles#6",
@@ -200,6 +222,35 @@
           "id": "component-styles#7",
           "text": "Only styles that are actually needed — no redundant declarations (e.g. `display: block` on an already-block element) and no rules duplicating what a utility class in the template already does.",
           "severity": "medium"
+        },
+        {
+          "id": "component-styles#8",
+          "text": "SCSS variables, mixins and placeholder selectors are kebab-case (`$panel-gap`, `@mixin card-shadow`, `%visually-hidden`).",
+          "severity": "low",
+          "subject": [
+            "\\$[A-Za-z_]",
+            "@mixin",
+            "%[A-Za-z_]"
+          ]
+        },
+        {
+          "id": "component-styles#9",
+          "text": "Selectors stay shallow: BEM classes are not nested inside one another, and a selector chain deeper than three levels is a finding.",
+          "severity": "low"
+        },
+        {
+          "id": "component-styles#10",
+          "text": "New declarations use the theme's current variables and tokens - never a variable the theme marks deprecated.",
+          "severity": "low"
+        },
+        {
+          "id": "component-styles#11",
+          "text": "Styles are loaded with `@use`/`@forward` - never `@import`, and never with `as *` (the namespace stays visible at every use).",
+          "severity": "low",
+          "subject": [
+            "@import",
+            "\\bas\\s+\\*"
+          ]
         }
       ]
     },
@@ -211,9 +262,12 @@
       "items": [
         {
           "id": "i18n#9",
-          "text": "Changing or renaming an existing key requires checking every consumer of that key first.",
+          "text": "Changing or renaming an existing key requires checking every consumer of that key first - in every app and shared library that resolves it - and a rename reaches all of them and `en.json`, never the other locale files (i18n#1, general#14).",
           "facts": [
             "i18n-missing-key"
+          ],
+          "sameAs": [
+            "general#14"
           ]
         },
         {
@@ -234,11 +288,11 @@
       "id": "architecture",
       "name": "Feature architecture",
       "selectedItems": "1,4-6,9,12",
-      "checklistSize": 12,
+      "checklistSize": 13,
       "items": [
         {
           "id": "architecture#1",
-          "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
+          "text": "Every feature area keeps the canonical layout: `data-access/+state/` (the view's `<name>.store.ts` signal store and, only for data several independent views share, an NgRx slice - actions, reducer, selectors, effects, facade - each with `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, plus `shared/mocks/` for the spec fixtures several specs share, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
           "severity": "medium",
           "facts": [
             "area-routes-twice"
@@ -248,7 +302,7 @@
         },
         {
           "id": "architecture#4",
-          "text": "Layering is strict: components touch state only through a facade; selectors compute every derived value; effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
+          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
           "severity": "low",
           "facts": [
             "component-injects-data-access"
@@ -256,7 +310,7 @@
         },
         {
           "id": "architecture#5",
-          "text": "Components never inject the store, never import actions or selectors, and never call HTTP services directly (the shared aggregate-form-validity service is the only allowed service injection in a feature component).",
+          "text": "Components never inject the NgRx `Store`, never import actions or selectors, and never call HTTP services directly - they talk to their view's signal store or a facade (the shared aggregate-form-validity service is the only other service a feature component may inject).",
           "severity": "low",
           "sameAs": [
             "feature-component#3"
@@ -264,7 +318,7 @@
         },
         {
           "id": "architecture#6",
-          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, HTTP in `data-access/services/`, state files in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed.",
+          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, spec fixtures several specs share in `shared/mocks/`, HTTP in `data-access/services/`, state files - the signal store and an NgRx slice's files - in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed. A type, interface, enum or const used only inside its own file may stay there, without `export`; once it is exported or a second file needs it, it moves to `models/`.",
           "severity": "medium",
           "probe": [
             {
@@ -282,7 +336,7 @@
         },
         {
           "id": "architecture#12",
-          "text": "Self-contained local state (dialogs, embedded browsers) uses an `@ngrx/signals` `signalStore()` provided in `@Component.providers` — composed with `withState`/`withComputed`/`withMethods` and mutated only through `patchState`; a hand-rolled `BehaviorSubject`/`Subject` service is not an acceptable component store. Feature-slice state is never component-scoped.",
+          "text": "A view's state - a page, the steps of one wizard, a dialog, an embedded picker - lives in an `@ngrx/signals` `signalStore()`: the default for almost every view. It is composed with `withState`/`withComputed`/`withMethods` (`withProps` for injected dependencies), mutated only through `patchState`, and provided by the view that owns it (the signal-store instruction); a hand-rolled `BehaviorSubject`/`Subject` state service is not an acceptable store.",
           "severity": "low"
         }
       ]
@@ -290,8 +344,8 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2,7",
-      "checklistSize": 13,
+      "selectedItems": "2,7,14-18",
+      "checklistSize": 18,
       "items": [
         {
           "id": "general#2",
@@ -308,6 +362,47 @@
           "sameAs": [
             "i18n#11"
           ]
+        },
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
+          ]
+        },
+        {
+          "id": "general#15",
+          "text": "A boolean - a field, signal, input, variable or a method returning a flag - is named with a predicate prefix that reads as a yes/no question (`isActive`, `hasChildren`, `canEdit`, `shouldRetry`; loading flags `isLoading<X>`), never a bare noun or adjective (`active`, `loading`, `children`). The fields of an API interface keep the names the API sends.",
+          "severity": "low",
+          "subject": [
+            "boolean",
+            "\\btrue\\b",
+            "\\bfalse\\b"
+          ]
+        },
+        {
+          "id": "general#16",
+          "text": "Private members carry the `_` prefix (`private readonly _usersService`, `private _buildRows()`, a store's `_`-prefixed private props and methods), and private methods sit at the end of the class, after every public member.",
+          "severity": "low",
+          "subject": [
+            "\\bprivate\\b",
+            "#[A-Za-z_$]",
+            "\\b_[A-Za-z]"
+          ]
+        },
+        {
+          "id": "general#17",
+          "text": "A comment explains only what the code cannot say itself - a non-obvious why, a tricky edge case, a workaround, a subtle gotcha; a comment restating what the code does or narrating obvious steps is a finding, and a clearer name replaces it. The section comments of a models barrel and the justification of a suppression comment are required, not this item's.",
+          "severity": "low",
+          "subject": [
+            "//",
+            "/\\*"
+          ]
+        },
+        {
+          "id": "general#18",
+          "text": "A long method is split into small, focused private helpers of the same file, each named after its one job; the split never creates a shared util or a new file for single-consumer logic (the utils instruction decides extraction).",
+          "severity": "low"
         }
       ]
     },
@@ -317,12 +412,12 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "1-4,9-10,12,15,21-23",
-      "checklistSize": 23,
+      "selectedItems": "1-4,9-10,12,15,21-26",
+      "checklistSize": 26,
       "items": [
         {
           "id": "best-practices#1",
-          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference where the type is obvious; exported functions and service methods declare their parameter and return types. A signal input or output carries a type argument only when its default cannot express the type - `input.required<T>()`, `output<T>()`, `input<Item[]>([])`, `input<string | null>(null)` - never one its default already infers (`input(0)`, `input(false)`, `signal('')`, not `input<number>(0)`).",
           "severity": "medium",
           "sameAs": [
             "utils#2"
@@ -330,7 +425,7 @@
         },
         {
           "id": "best-practices#2",
-          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `input(<default>)`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
           "severity": "low"
         },
         {
@@ -362,7 +457,7 @@
         },
         {
           "id": "best-practices#12",
-          "text": "Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction).",
+          "text": "Store and facade state reaches the template as signals; an observable that has a signal form is converted once with `toSignal()` in the class. The `async` pipe stays only for a residual observable the class cannot expose as a signal - one created per call or per item, or a third-party stream - never for store or facade state, and never replaced by a manual `subscribe()` that copies values into a field (see the component template instruction).",
           "severity": "low",
           "sameAs": [
             "component-template#8"
@@ -390,6 +485,30 @@
           "text": "Components stay small and single-responsibility.",
           "severity": "low",
           "okEvidence": "linia deklaracji klasy i to, co policzyłeś (np. \"L12: 4 metody, 3 pola\"), nie zakres pliku"
+        },
+        {
+          "id": "best-practices#24",
+          "text": "Dependencies are injected with `inject()` - in a field initializer, a store's `withProps`/`withMethods`, or the body of a functional guard, resolver or interceptor - never through constructor parameters.",
+          "severity": "low",
+          "subject": [
+            "constructor\\s*\\("
+          ]
+        },
+        {
+          "id": "best-practices#25",
+          "text": "RxJS operators and creation functions are imported from `'rxjs'` - never from the deprecated `'rxjs/operators'` entry point, however much legacy code still imports it.",
+          "severity": "low",
+          "subject": [
+            "rxjs/operators"
+          ]
+        },
+        {
+          "id": "best-practices#26",
+          "text": "Cleanup that must run on both success and error (resetting a loading flag, closing a spinner) goes in `finalize()`, never duplicated in the `next` and `error` callbacks, and an `error` callback that would hold only that cleanup is dropped: `.pipe(finalize(() => this.isLoading.set(false))).subscribe({ next: ... })`.",
+          "subject": [
+            "\\.subscribe\\s*\\(",
+            "tapResponse"
+          ]
         }
       ]
     },
@@ -427,7 +546,7 @@
       "items": [
         {
           "id": "performance#1",
-          "text": "Every value read by a template is a signal (`signal`/`computed`/`input`/facade signal) — a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).",
+          "text": "Every value read by a template is a signal (`signal`/`computed`/`input`/a store or facade signal) - a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).",
           "secondQuestion": "Które pola klasy czyta szablon i czy każde z nich to sygnał, `computed()` albo `input()`?",
           "handoff": [
             "component-template#8",
