@@ -21,6 +21,7 @@
 // the verdict and the excerpt stay this script's.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -68,7 +69,7 @@ const watchFlags = [
 ];
 
 function parseArgs(argv) {
-  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '' };
+  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '', changedSince: '', resultFile: '', slots: null };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -82,10 +83,13 @@ function parseArgs(argv) {
     // The E2E login, read from the file here so it never sits on a command line: those land in
     // the agent's transcript and in every process listing of the machine.
     else if (m[1] === 'auth-file') args.authFile = m[2];
+    else if (m[1] === 'changed-since') args.changedSince = m[2].trim();
+    else if (m[1] === 'result-file') args.resultFile = m[2];
+    else if (m[1] === 'slots' && /^\d+$/.test(m[2])) args.slots = Number(m[2]);
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms, --changed-since, --result-file, --slots).`);
   }
   // One command line is one step's command. Without the step named, its log, its
   // label and its verdict would belong to no step at all.
@@ -398,7 +402,8 @@ function readPackageJson(root) {
   try {
     const pkg = JSON.parse(raw);
     const scripts = pkg && typeof pkg.scripts === 'object' && pkg.scripts ? pkg.scripts : {};
-    return { scripts };
+    const dohChecks = pkg && pkg.doh && typeof pkg.doh.checks === 'object' && pkg.doh.checks ? pkg.doh.checks : null;
+    return { scripts, dohChecks };
   } catch (err) {
     return { error: `package.json at ${root} could not be parsed: ${(err && err.message) || err}` };
   }
@@ -559,6 +564,163 @@ function skippedStep(spec, reason, outDir) {
   };
 }
 
+// The project's own gate, when its package.json scripts are not it: dpx has `test:dpx` and a
+// `build` of three apps, so the gate of 2026-11-03 ran three builds a pass and no test at all,
+// and every agent ran jest by hand. `.claude/doh/checks.json` (or package.json `doh.checks`)
+// names a command per gate step - `false` turns one off, a list runs several - and `files`, a
+// regex over the changed paths, decides whether it runs; `{files}` in a command becomes the
+// paths it matched (`--changed-since`): a lint, typecheck and test of what the pull request
+// touched, in seconds, instead of the whole repository.
+const configFile = path.join('.claude', 'doh', 'checks.json');
+
+function gateConfigOf(root, pkg) {
+  const file = path.join(root, configFile);
+  let config = null;
+  let source = null;
+  if (fs.existsSync(file)) {
+    source = file;
+    try {
+      config = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    } catch (err) {
+      return { source, error: `${file} could not be parsed: ${(err && err.message) || err}` };
+    }
+  } else if (pkg && pkg.dohChecks) {
+    source = 'package.json#doh.checks';
+    config = pkg.dohChecks;
+  } else {
+    return null;
+  }
+  const problems = [];
+  const steps = config && typeof config.steps === 'object' && config.steps && !Array.isArray(config.steps) ? config.steps : null;
+  if (!steps) problems.push('it has no "steps" object');
+  for (const [name, value] of Object.entries(steps || {})) {
+    if (!stepNames.includes(name)) {
+      problems.push(`Unknown gate step "${name}" (expected ${stepNames.join(', ')})`);
+      continue;
+    }
+    if (value === false) continue;
+    for (const spec of Array.isArray(value) ? value : [value]) {
+      if (!spec || typeof spec.command !== 'string' || !spec.command.trim()) problems.push(`step "${name}" needs a "command" string (or false)`);
+      else if (spec.files !== undefined) {
+        try {
+          new RegExp(spec.files);
+        } catch {
+          problems.push(`step "${name}": "files" ${JSON.stringify(spec.files)} is no regular expression`);
+        }
+      }
+    }
+  }
+  if (config && config.maxParallel !== undefined && !(Number.isInteger(config.maxParallel) && config.maxParallel >= 0)) {
+    problems.push('"maxParallel" must be a whole number (0 = no limit)');
+  }
+  if (problems.length > 0) return { source, error: `${source}: ${problems.join('; ')}.` };
+  return { source, steps, maxParallel: config.maxParallel };
+}
+
+// What the branch changed since `since` (a merge-base diff, like the pull request's) plus what
+// the tree holds uncommitted or untracked; deleted paths are left out. null when `since` is no
+// ref this repository knows.
+function changedFilesOf(root, since) {
+  const out = (args) => {
+    const res = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true });
+    return res.status === 0 ? res.stdout : null;
+  };
+  const committed = out(['diff', '--name-only', '--diff-filter=d', `${since}...HEAD`]);
+  if (committed === null) return null;
+  const files = new Set();
+  for (const text of [committed, out(['diff', '--name-only', '--diff-filter=d', 'HEAD']), out(['ls-files', '--others', '--exclude-standard'])]) {
+    for (const line of String(text || '').split(/\r?\n/)) if (line.trim()) files.add(line.trim());
+  }
+  return [...files].filter((f) => fs.existsSync(path.join(root, f))).sort();
+}
+
+// cmd.exe refuses a line past 8,191 characters, and the 66 paths of one pull request reach it:
+// a long list runs as several commands, each under the limit.
+const lineLimit = process.platform === 'win32' ? 7000 : 60000;
+
+function expandFiles(command, files, limit = lineLimit) {
+  const quoted = files.map((f) => (/[\s"&|<>^()%!]/.test(f) ? `"${f}"` : f));
+  const fixed = command.length - '{files}'.length;
+  const chunks = [];
+  let current = [];
+  let size = fixed;
+  for (const q of quoted) {
+    if (current.length > 0 && size + 1 + q.length > limit) {
+      chunks.push(current);
+      current = [];
+      size = fixed;
+    }
+    current.push(q);
+    size += (current.length > 1 ? 1 : 0) + q.length;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks.map((chunk) => command.replace('{files}', chunk.join(' ')));
+}
+
+// A machine-wide limit on gate steps running at once: five agents ran five three-app builds side
+// by side on 2026-11-03, and a grep over one translation file took two minutes. A slot is a
+// directory (mkdir is atomic) holding its owner's pid; one whose owner is gone is taken over.
+const defaultSlotsDir = () => path.join(os.tmpdir(), 'doh-checks-slots');
+const defaultSlots = () => Math.max(1, Math.floor(os.cpus().length / 4));
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const pidAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+};
+
+function acquireSlot(count, { dir = defaultSlotsDir(), sleep = sleepSync, alive = pidAlive, now = Date.now, label = '', staleMs = 3 * 60 * minute } = {}) {
+  if (!count) return { release: () => {}, waitedMs: 0, slot: null };
+  fs.mkdirSync(dir, { recursive: true });
+  const started = now();
+  const stale = (slot) => {
+    try {
+      const owner = JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'), 'utf8'));
+      return !alive(owner.pid) || now() - owner.at > staleMs;
+    } catch {
+      // No owner yet: a slot being taken right now, or one whose taker died before writing it.
+      try {
+        return now() - fs.statSync(slot).mtimeMs > minute;
+      } catch {
+        return false;
+      }
+    }
+  };
+  for (;;) {
+    for (let i = 0; i < count; i += 1) {
+      const slot = path.join(dir, `slot-${i}`);
+      let taken = false;
+      for (let attempt = 0; attempt < 2 && !taken; attempt += 1) {
+        try {
+          fs.mkdirSync(slot);
+          taken = true;
+        } catch (err) {
+          if (err.code !== 'EEXIST') throw err;
+          // A stale slot is taken over at once: one more try at the same name.
+          if (!stale(slot)) break;
+          fs.rmSync(slot, { recursive: true, force: true });
+        }
+      }
+      if (!taken) continue;
+      fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ pid: process.pid, at: now(), label }));
+      return { release: () => fs.rmSync(slot, { recursive: true, force: true }), waitedMs: now() - started, slot: i };
+    }
+    sleep(2000);
+  }
+}
+
+// Written to a temporary name and renamed into place: an agent waiting for the file in slices
+// (wait-part.cjs) never reads half of it.
+function writeResultFile(file, result) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(result)}\n`, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
 function runChecks(options) {
   const root = path.resolve(options.root);
   const outDir = path.resolve(options.outDir);
@@ -610,27 +772,52 @@ function runChecks(options) {
   // tell which runner a line like `npm test -- <spec>` ends up in.
   const pkg = readPackageJson(root);
   const scripts = pkg.scripts || {};
+  const commandStep = commandSteps.find((spec) => only.includes(spec.step));
+  // A --command line and the steps outside the gate (e2e, precommit) bring their own command.
+  const gate = command || commandStep ? null : gateConfigOf(root, pkg);
+  if (gate && gate.error) {
+    result.errors.push(gate.error);
+    return allSkipped('the gate config could not be used');
+  }
+  result.gateSource = gate ? gate.source : null;
   if (!command) {
-    if (pkg.error) {
+    if (!gate && pkg.error) {
       result.errors.push(pkg.error);
       return allSkipped('package.json could not be parsed');
     }
-    if (pkg.missing) {
+    if (!gate && pkg.missing) {
       result.warnings.push(`There is no package.json at ${root}, so there is no gate to run.`);
       return allSkipped('the project has no package.json');
     }
     result.packageManager = detectPackageManager(root) || 'npm';
   }
+  const slotCount = options.slots === 'auto'
+    ? (gate && gate.maxParallel !== undefined ? gate.maxParallel : defaultSlots())
+    : Number(options.slots) || 0;
+  let changed = Array.isArray(options.changedFiles) ? options.changedFiles : null;
+  if (!changed && gate && options.changedSince) {
+    changed = changedFilesOf(root, options.changedSince);
+    // Every configured step would come back skipped - "nothing to run" for a pull request this
+    // pass never looked at. Fetch the base, then run the gate again.
+    if (changed === null) {
+      result.errors.push(`Could not list the files changed since ${options.changedSince} in ${root}: fetch it first (git -C "${root}" fetch origin <base>).`);
+      return allSkipped('the changed files could not be listed');
+    }
+  }
+  if (changed) result.changedFiles = changed.length;
 
   fs.mkdirSync(outDir, { recursive: true });
   if (only.length === 0) clearLogs(outDir);
 
   // --env sets a variable for the command without a shell of its own (cmd.exe knows no VAR=x cmd).
   const env = { ...process.env, ...(options.env || {}), ...auth, CI: '1', FORCE_COLOR: '0' };
-  const commandStep = commandSteps.find((spec) => only.includes(spec.step));
   for (const spec of commandStep ? [commandStep] : gateSteps) {
     if (only.length > 0 && !only.includes(spec.step)) {
       result.steps.push(skippedStep(spec, `not selected by --only=${only.join(',')}`, outDir));
+      continue;
+    }
+    if (gate) {
+      runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, timeoutMs: options.timeoutMs, result });
       continue;
     }
     const name = command ? null : spec.scripts.find((candidate) => typeof scripts[candidate] === 'string');
@@ -643,63 +830,20 @@ function runChecks(options) {
     const call = invocationFor(spec, { command, scripts, name, packageManager: result.packageManager,
       jestMajor: spec.step === 'test' ? jestMajorOf(root) : 0 });
     const timeoutMs = options.timeoutMs || spec.timeoutMs;
+    // The gate steps share the machine's slots; e2e and the pre-commit hook keep the coordination
+    // implementNewFeature gives them (an E2E run holds its own slot for up to half an hour).
+    const slot = acquireSlot(commandStep ? 0 : slotCount, { label: `${root} ${spec.step}` });
     const startedAt = Date.now();
-    const outcome = run(call.exec, call.args, {
-      cwd: root, env, timeoutMs, shell: call.shell, step: spec.step,
-    });
-    const durationMs = Date.now() - startedAt;
-
-    const logPath = path.join(outDir, `${spec.step}.log`);
-    const log = truncateLog(outcome.output);
+    let outcome;
     try {
-      fs.writeFileSync(logPath, log.text, 'utf8');
-    } catch (err) {
-      result.warnings.push(`Could not write ${logPath}: ${(err && err.message) || err}`);
+      outcome = run(call.exec, call.args, {
+        cwd: root, env, timeoutMs, shell: call.shell, step: spec.step,
+      });
+    } finally {
+      slot.release();
     }
-
-    const timedOut = Boolean(outcome.timedOut);
-    const orphans = outcome.orphans || [];
-    const status = timedOut || outcome.exitCode !== 0 ? 'failed' : 'passed';
-    // Cut from the whole output, not from the truncated log: the first errors, the
-    // ones the rest usually follow from, are what truncation drops.
-    const errorsAt = path.join(outDir, `${spec.step}.errors.log`);
-    let errorsPath = null;
-    try {
-      if (status === 'failed') {
-        // A timeout is the failure itself, and nothing the command printed says so.
-        const lead = timedOut ? `(the command timed out after ${timeoutMs}ms; what it printed until then:)\n` : '';
-        fs.writeFileSync(errorsAt, `${lead}${extractErrors(outcome.output) || '(the command printed nothing)'}\n`, 'utf8');
-        errorsPath = errorsAt;
-      } else if (fs.existsSync(errorsAt)) {
-        // Left by a red pass of a --only run; a green step pointing at errors would lie.
-        fs.unlinkSync(errorsAt);
-      }
-    } catch (err) {
-      result.warnings.push(`Could not write ${errorsAt}: ${(err && err.message) || err}`);
-    }
-
-    result.steps.push({
-      step: spec.step,
-      label: spec.label,
-      script: call.script,
-      command: call.display,
-      status,
-      exitCode: outcome.exitCode === undefined ? null : outcome.exitCode,
-      timedOut,
-      orphansKilled: orphans,
-      durationMs,
-      logPath,
-      errorsPath,
-      truncated: log.truncated,
-      // What the reaper did belongs in the reason, not only in the logs: a step that
-      // timed out AND left something running is a different problem from one that just
-      // took too long, and the difference decides whether the next run can even start.
-      reason: timedOut
-        ? `the command timed out after ${timeoutMs}ms`
-          + (orphans.length > 0
-            ? `; ${orphans.length} process(es) it had left running were killed (${orphans.join(', ')})`
-            : '')
-        : '',
+    recordStep(result, spec, {
+      script: call.script, display: call.display, outcome, durationMs: Date.now() - startedAt, timeoutMs, outDir, slotWaitMs: slot.waitedMs,
     });
   }
 
@@ -717,6 +861,131 @@ function runChecks(options) {
   return result;
 }
 
+// One gate step of a checks.json: each of its commands whose `files` the change touches, `{files}`
+// filled in, in one slot; the step fails with the first command that does.
+function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, timeoutMs, result }) {
+  const configured = gate.steps[spec.step];
+  if (configured === undefined) {
+    result.steps.push(skippedStep(spec, `not configured in ${gate.source}`, outDir));
+    return;
+  }
+  if (configured === false) {
+    result.steps.push(skippedStep(spec, `turned off in ${gate.source}`, outDir));
+    return;
+  }
+  const lines = [];
+  const reasons = [];
+  for (const entry of Array.isArray(configured) ? configured : [configured]) {
+    const pattern = entry.files === undefined ? null : new RegExp(entry.files);
+    const picked = changed === null ? null : changed.filter((f) => !pattern || pattern.test(f));
+    const needsFiles = entry.command.includes('{files}');
+    if (picked !== null && picked.length === 0 && (pattern || needsFiles)) {
+      reasons.push(pattern ? `no changed file matches ${entry.files}` : 'no file changed');
+      continue;
+    }
+    if (needsFiles && picked === null) {
+      reasons.push('the changed files are unknown (run it with --changed-since=<base>)');
+      continue;
+    }
+    const texts = needsFiles ? expandFiles(entry.command.trim(), picked) : [entry.command.trim()];
+    for (const text of texts) lines.push({ text, timeoutMs: entry.timeoutMs });
+  }
+  if (lines.length === 0) {
+    result.steps.push(skippedStep(spec, reasons.join('; '), outDir));
+    return;
+  }
+  const jestMajor = spec.step === 'test' ? jestMajorOf(root) : 0;
+  const slot = acquireSlot(slotCount, { label: `${root} ${spec.step}` });
+  const startedAt = Date.now();
+  const outputs = [];
+  const displays = [];
+  let exitCode = 0;
+  let timedOut = false;
+  let orphans = [];
+  let usedTimeout = 0;
+  try {
+    for (const line of lines) {
+      const call = invocationFor(spec, { command: line.text, scripts, name: null, packageManager: result.packageManager, jestMajor });
+      usedTimeout = timeoutMs || line.timeoutMs || spec.timeoutMs;
+      const outcome = run(call.exec, call.args, { cwd: root, env, timeoutMs: usedTimeout, shell: call.shell, step: spec.step });
+      displays.push(call.display);
+      outputs.push(lines.length > 1 ? `$ ${call.display}\n${outcome.output || ''}` : outcome.output || '');
+      orphans = orphans.concat(outcome.orphans || []);
+      if (outcome.timedOut) timedOut = true;
+      if ((outcome.timedOut || outcome.exitCode !== 0) && exitCode === 0) exitCode = Number.isInteger(outcome.exitCode) && outcome.exitCode !== 0 ? outcome.exitCode : 1;
+      if (outcome.timedOut) break;
+    }
+  } finally {
+    slot.release();
+  }
+  recordStep(result, spec, {
+    script: null,
+    display: displays.join(' ; '),
+    outcome: { exitCode, timedOut, output: outputs.join('\n'), orphans },
+    durationMs: Date.now() - startedAt,
+    timeoutMs: usedTimeout,
+    outDir,
+    slotWaitMs: slot.waitedMs,
+  });
+}
+
+// A step that ran: its log, the failure excerpt of a red one, and its entry in the result.
+function recordStep(result, spec, { script, display, outcome, durationMs, timeoutMs, outDir, slotWaitMs = 0 }) {
+  const logPath = path.join(outDir, `${spec.step}.log`);
+  const log = truncateLog(outcome.output);
+  try {
+    fs.writeFileSync(logPath, log.text, 'utf8');
+  } catch (err) {
+    result.warnings.push(`Could not write ${logPath}: ${(err && err.message) || err}`);
+  }
+
+  const timedOut = Boolean(outcome.timedOut);
+  const orphans = outcome.orphans || [];
+  const status = timedOut || outcome.exitCode !== 0 ? 'failed' : 'passed';
+  // Cut from the whole output, not from the truncated log: the first errors, the
+  // ones the rest usually follow from, are what truncation drops.
+  const errorsAt = path.join(outDir, `${spec.step}.errors.log`);
+  let errorsPath = null;
+  try {
+    if (status === 'failed') {
+      // A timeout is the failure itself, and nothing the command printed says so.
+      const lead = timedOut ? `(the command timed out after ${timeoutMs}ms; what it printed until then:)\n` : '';
+      fs.writeFileSync(errorsAt, `${lead}${extractErrors(outcome.output) || '(the command printed nothing)'}\n`, 'utf8');
+      errorsPath = errorsAt;
+    } else if (fs.existsSync(errorsAt)) {
+      // Left by a red pass of a --only run; a green step pointing at errors would lie.
+      fs.unlinkSync(errorsAt);
+    }
+  } catch (err) {
+    result.warnings.push(`Could not write ${errorsAt}: ${(err && err.message) || err}`);
+  }
+
+  result.steps.push({
+    step: spec.step,
+    label: spec.label,
+    script,
+    command: display,
+    status,
+    exitCode: outcome.exitCode === undefined ? null : outcome.exitCode,
+    timedOut,
+    orphansKilled: orphans,
+    durationMs,
+    logPath,
+    errorsPath,
+    truncated: log.truncated,
+    // What the reaper did belongs in the reason, not only in the logs: a step that
+    // timed out AND left something running is a different problem from one that just
+    // took too long, and the difference decides whether the next run can even start.
+    reason: timedOut
+      ? `the command timed out after ${timeoutMs}ms`
+        + (orphans.length > 0
+          ? `; ${orphans.length} process(es) it had left running were killed (${orphans.join(', ')})`
+          : '')
+      : '',
+    ...(slotWaitMs > 0 ? { slotWaitMs } : {}),
+  });
+}
+
 // A red gate and a script that could not run are different answers, and an agent
 // reading only the exit code must not confuse "your code is broken" with "I never
 // got as far as your code". A `partial` gate exits 0 like a green one: nothing failed and
@@ -729,13 +998,25 @@ function exitCodeFor(result) {
 
 function main() {
   let result;
+  let args = null;
   try {
-    result = runChecks(parseArgs(process.argv.slice(2)));
+    args = parseArgs(process.argv.slice(2));
+    // A result file left by the previous pass would read as this pass already done.
+    if (args.resultFile) fs.rmSync(args.resultFile, { force: true });
+    const envSlots = /^\d+$/.test(process.env.DOH_CHECKS_SLOTS || '') ? Number(process.env.DOH_CHECKS_SLOTS) : null;
+    result = runChecks({ ...args, slots: args.slots !== null ? args.slots : envSlots !== null ? envSlots : 'auto' });
   } catch (err) {
     result = {
       root: null, packageManager: null, gate: 'skipped', steps: [],
       errors: [String((err && err.message) || err)], warnings: [],
     };
+  }
+  if (args && args.resultFile) {
+    try {
+      writeResultFile(args.resultFile, result);
+    } catch (err) {
+      result.warnings.push(`Could not write ${args.resultFile}: ${(err && err.message) || err}`);
+    }
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exit(exitCodeFor(result));
@@ -743,7 +1024,7 @@ function main() {
 
 module.exports = {
   parseArgs, defaultRun, truncateLog, extractErrors, extraArgsFor, runChecks, exitCodeFor, gateSteps, reapTree,
-  precommitCommandFor, jestMajorOf,
+  precommitCommandFor, jestMajorOf, gateConfigOf, changedFilesOf, expandFiles, acquireSlot, writeResultFile,
 };
 
 if (require.main === module) main();

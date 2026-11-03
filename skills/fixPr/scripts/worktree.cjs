@@ -15,11 +15,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { sanitizeBranchName, countOf } = require('../../codeReview/scripts/review-context.cjs');
+const { unlinkLinks } = require('../../implementNewFeature/scripts/remove-worktree.cjs');
 
 const bootstrapTimeoutMs = 10 * 60 * 1000;
 
+const depsModes = ['auto', 'install', 'link'];
+
 function parseArgs(argv) {
-  const args = { action: 'add', branch: '', project: process.cwd(), worktree: '', bootstrap: true };
+  const args = { action: 'add', branch: '', project: process.cwd(), worktree: '', bootstrap: true, deps: 'auto' };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--no-bootstrap') {
@@ -35,13 +38,17 @@ function parseArgs(argv) {
     else if (m[1] === 'branch') args.branch = m[2];
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'worktree') args.worktree = m[2];
+    else if (m[1] === 'deps') args.deps = m[2];
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --branch, --project, --worktree, --no-bootstrap).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --branch, --project, --worktree, --deps, --no-bootstrap).`);
   }
   if (!['add', 'remove'].includes(args.action)) {
     throw new Error(`Unknown --action=${args.action} (expected add|remove).`);
+  }
+  if (!depsModes.includes(args.deps)) {
+    throw new Error(`Unknown --deps=${args.deps} (expected ${depsModes.join('|')}).`);
   }
   if (!args.branch && args.action === 'add') throw new Error('No branch given (expected --branch=<name>).');
   // A remove with neither of them has nothing to aim at: the default formula
@@ -216,6 +223,116 @@ function installDependencies(root) {
   }
 }
 
+const lockfileOf = { npm: 'package-lock.json', pnpm: 'pnpm-lock.yaml', yarn: 'yarn.lock' };
+
+const sameText = (a, b) => {
+  try {
+    return fs.readFileSync(a, 'utf8').replace(/\r\n/g, '\n') === fs.readFileSync(b, 'utf8').replace(/\r\n/g, '\n');
+  } catch {
+    return false;
+  }
+};
+
+const unlinkOne = (p) => {
+  try {
+    fs.unlinkSync(p);
+  } catch {
+    fs.rmdirSync(p);
+  }
+};
+
+// The main checkout's `node_modules`, linked in (a junction on Windows) instead of installed
+// again: five worktrees installed one after another took about twenty minutes before the first
+// fixing agent could start (2026-11-03). Only for a lockfile identical to the checkout's, so the
+// tree is the one this branch asks for, and only when git ignores the link - a `node_modules/`
+// pattern matches no link, and the link would then be one `git add` away from a commit.
+// The link is the danger `remove` unlinks first: git's recursive delete walks into a junction.
+function linkDependencies(project, root, manager, isIgnored = (dir) => tryGit(dir, ['check-ignore', '-q', 'node_modules']) !== null) {
+  const lock = lockfileOf[manager];
+  const source = path.join(project, 'node_modules');
+  const target = path.join(root, 'node_modules');
+  if (!lock || !sameText(path.join(project, lock), path.join(root, lock))) return { linked: false, reason: 'its lockfile differs from the main checkout' };
+  if (!isDirectory(source)) return { linked: false, reason: 'the main checkout has no node_modules' };
+  if (fs.existsSync(target)) return { linked: false, reason: 'the worktree already has a node_modules' };
+  try {
+    fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    return { linked: false, reason: `the link could not be made (${(err && err.message) || err})` };
+  }
+  if (!isIgnored(root)) {
+    unlinkOne(target);
+    return { linked: false, reason: 'git does not ignore a linked node_modules here' };
+  }
+  return { linked: true, reason: null };
+}
+
+// `mode`: `auto` links when it can and installs otherwise, `install` always installs, `link`
+// links or reports why it could not.
+function provideDependencies(project, root, { mode = 'auto', install = installDependencies, isIgnored } = {}) {
+  const manager = detectPackageManager(root);
+  if (!manager) return { manager: null, linked: false, error: null };
+  if (mode !== 'install') {
+    const link = linkDependencies(project, root, manager, isIgnored);
+    if (link.linked) return { manager, linked: true, error: null };
+    if (mode === 'link') return { manager, linked: false, error: `node_modules could not be linked: ${link.reason}` };
+  }
+  return { ...install(root), linked: false };
+}
+
+// The project's doh config lives in its gitignored `.claude/doh/`, so a worktree checked out
+// from HEAD has none of it: no rulebook for the fixing agent and its self-review (the run of
+// 2026-11-03 reviewed without the project's naming rules), no gate config for checks.cjs.
+// Copied only where git ignores it in the worktree - a tracked `.claude/doh/` is checked out
+// already, and a copy there would be an untracked file `remove` then refuses over.
+const dohConfigEntries = ['local', 'instructions', 'checks.json'];
+
+function copyMissing(from, to, rel) {
+  let st;
+  try {
+    st = fs.statSync(from);
+  } catch {
+    return [];
+  }
+  if (st.isDirectory()) {
+    return fs.readdirSync(from).flatMap((name) => copyMissing(path.join(from, name), path.join(to, name), `${rel}/${name}`));
+  }
+  if (fs.existsSync(to)) return [];
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
+    return [rel];
+  } catch {
+    return [];
+  }
+}
+
+function copyDohConfig(project, root, isIgnored = (rel) => tryGit(root, ['check-ignore', '-q', rel]) !== null) {
+  return dohConfigEntries.flatMap((entry) => {
+    const rel = `.claude/doh/${entry}`;
+    return isIgnored(rel) ? copyMissing(path.join(project, rel), path.join(root, rel), rel) : [];
+  });
+}
+
+// The self-review writes its report into the worktree (`.claude/doh/codeReview/runs/`), which
+// git ignores and `git worktree remove` deletes with the rest: the summary of 2026-11-03
+// pointed at five reports that were gone. They move next to the run's other artifacts first.
+function keepReports(project, worktree, branch) {
+  const from = path.join(worktree, '.claude', 'doh', 'codeReview', 'runs');
+  if (!isDirectory(from) || !isDirectory(path.join(project, '.claude'))) return { dir: null, reports: [] };
+  const dir = path.join(project, '.claude', 'doh', sanitizeBranchName(branch), 'codeReview', 'runs');
+  fs.cpSync(from, dir, { recursive: true, force: false, errorOnExist: false });
+  const reports = [];
+  const walk = (at) => {
+    for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
+      const p = path.join(at, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (/^raport\.(md|html)$/.test(entry.name)) reports.push(p);
+    }
+  };
+  walk(dir);
+  return { dir, reports: reports.sort() };
+}
+
 // Folders that never hold a hand-written `.env` and are the ones big enough to
 // make a full recursive walk cost real time.
 const notWalked = new Set([
@@ -379,11 +496,12 @@ function add(options) {
   }
 
   result.envFiles = copyEnvFiles(project, worktree);
+  result.dohConfig = copyDohConfig(project, worktree);
   if (options.bootstrap === false) {
     result.dependencies = { manager: null, error: null, skipped: true };
     return result;
   }
-  const deps = installDependencies(worktree);
+  const deps = provideDependencies(project, worktree, { mode: options.deps || 'auto' });
   result.dependencies = deps;
   result.installed = Boolean(deps.manager) && !deps.error;
   if (deps.error) {
@@ -411,9 +529,20 @@ function remove(options) {
   }
   // No `--force`, ever. git refuses a worktree holding modified or untracked
   // files, and that refusal is the last guard against deleting work the
-  // verification gate stopped from being committed.
+  // verification gate stopped from being committed. Asked first, so a refused
+  // worktree keeps its linked node_modules for whoever inspects it.
+  const refused = `git worktree remove refused ${worktree} - it still holds modified or untracked files. Inspect it, then remove it yourself once nothing there is worth keeping.`;
+  const status = tryGit(worktree, ['status', '--porcelain']);
+  if (status === null || status.trim()) {
+    result.errors.push(refused);
+    return result;
+  }
+  const kept = keepReports(project, worktree, options.branch || path.basename(worktree));
+  result.keptReportsDir = kept.dir;
+  result.keptReports = kept.reports;
+  result.unlinked = unlinkLinks(worktree).map((p) => path.relative(worktree, p));
   if (tryGit(project, ['worktree', 'remove', worktree]) === null) {
-    result.errors.push(`git worktree remove refused ${worktree} - it still holds modified or untracked files. Inspect it, then remove it yourself once nothing there is worth keeping.`);
+    result.errors.push(refused);
     return result;
   }
   result.removed = true;
@@ -438,6 +567,7 @@ function main() {
 module.exports = {
   parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
   detectPackageManager, installDependencies, installFailure, copyEnvFiles, copyLocalFiles, isLocalConfig,
+  linkDependencies, provideDependencies, copyDohConfig, keepReports,
   add, remove, git, tryGit,
 };
 

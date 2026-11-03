@@ -63,7 +63,7 @@ test('with a commit, only threads whose file it changes are resolved; the rest c
     { id: 'A', path: 'src/a.ts' }, { id: 'B', path: 'src/b.ts' }, { id: 'C', path: 'src/new.ts' },
   ] }));
   const called = [];
-  const api = { resolveThread: (project, id) => { called.push(id); return { resolved: true, error: null }; } };
+  const api = { replyToThread: () => ({ replied: true, error: null }), resolveThread: (project, id) => { called.push(id); return { resolved: true, error: null }; } };
   const files = new Set(['src/a.ts', 'src/old.ts', 'src/new.ts']);
   const result = rt.resolveAll({ project: '/p', threads: ['A', 'B', 'C', 'Z'], comments, root: dir, commit: 'abc' }, api, () => {}, files);
   assert.deepStrictEqual(called, ['A', 'C'], 'a renamed file counts under its new name');
@@ -80,4 +80,54 @@ test('a run on a replayed review (DOH_FIXPR_REPLAY) only rehearses, whatever the
   assert.strictEqual(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout);
   assert.deepStrictEqual([out.dryRun, out.resolved, out.failed], [true, ['A', 'B'], []]);
+});
+
+function commentsFile(t, threads) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const comments = path.join(dir, 'comments.json');
+  fs.writeFileSync(comments, JSON.stringify({ threads }));
+  return { dir, comments };
+}
+
+// Four threads of part-1 asked for translation keys the code already used; the fix renamed the
+// keys in en.json, so the commit never touched the files the threads sat on and they stayed
+// open (2026-11-03). The agent names where such a fix landed; the commit has to change it.
+test('a thread fixed in another file is resolved when the commit changes that file', (t) => {
+  const { dir, comments } = commentsFile(t, [{ id: 'A', path: 'src/effects.ts' }, { id: 'B', path: 'src/config.ts' }]);
+  const files = new Set(['src/assets/i18n/en.json']);
+  const via = { A: ['src/assets/i18n/en.json'], B: ['src/other.ts'] };
+  const { ids, unverified } = rt.verifiedThreads({ threads: ['A', 'B'], comments, root: dir, commit: 'abc', via }, files);
+  assert.deepStrictEqual(ids, ['A']);
+  assert.deepStrictEqual(unverified.map((u) => u.id), ['B']);
+  assert.match(unverified[0].reason, /nor src\/other\.ts/);
+});
+
+test('every resolved thread gets a reply naming the commit, before it is closed', (t) => {
+  const { dir, comments } = commentsFile(t, [{ id: 'A', path: 'src/a.ts' }, { id: 'B', path: 'src/b.ts' }]);
+  const calls = [];
+  const api = {
+    replyToThread: (project, id, body) => { calls.push(['reply', id, body]); return id === 'B' ? { replied: false, error: 'locked' } : { replied: true, error: null }; },
+    resolveThread: (project, id) => { calls.push(['resolve', id]); return { resolved: true, error: null }; },
+  };
+  const files = new Set(['src/a.ts', 'src/en.json']);
+  const result = rt.resolveAll({ project: '/p', threads: ['A', 'B'], comments, root: dir, commit: '0123456789abcdef', via: { B: ['src/en.json'] } }, api, () => {}, files);
+  assert.deepStrictEqual(calls.map((c) => c.slice(0, 2)), [['reply', 'A'], ['resolve', 'A'], ['reply', 'B'], ['resolve', 'B']]);
+  assert.strictEqual(calls[0][2], 'Fixed in 0123456789ab.');
+  assert.strictEqual(calls[2][2], 'Fixed in 0123456789ab (the change is in `src/en.json`).');
+  assert.deepStrictEqual(result.resolved, ['A', 'B'], 'a refused reply never keeps a fixed thread open');
+  assert.deepStrictEqual(result.replyFailed, [{ id: 'B', error: 'locked' }]);
+  const quiet = rt.resolveAll({ project: '/p', threads: ['A'], comments, root: dir, commit: 'abc', noReply: true }, api, () => {}, files);
+  assert.deepStrictEqual(quiet.resolved, ['A']);
+  assert.strictEqual(calls.filter((c) => c[0] === 'reply').length, 2, '--no-reply posts nothing');
+});
+
+test('parseArgs reads --via and --no-reply', () => {
+  const args = rt.parseArgs(['--threads=PRRT_a==,B', '--via=PRRT_a==:src/en.json|src/pl.json;B:x/y z.ts', '--no-reply']);
+  assert.deepStrictEqual(args.via, { 'PRRT_a==': ['src/en.json', 'src/pl.json'], B: ['x/y z.ts'] });
+  assert.strictEqual(args.noReply, true);
+  assert.throws(() => rt.parseArgs(['--threads=A', '--via=no-colon']), /--via/);
 });

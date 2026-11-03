@@ -148,6 +148,16 @@ test('resolveThread reports success, refusal and a thread that stayed open', () 
   assert.match(refused.error, /collaborator/);
 });
 
+test('replyToThread posts the body on the thread and reads the comment back', () => {
+  const sent = [];
+  const send = (project, req) => { sent.push(req); return { ok: true, status: 200, json: { data: { addPullRequestReviewThreadReply: { comment: { id: 'C1', url: 'https://x/c1' } } } } }; };
+  assert.deepStrictEqual(api.replyToThread('/p', 'T1', 'Fixed in abc.', send), { replied: true, url: 'https://x/c1', error: null });
+  assert.deepStrictEqual(sent[0].body.variables, { id: 'T1', body: 'Fixed in abc.' });
+  assert.match(sent[0].body.query, /addPullRequestReviewThreadReply/);
+  const refused = api.replyToThread('/p', 'T1', 'x', sender(ok({ errors: [{ message: 'thread is locked' }] })));
+  assert.deepStrictEqual([refused.replied, refused.error], [false, 'thread is locked']);
+});
+
 test('issueComments drops empty bodies, flags bots and pages', () => {
   const page = (n, count) => ok(Array.from({ length: count }, (_, i) => ({
     id: n * 1000 + i, body: `c${i}`, user: { login: 'ann', type: 'User' }, created_at: 'd', html_url: 'u',

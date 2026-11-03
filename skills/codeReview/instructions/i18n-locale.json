@@ -8,6 +8,7 @@
       "text": "Only the base-language file (`en.json`) is edited; the other locale files are never touched — no new keys, no English placeholders, no reformatting (the translation team owns them)."
     }
   ],
+  "readChanged": true,
   "itemCount": 4,
   "instructions": [
     {

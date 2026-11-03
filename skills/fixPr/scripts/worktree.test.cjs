@@ -51,10 +51,12 @@ test('branchState reads its counts through countOf, so a failed one is not in-sy
 test('parseArgs defaults, parses and refuses unknown flags', () => {
   assert.deepStrictEqual(
     wt.parseArgs(['--action=add', '--branch=feat/a', '--project=/tmp/x']),
-    { action: 'add', branch: 'feat/a', project: '/tmp/x', worktree: '', bootstrap: true },
+    { action: 'add', branch: 'feat/a', project: '/tmp/x', worktree: '', bootstrap: true, deps: 'auto' },
   );
   assert.strictEqual(wt.parseArgs(['--branch=a', '--no-bootstrap']).bootstrap, false);
   assert.throws(() => wt.parseArgs(['--action=nuke', '--branch=a']), /Unknown --action/);
+  assert.strictEqual(wt.parseArgs(['--branch=a', '--deps=install']).deps, 'install');
+  assert.throws(() => wt.parseArgs(['--branch=a', '--deps=copy']), /Unknown --deps/);
   assert.throws(() => wt.parseArgs(['--action=add']), /No branch given/);
   assert.throws(() => wt.parseArgs(['--branch=a', '--worktre=/tmp/y']), /Unknown argument/);
 });
@@ -391,4 +393,81 @@ test('the ignored local config travels to the worktree, a tracked file of the sa
   assert.ok(!fs.existsSync(path.join(root, 'tracked.local.ts')), 'a tracked file is the worktree\'s own');
   assert.ok(!fs.existsSync(path.join(root, 'node_modules')), 'dependency folders are never walked');
   assert.deepStrictEqual(wt.copyLocalFiles(dir, root), [], 'what is there already is left alone');
+});
+
+// Five worktrees installed one after another took about twenty minutes before the first
+// fixing agent could start (2026-11-03): a worktree whose lockfile is the main checkout's
+// links that checkout's node_modules instead.
+function depsDirs(t, lockA, lockB) {
+  const project = fs.realpathSync(tempDir(t, 'fpc-deps-main-'));
+  const root = fs.realpathSync(tempDir(t, 'fpc-deps-tree-'));
+  fs.writeFileSync(path.join(project, 'package-lock.json'), lockA);
+  fs.writeFileSync(path.join(root, 'package-lock.json'), lockB);
+  fs.mkdirSync(path.join(project, 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+  return { project, root };
+}
+
+test('provideDependencies links the main checkout\'s node_modules when the lockfiles match', (t) => {
+  const { project, root } = depsDirs(t, '{"lockfileVersion":3}\n', '{"lockfileVersion":3}\r\n');
+  const deps = wt.provideDependencies(project, root, { install: () => { throw new Error('must not install'); }, isIgnored: () => true });
+  assert.deepStrictEqual(deps, { manager: 'npm', linked: true, error: null });
+  assert.ok(fs.lstatSync(path.join(root, 'node_modules')).isSymbolicLink());
+  assert.ok(fs.existsSync(path.join(root, 'node_modules', 'pkg', 'index.js')));
+});
+
+test('provideDependencies installs when the lockfile differs, git would not ignore the link, or install is asked for', (t) => {
+  const installed = [];
+  const install = (root) => { installed.push(root); return { manager: 'npm', error: null }; };
+  const differs = depsDirs(t, '{"a":1}\n', '{"a":2}\n');
+  assert.strictEqual(wt.provideDependencies(differs.project, differs.root, { install, isIgnored: () => true }).linked, false);
+  const visible = depsDirs(t, '{}\n', '{}\n');
+  const deps = wt.provideDependencies(visible.project, visible.root, { install, isIgnored: () => false });
+  assert.strictEqual(deps.linked, false);
+  assert.ok(!fs.existsSync(path.join(visible.root, 'node_modules')), 'a link git would commit is taken back down');
+  const asked = depsDirs(t, '{}\n', '{}\n');
+  assert.strictEqual(wt.provideDependencies(asked.project, asked.root, { mode: 'install', install, isIgnored: () => true }).linked, false);
+  assert.deepStrictEqual(installed, [differs.root, visible.root, asked.root]);
+});
+
+// The rulebook and the gate config live in the gitignored `.claude/doh/`, which a worktree
+// checked out from HEAD does not have: the self-review of 2026-11-03 ran without the
+// project's naming rules.
+test('copyDohConfig brings the project rulebook and gate config into the worktree, never over a file it has', (t) => {
+  const project = fs.realpathSync(tempDir(t, 'fpc-doh-main-'));
+  const root = fs.realpathSync(tempDir(t, 'fpc-doh-tree-'));
+  const put = (dir, rel, text) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), text); };
+  put(project, '.claude/doh/local/naming.md', 'rules');
+  put(project, '.claude/doh/instructions/kind/x.md', 'kind');
+  put(project, '.claude/doh/checks.json', '{"steps":{}}');
+  put(project, '.claude/doh/codeReview/runs/old/raport.md', 'old report');
+  put(root, '.claude/doh/checks.json', '{"mine":true}');
+  const copied = wt.copyDohConfig(project, root, () => true);
+  assert.deepStrictEqual(copied.sort(), ['.claude/doh/instructions/kind/x.md', '.claude/doh/local/naming.md']);
+  assert.strictEqual(fs.readFileSync(path.join(root, '.claude/doh/checks.json'), 'utf8'), '{"mine":true}');
+  assert.ok(!fs.existsSync(path.join(root, '.claude/doh/codeReview')), 'run output stays where it is');
+  assert.deepStrictEqual(wt.copyDohConfig(project, fs.realpathSync(tempDir(t, 'fpc-doh-tracked-')), () => false), [], 'a tracked .claude/doh is left to git');
+});
+
+// `git worktree remove` deletes the gitignored self-review report with the rest of the tree,
+// and on Windows walks through a junction into what it points at.
+test('remove keeps the self-review reports and unlinks a linked node_modules without touching its target', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, '.gitignore', '/node_modules\n.claude/\n', 'ignore');
+  fs.mkdirSync(path.join(dir, '.claude', 'doh'), { recursive: true });
+  fakeRemoteBranch(dir, 'feat');
+  const added = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  const shared = fs.realpathSync(tempDir(t, 'fpc-shared-modules-'));
+  fs.writeFileSync(path.join(shared, 'keep.txt'), 'still here');
+  fs.symlinkSync(shared, path.join(added.worktree, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  const run = path.join(added.worktree, '.claude', 'doh', 'codeReview', 'runs', '2026-11-03-13-08-59', 'feat');
+  fs.mkdirSync(run, { recursive: true });
+  fs.writeFileSync(path.join(run, 'raport.md'), '# report');
+  const result = wt.remove({ project: dir, branch: 'feat', worktree: added.worktree });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.removed, true);
+  assert.ok(fs.existsSync(path.join(shared, 'keep.txt')), 'the linked folder keeps its files');
+  const kept = path.join(dir, '.claude', 'doh', 'feat', 'codeReview', 'runs', '2026-11-03-13-08-59', 'feat', 'raport.md');
+  assert.deepStrictEqual(result.keptReports, [kept]);
+  assert.strictEqual(fs.readFileSync(kept, 'utf8'), '# report');
 });

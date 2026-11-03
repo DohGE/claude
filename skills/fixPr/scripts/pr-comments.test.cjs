@@ -475,3 +475,43 @@ test('--local takes the named codeReview findings of each branch instead of the 
   assert.throws(() => pc.parseArgs(['--local=']), /needs the ids/);
   assert.throws(() => pc.parseArgs(['--local=not-an-id']), /no codeReview finding id/);
 });
+
+// A stack - pull requests of one run each based on another one's branch - lands bottom-up:
+// two of them landed side by side once left part-2 on a part-1 that part-1's own rebase had
+// rewritten, and part-4 on a part-3 that moved after it pushed (DPXN-11966, 2026-11-03).
+test('annotateStacks orders a stack bottom-first, holds every part above its bottom and names the tips', () => {
+  const t = (branch, base) => ({ branch, pr: { number: 1, title: 't', url: 'u', base } });
+  const targets = [t('part-3', 'part-2'), t('other', 'master'), t('part-1', 'master'), t('part-2', 'part-1')];
+  const tips = new Map([['part-1', 'a1'], ['part-2', 'b2'], ['part-3', 'c3'], ['other', 'o1']]);
+  const { targets: out, stacks, warnings } = pc.annotateStacks(targets, tips);
+  assert.deepStrictEqual(out.map((x) => x.branch), ['other', 'part-1', 'part-2', 'part-3']);
+  assert.deepStrictEqual(out.map((x) => x.landing), ['rebase', 'keep-base', 'hold', 'hold']);
+  assert.deepStrictEqual(out[2].stack, { parent: 'part-1', children: ['part-3'], parentTipAtStart: 'a1' });
+  assert.deepStrictEqual(out[1].stack, { parent: null, children: ['part-2'], parentTipAtStart: null });
+  assert.deepStrictEqual(out.map((x) => x.remoteTipAtStart), ['o1', 'a1', 'b2', 'c3']);
+  assert.deepStrictEqual(stacks, [['part-1', 'part-2', 'part-3']]);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('annotateStacks lands two parts on one parent after it, and breaks a cycle at its first part', () => {
+  const t = (branch, base) => ({ branch, pr: { number: 1, title: 't', url: 'u', base } });
+  const tree = pc.annotateStacks([t('b', 'a'), t('a', 'main'), t('c', 'a')]);
+  assert.deepStrictEqual(tree.targets.map((x) => [x.branch, x.landing]), [['a', 'keep-base'], ['b', 'hold'], ['c', 'hold']]);
+  assert.strictEqual(tree.targets[1].stack.parentTipAtStart, null, 'no tip known, none invented');
+  const cycle = pc.annotateStacks([t('x', 'y'), t('y', 'x')]);
+  assert.deepStrictEqual(cycle.targets.map((x) => [x.branch, x.landing]), [['x', 'keep-base'], ['y', 'hold']]);
+  assert.strictEqual(cycle.warnings.length, 1);
+  assert.match(cycle.warnings[0], /x.*y|y.*x/);
+});
+
+test('remoteTips reads every branch tip from one ls-remote and skips what the remote lacks', () => {
+  const calls = [];
+  const sha = (c) => c.repeat(40);
+  const tips = pc.remoteTips('/p', ['a', 'feat/b', 'gone'], (project, args) => {
+    calls.push(args);
+    return `${sha('1')}\trefs/heads/a\n${sha('2')}\trefs/heads/feat/b\n`;
+  });
+  assert.deepStrictEqual(calls, [['ls-remote', 'origin', 'refs/heads/a', 'refs/heads/feat/b', 'refs/heads/gone']]);
+  assert.deepStrictEqual([...tips], [['a', sha('1')], ['feat/b', sha('2')]]);
+  assert.strictEqual(pc.remoteTips('/p', ['a'], () => null).size, 0, 'no remote, no tips');
+});

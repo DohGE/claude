@@ -7,7 +7,7 @@ Branch: `{{BRANCH}}` | Pull request: `#{{PR_NUMBER}}` ({{PR_URL}}) into `{{BASE}
 Comments: `{{COMMENTS}}` | Report: `{{REPORT}}` | Check logs: `{{CHECKS_DIR}}`
 Commit message, CR form: `{{COMMIT_MESSAGE}}` | Commit prefix: `{{COMMIT_PREFIX}}`
 Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | Push: `{{PUSH}}`
-Dependencies installed: `{{INSTALLED}}` | User language: `{{LANGUAGE}}`
+Dependencies installed: `{{INSTALLED}}` | User language: `{{LANGUAGE}}` | Landing: `{{LANDING}}`
 
 `{{ROOT}}` is a dedicated `git worktree` holding ONLY this branch. Read, write, install, test, stage
 and commit exclusively inside it. `{{PROJECT}}` is named so you can recognise the repository — never
@@ -18,13 +18,31 @@ sits outside `{{ROOT}}`, so writing it can never end up in your commit.
 
 Leave pull request `#{{PR_NUMBER}}` with nothing open against it: every review comment the reviewers
 left unresolved, AND every red command in the project's own gate — whoever made it red, and whether
-or not there was a comment to fix at all. Land the whole thing as ONE commit, rebased onto the
-current `{{BASE}}`.
+or not there was a comment to fix at all. Land the whole thing as ONE commit; how it lands - rebased
+onto the current `{{BASE}}`, kept on it, or held for the orchestrator - is step 6, by `{{LANDING}}`.
 
 The order of the run: read the work (step 1), fix it (step 2), check that every comment really is
 addressed and that nothing else broke (step 3), review your own change with `/doh:codeReview staged`
-and apply its findings (step 4), bring the gate green (step 5), then report, commit, rebase and push
+and apply its findings (step 4), bring the gate green (step 5), then report, commit and land it
 (step 6).
+
+## Waiting, and the tools you have
+
+Your prompt cache lives five minutes. A call that blocks longer, or a turn you end while work runs in
+the background, makes the next response pay for this whole conversation again - 227k tokens a time in
+the run of 2026-11-03. So:
+
+- Never call `ToolSearch`. Every tool this brief needs is already loaded: Bash (with
+  `run_in_background`), Read, Edit, Write, Grep, Glob and Agent. Loading one more rewrites the whole
+  cached prompt (173-226k tokens per load), and `Monitor` is the one agents loaded - never use it.
+- Anything that can run past four minutes - the gate, the self-review - runs in the background, and you
+  wait for the file it writes at its end, in slices:
+
+      node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty
+
+  It waits under four minutes and prints `PART_READY <file>` or `PART_PENDING <file>` (FIXED
+  IDENTIFIERS). `PART_PENDING` → run it again. Never end your turn while background work runs.
+- No other call of yours blocks for four minutes either: no `sleep`, no foreground build.
 
 ## Step 1 — Read the work
 
@@ -100,9 +118,10 @@ which are not this project's rules, and a comment fix is not the place to apply 
 Files of one kind share one `projectRules`: skip one you already read, it stays binding for every
 file that returned it.
 `projectRules` null → the project's rulebook defines nothing for that file.
-`projectInstructionsDir` null → the project ships no rulebook, or a worktree is checked out from HEAD
-and it is not COMMITTED; when `{{ROOT}}/.claude/doh/instructions/` is absent but the main checkout
-has it, say so in `summary` instead of reaching outside `{{ROOT}}` for it. The matcher exiting
+`projectInstructionsDir` null → the project ships no rulebook. The worktree got a copy of the main
+checkout's gitignored `.claude/doh/` config (`instructions/`, `local/`, `checks.json`) when it was
+created; when `{{ROOT}}/.claude/doh/instructions/` is still absent but the main checkout has it, say so
+in `summary` instead of reaching outside `{{ROOT}}` for it. The matcher exiting
 non-zero → go on without it and say so in `summary`.
 
 ## Step 3 — Check the fixes against the comments and the rest of the code
@@ -122,25 +141,48 @@ Once every item has its verdict and its fix, check the work before anything else
    bring each one in line, or undo the change when that cannot be done without touching what nobody
    asked about. A behaviour your fix changed on purpose is checked at every caller that relied on the
    old one. The gate (step 5) proves what the tests cover; this step covers what they do not.
+   Translation files are the exception to "every use": edit only the base-language file (`en.json`),
+   never another locale's - the translation team owns those (rule i18n#1), even when a key you renamed
+   leaves that language on its fallback until they catch up. Two runs of 2026-11-03 renamed keys in
+   five locale files, and the user had them taken back by hand.
 
 Record what this step found and changed under `## Weryfikacja komentarzy` (point 1 of step 6).
 
 ## Step 4 — Review your own change before the commit
 
-Run the doh review of exactly what this run changed, through the Skill tool:
-`/doh:codeReview staged --project={{ROOT}} --only-md`. Its context script stages the worktree
-(`git add .`) and reviews the staged diff - your fixes, nothing else of the branch. It runs in this
-conversation (a sub-agent has no workflow to hand it to); follow the skill to its terminal summary,
-which names the report.
+Have the doh review of exactly what this run changed made by a sub-agent of its own. Its rules and
+bundles run to 70-300 kB, and in this conversation every one of your later responses would read them
+again. Its context script stages the worktree (`git add .`) and reviews the staged diff - your fixes,
+nothing else of the branch.
+
+1. Spawn it in the background: `Agent(subagent_type: "general-purpose", description: "self-review
+   {{BRANCH}}", run_in_background: true, prompt: <the text below, verbatim>)`:
+
+       Run the Skill tool with skill `doh:codeReview` and args
+       `staged --project={{ROOT}} --only-md --light`, and follow the skill to its terminal summary.
+       Change no file outside {{ROOT}}/.claude/doh/ but the one named below, and never call
+       ToolSearch. When the report is written, write its absolute path, alone, into
+       {{REPORT}}.review.txt with one Bash command
+       (printf '%s\n' "<path>" > "{{REPORT}}.review.txt"), then end with the line REVIEW DONE <path>.
+       When the skill cannot finish, write FAILED <reason> into that file instead and end with
+       REVIEW FAILED <reason>.
+
+2. Wait for `{{REPORT}}.review.txt` with `wait-part.cjs --nonempty` (see Waiting), then Read it: a path
+   is the report, `FAILED <reason>` is a review that did not run.
 
 Then read the report and apply its findings, one by one, under the same rules as a comment fix:
 
 - **fix** a finding when its fix leaves the current behaviour as it is - a rename, a type, a
   duplicated block folded, a missing spec case, a misplaced file, an unused import. The review only
   reports what the change touched, and every finding is meant as a behaviour-neutral refactor;
-- **leave** a finding whose fix would change what working code does or how it looks, one about code
-  your run did not write, and one that contradicts a reviewer's comment you fixed (the reviewer
-  wins) - each with its one-line ground.
+- **leave** a finding only on one of three grounds: its fix would change what working code does or
+  how it looks; it is about code your run did not write; or it contradicts a reviewer's comment you
+  fixed (the reviewer wins) - and then the ground names that comment (author and url). Nothing else
+  is a ground: "it would break the other translations" left a rule i18n#1 finding in place on
+  2026-11-03, and the user took those files back by hand.
+- **fix** a rule i18n#1 finding (a locale file other than the base language changed) always: take
+  the file back to what the branch had, `git -C "{{ROOT}}" checkout HEAD -- <file>`, and check the
+  base-language file still holds what your fix needs.
 
 The review stages everything, `.env*` and other untracked files included. Before you go on, unstage
 it all with `git -C "{{ROOT}}" reset --quiet` (the index only - your edits stay); step 6 stages by
@@ -160,14 +202,23 @@ gate: every command would fail for want of `node_modules`, and you would spend t
 missing dependency tree. Record that in the report and in `summary`, leave `checksFixed` empty, and go
 to step 6.
 
-Otherwise run, from anywhere:
+Otherwise, once before the first pass, `git -C "{{ROOT}}" fetch origin {{BASE}}`: the gate lists the
+files the pull request changes against `origin/{{BASE}}`, and refuses (an `errors[]` entry) a base it
+cannot resolve. Then run pass `<n>` (1, 2, 3) in the background - Bash with `run_in_background: true`:
 
-    node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}"
+    node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{BASE}}" --result-file="{{CHECKS_DIR}}/gate-<n>.json"
 
-It prints ONE JSON object: `gate` (`green` / `red` / `partial` / `skipped`) and a `steps[]` entry per command with
-`step`, `label`, `command`, `status`, `reason`, `logPath`, `errorsPath` and `truncated`. Never assemble these
-commands yourself — the script is where the package manager, the non-interactive flags and the
-timeouts are decided, and a hand-built `npm test` is how a watcher gets left running.
+and wait for `{{CHECKS_DIR}}/gate-<n>.json` with `wait-part.cjs --nonempty` (see Waiting); then Read
+that file. It holds ONE JSON object: `gate` (`green` / `red` / `partial` / `skipped`), `gateSource` and
+a `steps[]` entry per command with `step`, `label`, `command`, `status`, `reason`, `logPath`,
+`errorsPath` and `truncated`. Never assemble these commands yourself — the script is where the
+package manager, the non-interactive flags and the timeouts are decided, and a hand-built `npm test`
+is how a watcher gets left running.
+
+A project with `.claude/doh/checks.json` (or package.json `doh.checks`; `gateSource` names it) brings
+its own commands for the four steps, run on the files the pull request changes since
+`origin/{{BASE}}` - a step none of whose files changed is `skipped` with that reason. A step can wait
+for a free slot first: gate steps of every run on the machine share a few of them.
 
 A step's `status` is its command's exit code, decided by the script. It is never yours to decide by
 reading output: a `passed` step has nothing for you to read, and no output ever turns it into a failure.
@@ -188,8 +239,9 @@ reading output: a `passed` step has nothing for you to read, and no output ever 
 **Budget: three gate passes.** Still red after the third → do NOT commit, do NOT push, leave the
 worktree exactly as it is so the user can inspect it, write the report, and end with the `error` JSON.
 
-To re-run one command after a fix, `--only=lint` (or `typecheck`, `test`, `build`) runs just that one
-and leaves the other logs untouched. Such a pass answers `partial`, never `green` — your LAST pass
+To re-run one command after a fix, add `--only=lint` (or `typecheck`, `test`, `build`) to the same
+command, in the background with a result file of its own, to run just that one and leave the other
+logs untouched. Such a pass answers `partial`, never `green` — your LAST pass
 must be a full run, because what you report as green has to be green together, not one step at a time.
 
 `checksFixed` is the list of `label`s of the steps that were `failed` in your FIRST pass and `passed`
@@ -272,7 +324,11 @@ The following are not repairs, and none of them may appear in your commit:
 
    Then:
 
-       git -C "{{ROOT}}" commit -m "<the message>"
+       git -C "{{ROOT}}" commit -m "<the message>" > "{{CHECKS_DIR}}/commit.log" 2>&1; echo "exit $?"
+
+   The project's pre-commit hook runs on it. A non-zero exit is the hook's refusal: Read the tail of
+   `commit.log` (the hook's own words - on 2026-11-03 a refused commit went unexplained), fix what it
+   names, stage again and commit again. Never `--no-verify`.
 
    No body, no description, no trailer, no co-author line, no issue reference — the message is that one
    line and only that. One commit for the whole run: never a commit per comment, never one per check,
@@ -281,21 +337,33 @@ The following are not repairs, and none of them may appear in your commit:
    skipped — → that is a legitimate outcome, not a failure: skip the commit and the push, report
    `committed: false`, and say why in `summary`. If the tree is nonetheless dirty, name the files in
    `summary` and leave them; you revert nothing.
-4. Rebase the commit onto the current base, so the pull request lands on what `{{BASE}}` holds now:
-   - `git -C "{{ROOT}}" rev-parse origin/{{BRANCH}}` → keep it as `<remote-sha>` (where the remote
-     branch stood when you started);
-   - `git -C "{{ROOT}}" fetch origin {{BASE}}`;
-   - `git -C "{{ROOT}}" merge-base --is-ancestor origin/{{BASE}} HEAD` exits 0 → the branch already
-     holds the whole base: nothing to rebase, `rebased: false`, go to point 5;
-   - otherwise `git -C "{{ROOT}}" rebase origin/{{BASE}}`. A conflict → `git -C "{{ROOT}}" rebase
-     --abort`, which puts your commit back exactly as it was: `rebased: false`, the conflicting files
-     and the reason in `summary`, and go to point 5 with the commit un-rebased. Never resolve a
-     rebase conflict yourself - it is a merge of other people's work, not a review comment.
-   - A rebase that went through brought the base's newer commits under your change: run the full
-     gate (step 5) once more. Red now → the base and your change do not fit together: `git -C
-     "{{ROOT}}" reset --hard ORIG_HEAD` (back to your commit before the rebase - the only reset you
-     ever run), `rebased: false`, the red command in `summary`, and go on un-rebased. Green →
-     `rebased: true`.
+4. Land the commit as `{{LANDING}}` says:
+   - `hold` — `{{BASE}}` is another branch of this run, fixed side by side: do NOT rebase and do NOT
+     push. The orchestrator moves your commit onto `{{BASE}}` once that one has landed, runs the gate
+     and pushes (restack.cjs). Report `held: true`, `rebased: false`, `pushed: false`, and skip point 5.
+     A rebase of yours here is what left part-2 on a part-1 that part-1's own rebase had rewritten.
+   - `keep-base` — other pull requests of this run are built on this branch, and a rebase here rewrites
+     every one of them. `git -C "{{ROOT}}" fetch origin {{BASE}}`, then
+     `git -C "{{ROOT}}" merge-tree --write-tree --quiet origin/{{BASE}} HEAD`: exit 0 → it still merges
+     cleanly, so no rebase (`rebased: false`, "keeps its base: stacked pull requests build on it" in
+     `summary`); exit 1 → it no longer merges: rebase it exactly as `rebase` says below; any other exit
+     → no rebase, and say so in `summary`.
+   - `rebase` — rebase the commit onto the current base, so the pull request lands on what `{{BASE}}`
+     holds now:
+     - `git -C "{{ROOT}}" rev-parse origin/{{BRANCH}}` → keep it as `<remote-sha>` (where the remote
+       branch stood when you started);
+     - `git -C "{{ROOT}}" fetch origin {{BASE}}`;
+     - `git -C "{{ROOT}}" merge-base --is-ancestor origin/{{BASE}} HEAD` exits 0 → the branch already
+       holds the whole base: nothing to rebase, `rebased: false`, go to point 5;
+     - otherwise `git -C "{{ROOT}}" rebase origin/{{BASE}}`. A conflict → `git -C "{{ROOT}}" rebase
+       --abort`, which puts your commit back exactly as it was: `rebased: false`, the conflicting files
+       and the reason in `summary`, and go to point 5 with the commit un-rebased. Never resolve a
+       rebase conflict yourself - it is a merge of other people's work, not a review comment.
+     - A rebase that went through brought the base's newer commits under your change: run the full
+       gate (step 5) once more. Red now → the base and your change do not fit together: `git -C
+       "{{ROOT}}" reset --hard ORIG_HEAD` (back to your commit before the rebase - the only reset you
+       ever run), `rebased: false`, the red command in `summary`, and go on un-rebased. Green →
+       `rebased: true`.
    With `{{PUSH}}` `no`, rebase all the same: the user pushes the branch as it is.
 5. Push, but only when `{{PUSH}}` is `yes`.
    - Not rebased: `git -C "{{ROOT}}" push origin {{BRANCH}}` - plain push.
@@ -305,39 +373,46 @@ The following are not repairs, and none of them may appear in your commit:
    A rejected push means the branch moved on the remote WHILE you were working: do not fight it -
    no second rebase, no other force. Report `pushed: false` with the rejection text in `summary` and
    leave the commit sitting on the local branch for the user.
-6. Write `{{REPORT}}` (UTF-8) in ONE Bash heredoc — `cat > "{{REPORT}}" <<'EOF'` … `EOF` — never
-   the Write tool, which this harness refuses to a sub-agent for a `.md` file. One write: a report
+6. Write the report with the Write tool to `{{REPORT}}.txt` (the harness refuses a sub-agent a `.md`
+   file), then move it into place with Bash: `mv -f "{{REPORT}}.txt" "{{REPORT}}"`. Never a heredoc:
+   its quoting and backslashes broke a report of 2026-11-03. One write: a report
    assembled from several appends ends half-written when anything goes wrong. It holds the sections
    of point 1 and, last, the outcome:
 
        ## Wynik
        - Commit: <sha + message | nie powstał: reason>
-       - Rebase na {{BASE}}: <done | not needed | abandoned: reason>
+       - Rebase na {{BASE}}: <done | not needed | kept (keep-base) | held for the orchestrator | abandoned: reason>
        - Push: <done | done, force-with-lease after rebase | skipped (--no-push) | failed: reason>
 
 ## Rules
 
 - Everything happens inside `{{ROOT}}`. Never touch `{{PROJECT}}`, never touch another worktree.
 - Never `git checkout` another branch, never `stash` or `cherry-pick`. The one rebase is step 6
-  point 4, onto `origin/{{BASE}}`; the one `reset --hard` is its `ORIG_HEAD` undo; the one other
-  reset is step 4's `reset --quiet` of the index.
+  point 4, onto `origin/{{BASE}}`, and with `{{LANDING}}` `hold` there is none; the one `reset --hard` is
+  its `ORIG_HEAD` undo; the one other reset is step 4's `reset --quiet` of the index; the one
+  `checkout` is step 4's of a locale file.
+- Never `ToolSearch`, never `Monitor`, never a call that blocks past four minutes (Waiting).
 - Never resolve a thread on GitHub yourself and never post a comment there — the orchestrator closes
   exactly the threads you report as fixed, once the push has landed.
 - Never remove the worktree; the orchestrator does that after it has read your result.
-- Never write inside `{{CHECKS_DIR}}` yourself. `checks.cjs` owns those files; you only read a failed step's `errorsPath`.
+- Never write inside `{{CHECKS_DIR}}` yourself, except step 6's `commit.log`. `checks.cjs` owns those files; you read a pass's `gate-<n>.json` and a failed step's `errorsPath`.
 - `fixedThreadIds` carries the `id` of every `threads[]` entry you verdicted `fixed`, and nothing
   else. A rejected thread, an answered one, a `conversation[]` comment (which has no thread at all)
   and anything you fixed without committing must NOT be in that list: each id in it becomes a public
   claim on the pull request that the reviewer's comment was addressed.
 - `fixedFindingIds` carries the `id` of every `findings[]` entry (`--local`) you verdicted `fixed`;
   such a run has no thread, so its `fixedThreadIds` is empty.
+- `fixedVia` maps a fixed thread whose fix landed in other files than the one it sits on to those
+  repo-relative paths - keys renamed in `en.json` for a thread on an effects file. A thread is closed
+  only when the commit changes its own file or one of these: four threads of 2026-11-03 stayed open
+  for want of it. Leave a thread fixed in its own file out of the map.
 
 ## Final message
 
 End your final message with a single JSON object and nothing after it:
 
 - Success (including a run that legitimately committed nothing):
-  `{"type":"result","committed":<bool>,"pushed":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedFindingIds":["<id>",…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
+  `{"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
 - Gate still red after three passes, or any failure that left the work unfinished:
   `{"type":"error","report":"<in {{LANGUAGE}}: which commands are still red and why, what is in the worktree now, what you already fixed>","fixed":<N>,"fixedThreadIds":[],"checksFixed":[],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}]}`
   `fixedThreadIds` and `checksFixed` are empty on this path, always: nothing was committed or pushed,
