@@ -59,6 +59,10 @@ const resolveMutation = `mutation($id:ID!){
   resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}
 }`;
 
+const replyMutation = `mutation($id:ID!,$body:String!){
+  addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id url}}
+}`;
+
 // GraphQL answers a rejected query with HTTP 200 and an `errors` array, so
 // `res.ok` alone says nothing: a query the token may not run comes back as a
 // perfectly successful response carrying no data at all.
@@ -203,6 +207,15 @@ function resolveThread(project, threadId, send = github.request) {
   return { resolved: true, error: null };
 }
 
+// The reply resolve-threads.cjs posts before it closes a thread: which commit fixed it.
+function replyToThread(project, threadId, body, send = github.request) {
+  const { data, error } = graphql(project, replyMutation, { id: threadId, body }, send);
+  if (error) return { replied: false, error };
+  const comment = data && data.addPullRequestReviewThreadReply && data.addPullRequestReviewThreadReply.comment;
+  if (!comment) return { replied: false, error: 'GitHub accepted the reply but returned no comment' };
+  return { replied: true, url: comment.url || null, error: null };
+}
+
 // One REST list, paged to exhaustion. `page` is 1-based and a short page is the
 // last one, which is the only end condition that does not need the Link header.
 const restPerPage = 100;
@@ -273,7 +286,7 @@ function reviewBodies(project, slug, number, send = github.request) {
 }
 
 module.exports = {
-  graphql, reviewThreads, restOfThread, resolveThread, issueComments, reviewBodies,
+  graphql, reviewThreads, restOfThread, resolveThread, replyToThread, issueComments, reviewBodies,
   normalizeThread, normalizeComment, stripAnchor,
-  threadsQuery, threadCommentsQuery, resolveMutation,
+  threadsQuery, threadCommentsQuery, resolveMutation, replyMutation,
 };

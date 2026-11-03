@@ -429,6 +429,72 @@ function collectBranch(branch, ctx) {
   };
 }
 
+// Where every branch stands on origin now, in one `ls-remote`: the lease a held part is pushed
+// with, and the old tip its children are moved off once that part is rewritten.
+function remoteTips(project, branches, run = tryGit) {
+  const tips = new Map();
+  if (branches.length === 0) return tips;
+  const out = run(project, ['ls-remote', 'origin', ...branches.map((b) => `refs/heads/${b}`)]);
+  for (const line of String(out || '').split(/\r?\n/)) {
+    const m = line.match(/^([0-9a-f]{40})\s+refs\/heads\/(.+)$/);
+    if (m) tips.set(m[2].trim(), m[1]);
+  }
+  return tips;
+}
+
+// Pull requests of one run that build on each other - a stack, each one's base the branch of
+// another - land bottom-up. Landed side by side, each rebased at its own finish: part-1 rebased
+// onto master rewrote the commits part-2 sat on (its rebase then conflicted), and part-4 pushed
+// before part-3 did, so it stayed on the old part-3 (DPXN-11966, 2026-11-03). So a part above
+// the bottom only commits (`hold`) and the orchestrator moves it onto its parent once that one
+// has landed (restack.cjs); the bottom keeps its base unless it no longer merges (`keep-base`),
+// since a rebase there rewrites every part above it; a branch outside any stack `rebase`s.
+function annotateStacks(targets, tips = new Map()) {
+  const warnings = [];
+  const byBranch = new Map(targets.map((t) => [t.branch, t]));
+  const parentOf = new Map();
+  for (const t of targets) {
+    const base = t.pr && t.pr.base;
+    if (base && base !== t.branch && byBranch.has(base)) parentOf.set(t.branch, base);
+  }
+  // Two pull requests based on each other have no bottom: the first of them in the run's order
+  // lands by itself.
+  for (const t of targets) {
+    const seen = new Set([t.branch]);
+    for (let at = parentOf.get(t.branch); at !== undefined; at = parentOf.get(at)) {
+      if (seen.has(at)) {
+        warnings.push(`${[...seen].join(', ')} are based on each other in a cycle; ${t.branch} lands first, on its own base.`);
+        parentOf.delete(t.branch);
+        break;
+      }
+      seen.add(at);
+    }
+  }
+  const childrenOf = new Map(targets.map((t) => [t.branch, []]));
+  for (const t of targets) if (parentOf.has(t.branch)) childrenOf.get(parentOf.get(t.branch)).push(t.branch);
+  const ordered = [];
+  const stacks = [];
+  const visit = (branch, chain) => {
+    ordered.push(byBranch.get(branch));
+    chain.push(branch);
+    for (const child of childrenOf.get(branch)) visit(child, chain);
+  };
+  for (const t of targets) {
+    if (parentOf.has(t.branch)) continue;
+    const chain = [];
+    visit(t.branch, chain);
+    if (chain.length > 1) stacks.push(chain);
+  }
+  for (const t of ordered) {
+    const parent = parentOf.get(t.branch) || null;
+    const children = childrenOf.get(t.branch);
+    t.remoteTipAtStart = tips.get(t.branch) || null;
+    t.stack = { parent, children, parentTipAtStart: parent ? tips.get(parent) || null : null };
+    t.landing = parent ? 'hold' : children.length > 0 ? 'keep-base' : 'rebase';
+  }
+  return { targets: ordered, stacks, warnings };
+}
+
 function collect(options) {
   const project = path.resolve(options.project || process.cwd());
   const skillDir = options.skillDir || defaultSkillDir;
@@ -437,7 +503,7 @@ function collect(options) {
   const api = options.api || (replay && replay.api) || prApi;
   const findPr = options.findOpenPr || (replay && replay.findOpenPr) || github.findOpenPr;
   const result = {
-    project, tokenSource: null, targets: [], errors: [], warnings: [],
+    project, tokenSource: null, targets: [], stacks: [], errors: [], warnings: [],
   };
   if (replay) result.warnings.push(`Review replayed from ${options.replay}: nothing is read from GitHub, and resolve-threads.cjs only rehearses.`);
 
@@ -484,6 +550,12 @@ function collect(options) {
     const target = collectBranch(branch, ctx);
     if (target) result.targets.push(target);
   }
+  // A replayed review reads nothing from the network, the remote's tips included.
+  const tips = replay ? new Map() : (options.remoteTips || remoteTips)(project, result.targets.map((t) => t.branch));
+  const stacked = annotateStacks(result.targets, tips);
+  result.targets = stacked.targets;
+  result.stacks = stacked.stacks;
+  result.warnings.push(...stacked.warnings);
   if (local) {
     const missing = local.filter((id) => !ctx.matched.has(id));
     if (missing.length > 0) {
@@ -508,6 +580,6 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf };
+module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf, annotateStacks, remoteTips };
 
 if (require.main === module) main();

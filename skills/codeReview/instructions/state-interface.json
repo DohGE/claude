@@ -9,10 +9,10 @@
   "describedBy": [
     {
       "id": "state-interface#1",
-      "text": "The state interface is one flat structure `export interface <Area>State { ... }` in `models/interfaces/`; the file name is the kebab-case of the interface."
+      "text": "The state interface - of a signal store or an NgRx slice - is one flat structure `export interface <Name>State { ... }` in `models/interfaces/`; the file name is the kebab-case of the interface."
     }
   ],
-  "itemCount": 21,
+  "itemCount": 26,
   "instructions": [
     {
       "id": "state-interface",
@@ -22,7 +22,7 @@
       "items": [
         {
           "id": "state-interface#1",
-          "text": "The state interface is one flat structure `export interface <Area>State { ... }` in `models/interfaces/`; the file name is the kebab-case of the interface.",
+          "text": "The state interface - of a signal store or an NgRx slice - is one flat structure `export interface <Name>State { ... }` in `models/interfaces/`; the file name is the kebab-case of the interface.",
           "severity": "low"
         },
         {
@@ -32,7 +32,7 @@
         },
         {
           "id": "state-interface#3",
-          "text": "Loading flags are plain `boolean` (not optional); collections are arrays initialized to `[]` (or typed `| null` when \"none\" is a distinct UI state).",
+          "text": "Loading flags are plain `boolean` (not optional) named `isLoading<X>` (`isLoadingNodes`); collections are arrays initialized to `[]` (or typed `| null` when \"none\" is a distinct UI state).",
           "severity": "low"
         },
         {
@@ -61,8 +61,8 @@
     {
       "id": "models",
       "name": "Models folder",
-      "selectedItems": "1-3,9-10,16,23",
-      "checklistSize": 24,
+      "selectedItems": "1-3,9-10,16,23,25",
+      "checklistSize": 25,
       "items": [
         {
           "id": "models#1",
@@ -101,12 +101,17 @@
         },
         {
           "id": "models#16",
-          "text": "`type` is used for unions/intersections/utility types (`Pick`, `Omit`, `Partial`, mapped types) and for enriching library types by intersection; `interface` for plain extensible objects; discriminated unions keep the literal discriminant field and all member interfaces in one file.",
+          "text": "`type` is used for unions/intersections/utility types (`Pick`, `Omit`, `Partial`, mapped types) and for enriching library types by intersection; `interface` for plain extensible objects; discriminated unions keep the literal discriminant field and all member interfaces in one file. A type repeating the fields of another is derived from it with `Pick`/`Omit` rather than copying them.",
           "severity": "low"
         },
         {
           "id": "models#23",
           "text": "No `readonly` on state, API or domain fields — immutability is enforced by the reducer, not the type; no `?` fields in the state interface (use `| null`).",
+          "severity": "low"
+        },
+        {
+          "id": "models#25",
+          "text": "Names follow the declaration kind: consts are camelCase - feature keys, initial states, mappers, option sets - never SCREAMING_SNAKE_CASE; interfaces, types and enums are PascalCase domain names without a `Util` or `Interface` suffix.",
           "severity": "low"
         }
       ]
@@ -114,12 +119,12 @@
     {
       "id": "architecture",
       "name": "Feature architecture",
-      "selectedItems": "1,6,9",
-      "checklistSize": 12,
+      "selectedItems": "1,6,8-9",
+      "checklistSize": 13,
       "items": [
         {
           "id": "architecture#1",
-          "text": "Every feature area keeps the canonical layout: `data-access/+state/` (actions, reducer, selectors, effects, facade + `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
+          "text": "Every feature area keeps the canonical layout: `data-access/+state/` (the view's `<name>.store.ts` signal store and, only for data several independent views share, an NgRx slice - actions, reducer, selectors, effects, facade - each with `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, plus `shared/mocks/` for the spec fixtures several specs share, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area.",
           "severity": "medium",
           "facts": [
             "area-routes-twice"
@@ -129,13 +134,18 @@
         },
         {
           "id": "architecture#6",
-          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, HTTP in `data-access/services/`, state files in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed.",
+          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, spec fixtures several specs share in `shared/mocks/`, HTTP in `data-access/services/`, state files - the signal store and an NgRx slice's files - in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed. A type, interface, enum or const used only inside its own file may stay there, without `export`; once it is exported or a second file needs it, it moves to `models/`.",
           "severity": "medium",
           "probe": [
             {
               "builtin": "area-root-file"
             }
           ]
+        },
+        {
+          "id": "architecture#8",
+          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in. Inside `models/` the rule flips: a models file imports another models file by its relative concrete path, never through its own barrel, which would import itself in a cycle.",
+          "severity": "low"
         },
         {
           "id": "architecture#9",
@@ -150,8 +160,8 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2",
-      "checklistSize": 13,
+      "selectedItems": "2,14-15,17",
+      "checklistSize": 18,
       "items": [
         {
           "id": "general#2",
@@ -161,6 +171,32 @@
             "models#10"
           ],
           "okEvidence": "linia każdej deklaracji, której nazwę sprawdziłeś (L3, L7, L12), nie zakres pliku"
+        },
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
+          ]
+        },
+        {
+          "id": "general#15",
+          "text": "A boolean - a field, signal, input, variable or a method returning a flag - is named with a predicate prefix that reads as a yes/no question (`isActive`, `hasChildren`, `canEdit`, `shouldRetry`; loading flags `isLoading<X>`), never a bare noun or adjective (`active`, `loading`, `children`). The fields of an API interface keep the names the API sends.",
+          "severity": "low",
+          "subject": [
+            "boolean",
+            "\\btrue\\b",
+            "\\bfalse\\b"
+          ]
+        },
+        {
+          "id": "general#17",
+          "text": "A comment explains only what the code cannot say itself - a non-obvious why, a tricky edge case, a workaround, a subtle gotcha; a comment restating what the code does or narrating obvious steps is a finding, and a clearer name replaces it. The section comments of a models barrel and the justification of a suppression comment are required, not this item's.",
+          "severity": "low",
+          "subject": [
+            "//",
+            "/\\*"
+          ]
         }
       ]
     },

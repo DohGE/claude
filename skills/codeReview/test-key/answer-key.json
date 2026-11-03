@@ -73,7 +73,7 @@
   {
    "id": "b16",
    "file": "src/app/user-panel/data-access/services/user-panel.service.ts",
-   "text": "The endpoint path text in `user-panel.service.ts` — segments, wording, casing, versioning, leading/trailing slash, key names — is out of review scope entirely. Only the absolute base URL inside the value, and the fact that two keys hold the *same* URL, are reportable."
+   "text": "The endpoint path text in `user-panel.service.ts` — segments, wording, casing, versioning, trailing slash, key names — is out of review scope. Only the absolute base URL inside the value, a leading slash, and the fact that two keys hold the *same* URL are reportable."
   },
   {
    "id": "b18",
@@ -99,6 +99,11 @@
    "id": "b22",
    "file": "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.html",
    "text": "`ui-user-card.component.html`: `<h3>` for the user name inside a card is a plausible heading level for a card — the heading-order violations live in the feature template, not here."
+  },
+  {
+   "id": "b23",
+   "file": "src/app/user-panel/data-access/+state/user-invites.store.ts",
+   "text": "`user-invites.store.ts`: the `filter(() => !store.isSendingInvite())` guard followed by `exhaustMap` with tapResponse inside the flattening operator is the prescribed form of a save that ignores repeat triggers, and `hasInvites` as a withComputed signal is the prescribed home of a derived flag - neither is a finding; the defects there are the duplicated reset and the missing consumer."
   }
  ],
  "findings": [
@@ -1946,7 +1951,7 @@
     "architecture#4"
    ],
    "severity": null,
-   "text": "HTTP service injected and called directly from the facade (`searchAndReturn`) — effects are the only HTTP consumers.",
+   "text": "HTTP service injected and called directly from the facade (`searchAndReturn`) — only effects and signal-store methods consume HTTP services.",
    "lines": {
     "src/app/user-panel/data-access/+state/user-panel.facade.ts": "33"
    }
@@ -2015,7 +2020,7 @@
     "http-service#4"
    ],
    "severity": null,
-   "text": "`export const endpoints = {` exported (must be module-level, non-exported); hard-coded absolute base URL (private endpoint, `https://api.internal.example.com/v1/users`); URL interpolation outside `endpoints` (string concatenation in methods: `endpoints.users + '?page_size='`, `endpoints.users + '/' + id`). The path text itself — including the leading slash in `searchUsers` — is out of scope and must NOT be reported.",
+   "text": "`export const endpoints = {` exported (must be module-level, non-exported); hard-coded absolute base URL (private endpoint, `https://api.internal.example.com/v1/users`); URL interpolation outside `endpoints` (string concatenation in methods: `endpoints.users + '?page_size='`, `endpoints.users + '/' + id`). The leading slash of the `searchUsers` path is reported too (an endpoint path never starts with `/`); the rest of the path text is out of scope and must NOT be reported.",
    "lines": {
     "src/app/user-panel/data-access/services/user-panel.service.ts": "10-12, 30, 38, 49"
    }
@@ -2223,7 +2228,7 @@
     "architecture#4"
    ],
    "severity": null,
-   "text": "injected directly by the feature component (components reach state only through the facade)."
+   "text": "injected directly by the feature component (components reach state only through their view's signal store or a facade)."
   },
   {
    "id": "v181",
@@ -2515,20 +2520,6 @@
    "text": "no edit-mode safety test, no parameterized-selector two-step test (`selectUserById`), nothing for `selectVisibleUsers`."
   },
   {
-   "id": "v207",
-   "files": [
-    "src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts"
-   ],
-   "instructions": [
-    "ngrx-effects-unit-test"
-   ],
-   "items": [
-    "ngrx-effects-unit-test#2"
-   ],
-   "severity": null,
-   "text": "HTTP simulated with `of()` instead of per-endpoint `Subject`s."
-  },
-  {
    "id": "v208",
    "files": [
     "src/app/user-panel/data-access/+state/tests/user-panel.effects.spec.ts"
@@ -2736,7 +2727,7 @@
     "guards#5"
    ],
    "severity": null,
-   "text": "injects the store and an HTTP service (facades only); fires an HTTP request from a guard."
+   "text": "injects the store and an HTTP service (facades or a route-provided signal store only); fires an HTTP request from a guard."
   },
   {
    "id": "v225",
@@ -4002,7 +3993,7 @@
     "feature-component#2"
    ],
    "severity": null,
-   "text": "store injected + `store.dispatch`, actions/selectors imported, HTTP service injected and called, plus the hand-rolled `UserPanelUiStateService` injected — components may talk only to the facade.",
+   "text": "store injected + `store.dispatch`, actions/selectors imported, HTTP service injected and called, plus the hand-rolled `UserPanelUiStateService` injected — components may talk only to their view's signal store or a facade.",
    "lines": {
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "5, 69, 160, 200, 211"
    }
@@ -4212,7 +4203,7 @@
     "architecture#10"
    ],
    "severity": null,
-   "text": "`httpResource()` fetching feature-slice data in a component — an area's server state travels component → facade → action → effect → HTTP service → reducer."
+   "text": "`httpResource()` fetching feature-slice data in a component — server data travels through the area's HTTP service, called from a signal-store method or, for data several independent views share, from an effect."
   },
   {
    "id": "v345",
@@ -7426,7 +7417,7 @@
     "http-service#1"
    ],
    "severity": null,
-   "text": "`UserPanelService` is injected outside the effects: the feature component (`svc = inject(UserPanelService)`, used for `this.svc.deleteUser('draft')`), the `Highlight` directive, `UserPanelFacade` and `UserPanelGuard` all inject it, and `user-panel.actions.ts` imports it — only effects may use the HTTP service.",
+   "text": "`UserPanelService` is injected outside the effects: the feature component (`svc = inject(UserPanelService)`, used for `this.svc.deleteUser('draft')`), the `Highlight` directive, `UserPanelFacade` and `UserPanelGuard` all inject it, and `user-panel.actions.ts` imports it — only effects and signal stores may use the HTTP service.",
    "lines": {
     "src/app/user-panel/data-access/services/user-panel.service.ts": "20"
    }
@@ -7566,6 +7557,322 @@
    "text": "`flex-direction: row-reverse` on `&__actions` shows `Select` before `Details` while focus follows the DOM — the tab order runs right-to-left across the card's actions (1.3.2, 2.4.3).",
    "lines": {
     "src/app/user-panel/components-user-panel/ui/ui-user-card/ui-user-card.component.scss": "24, 26"
+   }
+  },
+  {
+   "id": "v617",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store",
+    "architecture"
+   ],
+   "items": [
+    "signal-store#1",
+    "signal-store#2",
+    "architecture#6"
+   ],
+   "severity": null,
+   "text": "`UserInvitesState` is declared and exported in the store file - a second export next to `UserInvitesStore` - instead of living in models/interfaces/, and `withState<UserInvitesState>({` seeds an inline literal instead of a userInvitesInitialState const from models/consts/.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "10, 18, 20"
+   }
+  },
+  {
+   "id": "v618",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store",
+    "general"
+   ],
+   "items": [
+    "signal-store#2",
+    "general#15"
+   ],
+   "severity": null,
+   "text": "the state breaks the state-interface rules: `invites?: string[]` and `lastError?: unknown` are optional instead of `| null`, and the loading flag is a bare `loading: boolean` instead of isLoadingInvites.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "11-12, 15"
+   }
+  },
+  {
+   "id": "v619",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store"
+   ],
+   "items": [
+    "signal-store#3"
+   ],
+   "severity": null,
+   "text": "`withProps(() => ({ httpClient: inject(HttpClient) }))` gives the store a public, unprefixed dependency, and its methods send every request through that raw client to the store's own `invitesEndpoint` - requests belong to the area's HTTP service (UserPanelService), injected as a prefixed private prop.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "8, 21, 28, 38, 54"
+   }
+  },
+  {
+   "id": "v620",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store"
+   ],
+   "items": [
+    "signal-store#4"
+   ],
+   "severity": null,
+   "text": "the invite count is a derived value stored in the state and kept in sync by hand - `inviteCount: invites.length`, `inviteCount: store.inviteCount() + 1`, `inviteCount: store.inviteCount() - 1` - and `removeInvite` already lets it drift from the list; it is a withComputed signal.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "29, 43, 52, 56"
+   }
+  },
+  {
+   "id": "v621",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store"
+   ],
+   "items": [
+    "signal-store#5"
+   ],
+   "severity": null,
+   "text": "`protectedState: false` lets any consumer patch the state from outside the store's methods.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "19"
+   }
+  },
+  {
+   "id": "v622",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store"
+   ],
+   "items": [
+    "signal-store#6",
+    "signal-store#8"
+   ],
+   "severity": null,
+   "text": "`loadInvites()` runs `store.httpClient.get<string[]>(invitesEndpoint).subscribe({` - a bare subscribe instead of an rxMethod - and its `error: () => {}` swallows the failure and leaves `loading: true` in place.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "26-28, 30"
+   }
+  },
+  {
+   "id": "v623",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store"
+   ],
+   "items": [
+    "signal-store#7"
+   ],
+   "severity": null,
+   "text": "`sendInvite` resets `isSendingInvite: false` in both the next and the error callback instead of once in the finalize callback of tapResponse - its `exhaustMap` calls never overlap, so the exception for an overlapping switchMap does not apply.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "6, 20, 33, 37, 44, 46"
+   }
+  },
+  {
+   "id": "v624",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store"
+   ],
+   "items": [
+    "signal-store#6"
+   ],
+   "severity": null,
+   "text": "`removeInvite` flattens a delete with `switchMap` - a second removal cancels the first - and applies tapResponse after the flattening operator instead of inside it, so the first failed request ends the method's stream and every later call does nothing.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "6, 52, 54"
+   }
+  },
+  {
+   "id": "v625",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store"
+   ],
+   "items": [
+    "signal-store#9"
+   ],
+   "severity": null,
+   "text": "`providedIn: 'root'` - no view provides the store; it belongs in the providers of the feature component that renders the invite view.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "19"
+   }
+  },
+  {
+   "id": "v626",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "code-quality"
+   ],
+   "items": [
+    "code-quality#3"
+   ],
+   "severity": null,
+   "text": "`UserInvitesStore` has no consumer outside its own spec - no component provides or injects it - and its `hasInvites` signal is read nowhere, not even by the spec.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "18, 23"
+   }
+  },
+  {
+   "id": "v627",
+   "files": [
+    "src/app/user-panel/data-access/+state/user-panel.actions.ts",
+    "src/app/user-panel/data-access/+state/user-panel.reducer.ts",
+    "src/app/user-panel/data-access/+state/users.selectors.ts",
+    "src/app/user-panel/data-access/+state/user-panel.effects.ts",
+    "src/app/user-panel/data-access/+state/user-panel.facade.ts"
+   ],
+   "instructions": [
+    "architecture"
+   ],
+   "items": [
+    "architecture#13"
+   ],
+   "severity": null,
+   "text": "the userPanel NgRx slice - `createActionGroup`, `createReducer`, its selectors, its effects and `UserPanelFacade` - serves a single view (the user panel page with its dialog, card, directive, guard and pipe); no independent view reads it, so its state belongs in that view's signal store.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/user-panel.actions.ts": "1, 12",
+    "src/app/user-panel/data-access/+state/user-panel.reducer.ts": "1, 14",
+    "src/app/user-panel/data-access/+state/user-panel.effects.ts": "27, 35",
+    "src/app/user-panel/data-access/+state/user-panel.facade.ts": "11"
+   }
+  },
+  {
+   "id": "v628",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts"
+   ],
+   "instructions": [
+    "signal-store-unit-test",
+    "unit-tests"
+   ],
+   "items": [
+    "signal-store-unit-test#1",
+    "unit-tests#2",
+    "unit-tests#7",
+    "unit-tests#22"
+   ],
+   "severity": null,
+   "text": "the setup runs `TestBed.configureTestingModule({` in `beforeEach(() => {` - no ngMocks.faster() and no shared setup in beforeAll - and the HTTP mock is forced in with `httpClientMock as unknown as HttpClient` instead of a typed satisfies Partial<HttpClient> mock.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts": "14-16"
+   }
+  },
+  {
+   "id": "v629",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts"
+   ],
+   "instructions": [
+    "signal-store-unit-test"
+   ],
+   "items": [
+    "signal-store-unit-test#2"
+   ],
+   "severity": null,
+   "text": "the plain success of `loadInvites` is simulated with `new Subject<string[]>()` pushed by hand (`invites$.next(`, `invites$.complete()`) instead of of(...) through mockReturnValueOnce.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts": "30, 33-35"
+   }
+  },
+  {
+   "id": "v630",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts",
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store-unit-test",
+    "test-coverage"
+   ],
+   "items": [
+    "signal-store-unit-test#3",
+    "signal-store-unit-test#4",
+    "test-coverage#2",
+    "test-coverage#4"
+   ],
+   "severity": null,
+   "text": "success tests only: no failure test for `loadInvites` or `sendInvite` (the loading flags and `lastError` after an error are never asserted), the `hasInvites` branches are never read, and `removeInvite` is not tested at all.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts": "33, 45",
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "15, 23, 26, 33, 46, 52, 57"
+   }
+  },
+  {
+   "id": "v631",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts"
+   ],
+   "instructions": [
+    "unit-tests",
+    "signal-store-unit-test"
+   ],
+   "items": [
+    "unit-tests#15",
+    "signal-store-unit-test#3"
+   ],
+   "severity": null,
+   "text": "`expect(httpClientMock.post).toHaveBeenCalled()` ignores the posted body - the call is asserted with toHaveBeenCalledWith on the endpoint and the invited email.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts": "47"
+   }
+  },
+  {
+   "id": "v632",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts",
+    "src/app/user-panel/data-access/+state/user-invites.store.ts"
+   ],
+   "instructions": [
+    "signal-store-unit-test"
+   ],
+   "items": [
+    "signal-store-unit-test#5"
+   ],
+   "severity": null,
+   "text": "the `filter(() => !store.isSendingInvite())` guard of `sendInvite` has no test proving that a second call while the first request runs does nothing (the HTTP mock called once).",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts": "45",
+    "src/app/user-panel/data-access/+state/user-invites.store.ts": "33, 35"
+   }
+  },
+  {
+   "id": "v633",
+   "files": [
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts"
+   ],
+   "instructions": [
+    "unit-tests"
+   ],
+   "items": [
+    "unit-tests#13"
+   ],
+   "severity": null,
+   "text": "`it('should be created'` only asserts `toBeTruthy()` - an existence-only test.",
+   "lines": {
+    "src/app/user-panel/data-access/+state/tests/user-invites.store.spec.ts": "25-26"
    }
   }
  ],

@@ -16,13 +16,13 @@
       "text": "A const is created only when it is reusable, carries meaningful logic/knowledge (a mapper, an option set, a configuration, a shared literal) or removes a magic value used in several places. A small one-off value — a single string, number, flag or object literal used in exactly ONE place — stays inline at its use site; extracting it into a `.const.ts` file (or a module-level const) is a finding, exactly like extracting a short single-consumer util."
     }
   ],
-  "itemCount": 23,
+  "itemCount": 27,
   "instructions": [
     {
       "id": "models",
       "name": "Models folder",
-      "selectedItems": "1-2,4-6,10,22",
-      "checklistSize": 24,
+      "selectedItems": "1-2,4-6,10,22,25",
+      "checklistSize": 25,
       "items": [
         {
           "id": "models#1",
@@ -64,6 +64,11 @@
         {
           "id": "models#22",
           "text": "Radio/select option consts are typed with the shared-library option interface, and their `label`/`description` values are i18n keys, never texts."
+        },
+        {
+          "id": "models#25",
+          "text": "Names follow the declaration kind: consts are camelCase - feature keys, initial states, mappers, option sets - never SCREAMING_SNAKE_CASE; interfaces, types and enums are PascalCase domain names without a `Util` or `Interface` suffix.",
+          "severity": "low"
         }
       ]
     },
@@ -91,11 +96,11 @@
       "id": "architecture",
       "name": "Feature architecture",
       "selectedItems": "8-9,11",
-      "checklistSize": 12,
+      "checklistSize": 13,
       "items": [
         {
           "id": "architecture#8",
-          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in.",
+          "text": "Import FORM is checked on every import, not just its direction: an area's models are imported from outside `models/` only through the `models/` barrel (never a concrete `models/interfaces/x.interface` path), while everything else is imported from its concrete file — binding a consumer to the models folder structure makes every model move a repo-wide edit. This item is evaluated for every file that imports anything, whatever folder that file sits in. Inside `models/` the rule flips: a models file imports another models file by its relative concrete path, never through its own barrel, which would import itself in a cycle.",
           "severity": "low"
         },
         {
@@ -117,8 +122,8 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2-4,6-7",
-      "checklistSize": 13,
+      "selectedItems": "2-4,6-7,14-15,17",
+      "checklistSize": 18,
       "items": [
         {
           "id": "general#2",
@@ -136,7 +141,7 @@
         },
         {
           "id": "general#4",
-          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly.",
+          "text": "No type annotation through indexed access (`const disks: PoolLayout['disks']`): use the named type (`PoolLayoutDisk[]`) or let inference type the value; indexed access stays only where the property's type has no name of its own.",
           "severity": "low"
         },
         {
@@ -153,6 +158,32 @@
           "sameAs": [
             "i18n#11"
           ]
+        },
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
+          ]
+        },
+        {
+          "id": "general#15",
+          "text": "A boolean - a field, signal, input, variable or a method returning a flag - is named with a predicate prefix that reads as a yes/no question (`isActive`, `hasChildren`, `canEdit`, `shouldRetry`; loading flags `isLoading<X>`), never a bare noun or adjective (`active`, `loading`, `children`). The fields of an API interface keep the names the API sends.",
+          "severity": "low",
+          "subject": [
+            "boolean",
+            "\\btrue\\b",
+            "\\bfalse\\b"
+          ]
+        },
+        {
+          "id": "general#17",
+          "text": "A comment explains only what the code cannot say itself - a non-obvious why, a tricky edge case, a workaround, a subtle gotcha; a comment restating what the code does or narrating obvious steps is a finding, and a clearer name replaces it. The section comments of a models barrel and the justification of a suppression comment are required, not this item's.",
+          "severity": "low",
+          "subject": [
+            "//",
+            "/\\*"
+          ]
         }
       ]
     },
@@ -163,11 +194,11 @@
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
       "selectedItems": "1-2,22",
-      "checklistSize": 23,
+      "checklistSize": 26,
       "items": [
         {
           "id": "best-practices#1",
-          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference where the type is obvious; exported functions and service methods declare their parameter and return types. A signal input or output carries a type argument only when its default cannot express the type - `input.required<T>()`, `output<T>()`, `input<Item[]>([])`, `input<string | null>(null)` - never one its default already infers (`input(0)`, `input(false)`, `signal('')`, not `input<number>(0)`).",
           "severity": "medium",
           "sameAs": [
             "utils#2"
@@ -175,7 +206,7 @@
         },
         {
           "id": "best-practices#2",
-          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `input(<default>)`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
           "severity": "low"
         },
         {

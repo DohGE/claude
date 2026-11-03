@@ -5,11 +5,11 @@
   "describedBy": [
     {
       "id": "i18n#1",
-      "text": "Only the base-language file (`en.json`) is edited; the other locale files are never touched — no new keys, no English placeholders, no reformatting (the translation team owns them)."
+      "text": "Only the base-language file (`en.json`) is edited - new keys, value changes, key renames and moves alike; the other locale files are never touched - no new keys, no English placeholders, no renamed or moved keys, no reformatting (the translation team owns them). A key renamed in `en.json` keeps its old path in the other locale files until that team moves it, and that old path is no leftover of the rename (general#14)."
     }
   ],
   "readChanged": true,
-  "itemCount": 11,
+  "itemCount": 12,
   "instructions": [
     {
       "id": "i18n",
@@ -19,7 +19,7 @@
       "items": [
         {
           "id": "i18n#1",
-          "text": "Only the base-language file (`en.json`) is edited; the other locale files are never touched — no new keys, no English placeholders, no reformatting (the translation team owns them).",
+          "text": "Only the base-language file (`en.json`) is edited - new keys, value changes, key renames and moves alike; the other locale files are never touched - no new keys, no English placeholders, no renamed or moved keys, no reformatting (the translation team owns them). A key renamed in `en.json` keeps its old path in the other locale files until that team moves it, and that old path is no leftover of the rename (general#14).",
           "severity": "medium",
           "facts": [
             "i18n-locale-extra-key"
@@ -27,7 +27,7 @@
         },
         {
           "id": "i18n#2",
-          "text": "Before adding a key, the base file is searched for an existing translation with the same meaning — generic reusable texts are referenced, never duplicated per area; a new key exists only when no existing one fits semantically; the same phrase never lives under two keys.",
+          "text": "Before adding a key, the base file is searched for an existing translation with the same meaning — generic reusable texts are referenced, never duplicated per area; a new key exists only when no existing one fits semantically; the same phrase never lives under two keys. Two strings are the same phrase only when value AND casing match exactly: `Days Retained` (a table header) and `Days retained` (a sentence-case input label) are two strings, so keys for both are no duplicate.",
           "severity": "medium",
           "facts": [
             "i18n-duplicate-value"
@@ -35,34 +35,52 @@
         },
         {
           "id": "i18n#3",
-          "text": "Page-scoped keys follow `page.<area>.labels.<leaf>` / `page.<area>.actions.<leaf>`; global keys follow `<section>.<leaf>` (`labels`, `actions`, `validationMessages`, `chartLabels`, ...); the leaf is descriptive camelCase.",
+          "text": "Page-scoped keys follow `<page root>.<area>.labels.<leaf>` / `<page root>.<area>.actions.<leaf>`, where the page root is the one the app's base file already uses (`page` or `pages`), never the other; global keys follow `<section>.<leaf>` (`labels`, `actions`, `validationMessages`, `chartLabels`, ...); the leaf is descriptive camelCase named after what the text means, not after the component it sits in.",
           "severity": "low"
         },
         {
           "id": "i18n#4",
-          "text": "`<area>` is the parent page/module, never a single component — no new top-level sections and no per-component nodes without a real need; keys shared between areas are reused directly.",
+          "text": "Page-scoped is the default: a new key goes to a global section (or the lowest node common to its consumers) only when it already has consumers in two or more unrelated areas - one consumer inside a single feature is never enough, however generic the wording looks, and the top-level `labels` is no shortcut for a feature-only text. `<area>` is the parent page/module, never a single component - no new top-level sections and no per-component nodes without a real need. A page-local key a second area needs is moved up and both consumers repointed, never copied.",
           "severity": "low"
         },
         {
           "id": "i18n#5",
-          "text": "The leaf suffix encodes the UI element type: `…Hint`, `…Toggle`, `…Radio`, `…InputLabel`, `…Selection`, `…Heading`, `…Subheading`, `…Description`, `…Tooltip`, `…SuccessMessage`, `…ErrorMessage`, `…InfoMessage`, `…ConfirmationMessage` — chosen by control type, not by place of use.",
+          "text": "The leaf suffix encodes the UI element type: `…Hint`, `…Toggle`, `…Radio`, `…InputLabel`, `…Selection`, `…Heading`, `…Subheading`, `…Description`, `…Tooltip`, `…SuccessMessage`, `…ErrorMessage`, `…InfoMessage`, `…ConfirmationMessage`, `…AriaLabel` — chosen by control type, not by place of use. `…AriaLabel` is only for text written for assistive technology alone (an `aria-label`, screen-reader-only text); an accessible name that repeats a visible label references that label's key as it is, never a copy under an `…AriaLabel` key.",
           "severity": "low"
         },
         {
           "id": "i18n#6",
-          "text": "Validation messages go under `validationMessages`; chart labels under `chartLabels` (dynamic backend-driven ones nested); generic button actions in the global `actions` section, view-specific ones under `page.<area>.actions`.",
+          "text": "Button and menu-item texts - a confirmation dialog's confirm and decline labels included - live in the global `actions` section or the page's `actions` node, never under `labels`; every other text (headings, descriptions, tooltips, toasts, aria labels) lives under `labels`; validation messages go under `validationMessages`; chart labels under `chartLabels` (dynamic backend-driven ones nested).",
           "severity": "low"
         },
         {
           "id": "i18n#7",
-          "text": "Values: labels in sentence case without a trailing period; messages as full sentences; `…Heading` in Title Case; interpolation with `{{paramName}}` and the same parameter names used in code.",
+          "text": "Values: labels in sentence case without a trailing period; messages as full sentences; `…Heading` in Title Case; a single-sentence tooltip without a trailing period (only a multi-sentence one keeps it); interpolation with `{{paramName}}` and the same parameter names used in code.",
           "severity": "low"
         },
         {
           "id": "i18n#9",
-          "text": "Changing or renaming an existing key requires checking every consumer of that key first.",
+          "text": "Changing or renaming an existing key requires checking every consumer of that key first - in every app and shared library that resolves it - and a rename reaches all of them and `en.json`, never the other locale files (i18n#1, general#14).",
           "facts": [
             "i18n-missing-key"
+          ],
+          "sameAs": [
+            "general#14"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "general",
+      "name": "General code rules",
+      "selectedItems": "14",
+      "checklistSize": 18,
+      "items": [
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
           ]
         }
       ]

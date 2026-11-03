@@ -123,18 +123,57 @@ states are **refused**, each with the fix in the message, and none of them is fo
 A branch that is **behind** its remote is fast-forwarded first, so the fixes are built on the code the
 reviewer actually saw. A branch that is **ahead** keeps its unpushed commits and they ride along.
 
-A fresh worktree has neither `node_modules` nor the gitignored local config, so it is bootstrapped:
-`npm ci` / `pnpm install --frozen-lockfile` / `yarn install --immutable` according to the lockfile, and
-every `.env*` file of the project is copied to the same relative path. A failed install is a warning,
-not a failure — it only means the verification gate will be skipped.
+A fresh worktree has neither `node_modules` nor the gitignored local config, so it is bootstrapped.
+When its lockfile is the main checkout's, that checkout's `node_modules` is linked in (a junction on
+Windows) - five worktrees installed one after another took about twenty minutes before the first
+agent could start (2026-11-03). Otherwise, or with `--deps=install`, it installs: `npm ci` /
+`pnpm install --frozen-lockfile` / `yarn install --immutable` according to the lockfile. The link is
+made only where git ignores it, so no `git add` can carry it into a commit. Every `.env*` file of the
+project is copied to the same relative path, and so is the project's gitignored doh config
+(`.claude/doh/instructions/`, `.claude/doh/local/`, `.claude/doh/checks.json`), so the agent and its
+self-review walk the project's own rules. A failed install is a warning, not a failure — it only means
+the verification gate will be skipped.
 
 After a successful commit the worktree is removed. `git worktree remove` is called **without**
 `--force`, ever: git refuses a worktree holding modified or untracked files, and that refusal is the
-last guard against deleting work the verification gate stopped from being committed.
+last guard against deleting work the verification gate stopped from being committed. Before it, the
+self-review's reports (`.claude/doh/codeReview/runs/`, gitignored, so git would delete them) move to
+`<project>/.claude/doh/<branch>/codeReview/runs/`, and every link in the tree is unlinked: git's
+recursive delete walks into a junction and empties what it points at. Take a worktree down with
+`worktree.cjs --action=remove`, never with `git worktree remove --force`.
 
 ## The gate
 
-Whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
+The project's own gate config when it has one: `.claude/doh/checks.json` (or `doh.checks` in
+`package.json`) names a command per step, and the scripts below are not looked at:
+
+```json
+{
+  "maxParallel": 2,
+  "steps": {
+    "lint": { "command": "npx ng lint dpx --lint-file-patterns {files} --quiet", "files": "^projects/dpx/.+\\.(ts|html)$" },
+    "typecheck": { "command": "npx tsc -p projects/dpx/tsconfig.app.json --noEmit", "files": "^projects/(dpx|c-lib)/.+\\.ts$" },
+    "test": [
+      { "command": "npx jest --config projects/dpx/jest.config.ts --setupFilesAfterEnv jest-preset-angular/setup-jest --findRelatedTests {files}", "files": "^projects/dpx/.+\\.ts$" },
+      { "command": "npx jest --config projects/c-lib/jest.config.ts --findRelatedTests {files}", "files": "^projects/c-lib/.+\\.ts$" }
+    ],
+    "build": { "command": "npx ng build dpx", "files": "^projects/(dpx|c-lib)/" }
+  }
+}
+```
+
+`files` is a regex over the paths the pull request changes since `origin/<base>` (`--changed-since`,
+uncommitted and untracked files included): a command none of whose files changed is skipped, and
+`{files}` becomes the paths it matched - cut into several commands where one line would pass the
+8,191 characters of `cmd.exe`. A list runs several commands for one step; `false` turns a step off; a
+step the config does not name is skipped. Measured on dpx: its `build` script builds three apps and
+there is no `test` script, so the gate of 2026-11-03 ran three builds a pass and no test at all.
+
+Gate steps of every run on the machine share `maxParallel` slots (default: a quarter of the cores;
+`DOH_CHECKS_SLOTS` or `--slots=` override it, `0` lifts the limit): five agents building at once made
+a grep over one translation file take two minutes. A step waits for a free slot (`slotWaitMs`).
+
+Without a config: whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
 `type-check`), `test:unit` (else `test`), `build`. `test:unit` comes first because a project that has
 both usually keeps `test` for everything, an e2e suite included, and that suite cannot pass in a
 worktree with no backend. Missing scripts are `skipped`, not failures; so is the whole gate when
@@ -180,12 +219,43 @@ cause. It is the same discipline the skill applies to comment bodies.
 2. Fix them.
 3. Check every comment again against the final code, and Grep the uses of everything the fixes
    changed, so nothing outside the comments breaks.
-4. Review the run's own change with `/doh:codeReview staged --project=<worktree> --only-md` and apply
-   the findings whose fix leaves behaviour as it is; the rest are named in the report.
+4. Review the run's own change with `/doh:codeReview staged --project=<worktree> --only-md --light`,
+   made by a background sub-agent of its own - its rules and bundles never enter the fixing agent's
+   conversation - and apply the findings whose fix leaves behaviour as it is; the rest are named in
+   the report, each on one of three grounds.
 5. Bring the gate green.
-6. Commit, rebase onto `origin/<base>` (a conflict, or a gate the rebase turned red, leaves the commit
-   un-rebased), push - `--force-with-lease` pinned to the remote state the run started from when the
-   rebase rewrote the branch.
+6. Commit and land it, as the target's `landing` says:
+   - `rebase` - onto `origin/<base>` (a conflict, or a gate the rebase turned red, leaves the commit
+     un-rebased), then push - `--force-with-lease` pinned to the remote state the run started from
+     when the rebase rewrote the branch;
+   - `keep-base` - the bottom of a stack: rebased only when it no longer merges into its base
+     (`git merge-tree`), since a rebase there rewrites every part above it;
+   - `hold` - a part whose base is another branch of the run: committed only. The orchestrator lands
+     it once its parent has, with `scripts/restack.cjs`.
+
+The fixing agent waits for long work in slices of under four minutes (`wait-part.cjs`) and never
+loads a tool: its prompt cache lives five minutes, and the run of 2026-11-03 paid 1.3M cache-write
+tokens - 27% of all - for `ToolSearch select:Monitor` and for waits that outlived it.
+
+## Stacks
+
+Pull requests of one run each based on another one's branch are a stack (`stacks[]`, bottom-first).
+Its parts are fixed side by side but land bottom-up: landed side by side on 2026-11-03, part-1's
+rebase onto master rewrote the commits part-2 sat on (part-2's rebase then conflicted), and part-4
+pushed before part-3 had, so every part above part-1 had to be moved by hand.
+
+`restack.cjs --action=land` moves a held part once its parent has landed: it fetches the parent,
+replays only the part's own commits onto it (`git rebase --onto origin/<parent> <parent tip at the
+start>`, with `rerere` on), runs the gate in the part's worktree when the move brought new code under
+it, and pushes with a lease pinned to where the part stood when the run began. A conflict goes to a
+conflict agent (`references/restack-agent.md`) with the files named: it keeps both sides' changes,
+brings the gate green and pushes the same way. A part that did not land leaves its branch where it
+was, and its children move onto that. After the run, `restack.cjs --action=verify` names every part
+that does not sit on its parent, with the command that moves it.
+
+Each closed thread gets a reply naming the commit first (`--no-reply` leaves it out), and a thread
+whose fix landed in another file than its own - keys renamed in `en.json` for a thread on an effects
+file - is closed when the commit changes that file (`fixedVia`).
 
 Comments first, then the gate. There is no separate baseline run before the fixes: it would name
 exactly which failures pre-dated the run, at the price of a second full `build` on every branch, and
@@ -264,7 +334,9 @@ Its gate starts red twice: a `var` in a file no comment touches (lint), and the 
 | `scripts/pr-comments.cjs` | argument parsing, the commit prefix and `CR` message, and the per-branch comment JSON |
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
 | `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap, removal |
-| `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed |
+| `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit |
+| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`) and checks a stack after the run (`verify`) |
+| `references/restack-agent.md` | the brief of the agent that resolves a conflict `restack.cjs` stopped at |
 | `scripts/score-fix.cjs` | the quality meter's scorer: verdicts, checks on the result, landing, scope, gate |
 | `test-key/` | the meter's fixture (`fixture/`, built by `make-fixture.cjs`), its key (`key.json`) and the reference fix (`solution/`) |
 | `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled, so the orchestrator hands the agent a path instead of carrying the brief twice |

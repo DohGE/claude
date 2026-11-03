@@ -793,3 +793,126 @@ test('precommit runs lint-staged without its backup stash, else the hook itself,
   assert.strictEqual(stepNamed(none, 'precommit').status, 'skipped');
   assert.deepStrictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', '--only=precommit']).only, ['precommit']);
 });
+
+// The project's own gate, when its package.json scripts are not it: dpx has `test:dpx` and a
+// `build` of three apps, so the gate of 2026-11-03 ran three builds per pass and no test at all.
+function configure(root, config) {
+  fs.mkdirSync(path.join(root, '.claude', 'doh'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude', 'doh', 'checks.json'), JSON.stringify(config));
+}
+
+test('a checks.json gate runs its own commands on the changed files its patterns pick', (t) => {
+  const root = makeProject(t, { build: 'ng build a && ng build b', test: 'ng test' });
+  configure(root, {
+    steps: {
+      lint: { command: 'npx ng lint app --lint-file-patterns {files}', files: '\\.(ts|html)$' },
+      test: [
+        { command: 'npx jest --config app/jest.config.ts --findRelatedTests {files}', files: '^app/.*\\.ts$' },
+        { command: 'npx jest --config lib/jest.config.ts --findRelatedTests {files}', files: '^lib/.*\\.ts$' },
+      ],
+      build: false,
+    },
+  });
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: ['app/a.ts', 'app/b.html', 'README.md'] });
+  assert.deepStrictEqual(result.steps.map((s) => [s.step, s.status]), [['lint', 'passed'], ['typecheck', 'skipped'], ['test', 'passed'], ['build', 'skipped']]);
+  assert.deepStrictEqual(run.calls.map((c) => c.options.step), ['lint', 'test']);
+  assert.strictEqual(run.calls[0].command, 'npx ng lint app --lint-file-patterns app/a.ts app/b.html');
+  assert.match(run.calls[1].command, /^npx jest --config app\/jest\.config\.ts --findRelatedTests app\/a\.ts --ci --watchAll=false/);
+  assert.match(stepNamed(result, 'typecheck').reason, /not configured in .*checks\.json/);
+  assert.match(stepNamed(result, 'build').reason, /turned off in .*checks\.json/);
+  assert.ok(result.gateSource.endsWith('checks.json'));
+  assert.strictEqual(result.gate, 'green');
+});
+
+test('a configured step with no changed file it covers is skipped, and one without the list cannot run', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { test: { command: 'npx jest --findRelatedTests {files}', files: '\\.ts$' }, build: { command: 'npx ng build app', files: '^app/' } } });
+  const run = fakeRunner();
+  const none = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: ['docs/x.md'] });
+  assert.match(stepNamed(none, 'test').reason, /no changed file matches/);
+  assert.strictEqual(stepNamed(none, 'build').status, 'skipped');
+  assert.strictEqual(none.gate, 'skipped');
+  const unknown = checks.runChecks({ root, outDir: outDirFor(t), run });
+  assert.match(stepNamed(unknown, 'test').reason, /--changed-since/);
+  assert.strictEqual(stepNamed(unknown, 'build').status, 'passed', 'a command without {files} runs when the changed files are unknown');
+});
+
+test('a misspelled gate step in checks.json stops the gate instead of leaving a step out', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { tests: { command: 'npx jest' } } });
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedFiles: [] });
+  assert.match(result.errors.join(' '), /Unknown gate step "tests"/);
+  assert.strictEqual(checks.exitCodeFor(result), 2);
+});
+
+test('package.json "doh.checks" configures the gate when there is no checks.json', (t) => {
+  const root = fs.realpathSync(tempDir(t, 'fpc-checks-pkg-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'x' }, doh: { checks: { steps: { typecheck: { command: 'npx tsc --noEmit' } } } } }));
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: [] });
+  assert.deepStrictEqual(run.calls.map((c) => c.command), ['npx tsc --noEmit']);
+  assert.strictEqual(result.gateSource, 'package.json#doh.checks');
+});
+
+// cmd.exe refuses a line past 8,191 characters, and the 66 paths of one pull request reach it.
+test('expandFiles cuts a long file list into command lines under the limit and quotes what needs it', () => {
+  const lines = checks.expandFiles('run {files} --flag', ['a.ts', 'b c.ts', 'd.ts', 'e.ts'], 26);
+  assert.deepStrictEqual(lines, ['run a.ts "b c.ts" --flag', 'run d.ts e.ts --flag']);
+  assert.ok(lines.every((line) => line.length <= 26));
+});
+
+test('changedFilesOf lists what the branch and the tree changed since a ref, deletions left out', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-changed-'));
+  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.local');
+  git('config', 'user.name', 'T');
+  git('config', 'commit.gpgsign', 'false');
+  for (const f of ['keep.ts', 'gone.ts', 'edit.ts']) fs.writeFileSync(path.join(dir, f), f);
+  git('add', '.');
+  git('commit', '-q', '-m', 'base');
+  git('switch', '-q', '-c', 'feat');
+  fs.writeFileSync(path.join(dir, 'committed.ts'), 'x');
+  fs.rmSync(path.join(dir, 'gone.ts'));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'feat');
+  fs.writeFileSync(path.join(dir, 'edit.ts'), 'edited');
+  fs.writeFileSync(path.join(dir, 'new.ts'), 'untracked');
+  assert.deepStrictEqual(checks.changedFilesOf(dir, 'main'), ['committed.ts', 'edit.ts', 'new.ts']);
+  assert.strictEqual(checks.changedFilesOf(dir, 'no-such-ref'), null);
+});
+
+// Five agents ran five three-app builds at once, and a grep over en.json took two minutes.
+test('acquireSlot waits for a free slot and takes over one whose owner is gone', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-slots-'));
+  const first = checks.acquireSlot(1, { dir });
+  let slept = 0;
+  const second = checks.acquireSlot(1, { dir, sleep: () => { slept += 1; first.release(); } });
+  assert.strictEqual(slept, 1);
+  second.release();
+  fs.mkdirSync(path.join(dir, 'slot-0'));
+  fs.writeFileSync(path.join(dir, 'slot-0', 'owner.json'), JSON.stringify({ pid: 999999, at: Date.now() }));
+  const third = checks.acquireSlot(1, { dir, alive: () => false, sleep: () => { throw new Error('must not wait'); } });
+  third.release();
+  assert.strictEqual(checks.acquireSlot(0, { dir }).waitedMs, 0, 'no limit, no slot');
+});
+
+test('the result file is written whole, so a waiting agent never reads half of it', (t) => {
+  const file = path.join(fs.realpathSync(tempDir(t, 'fpc-result-')), 'gate-1.json');
+  checks.writeResultFile(file, { gate: 'green', steps: [] });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { gate: 'green', steps: [] });
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), ['gate-1.json']);
+  const args = checks.parseArgs(['--root=/a', '--out-dir=/b', '--changed-since=origin/main', '--result-file=/b/gate-1.json', '--slots=3']);
+  assert.deepStrictEqual([args.changedSince, args.resultFile, args.slots], ['origin/main', '/b/gate-1.json', 3]);
+});
+
+// A base the worktree never fetched would list no changed file, and every configured step would
+// come back skipped - a gate that answers "nothing to run" for a pull request it never looked at.
+test('a --changed-since the repository cannot resolve stops a configured gate', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { test: { command: 'npx jest --findRelatedTests {files}' } } });
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedSince: 'origin/nope' });
+  assert.match(result.errors.join(' '), /origin\/nope/);
+  assert.strictEqual(checks.exitCodeFor(result), 2);
+});

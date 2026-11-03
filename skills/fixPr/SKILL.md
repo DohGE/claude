@@ -1,7 +1,7 @@
 ---
 name: fixPr
-description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title, rebased onto the base; with --local=<ids> it fixes those findings of the branch's doh codeReview reports instead of the pull request comments
-argument-hint: "<branch>[;<branch>…] [--local=<id>[,<id>…]] [--dry-run] [--no-push] [--keep-worktree] [--project=<path>]"
+description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title, rebased onto the base - a stack of pull requests (each based on another one's branch) lands bottom-up, each part moved onto its landed parent; with --local=<ids> it fixes those findings of the branch's doh codeReview reports instead of the pull request comments
+argument-hint: "<branch>[;<branch>…] [--local=<id>[,<id>…]] [--dry-run] [--no-push] [--no-reply] [--keep-worktree] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -83,7 +83,8 @@ Without that tool, re-read the file or re-run the command with narrower output.
 - A run is responsible for the WHOLE pull request: the open comments and the red commands alike. A
   branch with every comment resolved and a red build still has work, and it is not skipped.
 - Never run `lint`, `test` or `build` yourself, in the user's checkout or anywhere else. The gate
-  belongs to the agent, inside its worktree, through `checks.cjs`.
+  belongs to the agent, inside its worktree, through `checks.cjs` - and, for a held part of a stack,
+  to `restack.cjs`, which runs it inside that part's worktree and hands you only the verdict.
 - Branches run in PARALLEL, one background agent each. Never fix a branch yourself, not for a single
   comment, not to save time, not because only one branch was named.
 - A resolved thread is finished work. The collector already dropped them; never reach for the REST
@@ -95,10 +96,17 @@ Without that tool, re-read the file or re-run the command with narrower output.
 - The agent ends its work in a fixed order: it fixes the comments, checks every one of them again
   against the final code and Greps the uses of everything it changed, reviews its own staged change
   with `/doh:codeReview staged` and applies the findings that leave behaviour as it is, brings the
-  gate green, commits, rebases the commit onto `origin/<pr.base>` (a conflict or a red gate after the
-  rebase → it stays un-rebased) and pushes - with `--force-with-lease` pinned to the remote state it
-  started from when the rebase rewrote the branch. That rebase and that lease are the agent's only;
-  you never rebase, reset or push yourself.
+  gate green, commits, and lands the commit as its target's `landing` says: `rebase` - onto
+  `origin/<pr.base>` (a conflict or a red gate after the rebase → it stays un-rebased) and push, with
+  `--force-with-lease` pinned to the remote state it started from when the rebase rewrote the branch;
+  `keep-base` - the bottom of a stack: rebased only when it no longer merges into its base, since a
+  rebase there rewrites every part above it; `hold` - a part above the bottom: committed, never
+  rebased or pushed by the agent. A held part lands through `restack.cjs` (Step 5) once its parent has.
+  You never rebase, reset or push yourself.
+- A stack lands bottom-up. Its parts are FIXED side by side, but each part lands only after the part
+  below it: landed side by side on 2026-11-03, part-1's rebase rewrote what part-2 sat on, part-2's
+  rebase then conflicted, and part-4 pushed before part-3 had - every part above part-1 had to be
+  moved by hand.
 
 ## Step 1 — Parse the arguments
 
@@ -112,6 +120,7 @@ Without that tool, re-read the file or re-run the command with narrower output.
    - `--no-push` → the agent commits but does not push. Threads are then NOT resolved either: a fix
      nobody can see on GitHub is not an addressed comment.
    - `--keep-worktree` → leave every worktree in place after the run.
+   - `--no-reply` → resolve the fixed threads without the reply that names the commit.
    - `--local=<id>[,<id>…]` → `LOCAL=<ids>`: the work is the findings of the doh codeReview reports
      with those ids (the 8 hex characters a finding shows on the report page), looked up in each
      named branch's reports, newest run first, instead of the pull request's comments. Everything
@@ -141,15 +150,20 @@ Parse the JSON from stdout:
   warning about SCOPE, not a failure: that branch still runs, for its gate alone. Say it that way.
 - `targets` empty → stop here, after reporting. Every branch was dropped by an error.
 
+`targets` come bottom-first: every part of a stack after the part it is based on. `stacks[]` lists
+each stack bottom-first (`["part-1", "part-2", …]`).
+
 Each target carries: `branch`, `pr` (`number`, `title`, `url`, `base`), `commitMessage`,
-`commitPrefix`, `commentsPath`, `reportPath`, `promptPath`, `checksDir`, `worktree`, `local` (with `--local`), and `counts`
+`commitPrefix`, `commentsPath`, `reportPath`, `promptPath`, `checksDir`, `worktree`, `local` (with `--local`),
+`landing` (`rebase` | `keep-base` | `hold`), `stack` (`parent`, `children`, `parentTipAtStart`),
+`remoteTipAtStart`, and `counts`
 (`openThreads`, `resolvedThreads`, `outdatedThreads`, `conversation`, `reviews`, `candidates`, and
 `findings` under `--local`). Keep
 exactly those; the comment bodies stay in the file.
 
 Tell the user, in Polish, what was found per branch — the pull request number and title, how many
 threads are open, how many were already resolved and skipped, how many conversation comments and
-review summaries there are — under `--local`, how many of the named findings each branch's reports held. `candidates: 0` is reported as "no open comments; this branch runs for its
+review summaries there are — under `--local`, how many of the named findings each branch's reports held. Name every stack bottom-first (`part-1 ← part-2 ← …`): its parts are fixed side by side and land one after another. `candidates: 0` is reported as "no open comments; this branch runs for its
 checks only", never as a skip.
 
 **`--dry-run` stops here**, after that listing. It stays comment-only on purpose: reporting on the
@@ -158,7 +172,9 @@ do. Say so if the user expected the checks in it.
 
 ## Step 3 — One worktree per branch
 
-For each target, in order:
+For each target, in `targets` order (the bottom of a stack first), create its worktree and spawn its
+agent (Step 4) right after it - never every worktree first: on 2026-11-03 five worktrees made one after
+another held the first agent back nineteen minutes, and the bottom part of the stack started last.
 
     node "<SKILL_DIR>/scripts/worktree.cjs" --action=add --branch="<branch>" --project="<PROJECT>"
 
@@ -175,21 +191,25 @@ Never pass `--force` to git, never delete the directory in the way, and never re
 hoping for a different answer. Report `warnings[]` too — a fast-forward, an install that failed or a
 missing lockfile (either way the gate will be skipped), and the `.env*` files copied in.
 
+A worktree whose lockfile is the main checkout's gets that checkout's `node_modules` linked in
+(`dependencies.linked`) instead of an install, and a copy of its gitignored `.claude/doh/` config
+(`dohConfig`: rulebook, `local/` rules, `checks.json`). Only `worktree.cjs --action=remove` takes such
+a worktree down: it unlinks first, where git's own recursive delete walks into the linked folder.
+
 Keep each branch's `installed` from this JSON: it becomes `INSTALLED` in Step 4a, and it is the one
 thing that decides whether the agent runs the gate at all.
 
 ## Step 4 — One background agent per branch
 
-For every branch that got a worktree: FIRST render its brief, THEN spawn the agent on it. Spawn all
-of them, in the BACKGROUND, before you wait for any of them — but the FIRST agent alone in its own
-message, and the rest together in the next one. Every fix agent opens with the same system prompt and
-tool definitions; spawned at the same instant, each of them pays to write that prefix into the prompt
-cache, while the ones that start a message later read the copy the first one wrote, at a tenth of the
-price. One branch → one spawn, nothing to split.
+For every branch that got a worktree: FIRST render its brief, THEN spawn the agent on it, in the
+BACKGROUND, before the next worktree. Spawn every agent before you wait for any of them. Every fix
+agent opens with the same system prompt and tool definitions: the first one, alone in its message,
+writes that prefix into the prompt cache, and each one spawned after it reads that copy at a tenth of
+the price.
 
 ### 4a — Render the brief
 
-    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=BASE=<pr.base> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language>
+    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=BASE=<pr.base> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language> --set=LANDING=<landing>
 
 | Value | Where it comes from |
 |---|---|
@@ -201,6 +221,7 @@ price. One branch → one spawn, nothing to split.
 | `PROJECT`, `SKILL_DIR` | the values from Step 1 |
 | `PUSH` | `no` when `--no-push` was passed, otherwise `yes` |
 | `INSTALLED` | `yes` when this branch's Step 3 returned `installed: true`, otherwise `no`. `no` tells the agent to skip the gate rather than spend the run repairing a missing `node_modules`. |
+| `LANDING` | the target's `landing`, verbatim: `rebase`, `keep-base` or `hold` |
 | `LANGUAGE` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved |
 
 `errors[]` non-empty → that branch is OUT of the run, exactly like a refused worktree: report the
@@ -237,12 +258,43 @@ the worktree is kept, and the report says the agent ended without a result.
 
 ## Step 5 — Land each branch
 
-On `{"type":"result", …}`:
+A target with `landing: hold` lands only after its parent (`stack.parent`) has: once the parent's
+landing below is final - pushed, refused or failed - and its own agent ended with
+`{"type":"result", …}`, move it with (Bash, `run_in_background: true`):
+
+    node "<SKILL_DIR>/scripts/restack.cjs" --action=land --worktree="<worktree>" --branch="<branch>" --parent="<stack.parent>" --parent-tip-at-start="<stack.parentTipAtStart>" --remote-tip-at-start="<remoteTipAtStart>" --checks-dir="<checksDir>/restack" --push=<yes|no>
+
+It fetches the parent, moves the part's own commits onto it (`rebase --onto`, nothing of the old
+parent replayed), runs the gate inside the worktree when the move brought new code under it, and
+pushes with a lease pinned to `remoteTipAtStart`. A part whose agent committed nothing still goes
+through it: its branch has to sit on the landed parent too. Act on its JSON `status`:
+
+- `landed` → the part's commit is `commit` and its push `pushed`: go on with point 1 below, with
+  those two instead of the agent's.
+- `conflict` → render the conflict agent's brief next to the fix agent's (`<promptPath>` with
+  `-restack` before `.md`), with `OLD_TIP` = the JSON's `oldParentTip` and `FILES` = its
+  `conflictFiles` joined by `, `:
+
+      node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/restack-agent.md" --out="<restack prompt path>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=PARENT=<stack.parent> --set=OLD_TIP=<oldParentTip> --set=LEASE=<remoteTipAtStart> --set=FILES=<files> --set=CHECKS_DIR=<checksDir>/restack --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=LANGUAGE=<language>
+
+  and spawn it like a fix agent (Step 4b, pointing at that file). Its `result` → point 1 with its
+  `commit` and `pushed`, and its `resolvedFiles` in the summary; its `error` → like an agent's error.
+- `gate-red`, `push-rejected`, `error` → like an agent's `{"type":"error"}`: nothing resolved, the
+  worktree kept; name the red steps (`gate.steps[].errorsPath`) or the refusal.
+
+The parts above it wait for this one, whatever the outcome: a part that did not land leaves
+`origin/<branch>` where it was, and its children move onto that.
+
+On `{"type":"result", …}` (for a held part: once `restack.cjs` or its conflict agent has landed it):
 
 1. **Resolve the threads**, but only when `fixedThreadIds` is non-empty AND `committed` is true AND
    `pushed` is true. Any of the three missing → skip this point entirely and say why in the summary.
 
-       node "<SKILL_DIR>/scripts/resolve-threads.cjs" --project="<PROJECT>" --threads="<id,id,…>" --comments="<commentsPath>" --root="<worktree>" --commit="<commit>"
+       node "<SKILL_DIR>/scripts/resolve-threads.cjs" --project="<PROJECT>" --threads="<id,id,…>" --comments="<commentsPath>" --root="<worktree>" --commit="<commit>" [--via="<id>:<path>|<path>;…"] [--no-reply]
+
+   `--via` carries the agent's `fixedVia` (a thread fixed in another file than its own), `--no-reply`
+   the user's flag. Each thread gets a reply naming the commit before it is closed (`replied[]`,
+   `replyFailed[]` - a refused reply never keeps a fixed thread open).
 
    A `--local` target has no thread to resolve: skip this point.
    It resolves only the threads whose file the commit changes. Report `unverified[]` in Polish: the
@@ -257,6 +309,8 @@ On `{"type":"result", …}`:
 
    A refusal here means the worktree still holds uncommitted files: report the path in Polish and
    leave it alone. Never reach for `--force` — that would delete the very work the gate protected.
+   The self-review's report sat inside the worktree: `keptReports` names where `remove` moved it,
+   and the summary prints that path, never the agent's `reviewReport`.
 
 The agent reports the commit message it actually used as `commitMessage` — `<prefix>: CR` when it
 fixed a comment, `<prefix>: Fix <labels>` when it only repaired checks. Print that string; never
@@ -267,11 +321,20 @@ agent's report and the path of the worktree the user can go and inspect.
 
 ## Step 6 — Terminal summary (Polish)
 
-After every branch has landed, print one summary, in Polish, and nothing else:
+After every branch has landed, check each stack once (one call for all of them):
+
+    node "<SKILL_DIR>/scripts/restack.cjs" --action=verify --project="<PROJECT>" --pairs="<parent>><child>@<child's stack.parentTipAtStart>,…"
+
+A child whose `stack.parentTipAtStart` is null goes in without its `@…`. Every `broken[]` pair - a
+part that does not sit on its parent - goes into the summary with its `command`.
+
+Then print one summary, in Polish, and nothing else:
 
 - one row per branch: pull request number and title, the agent's `commitMessage` and the sha (or why
-  no commit was made), whether it was rebased onto the base (`rebased`, or why not), whether it was pushed, how many comments were fixed / rejected / left without
-  action, and how many threads were resolved on GitHub;
+  no commit was made), how it landed (rebased onto the base, kept on it, moved onto its parent by
+  `restack.cjs` or the conflict agent, or why not), whether it was pushed, how many comments were
+  fixed / rejected / left without action, and how many threads were resolved on GitHub;
+- every stack, bottom-first, and every `broken[]` pair of the check above with its command;
 - under `--local`, which finding ids were fixed (`fixedFindingIds`) and which were not;
 - what the agent's `/doh:codeReview staged` found: the report path (`reviewReport`), how many findings it
   fixed and how many it left, with the ground of each left one from the report the agent wrote;
@@ -302,4 +365,6 @@ the user has not been told about yet.
 | "The agent only repaired the build, I will still call the commit `CR`" | The message is whatever the agent reported in `commitMessage`. Renaming it in the summary describes a commit that is not in the branch. |
 | "Nothing was committed, so I will clean up the worktree" | An uncommitted worktree holds work. Removing it destroys it; git refuses for the same reason. |
 | "The agent is still running, I will summarise what it will probably find" | A result that has not arrived is not a result. Say it is still running. |
+| "part-4 finished first, I will land it now" | A held part lands after its parent, through `restack.cjs`. Landed earlier, it sits on a parent that is about to change. |
+| "restack.cjs stopped at a conflict, I will resolve it myself" | The conflict agent resolves it, in the worktree, with the gate after it. You hold paths and verdicts, never a file's content. |
 | "I will read `fix-agent.md` and paste it into the prompt myself" | That is the file twice over, per branch, in the context you emptied of comment bodies to make room. Render it with the script and pass the path. |

@@ -8,7 +8,7 @@
       "text": "Every guard file has a spec in the sibling `tests/` folder."
     }
   ],
-  "itemCount": 39,
+  "itemCount": 46,
   "instructions": [
     {
       "id": "util-guard-unit-test",
@@ -34,8 +34,8 @@
     {
       "id": "unit-tests",
       "name": "Unit tests (common)",
-      "selectedItems": "1-2,4,6-13,15-16,20,22,24-25",
-      "checklistSize": 25,
+      "selectedItems": "1-2,4,6-13,15-16,20,22,24-28",
+      "checklistSize": 28,
       "items": [
         {
           "id": "unit-tests#1",
@@ -99,7 +99,7 @@
         },
         {
           "id": "unit-tests#12",
-          "text": "The same test data is never duplicated across cases: define a shared object/dataset once and reuse it directly when the data is identical, or derive near-identical variants from it with the spread operator (`{ ...baseFixture, changedField: value }`) — never hand-write a second copy of an equivalent literal.",
+          "text": "The same test data is never duplicated across cases: define a shared object/dataset once - typed with the real interface (`const baseUser: User = {...}`), at the nearest `describe` the tests share - and reuse it directly when the data is identical, or derive near-identical variants from it with the spread operator (`{ ...baseFixture, changedField: value }`), however few fields differ - never hand-write a second copy of an equivalent literal. A literal value several fixtures or payloads share (an id, a name) is one const referenced everywhere.",
           "severity": "medium"
         },
         {
@@ -109,7 +109,7 @@
         },
         {
           "id": "unit-tests#15",
-          "text": "Any spy or mock called with arguments is asserted on those arguments with `toHaveBeenCalledWith(...)` (or `toHaveBeenLastCalledWith(...)` for effect-driven repeats) — a bare `toHaveBeenCalled()`/`toHaveBeenCalledTimes(n)` that ignores the payload is insufficient; `toHaveBeenCalled()` is reserved for genuinely argument-less calls."
+          "text": "Any spy or mock called with arguments is asserted on those arguments with `toHaveBeenCalledWith(...)` (or `toHaveBeenLastCalledWith(...)` for effect-driven repeats) — a bare `toHaveBeenCalled()`/`toHaveBeenCalledTimes(n)` that ignores the payload is insufficient; `toHaveBeenCalled()` is reserved for genuinely argument-less calls. Such a call is never asserted with an empty `toHaveBeenCalledWith()`."
         },
         {
           "id": "unit-tests#16",
@@ -121,7 +121,7 @@
         },
         {
           "id": "unit-tests#22",
-          "text": "No double casts (`as unknown as X`) where a single `as X` suffices; no `as never`; no string-index type access.",
+          "text": "No forced casts to satisfy the type checker: no `as unknown as X`, `as never` or `as undefined as never`, and no double cast where a single `as X` suffices - a mock or fixture is typed properly (`Partial<X>` + `satisfies`) instead; no indexed-access type annotation where the type has a name.",
           "severity": "low"
         },
         {
@@ -135,6 +135,27 @@
           "text": "After changing any source file, its spec is run and green before commit (the pre-commit hook lints but does not run tests).",
           "severity": "low",
           "unverified": "narzędzie: recenzja nie uruchamia testów"
+        },
+        {
+          "id": "unit-tests#26",
+          "text": "A `describe` groups related tests: a spec of a single method keeps its `it`s at the top level, never wrapped in a `describe` of their own, unless an item of the file's own instruction asks for one `describe` per function or per effect.",
+          "severity": "low",
+          "subject": [
+            "describe\\s*\\("
+          ]
+        },
+        {
+          "id": "unit-tests#27",
+          "text": "A fixture or builder a second spec of the area needs is moved to `<area>/shared/mocks/<name>.mock.ts`, exported as `<name>Mock`, typed with the real interface and imported by its concrete path from every spec - never copied into each spec. Test-loop rows stay inline in their `it.each` calls (the test-loop item above).",
+          "severity": "medium"
+        },
+        {
+          "id": "unit-tests#28",
+          "text": "A `done` callback is typed - `(done: () => void)` or `(done: jest.DoneCallback)` - never a bare `(done)`.",
+          "severity": "low",
+          "subject": [
+            "\\bdone\\b"
+          ]
         }
       ]
     },
@@ -156,8 +177,8 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2-4",
-      "checklistSize": 13,
+      "selectedItems": "2-4,14-15,17",
+      "checklistSize": 18,
       "items": [
         {
           "id": "general#2",
@@ -175,8 +196,34 @@
         },
         {
           "id": "general#4",
-          "text": "No type access through a string index (`MyInterface['field']`) — reference the named type or field directly.",
+          "text": "No type annotation through indexed access (`const disks: PoolLayout['disks']`): use the named type (`PoolLayoutDisk[]`) or let inference type the value; indexed access stays only where the property's type has no name of its own.",
           "severity": "low"
+        },
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
+          ]
+        },
+        {
+          "id": "general#15",
+          "text": "A boolean - a field, signal, input, variable or a method returning a flag - is named with a predicate prefix that reads as a yes/no question (`isActive`, `hasChildren`, `canEdit`, `shouldRetry`; loading flags `isLoading<X>`), never a bare noun or adjective (`active`, `loading`, `children`). The fields of an API interface keep the names the API sends.",
+          "severity": "low",
+          "subject": [
+            "boolean",
+            "\\btrue\\b",
+            "\\bfalse\\b"
+          ]
+        },
+        {
+          "id": "general#17",
+          "text": "A comment explains only what the code cannot say itself - a non-obvious why, a tricky edge case, a workaround, a subtle gotcha; a comment restating what the code does or narrating obvious steps is a finding, and a clearer name replaces it. The section comments of a models barrel and the justification of a suppression comment are required, not this item's.",
+          "severity": "low",
+          "subject": [
+            "//",
+            "/\\*"
+          ]
         }
       ]
     },
@@ -186,12 +233,12 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "1-2,22",
-      "checklistSize": 23,
+      "selectedItems": "1-2,22,25",
+      "checklistSize": 26,
       "items": [
         {
           "id": "best-practices#1",
-          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference for primitive values when the type is obvious; exported functions, service methods and component inputs/outputs have explicit types.",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference where the type is obvious; exported functions and service methods declare their parameter and return types. A signal input or output carries a type argument only when its default cannot express the type - `input.required<T>()`, `output<T>()`, `input<Item[]>([])`, `input<string | null>(null)` - never one its default already infers (`input(0)`, `input(false)`, `signal('')`, not `input<number>(0)`).",
           "severity": "medium",
           "sameAs": [
             "utils#2"
@@ -199,13 +246,21 @@
         },
         {
           "id": "best-practices#2",
-          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `input(<default>)`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
           "severity": "low"
         },
         {
           "id": "best-practices#22",
           "text": "A suppression comment added by the diff (`@ts-ignore`, `@ts-expect-error`, `eslint-disable*`) carries a one-line justification and the narrowest scope that works (line-level over file-level); `@ts-expect-error` is used wherever it compiles, because it fails once the underlying problem is fixed. The `/* eslint-disable @typescript-eslint/member-ordering */` allowed by the effects instruction is the one standing exception.",
           "severity": "low"
+        },
+        {
+          "id": "best-practices#25",
+          "text": "RxJS operators and creation functions are imported from `'rxjs'` - never from the deprecated `'rxjs/operators'` entry point, however much legacy code still imports it.",
+          "severity": "low",
+          "subject": [
+            "rxjs/operators"
+          ]
         }
       ]
     },

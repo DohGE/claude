@@ -2,7 +2,7 @@
   "kind": "feature-component-template",
   "pattern": "src/app/**/components-<area>/feature/<name>/<name>.component.html",
   "role": "Template of a feature or dialog component.",
-  "itemCount": 76,
+  "itemCount": 77,
   "instructions": [
     {
       "id": "component-template",
@@ -60,13 +60,13 @@
         },
         {
           "id": "component-template#7",
-          "text": "Class and style bindings use `[class.x]` / `[style.x.px]` — never `ngClass`/`ngStyle`.",
+          "text": "Class bindings use `[class.x]`/`[class]` - never `ngClass`/`ngStyle`. No inline styles: no `style=\"...\"` attribute and no `[style.x]` binding for what a CSS class can express - add or change a class instead; only a value computed at runtime (a dimension, a position) is bound as a style (`[style.width.px]`).",
           "severity": "low",
           "subject": "ngclass|ngstyle|\\[class|\\[style"
         },
         {
           "id": "component-template#8",
-          "text": "No `async` pipe — observables are converted with `toSignal()` in the component and the template reads the signal.",
+          "text": "Store and facade state is read as signals; an observable that has a signal form is converted once with `toSignal()` in the class. The `async` pipe stays only for a residual observable the class cannot expose as a signal (one created per call or per item, a third-party stream), and every built-in pipe the template uses is listed in the component's `imports`.",
           "severity": "low",
           "sameAs": [
             "best-practices#12"
@@ -103,12 +103,12 @@
         },
         {
           "id": "component-template#13",
-          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant). On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template.",
+          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant), its value naming the element's role or intent - never its translated text. On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template.",
           "severity": "medium"
         },
         {
           "id": "component-template#14",
-          "text": "Static strings/constants are passed as plain attributes (`prop=\"value\"`), not property bindings of a literal (`[prop]=\"'value'\"`); `[...]` only for real expressions — with one exception: when an input name collides with a native HTML attribute (e.g. `title`), the binding form `[title]=\"'test'\"` is required even for a literal, because plain `title=\"test\"` also lands in the DOM as the native attribute and triggers unwanted browser behavior (a tooltip).",
+          "text": "Static strings/constants are passed as plain attributes (`label=\"Save\"`), not property bindings of a literal (`[label]=\"'Save'\"`); `[...]` only for real expressions. The exception is an input whose name collides with a global HTML attribute (`title`, `hidden`, `translate`, `dir`, `lang`, `draggable`, `tabindex`, `contenteditable`, `role`, `slot`), decided by intent: targeting the component's INPUT takes the binding form even for a literal (`[title]=\"'labels.ports'\"`), because the plain attribute also lands in the DOM as the native one and an i18n key renders as an untranslated browser tooltip - so an existing `[title]=\"'...'\"` is never \"simplified\" to `title=\"...\"`; genuinely wanting the NATIVE attribute takes the plain attribute, and user-visible text in it is still translated (`[title]=\"'labels.foo' | translate\"`).",
           "severity": "medium",
           "probe": [
             {
@@ -192,9 +192,12 @@
       "items": [
         {
           "id": "i18n#9",
-          "text": "Changing or renaming an existing key requires checking every consumer of that key first.",
+          "text": "Changing or renaming an existing key requires checking every consumer of that key first - in every app and shared library that resolves it - and a rename reaches all of them and `en.json`, never the other locale files (i18n#1, general#14).",
           "facts": [
             "i18n-missing-key"
+          ],
+          "sameAs": [
+            "general#14"
           ]
         },
         {
@@ -215,7 +218,7 @@
       "id": "architecture",
       "name": "Feature architecture",
       "selectedItems": "9",
-      "checklistSize": 12,
+      "checklistSize": 13,
       "items": [
         {
           "id": "architecture#9",
@@ -230,14 +233,21 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "7",
-      "checklistSize": 13,
+      "selectedItems": "7,14",
+      "checklistSize": 18,
       "items": [
         {
           "id": "general#7",
           "text": "Every user-facing string is an i18n key resolved through the translation pipe/service — never a hard-coded text, in TS or in templates.",
           "sameAs": [
             "i18n#11"
+          ]
+        },
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
           ]
         }
       ]
@@ -249,11 +259,11 @@
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
       "selectedItems": "12,19",
-      "checklistSize": 23,
+      "checklistSize": 26,
       "items": [
         {
           "id": "best-practices#12",
-          "text": "Observables consumed by templates are converted once with `toSignal()` in the class; the `async` pipe is not used (project convention — see the component template instruction).",
+          "text": "Store and facade state reaches the template as signals; an observable that has a signal form is converted once with `toSignal()` in the class. The `async` pipe stays only for a residual observable the class cannot expose as a signal - one created per call or per item, or a third-party stream - never for store or facade state, and never replaced by a manual `subscribe()` that copies values into a field (see the component template instruction).",
           "severity": "low",
           "sameAs": [
             "component-template#8"
@@ -307,7 +317,7 @@
       "items": [
         {
           "id": "performance#1",
-          "text": "Every value read by a template is a signal (`signal`/`computed`/`input`/facade signal) — a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).",
+          "text": "Every value read by a template is a signal (`signal`/`computed`/`input`/a store or facade signal) - a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).",
           "secondQuestion": "Które pola klasy czyta szablon i czy każde z nich to sygnał, `computed()` albo `input()`?",
           "handoff": [
             "component-template#8",

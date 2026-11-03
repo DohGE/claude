@@ -1,27 +1,135 @@
 {
   "kind": "component-signal-store",
   "pattern": "src/app/**/**/<name>.store.ts",
-  "role": "Component-scoped `signalStore()` for self-contained local state (e.g. a dialog), provided in `@Component.providers`.",
+  "role": "A view's `signalStore()` - a page, a wizard's steps, a dialog, an embedded picker: the default home of view state, provided by the feature component or route that owns the view.",
   "describedBy": [
     {
+      "id": "signal-store#1",
+      "text": "The file is `<name>.store.ts` in the area's `data-access/+state/` folder, with its spec in `+state/tests/`; it has one export, `export const <Name>Store = signalStore(...)` - PascalCase, because it is an injectable token, not a value."
+    },
+    {
       "id": "architecture#12",
-      "text": "Self-contained local state (dialogs, embedded browsers) uses an `@ngrx/signals` `signalStore()` provided in `@Component.providers` — composed with `withState`/`withComputed`/`withMethods` and mutated only through `patchState`; a hand-rolled `BehaviorSubject`/`Subject` service is not an acceptable component store. Feature-slice state is never component-scoped."
+      "text": "A view's state - a page, the steps of one wizard, a dialog, an embedded picker - lives in an `@ngrx/signals` `signalStore()`: the default for almost every view. It is composed with `withState`/`withComputed`/`withMethods` (`withProps` for injected dependencies), mutated only through `patchState`, and provided by the view that owns it (the signal-store instruction); a hand-rolled `BehaviorSubject`/`Subject` state service is not an acceptable store."
     }
   ],
   "notes": [
-    "The instructions prescribe how it is provided, not where the file lives (architecture#6 only rules out the component folder)."
+    "A signal store is the default for view state; an NgRx slice is kept only for data several independent views share (architecture#13), and a store holding such data is reported under signal-store#10."
   ],
-  "itemCount": 17,
+  "itemCount": 48,
   "instructions": [
     {
-      "id": "architecture",
-      "name": "Feature architecture",
-      "selectedItems": "12",
+      "id": "signal-store",
+      "name": "Signal store",
+      "preamble": [
+        "This instruction OWNS a view's `signalStore()` file: its location, state, dependencies, derivations, mutations, async methods and provisioning. Whether data belongs in a signal store or an NgRx slice is decided by the architecture instruction (architecture#12, architecture#13); the signals API itself belongs to the best-practices instruction."
+      ],
+      "selectedItems": "1-10",
+      "checklistSize": 10,
+      "items": [
+        {
+          "id": "signal-store#1",
+          "text": "The file is `<name>.store.ts` in the area's `data-access/+state/` folder, with its spec in `+state/tests/`; it has one export, `export const <Name>Store = signalStore(...)` - PascalCase, because it is an injectable token, not a value.",
+          "severity": "low"
+        },
+        {
+          "id": "signal-store#2",
+          "text": "The state is typed with a `<Name>State` interface from `models/interfaces/` and seeded with `withState(<name>InitialState)` from `models/consts/`; the state-interface rules apply to it - one flat structure, `| null` instead of `?`, `isLoading<X>` booleans, API responses stored whole, no derived fields.",
+          "severity": "low"
+        },
+        {
+          "id": "signal-store#3",
+          "text": "Dependencies come from `inject()` in `withProps(() => ({ _usersService: inject(UsersService) }))` or inside `withMethods`, each `_`-prefixed - a private store member - and named after its type in full; HTTP goes only through the area's HTTP service, never a direct `HttpClient`.",
+          "severity": "low"
+        },
+        {
+          "id": "signal-store#4",
+          "text": "Every value derived from the state is a `withComputed` signal of the store - never a stored field kept in sync by hand, and never a `computed()` in the consuming component over operands that all come from the store.",
+          "severity": "medium"
+        },
+        {
+          "id": "signal-store#5",
+          "text": "The state changes only through `patchState(store, ...)` inside the store's own methods; it stays protected (no `protectedState: false`), and consumers call methods - they never patch.",
+          "severity": "medium"
+        },
+        {
+          "id": "signal-store#6",
+          "text": "Async work is an `rxMethod<T>(pipe(...))` whose flattening operator is chosen like an effect's - `switchMap` by default, `exhaustMap` to ignore repeat triggers while one runs (a save), `concatMap` when order matters, `mergeMap` for parallel bulk work - with `tapResponse({ next, error, finalize })` from `@ngrx/operators` inside the flattening operator: never a bare `subscribe()`, never an error path that ends the stream."
+        },
+        {
+          "id": "signal-store#7",
+          "text": "State set on both outcomes - typically the `isLoading<X>` flag - goes in `tapResponse`'s `finalize`, never duplicated in `next` and `error`; the one exception is a `switchMap` whose calls can overlap, where `finalize` also runs when the replaced request is unsubscribed and would clear the flag mid-request."
+        },
+        {
+          "id": "signal-store#8",
+          "text": "The error path leaves the state consistent (loading flags reset, partial results cleared) and reaches the user through state the template renders; a toast or alert fires only where the mockups or requirements ask for one, and an empty `error: () => {}` is a finding."
+        },
+        {
+          "id": "signal-store#9",
+          "text": "The store is provided by the view that owns it: in the `providers` of the feature component that renders the view, or on the route when several routed components of one view share it (a wizard's steps) - never `{ providedIn: 'root' }`. Children of the view inject it; `ui-*` components get its data through inputs.",
+          "severity": "medium"
+        },
+        {
+          "id": "signal-store#10",
+          "text": "One store holds the state of one view. Data a second, independent view reads or writes belongs in an NgRx slice (architecture#13): the store reads it through that slice's facade instead of loading a copy of its own.",
+          "severity": "medium"
+        }
+      ]
+    },
+    {
+      "id": "i18n",
+      "name": "Translations",
+      "selectedItems": "11",
       "checklistSize": 12,
       "items": [
         {
+          "id": "i18n#11",
+          "text": "No user-facing text is hard-coded in code or templates: every label, message, heading, tooltip and option text a user sees is a key of the base file, rendered through the translate pipe or resolved through the translation service — a `'Blocked'` returned by a mapper or a `<h2>Users</h2>` in a template is a finding, and so is a text an existing key already carries.",
+          "sameAs": [
+            "general#7",
+            "pipes#5",
+            "component-template#9"
+          ],
+          "facts": [
+            "i18n-missing-key"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "architecture",
+      "name": "Feature architecture",
+      "selectedItems": "4,6,9,12",
+      "checklistSize": 13,
+      "items": [
+        {
+          "id": "architecture#4",
+          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
+          "severity": "low",
+          "facts": [
+            "component-injects-data-access"
+          ]
+        },
+        {
+          "id": "architecture#6",
+          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, spec fixtures several specs share in `shared/mocks/`, HTTP in `data-access/services/`, state files - the signal store and an NgRx slice's files - in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed. A type, interface, enum or const used only inside its own file may stay there, without `export`; once it is exported or a second file needs it, it moves to `models/`.",
+          "severity": "medium",
+          "probe": [
+            {
+              "builtin": "area-root-file"
+            }
+          ]
+        },
+        {
+          "id": "architecture#9",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach. A function shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is no such element: it is never reported for not reusing, or not becoming, a shared util.",
+          "severity": "medium",
+          "sameAs": [
+            "component-template#16"
+          ]
+        },
+        {
           "id": "architecture#12",
-          "text": "Self-contained local state (dialogs, embedded browsers) uses an `@ngrx/signals` `signalStore()` provided in `@Component.providers` — composed with `withState`/`withComputed`/`withMethods` and mutated only through `patchState`; a hand-rolled `BehaviorSubject`/`Subject` service is not an acceptable component store. Feature-slice state is never component-scoped.",
+          "text": "A view's state - a page, the steps of one wizard, a dialog, an embedded picker - lives in an `@ngrx/signals` `signalStore()`: the default for almost every view. It is composed with `withState`/`withComputed`/`withMethods` (`withProps` for injected dependencies), mutated only through `patchState`, and provided by the view that owns it (the signal-store instruction); a hand-rolled `BehaviorSubject`/`Subject` state service is not an acceptable store.",
           "severity": "low"
         }
       ]
@@ -29,8 +137,8 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2",
-      "checklistSize": 13,
+      "selectedItems": "2,14-18",
+      "checklistSize": 18,
       "items": [
         {
           "id": "general#2",
@@ -40,6 +148,47 @@
             "models#10"
           ],
           "okEvidence": "linia każdej deklaracji, której nazwę sprawdziłeś (L3, L7, L12), nie zakres pliku"
+        },
+        {
+          "id": "general#14",
+          "text": "A rename is complete: every name the change renames - a file or folder, an exported symbol, a class or store member, an input or output, a component/directive selector or pipe name, an action, a selector, a route path, a CSS class, a `data-test` value, an enum member, a translation key - has no use of its old name left anywhere in the repository: code, templates, styles, specs, mocks, snapshots, e2e tests, routes, barrels, configs and the base-language translation file (`en.json`), where a renamed key is renamed as well. The other locale files are the one exception: they are never touched (i18n#1), so the old key path they keep is no leftover. Whoever renames dispatches a fresh verification sub-agent once the rename is written (Agent tool, `general-purpose`): its prompt lists every old and new name and the repository root; it searches the whole tree but the other locale files for every old name - whole words, string literals, dotted translation-key paths and the key's leaf inside the nested `en.json` - and replies with each leftover `path:line`; every leftover is fixed and the sub-agent runs again until it finds none (a session without the Agent tool makes the same search itself and says so). A review judges the result only: an old name still in use is a finding at the renamed line, naming every leftover `path:line`.",
+          "sameAs": [
+            "i18n#9"
+          ]
+        },
+        {
+          "id": "general#15",
+          "text": "A boolean - a field, signal, input, variable or a method returning a flag - is named with a predicate prefix that reads as a yes/no question (`isActive`, `hasChildren`, `canEdit`, `shouldRetry`; loading flags `isLoading<X>`), never a bare noun or adjective (`active`, `loading`, `children`). The fields of an API interface keep the names the API sends.",
+          "severity": "low",
+          "subject": [
+            "boolean",
+            "\\btrue\\b",
+            "\\bfalse\\b"
+          ]
+        },
+        {
+          "id": "general#16",
+          "text": "Private members carry the `_` prefix (`private readonly _usersService`, `private _buildRows()`, a store's `_`-prefixed private props and methods), and private methods sit at the end of the class, after every public member.",
+          "severity": "low",
+          "subject": [
+            "\\bprivate\\b",
+            "#[A-Za-z_$]",
+            "\\b_[A-Za-z]"
+          ]
+        },
+        {
+          "id": "general#17",
+          "text": "A comment explains only what the code cannot say itself - a non-obvious why, a tricky edge case, a workaround, a subtle gotcha; a comment restating what the code does or narrating obvious steps is a finding, and a clearer name replaces it. The section comments of a models barrel and the justification of a suppression comment are required, not this item's.",
+          "severity": "low",
+          "subject": [
+            "//",
+            "/\\*"
+          ]
+        },
+        {
+          "id": "general#18",
+          "text": "A long method is split into small, focused private helpers of the same file, each named after its one job; the split never creates a shared util or a new file for single-consumer logic (the utils instruction decides extraction).",
+          "severity": "low"
         }
       ]
     },
@@ -49,9 +198,22 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "4,9",
-      "checklistSize": 23,
+      "selectedItems": "1-2,4,9,17,21-22,24-25",
+      "checklistSize": 26,
       "items": [
+        {
+          "id": "best-practices#1",
+          "text": "Strict typing everywhere: no `any` (use `unknown` plus narrowing when the shape is genuinely uncertain); prefer inference where the type is obvious; exported functions and service methods declare their parameter and return types. A signal input or output carries a type argument only when its default cannot express the type - `input.required<T>()`, `output<T>()`, `input<Item[]>([])`, `input<string | null>(null)` - never one its default already infers (`input(0)`, `input(false)`, `signal('')`, not `input<number>(0)`).",
+          "severity": "medium",
+          "sameAs": [
+            "utils#2"
+          ]
+        },
+        {
+          "id": "best-practices#2",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `input(<default>)`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
+          "severity": "low"
+        },
         {
           "id": "best-practices#4",
           "text": "Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators or `@Input() set` accessors; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array.",
@@ -68,6 +230,35 @@
               "flags": "m"
             }
           ]
+        },
+        {
+          "id": "best-practices#17",
+          "text": "Singleton services use `@Injectable({ providedIn: 'root' })`; the route- and view-scoped provisioning of signal stores, facades and effects is governed by the architecture instruction."
+        },
+        {
+          "id": "best-practices#21",
+          "text": "No `subscribe()` inside a `subscribe()` — compose with `switchMap`/`concatMap`/`mergeMap`; the nested form leaks the inner subscription past every teardown operator on the outer one."
+        },
+        {
+          "id": "best-practices#22",
+          "text": "A suppression comment added by the diff (`@ts-ignore`, `@ts-expect-error`, `eslint-disable*`) carries a one-line justification and the narrowest scope that works (line-level over file-level); `@ts-expect-error` is used wherever it compiles, because it fails once the underlying problem is fixed. The `/* eslint-disable @typescript-eslint/member-ordering */` allowed by the effects instruction is the one standing exception.",
+          "severity": "low"
+        },
+        {
+          "id": "best-practices#24",
+          "text": "Dependencies are injected with `inject()` - in a field initializer, a store's `withProps`/`withMethods`, or the body of a functional guard, resolver or interceptor - never through constructor parameters.",
+          "severity": "low",
+          "subject": [
+            "constructor\\s*\\("
+          ]
+        },
+        {
+          "id": "best-practices#25",
+          "text": "RxJS operators and creation functions are imported from `'rxjs'` - never from the deprecated `'rxjs/operators'` entry point, however much legacy code still imports it.",
+          "severity": "low",
+          "subject": [
+            "rxjs/operators"
+          ]
         }
       ]
     },
@@ -75,13 +266,33 @@
       "id": "performance",
       "name": "Performance & change detection",
       "gate": "the file holds Angular runtime code or a template - a component, directive, pipe, service, effect, store, config or bindings, not only type/const declarations or re-exports",
-      "selectedItems": "5",
+      "selectedItems": "5,7-9,16",
       "checklistSize": 18,
       "items": [
         {
           "id": "performance#5",
           "text": "`effect()` never writes signals to emulate derivation — derived state is `computed()`; dependent-but-locally-resettable state is `linkedSignal()`.",
           "subject": "effect\\s*\\("
+        },
+        {
+          "id": "performance#7",
+          "text": "An `effect()` that starts a timer, listener or subscription registers its teardown through the `onCleanup` callback; without it every re-run stacks another one.",
+          "subject": "effect\\s*\\("
+        },
+        {
+          "id": "performance#8",
+          "text": "An `effect()` reading a signal it must not depend on (a value it only samples — a form snapshot read while reacting to a lock flag) wraps that read in `untracked()`; an accidental dependency turns the effect into a loop.",
+          "subject": "effect\\s*\\("
+        },
+        {
+          "id": "performance#9",
+          "text": "`resource`/`httpResource` reads are guarded with `hasValue()` before `.value()` (an errored resource throws on read); a resource depending on another resource derives its `params` from the source resource's signal, never by calling the source's `.value()` inside the loader.",
+          "subject": "resource"
+        },
+        {
+          "id": "performance#16",
+          "text": "Long-lived async work is bounded: polling/intervals take their period from the central app config and are explicitly stopped — no unbounded `setInterval`/`timer` outliving its view or effect.",
+          "subject": "setinterval|interval|timer|poll|repeat|retry"
         }
       ]
     },
@@ -94,7 +305,7 @@
         "This instruction OWNS duplication, dead/unnecessary code, boilerplate and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1,3-5,8",
+      "selectedItems": "1-5,8",
       "checklistSize": 13,
       "items": [
         {
@@ -118,6 +329,13 @@
             "unit-tests#12"
           ],
           "severityInSpec": "medium"
+        },
+        {
+          "id": "code-quality#2",
+          "text": "No copy-paste-with-a-tweak: three or more near-identical blocks differing only in a value, a field name or one branch become one parameterized function, const or loop — this includes near-identical test fixtures, mock objects and `it` bodies (which belong in an `it.each` dataset). Two such blocks are not a finding under this item.",
+          "severity": "high",
+          "severityInSpec": "medium",
+          "okEvidence": "pierwsza linia każdego z porównanych bloków (L12, L30, L48), nie zakres obejmujący je wszystkie"
         },
         {
           "id": "code-quality#3",
