@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { snapshotPath, writeSnapshot, shapeUsage, usageReader, PRUNE_AFTER_MS, RELAY_SCRIPT } = require('./usage.cjs');
+const { snapshotPath, writeSnapshot, shapeUsage, usageReader, PRUNE_AFTER_MS, RELAY_SCRIPT, ensureStableRelay } = require('./usage.cjs');
 const { commandOf } = require('./statusline-relay.cjs');
 
 function tmpDir() {
@@ -129,4 +129,25 @@ test('the relay still runs the command when the update is not JSON', async () =>
   assert.strictEqual(out, 'ok');
   assert.strictEqual(code, 0);
   assert.deepStrictEqual(fs.readdirSync(dir).filter(n => n.endsWith('.json')), []);
+});
+
+test('the status line launcher stays put across plugin updates and runs the newest relay, or the command alone', () => {
+  const home = tmpDir();
+  const file = path.join(home, '.claude', 'doh', 'statusline-relay.cjs');
+  assert.strictEqual(ensureStableRelay({ file, current: RELAY_SCRIPT }), file.replace(/\\/g, '/'));
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.includes(JSON.stringify(RELAY_SCRIPT)), 'it names this version\'s relay first');
+  const before = fs.statSync(file).mtimeMs;
+  ensureStableRelay({ file, current: RELAY_SCRIPT });
+  assert.strictEqual(fs.statSync(file).mtimeMs, before, 'rewritten only when it changes');
+  // The page names it once the server installed it.
+  assert.strictEqual(usageReader({ sessionId: null, dir: tmpDir(), env: {}, launcher: '/x/statusline-relay.cjs' })().relayScript, '/x/statusline-relay.cjs');
+  // With no relay left anywhere, the user's command still gets the update.
+  const gone = path.join(home, 'gone.cjs');
+  ensureStableRelay({ file: gone, current: path.join(home, 'nowhere', 'statusline-relay.cjs') });
+  const r = require('node:child_process').spawnSync(process.execPath, [gone, 'node -e "process.stdin.pipe(process.stdout)"'], {
+    input: '{"session_id":"s"}', encoding: 'utf8', env: { ...process.env, USERPROFILE: home, HOME: home },
+  });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.trim(), '{"session_id":"s"}');
 });

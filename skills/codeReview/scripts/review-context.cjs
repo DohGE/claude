@@ -68,7 +68,9 @@ function isSkippedPath(filePath) {
 // The effort levels a walker's prompt can carry, worded in SKILL.md Step 3 (Windows).
 const walkerEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Windows walked at once (`--parallel=<n>`): each walker writes parts of its own files only.
-const defaultParallel = 4;
+// Every window of a run gets a lane up to the maximum: with four lanes a 174-file run of 45
+// windows kept every lane busy for its whole 64 minutes (243 walker-minutes, 2026-11-02).
+const defaultParallel = 6;
 const maxParallel = 6;
 // The most files a target walked in the main conversation may have to make its cross-file pass there.
 const crossInlineMax = 4;
@@ -401,6 +403,14 @@ function q(s) {
 function assembleCommand(target, contextPath, project, skillDir) {
   const slash = (p) => String(p).replace(/\\/g, '/');
   return `node ${q(`${slash(skillDir)}/scripts/check-part.cjs`)} --context=${q(slash(contextPath))} --report=${q(slash(target.reportPath))} --assemble`;
+}
+
+// Every target's assembly in one call, in target order, followed by the run's Step 5 summary
+// (check-part.cjs --assemble-all): a five-branch run assembled one Bash call per target, and the
+// summary the conversation then wrote by hand dropped two of the run's warnings (2026-10-30).
+function assembleAllCommand(contextPath, skillDir) {
+  const slash = (p) => String(p).replace(/\\/g, '/');
+  return `node ${q(`${slash(skillDir)}/scripts/check-part.cjs`)} --context=${q(slash(contextPath))} --assemble-all`;
 }
 
 // All files under dir, recursive, as project-relative forward-slash paths
@@ -1396,9 +1406,13 @@ function buildContext(options) {
     const range = `${baseRef}...${branchRef}`;
     const raw = parseRawDiff(tryGit(project, [...quiet, 'diff', '--raw', range]) || '');
     const { kept, skipped } = partition(raw);
+    // The commit the review reads: a walker's search names it instead of a branch name, which
+    // another run, a rebase or a later push moves (stackOf compares targets by it as well).
+    const revision = tryGit(project, ['rev-parse', '--verify', '--quiet', `${branchRef}^{commit}`]);
     registerTarget({
       kind: 'branch',
       branch: branchName,
+      ...(revision ? { revision } : {}),
       baseBranch: baseRef,
       baseSource: base.source,
       prNumber: base.source === 'pr' ? base.prNumber : null,
@@ -1603,6 +1617,21 @@ function buildContext(options) {
         result.warnings.push(`[${target.branch}] Repository facts were not collected (${(err && err.message) || err}) - the file bundles carry the plan without them.`);
       }
     }
+    // A snapshot that changed while neither its spec nor the code beside the spec changed in this
+    // target (jest-snapshot#2): a hand edit, a stale regeneration - or a child component's change,
+    // which is why the fact only points.
+    const changedPaths = new Set(target.files.map((f) => f.path));
+    for (const f of target.files) {
+      if (f.status === 'D' || !/(?:^|\/)__snapshots__\/[^/]+\.snap$/.test(f.path)) continue;
+      const specDir = path.posix.dirname(path.posix.dirname(f.path));
+      const spec = `${specDir}/${path.posix.basename(f.path).replace(/\.snap$/, '')}`;
+      const source = path.posix.basename(spec).replace(/\.(?:spec|test)(\.[cm]?[jt]sx?)$/, '$1');
+      const near = [specDir, path.posix.dirname(specDir)].flatMap((dir) => [`${dir}/${source}`, `${dir}/${source.replace(/\.[cm]?[jt]sx?$/, '.html')}`]);
+      if ([spec, ...near].some((p) => changedPaths.has(p))) continue;
+      const own = collected.facts.get(f.path) || [];
+      own.push({ kind: 'snapshot-without-change', lines: [1], text: `snapshot zmieniony w tym celu, a jego spec (${spec}) ani kod obok niego się nie zmienił - sprawdź, czy zmiana wynika z komponentu potomnego albo współdzielonego kodu; ręczna edycja albo nieaktualny snapshot to naruszenie.`, hint: true });
+      collected.facts.set(f.path, own);
+    }
     if (universe.partial) {
       result.warnings.push(`[${target.branch}] Repository facts come from part of the repository (git could not list it, or it holds more than ${factFileLimit} files / ${factTotalBytes / 1024 / 1024} MB of sources) - every fact only points at its line.`);
     }
@@ -1644,18 +1673,30 @@ function buildContext(options) {
     const leftOver = mechanicalOf.size > 0 && Object.keys(learned).length > 0
       ? mechanical.leftovers(learned, universe.files)
       : { total: 0, hits: [] };
+    // The names whose declaration the diff deleted, and where the reviewed revision still uses
+    // them: "did the change break something" answered for every file, not only a mechanical one -
+    // the walkers of a rename-heavy run searched them one Grep at a time (2026-10-30).
+    const removedNames = mechanical.removedDeclarations(target.files, (p) => patches.get(p) || '');
+    const namesLeft = removedNames.size > 0 ? mechanical.usesLeft([...removedNames.keys()], universe.files) : new Map();
     // The files of one walker setting walk together: a window is a run of consecutive files, and a
     // rename branch whose mechanical files lay between the others by path was cut into eleven
     // windows (2026-10-27). Behaviour first - it carries the findings - then the files of a light
     // kind, then the mechanical ones; a resumed run keeps the order its parts were numbered in.
     // A group shorter than `lightRunMin` stays among its neighbours, which it is walked with anyway:
     // moved to the end it was a window of its own for one file.
+    // Inside a group the files of one kind follow each other: a window then meets fewer
+    // instructions, and the item texts a walker's first bundle of a kind showed are references in
+    // the next ones (review-hooks.cjs dedupItems) - measured on a 188-file run (2026-10-30), 17%
+    // less item text read by the window walkers than in path order.
     if (!target.resume) {
       const lightKind = (f) => !!(planCatalog[f.plan] && planCatalog[f.plan].walker);
       const mechanicalGroup = mechanicalOf.size >= lightRunMin;
       const lightGroup = target.files.filter((f) => lightKind(f) && !mechanicalOf.has(f.path)).length >= lightRunMin;
       const rank = (f) => (mechanicalOf.has(f.path) ? (mechanicalGroup ? 2 : 0) : lightKind(f) && lightGroup ? 1 : 0);
-      target.files = target.files.map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map(({ f }) => f);
+      const kindName = (f) => (planCatalog[f.plan] ? planCatalog[f.plan].name : '￿');
+      target.files = target.files.map((f, i) => ({ f, i }))
+        .sort((a, b) => rank(a.f) - rank(b.f) || (kindName(a.f) < kindName(b.f) ? -1 : kindName(a.f) > kindName(b.f) ? 1 : 0) || a.i - b.i)
+        .map(({ f }) => f);
     }
     // The part files' own width (check-part.cjs), so `03-a.ts` pairs with `part03.md`.
     const width = Math.max(2, String(target.files.length + 2).length);
@@ -1688,6 +1729,8 @@ function buildContext(options) {
         if (patch) {
           f.diffPath = `${stem}.diff`;
           diffChars = patch.length;
+          const diffPages = reviewBundle.pagesOf(patch);
+          if (diffPages) f.diffPages = diffPages;
           writes.push([f.diffPath, patch.endsWith('\n') ? patch : `${patch}\n`]);
         }
       }
@@ -1695,10 +1738,22 @@ function buildContext(options) {
       // still indexes the full plan catalog here; it is remapped below.
       const kind = planCatalog[f.plan];
       const text = reviewedTexts.has(f.path) ? reviewedTexts.get(f.path) : null;
+      // A data file its kind reads where the diff touched it (rulebook `readChanged`): the walk
+      // reads those ranges, and the window planning weighs them instead of the whole file.
+      if (kind && kind.readChanged && text !== null && f.changedLines && (f.status === 'M' || f.status === 'R')) {
+        const ranges = reviewBundle.readRangesOf(f.changedLines, reviewBundle.lineCountOf(text));
+        if (ranges) f.readRanges = ranges;
+      }
+      // A content past one Read's limit is read in pages (review-bundle.cjs pagesOf).
+      if (f.contentPath && !f.readRanges && text !== null) {
+        const pages = reviewBundle.pagesOf(text);
+        if (pages) f.contentPages = pages;
+      }
+      const readText = f.readRanges ? reviewBundle.textOfRanges(text, f.readRanges) : text;
       // A file another project imports from outside what the facts read: they point, never decide.
       const scope = targetScopes.has(target) ? targetScopes.get(target).scope : null;
       const partialHere = universe.partial || !!(scope && scope.open.has(f.path));
-      const bound = reviewBundle.bindFile({
+      const fullBound = reviewBundle.bindFile({
         plan: kind ? kind.plan : [],
         instructions: rules.instructions,
         filePath: f.path,
@@ -1714,13 +1769,15 @@ function buildContext(options) {
         // An answer states what the whole repository holds: from part of it, the reviewer searches.
         answers: partialHere ? {} : collected.answers.get(f.path) || {},
       });
-      if (Object.keys(bound.items).length > 0 || bound.info.length > 0) factFiles[f.path] = bound;
+      // A data file read in ranges owes answers only to the lines it reads.
+      const bound = f.readRanges ? reviewBundle.narrowBinding(fullBound, f.readRanges) : fullBound;
+      if (Object.keys(bound.items).length > 0 || bound.info.length > 0 || (bound.closed || []).length > 0) factFiles[f.path] = bound;
       f.bundlePath = `${stem}.bundle.md`;
       bundles.push({
         file: f,
         number: i + 1,
         lineCount: reviewBundle.lineCountOf(reviewedTexts.get(f.path)),
-        readChars: (text === null ? 0 : text.length) + diffChars,
+        readChars: (readText === null ? 0 : readText.length) + diffChars,
         render: {
           file: f,
           kind,
@@ -1733,6 +1790,7 @@ function buildContext(options) {
           factRoot: universe.factRoot,
           partial: partialHere,
           mechanical: f.mechanical ? { reason: f.mechanical, map: learned, leftovers: leftOver } : null,
+          removed: [...removedNames].filter(([, from]) => from.includes(f.path)).map(([name]) => ({ name, ...(namesLeft.get(name) || { total: 0, hits: [] }) })),
         },
       });
     });
@@ -1809,14 +1867,26 @@ function buildContext(options) {
       const next = k + 1 < batches.length ? batches[k + 1].map((number) => byNumber.get(number).file) : [];
       for (const number of batch) batchOf.set(number, { batch, next });
     });
-    for (const b of bundles) {
+    const renderedOf = (b) => {
       const at = batchOf.get(b.number);
-      const last = at && at.batch.length > 0 && at.batch[at.batch.length - 1] === b.number;
-      const rendered = {
+      return {
         ...b.render,
         lineCount: b.lineCount,
         partPath: reviewBundle.partPathOf(target.reportPath, b.number, n),
         batch: at && at.batch.length > 1 ? at.batch.map((number) => byNumber.get(number).file.path) : null,
+      };
+    };
+    // The pages of each bundle, cut before any `## Dalej` names them: that section comes last, so
+    // the lines above it are the same in the bundle as written, and the last page reads to the end.
+    for (const b of bundles) {
+      const pages = reviewBundle.pagesOf(reviewBundle.renderBundle({ ...renderedOf(b), ...(b.file.mechanical ? { fullPath: `${b.file.bundlePath}` } : {}) }));
+      if (pages) b.file.bundlePages = pages;
+    }
+    for (const b of bundles) {
+      const at = batchOf.get(b.number);
+      const last = at && at.batch.length > 0 && at.batch[at.batch.length - 1] === b.number;
+      const rendered = {
+        ...renderedOf(b),
         next: last ? reviewBundle.renderNext({ nextFiles: at.next, crossBundlePath: target.crossBundlePath, crossPartPath, crossBriefPath: crossInline ? null : target.crossBriefPath, window: windowEnds.get(b.number) || null }) : null,
       };
       // A mechanical file: the short bundle is the one its walk reads, the full one waits beside it.
@@ -1837,6 +1907,7 @@ function buildContext(options) {
       withRuleText: target.withRuleText,
       light: target.light,
       dedupItems: target.dedupItems,
+      ...(target.revision ? { revision: target.revision } : {}),
       ...(target.snapshotDir ? { snapshotDir: target.snapshotDir } : {}),
       commands: { grep: target.commands.grep },
     };
@@ -1941,13 +2012,16 @@ function buildContext(options) {
   // point 3) - the part check lets that finding name several of its items, and refuses a second.
   result.checklistPerFile = walkedIds.filter((id) => instructionOf(id).findings === 'per-file');
   for (const [target, cross] of pendingCross) {
-    pendingWork.get(target).push([target.crossBundlePath, reviewBundle.renderCrossBundle({
+    const crossText = reviewBundle.renderCrossBundle({
       ...cross,
       instructions: rules.instructions,
       walked,
       candidates: target.duplicationCandidates || null,
       importLedger: target.importLedger,
-    })]);
+    });
+    pendingWork.get(target).push([target.crossBundlePath, crossText]);
+    const crossPages = reviewBundle.crossPagesOf(crossText);
+    if (crossPages) target.crossPages = crossPages;
     if (target.crossBriefPath) {
       pendingWork.get(target).push([target.crossBriefPath, reviewBundle.renderCrossBrief({
         target: {
@@ -1962,6 +2036,18 @@ function buildContext(options) {
         crossBundlePath: target.crossBundlePath,
         crossPartPath: cross.crossPartPath,
         closingPartPath: cross.closingPartPath,
+        crossPages: target.crossPages || null,
+      })]);
+      // The agent that closes the items left open for a readable outside file, before the pass.
+      target.gapsBriefPath = `${target.workDir}/${reviewBundle.gapsBriefName}`;
+      pendingWork.get(target).push([target.gapsBriefPath, reviewBundle.renderGapsBrief({
+        target: {
+          reportPath: target.reportPath,
+          htmlReportPath: target.htmlReportPath,
+          workDir: target.workDir,
+          ...(target.revision ? { revision: target.revision } : {}),
+          ...(target.snapshotDir ? { snapshotDir: target.snapshotDir } : {}),
+        },
       })]);
     }
   }
@@ -2065,11 +2151,165 @@ function buildContext(options) {
     if (result.targets.length > 0) {
       result.contextPath = path.join(runCacheDir, `.review-context-${result.targets[0].kind}.json`);
       for (const target of result.targets) target.commands.assemble = assembleCommand(target, result.contextPath, project, skillDir);
+      result.commands = { assembleAll: assembleAllCommand(result.contextPath, skillDir) };
     }
+    // Next to each stacked target's report, the lines its later parts change: the renderer marks
+    // the findings on them (check-part.cjs passes `--stack`), and the assembly removes the file.
+    for (const [target, stack] of stackOf(result.targets, project)) {
+      const stackPath = target.reportPath.replace(/\.md$/i, '.stack.json');
+      try {
+        fs.writeFileSync(stackPath, JSON.stringify(stack));
+        target.stackPath = stackPath.replace(/\\/g, '/');
+        target.stackTip = stack.tip;
+      } catch {}
+    }
+    // The verdicts later parts of a stack take over from earlier ones (stack-carry.cjs).
+    try {
+      carryPlanOf(result.targets, project, rules.instructions, plannedKinds);
+    } catch (err) {
+      result.warnings.push(`Could not plan the verdicts later parts of the stack take over (${(err && err.message) || err}) - every file is walked whole.`);
+    }
+    mark('stack');
     result.workflow = runWorkflow(result, options);
   }
   mark('write');
   return result;
+}
+
+// The old-side ranges of each file a `git diff -U0` changes, `{ <old path>: [[from, to], …] }`: a
+// hunk that only inserts marks the two lines around its place, and a deleted file is `[1, null]`
+// (to its end).
+function oldSideRanges(diff) {
+  const files = {};
+  let current = null;
+  const add = (range) => {
+    if (!files[current]) files[current] = [];
+    files[current].push(range);
+  };
+  for (const line of String(diff || '').split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      current = null;
+      continue;
+    }
+    if (line.startsWith('--- ')) {
+      const p = line.slice(4).replace(/\t.*$/, '').trim();
+      current = p === '/dev/null' ? null : unquoteGitPath(p).replace(/^a\//, '');
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      if (current && line.slice(4).trim() === '/dev/null') add([1, null]);
+      continue;
+    }
+    const m = current ? line.match(/^@@ -(\d+)(?:,(\d+))? \+/) : null;
+    if (!m) continue;
+    const start = Number(m[1]);
+    const count = m[2] === undefined ? 1 : Number(m[2]);
+    add(count === 0 ? [start, start + 1] : [start, start + count - 1]);
+  }
+  return files;
+}
+
+// Branch targets of one run that stack - one's base is another target's branch or commit, the
+// stacked pull requests of one feature. For each target with parts after it, the lines of its
+// reviewed files those parts change (its revision against the stack's tip, old side): a finding
+// there may be settled - or made worse - by a later part, and the page says so (render-report.cjs
+// attachStack). A five-part run reported part-3 for a function part-5 completed (2026-10-30).
+function stackOf(targets, project) {
+  const branches = targets.filter((t) => t && t.kind === 'branch' && t.revision);
+  if (branches.length < 2) return new Map();
+  const short = (ref) => String(ref || '').replace(/^refs\/(?:heads|remotes)\//, '').replace(/^origin\//, '');
+  const baseCommits = new Map();
+  const baseCommit = (t) => {
+    if (!baseCommits.has(t)) baseCommits.set(t, tryGit(project, ['rev-parse', '--verify', '--quiet', `${t.baseBranch}^{commit}`]));
+    return baseCommits.get(t);
+  };
+  const above = new Map();
+  for (const upper of branches) {
+    const below = branches.find((t) => t !== upper && (short(upper.baseBranch) === short(t.branch) || baseCommit(upper) === t.revision));
+    if (below && !above.has(below)) above.set(below, upper);
+  }
+  const out = new Map();
+  for (const target of branches) {
+    const later = [];
+    const seen = new Set([target]);
+    for (let next = above.get(target); next && !seen.has(next); next = above.get(next)) {
+      seen.add(next);
+      later.push(next);
+    }
+    const paths = target.files.filter((f) => f.status !== 'D').map((f) => f.path);
+    if (later.length === 0 || paths.length === 0) continue;
+    const tip = later[later.length - 1];
+    // A path list longer than a command line holds is filtered afterwards instead.
+    const limited = paths.join(' ').length < 20000;
+    const diff = tryGit(project, ['-c', 'core.quotepath=false', 'diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', target.revision, tip.revision, ...(limited ? ['--', ...paths] : [])]);
+    if (diff === null) continue;
+    const reviewed = new Set(paths);
+    const files = Object.fromEntries(Object.entries(oldSideRanges(diff)).filter(([p]) => reviewed.has(p)));
+    out.set(target, { tip: tip.branch, later: later.map((t) => t.branch), files });
+  }
+  return out;
+}
+
+// The verdicts a later part of a stack may take over (stack-carry.cjs): for each file a target
+// shares with the nearest part below it, the items whose subject no line it changed holds, and the
+// hunks that move the earlier part's lines to this revision - `file.carry = { target, number,
+// eligible, hunks }`, `target` an index into `targets`. `kinds` are the run's planned kinds by
+// `file.plan`; the bindings come from each target's facts.json, on disk by now.
+function carryPlanOf(targets, project, instructions, kinds, carry = require('./stack-carry.cjs')) {
+  const branches = targets.filter((t) => t && t.kind === 'branch' && t.revision);
+  if (branches.length < 2) return 0;
+  const short = (ref) => String(ref || '').replace(/^refs\/(?:heads|remotes)\//, '').replace(/^origin\//, '');
+  const below = new Map();
+  for (const upper of branches) {
+    const base = tryGit(project, ['rev-parse', '--verify', '--quiet', `${upper.baseBranch}^{commit}`]);
+    const lower = branches.find((t) => t !== upper && (short(upper.baseBranch) === short(t.branch) || base === t.revision));
+    if (lower) below.set(upper, lower);
+  }
+  const readJson = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+  let count = 0;
+  for (const target of branches) {
+    const own = new Map(target.files.filter((f) => f.status !== 'D' && f.contentPath).map((f, i) => [f.path, f]));
+    const sources = new Map();
+    const seen = new Set([target]);
+    for (let lower = below.get(target); lower && !seen.has(lower); lower = below.get(lower)) {
+      seen.add(lower);
+      lower.files.forEach((f, i) => {
+        if (f.status !== 'D' && own.has(f.path) && !sources.has(f.path) && f.plan === own.get(f.path).plan) sources.set(f.path, { lower, number: i + 1 });
+      });
+    }
+    if (sources.size === 0) continue;
+    const facts = readJson(target.factsPath);
+    // One diff per pair of revisions.
+    const byLower = new Map();
+    for (const [p, source] of sources) byLower.set(source.lower, [...(byLower.get(source.lower) || []), p]);
+    for (const [lower, paths] of byLower) {
+      const limited = paths.join(' ').length < 20000;
+      const diff = tryGit(project, ['-c', 'core.quotepath=false', 'diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', lower.revision, target.revision, ...(limited ? ['--', ...paths] : [])]);
+      if (diff === null) continue;
+      const hunks = carry.hunksOf(diff);
+      for (const p of paths) {
+        const file = own.get(p);
+        const kind = kinds[file.plan];
+        let text = null;
+        try {
+          text = fs.readFileSync(file.contentPath, 'utf8');
+        } catch {}
+        if (!kind || text === null) continue;
+        const fileHunks = hunks[p] || [];
+        const eligible = carry.eligibleItems({ plan: kind.plan, instructions, bound: (facts && facts.files && facts.files[p]) || { items: {} }, text, hunks: fileHunks });
+        if (eligible.length === 0) continue;
+        file.carry = { target: targets.indexOf(lower), number: sources.get(p).number, eligible, hunks: fileHunks };
+        count++;
+      }
+    }
+  }
+  return count;
 }
 
 // The snapshots a run left behind: the assembly removes its own, so one older than a day is a
@@ -2098,32 +2338,57 @@ function pruneSnapshots(dir, keep = [], maxAgeMs = 24 * 60 * 60 * 1000) {
 // into the run folder: the Workflow tool runs a `scriptPath` only from a folder of the project,
 // and the plugin's own lies outside it. `args` stays small - the script derives each brief's
 // path from `dir` and the window's number.
+// The copy carries the run's `args` itself (the script's `baked` line): the conversation passes only
+// the path, where it retyped 3 kB of window tuples into the call before (2026-10-30, 42 windows).
+const bakedArgsLine = /^const baked = null\b.*$/m;
 function runWorkflow(result, options) {
   const windowed = result.targets.filter((target) => (target.windows || []).length > 0);
   const total = windowed.reduce((sum, target) => sum + target.windows.length, 0);
   const lanes = Math.max(1, Math.min(options.parallel || defaultParallel, total));
   for (const target of result.targets) target.parallel = target.windows && target.windows.length > 0 ? lanes : 1;
   if (windowed.length === 0) return null;
+  // The windows of the earlier parts a window's carried verdicts come from (stack-carry.cjs): it
+  // starts once they are done, so the parts it takes over are on disk when its bundles are read.
+  const windowKey = (target, number) => {
+    const t = windowed.indexOf(target);
+    const w = t < 0 ? -1 : target.windows.findIndex((x) => number >= x.files[0] && number <= x.files[1]);
+    return w < 0 ? null : `${t + 1}:${w + 1}`;
+  };
+  const afterOf = (target, w) => {
+    const keys = new Set();
+    for (let k = w.files[0]; k <= w.files[1]; k++) {
+      const carry = target.files[k - 1] && target.files[k - 1].carry;
+      const source = carry ? result.targets[carry.target] : null;
+      const key = source ? windowKey(source, carry.number) : null;
+      if (key) keys.add(key);
+    }
+    return [...keys];
+  };
+  const args = {
+    lanes,
+    targets: windowed.map((target) => ({
+      dir: target.workDir,
+      windows: target.windows.map((w) => {
+        const after = afterOf(target, w);
+        return [`${w.files[0]}-${w.files[1]}`, w.model || '', w.effort || '', ...(after.length ? [after] : [])];
+      }),
+      cross: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
+      // Light work - read a named file, settle an item - on the light model.
+      ...(target.gapsBriefPath ? { gaps: { model: 'sonnet', effort: 'medium' } } : {}),
+    })),
+  };
   const source = path.join(defaultSkillDir, 'workflows', 'review-windows.js');
   let scriptPath = source.replace(/\\/g, '/');
   try {
     const copy = path.join(path.dirname(path.dirname(windowed[0].reportPath)), 'review-windows.js');
-    fs.copyFileSync(source, copy);
-    scriptPath = copy.replace(/\\/g, '/');
+    const text = fs.readFileSync(source, 'utf8');
+    if (!bakedArgsLine.test(text)) throw new Error(`${source} has no \`const baked = null\` line to write the run's args into`);
+    fs.writeFileSync(copy, text.replace(bakedArgsLine, () => `const baked = ${JSON.stringify(args)}`));
+    return { scriptPath: copy.replace(/\\/g, '/') };
   } catch (err) {
-    result.warnings.push(`Could not copy the workflow script into the run folder (${(err && err.message) || err}) - the Workflow tool may refuse ${scriptPath}; pass its text as \`script\` instead.`);
+    result.warnings.push(`Could not write the workflow script into the run folder (${(err && err.message) || err}) - the Workflow tool may refuse ${scriptPath}; pass its text as \`script\`, with \`args\` from the context file's \`workflow\`.`);
   }
-  return {
-    scriptPath,
-    args: {
-      lanes,
-      targets: windowed.map((target) => ({
-        dir: target.workDir,
-        windows: target.windows.map((w) => [`${w.files[0]}-${w.files[1]}`, w.model || '', w.effort || '']),
-        cross: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
-      })),
-    },
-  };
+  return { scriptPath, args };
 }
 
 function main() {
@@ -2156,7 +2421,8 @@ function writeContext(context) {
   // A context not built by buildContext names no path; it goes next to its first report.
   const contextPath = planned || path.join(path.dirname(first.reportPath), `.review-context-${first.kind}.json`);
   try {
-    fs.writeFileSync(contextPath, layoutJson(rest) + '\n');
+    // `runWarnings`: Step 1's warnings again, for the run's summary (check-part.cjs --assemble-all).
+    fs.writeFileSync(contextPath, layoutJson({ ...rest, runWarnings: warnings || [] }) + '\n');
   } catch (err) {
     return { ...context, errors: [...(errors || []), `Could not write the context file ${contextPath} (${(err && err.message) || err}) - the full context follows inline.`] };
   }
@@ -2182,6 +2448,8 @@ function writeContext(context) {
     rulebookNotesPath: context.rulebookNotesPath,
     claudeMd: context.claudeMd,
     workflow: context.workflow || null,
+    // Every target assembled in one call, which ends with the run's summary (Step 5).
+    commands: { assembleAll: (context.commands && context.commands.assembleAll) || null },
     targets: context.targets.map((t) => {
       const windows = (t.windows || []).length;
       const unchanged = t.unchangedSinceLastReview;
@@ -2196,8 +2464,11 @@ function writeContext(context) {
         htmlReportPath: t.htmlReportPath,
         workDir: t.workDir,
         ...(t.snapshotDir ? { snapshotDir: t.snapshotDir } : {}),
+        ...(t.revision ? { revision: t.revision } : {}),
+        ...(t.stackTip ? { stackTip: t.stackTip } : {}),
         crossBundlePath: t.crossBundlePath,
         crossBriefPath: t.crossBriefPath || null,
+        ...(t.gapsBriefPath ? { gapsBriefPath: t.gapsBriefPath } : {}),
         ...(t.crossInline ? { crossInline: true } : {}),
         windows,
         ...(windows > 0 ? { parallel: t.parallel || 1 } : { start: t.start }),
@@ -2212,6 +2483,6 @@ function writeContext(context) {
   };
 }
 
-module.exports = { contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

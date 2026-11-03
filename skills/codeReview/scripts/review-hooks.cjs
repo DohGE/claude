@@ -13,7 +13,12 @@
 //                    reference to that bundle, line for line.
 //   --event=draft    PostToolUse on Write|Edit (hooks/hooks.json). A refused part's draft,
 //                    once an Edit fixed it, is checked again and moved into place
-//                    (check-part.cjs promoteDraft), and the drafts waiting behind it follow.
+//                    (check-part.cjs promoteDraft), and the drafts waiting behind it follow -
+//                    as they do after a part written whole lands.
+//   --event=search   PreToolUse on Grep|Glob (hooks/hooks.json). While a review of a branch
+//                    runs, a search of the project's working tree is a search of another
+//                    revision: it goes to the same path in the walker's target.snapshotDir, the
+//                    reviewed commit as plain files, and a path that revision lacks is refused.
 //   --event=compact  SessionStart with the matcher "compact", called through the plugin's
 //                    shared scripts/compact-hook.cjs (hooks/hooks.json: a skill's frontmatter
 //                    cannot register it). A compaction brings back only the head of
@@ -34,6 +39,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const skillDir = path.resolve(__dirname, '..').replace(/\\/g, '/');
+const { carriedNote } = require('./stack-carry.cjs');
 const reContextName = /^\.review-context-[a-z]+\.json$/;
 const reBundleName = /\.bundle\.md$/i;
 const reDraftName = /^(.+\.part\d+)\.draft\.md$/i;
@@ -54,10 +60,10 @@ function parseArgs(argv) {
   const args = { event: null };
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
-    if (m && m[1] === 'event' && ['read', 'draft', 'compact', 'subagent'].includes(m[2])) args.event = m[2];
-    else throw new Error(`Nieznany argument: ${arg} (oczekiwano --event=read|draft|compact|subagent).`);
+    if (m && m[1] === 'event' && ['read', 'draft', 'compact', 'subagent', 'search'].includes(m[2])) args.event = m[2];
+    else throw new Error(`Nieznany argument: ${arg} (oczekiwano --event=read|draft|compact|subagent|search).`);
   }
-  if (!args.event) throw new Error('Brak --event=read|draft|compact|subagent.');
+  if (!args.event) throw new Error('Brak --event=read|draft|compact|subagent|search.');
   return args;
 }
 
@@ -89,9 +95,11 @@ function statePath(sessionId, env) {
   return reSessionId.test(String(sessionId || '')) ? path.join(stateDir(env), `${sessionId}.json`) : null;
 }
 
+// `agents`: the work folder of the target each agent last read a bundle of ('' for reads without
+// an agent id) - which snapshot a search of that agent goes to.
 function readState(file) {
   const state = readJson(file);
-  return state && typeof state.contextPath === 'string' ? { contextPath: state.contextPath, shown: state.shown || {} } : null;
+  return state && typeof state.contextPath === 'string' ? { contextPath: state.contextPath, shown: state.shown || {}, agents: state.agents || {} } : null;
 }
 
 // The Reads of one batch run their hooks at once: every change of the state holds the lock.
@@ -119,13 +127,17 @@ function withLock(file, change) {
   }
 }
 
-// Ties the session to a run; the items shown so far count only within the same run.
-function record(stateFile, contextPath, change = (shown) => shown) {
+// Ties the session to a run; the items shown so far count only within the same run. `tie`
+// (`{ agent, workDir }`) records the target an agent walks.
+function record(stateFile, contextPath, change = (shown) => shown, tie = null) {
   return withLock(stateFile, () => {
     const current = readState(stateFile);
-    const shown = current && samePath(current.contextPath, contextPath) ? current.shown : {};
+    const same = current && samePath(current.contextPath, contextPath);
+    const shown = same ? current.shown : {};
+    const agents = same ? current.agents : {};
+    if (tie && tie.workDir) agents[tie.agent || ''] = tie.workDir;
     const result = change(shown);
-    writeAtomic(stateFile, JSON.stringify({ contextPath, shown }));
+    writeAtomic(stateFile, JSON.stringify({ contextPath, shown, agents }));
     return result;
   });
 }
@@ -180,14 +192,26 @@ function refreshCross(found, file) {
 }
 
 // An item line of the plan whose text another bundle already showed becomes a reference to it;
-// `shown` gains the items this bundle shows first. Line for line: every line number stays.
+// `shown` gains the items this bundle shows first. So does a rule line of `## Zapis części` that
+// another bundle showed word for word (`§<line>` in `shown`): 9% of what the walkers of a
+// 188-file run read was that section, the same lines in every bundle (2026-10-30). Line for line:
+// every line number stays.
 function dedupItems(text, name, shown) {
-  let inPlan = false;
+  let section = '';
   let replaced = 0;
   const lines = text.split('\n').map((line) => {
-    if (line.startsWith('## ')) inPlan = line.trim() === '## Plan';
-    const m = inPlan ? line.match(reItemLine) : null;
-    if (!m) return line;
+    if (line.startsWith('## ')) section = line.trim();
+    if (section === '## Zapis części' && line.startsWith('- ')) {
+      const key = `§${line.trim()}`;
+      const first = shown[key];
+      if (!first) shown[key] = name;
+      if (!first || first === name) return line;
+      replaced++;
+      return `- zasada zapisu jak w paczce ${first}`;
+    }
+    const m = section === '## Plan' ? line.match(reItemLine) : null;
+    // A verdict carried from an earlier part of the stack shows no item text to refer to.
+    if (!m || line.includes(carriedNote)) return line;
     const first = shown[m[1]];
     if (!first) shown[m[1]] = name;
     if (!first || first === name) return line;
@@ -216,34 +240,57 @@ function onRead(input, env = process.env) {
   const found = runOfWork(workDir, stateFile ? readState(stateFile) : null);
   if (!found) return null;
   const bundle = require('./review-bundle.cjs');
+  const agent = input.agent_id ? String(input.agent_id) : '';
+  const tie = { agent, workDir: found.target.workDir };
   if (name === bundle.crossBundleName) {
     refreshCross(found, file);
-    if (stateFile) record(stateFile, found.contextPath);
+    if (stateFile) record(stateFile, found.contextPath, undefined, tie);
     return null;
   }
-  if (!stateFile) return null;
+  // A later part of a stack takes over the earlier part's verdicts on the items its diff cannot
+  // have changed (stack-carry.cjs): their text leaves the bundle, and the part check writes them in.
+  let text = null;
+  let carried = 0;
+  const files = found.target.files || [];
+  const number = files.findIndex((f) => f && f.carry && f.bundlePath && samePath(f.bundlePath, file)) + 1;
+  if (number > 0) {
+    try {
+      text = fs.readFileSync(file, 'utf8');
+      const result = require('./stack-carry.cjs').carryForRead({ context: found.context, target: found.target, file: files[number - 1], number, text });
+      if (result && result.count > 0) {
+        writeAtomic(result.recordPath, JSON.stringify(result.record));
+        text = result.text;
+        carried = result.count;
+      }
+    } catch {}
+  }
+  const reasons = carried ? [`codeReview: ${carried} werdyktów z poprzedniej części stosu`] : [];
   // Walkers side by side (`target.parallel`) share the session id. A Read carrying the agent's
   // own id dedups against what that agent read (`@<id>` in the state); one without it could be
   // any walker's, and a reference to a bundle another walker read is an item never shown.
-  const agent = input.agent_id ? String(input.agent_id) : '';
-  if (!found.target.dedupItems || (!agent && (found.target.parallel || 1) > 1)) {
-    record(stateFile, found.contextPath);
-    return null;
+  if (!stateFile || !found.target.dedupItems || (!agent && (found.target.parallel || 1) > 1)) {
+    if (stateFile) record(stateFile, found.contextPath, undefined, tie);
+  } else {
+    if (text === null) text = fs.readFileSync(file, 'utf8');
+    const source = text;
+    const result = record(stateFile, found.contextPath, (shown) => {
+      if (!agent) return dedupItems(source, name, shown);
+      if (!shown[`@${agent}`]) shown[`@${agent}`] = {};
+      return dedupItems(source, name, shown[`@${agent}`]);
+    }, tie);
+    if (result.replaced > 0) {
+      text = result.text;
+      reasons.push(`codeReview --dedup-items: ${result.replaced} pozycji z treścią z wcześniejszej paczki`);
+    }
   }
-  const text = fs.readFileSync(file, 'utf8');
-  const result = record(stateFile, found.contextPath, (shown) => {
-    if (!agent) return dedupItems(text, name, shown);
-    if (!shown[`@${agent}`]) shown[`@${agent}`] = {};
-    return dedupItems(text, name, shown[`@${agent}`]);
-  });
-  if (result.replaced === 0) return null;
+  if (reasons.length === 0) return null;
   const copy = path.join(workDir, name.replace(reBundleName, '.bundle.dedup.md'));
-  writeAtomic(copy, result.text);
+  writeAtomic(copy, text);
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      permissionDecisionReason: `codeReview --dedup-items: ${result.replaced} pozycji z treścią z wcześniejszej paczki`,
+      permissionDecisionReason: reasons.join('; '),
       updatedInput: { ...args, file_path: copy.replace(/\\/g, '/') },
     },
   };
@@ -253,10 +300,21 @@ function note(event, text) {
   return { hookSpecificOutput: { hookEventName: event, additionalContext: text } };
 }
 
+// A part that landed whole: the drafts its absence held back (`najpierw brakujące wcześniejsze
+// części`) are checked again and moved in - the walker was told they land by themselves.
+function onPartLanded(file, input) {
+  const cp = require('./check-part.cjs');
+  const found = cp.findContextFor(path.resolve(file));
+  if (!found || !fs.existsSync(path.resolve(file))) return null;
+  const landed = cp.promoteLater(found, { timing: false, root: input.cwd }).filter((result) => result.state === 'promoted');
+  return landed.length ? note('PostToolUse', landed.map((result) => `check-part: ${result.partName} zapisana ze szkicu.`).join('\n')) : null;
+}
+
 function onDraft(input) {
   const tool = input && input.tool_name;
   const file = input && input.tool_input && input.tool_input.file_path;
   if ((tool !== 'Write' && tool !== 'Edit') || typeof file !== 'string') return null;
+  if (/^.+\.part\d+\.md$/i.test(path.basename(file))) return onPartLanded(file, input);
   const m = path.basename(file).match(reDraftName);
   if (!m) return null;
   const draft = path.resolve(file);
@@ -331,7 +389,15 @@ function position(context, contextPath, skillFile) {
   const targets = (context.targets || []).filter((t) => t && t.workDir && t.reportPath);
   const open = targets.filter((t) => fs.existsSync(t.workDir));
   if (open.length === 0) return null;
-  const target = open[0];
+  // Every part written - the cross-file one too - is a target that waits for the assembly of all
+  // of them (`commands.assembleAll`): the next one still to walk comes first.
+  const complete = (t) => {
+    const count = (t.files || []).length;
+    const last = count === 0 ? 1 : count + 1;
+    for (let k = 1; k <= last; k++) if (!fs.existsSync(bundle.partPathOf(t.reportPath, k, count))) return false;
+    return true;
+  };
+  const target = open.find((t) => !complete(t)) || open[0];
   const files = target.files || [];
   const n = files.length;
   const partOf = (k) => bundle.partPathOf(target.reportPath, k, n);
@@ -345,7 +411,10 @@ function position(context, contextPath, skillFile) {
   if (rulebook.length) out.push(`- rulebook (Step 2) wraca tylko z pliku: przeczytaj (Read) ${rulebook.join(' i ')}`);
   const missing = [];
   for (let k = 1; k <= n; k++) if (!exists(k)) missing.push(k);
-  const assembly = `- następne: złożenie - przeczytaj (Read) ${skillDir}/references/assembly.md i uruchom \`target.commands.assemble\`:`;
+  const all = context.commands && context.commands.assembleAll;
+  const assembly = all
+    ? `- następne: złożenie wszystkich celów - przeczytaj (Read) ${skillDir}/references/assembly.md i uruchom \`commands.assembleAll\` (na końcu drukuje podsumowanie Step 5):`
+    : `- następne: złożenie - przeczytaj (Read) ${skillDir}/references/assembly.md i uruchom \`target.commands.assemble\`:`;
   if (n === 0 && !exists(1)) {
     out.push(`- następne: ${partOf(1)} z jedyną linią \`Nie wykryto zmian do analizy.\`, potem złożenie (${skillDir}/references/assembly.md)`);
   } else if (missing.length > 0) {
@@ -371,17 +440,18 @@ function position(context, contextPath, skillFile) {
   } else if (n > 0 && !exists(n + 1)) {
     out.push(`- części plików zapisane (${n}/${n}); następne: przejście międzyplikowe, część ${partOf(n + 1)}`);
     if (target.crossBriefPath && !target.crossInline) {
-      out.push(`- robi je świeży agent: wyślij \`doh:codereview-walker\` z promptem \`Read ${target.crossBriefPath} and follow it.\` i czekaj na \`${bundle.crossReplies.done}\` (\`wait-part.cjs --path="${partOf(n + 1)}"\`); bez Agent:`);
+      out.push(`- robi je świeży agent: wyślij \`doh:codereview-cross\` z promptem \`Read ${target.crossBriefPath} and follow it.\` i czekaj na \`${bundle.crossReplies.done}\` (\`wait-part.cjs --path="${partOf(n + 1)}"\`); bez Agent:`);
     } else if (target.crossInline) {
       out.push('- mały cel (`crossInline`): przejście robisz sam, w tej rozmowie:');
     }
-    out.push('- przeczytaj (Read) w jednej odpowiedzi:', `  - ${target.crossBundlePath}`, `  - ${skillDir}/references/cross-file.md`);
+    out.push('- przeczytaj (Read) w jednej odpowiedzi:', `  - ${bundle.pagedRead(target.crossBundlePath, target.crossPages)}`, `  - ${skillDir}/references/cross-file.md`);
   } else {
-    out.push(assembly, `  ${(target.commands && target.commands.assemble) || '(brak w kontekście - złóż według assembly.md)'}`);
+    out.push(assembly, `  ${all || (target.commands && target.commands.assemble) || '(brak w kontekście - złóż według assembly.md)'}`);
   }
   const drafts = listDrafts(target.workDir);
   if (drafts.length) out.push(`- szkice odrzuconych części czekają na Edit (hook przenosi szkic po Edit): ${drafts.join(', ')}`);
-  if (open.length > 1) out.push(`- potem cele: ${open.slice(1).map(labelOf).join(', ')}`);
+  const later = open.filter((t) => t !== target && !complete(t));
+  if (later.length > 0) out.push(`- potem cele: ${later.map(labelOf).join(', ')}`);
   const skill = skillLines(skillFile);
   if (skill) {
     out.push(`- SKILL.md wrócił po kompaktowaniu tylko do około linii ${skill.from} (po wznowieniu sesji - wcale): przeczytaj (Read) ${skill.path} z offset ${skill.from} i limit ${skill.limit} - reszta prowadzenia recenzji.`);
@@ -412,7 +482,10 @@ function onCompact(input, env = process.env) {
 
 // The item texts shown so far are not in the conversation of whoever reads next.
 function forget(stateFile, contextPath) {
-  withLock(stateFile, () => writeAtomic(stateFile, JSON.stringify({ contextPath, shown: {} })));
+  withLock(stateFile, () => {
+    const current = readState(stateFile);
+    writeAtomic(stateFile, JSON.stringify({ contextPath, shown: {}, agents: current && samePath(current.contextPath, contextPath) ? current.agents : {} }));
+  });
 }
 
 // A sub-agent's start or stop: what the session's reads without an agent id showed is reset, as
@@ -424,11 +497,69 @@ function onSubagent(input, env = process.env) {
   if (!state) return null;
   const agent = input && input.agent_id ? `@${input.agent_id}` : null;
   const others = Object.fromEntries(Object.entries(state.shown).filter(([key]) => key.startsWith('@') && key !== agent));
-  withLock(stateFile, () => writeAtomic(stateFile, JSON.stringify({ contextPath: state.contextPath, shown: others })));
+  withLock(stateFile, () => writeAtomic(stateFile, JSON.stringify({ contextPath: state.contextPath, shown: others, agents: state.agents })));
   return null;
 }
 
-const handlers = { read: onRead, draft: onDraft, compact: onCompact, subagent: onSubagent };
+const inside = (p, dir) => {
+  const rel = path.relative(dir, p);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+// Whether git tracks something at `rel` in the working tree's checkout: a path the reviewed revision
+// lacks but the checkout tracks belongs to another revision; an untracked one (node_modules, a
+// build folder) belongs to none, and is searched where it is.
+function tracked(project, rel) {
+  const r = require('node:child_process').spawnSync('git', ['-C', project, 'ls-files', '--', rel || '.'], { encoding: 'utf8', timeout: 3000 });
+  return r.status === 0 && String(r.stdout || '').trim() !== '';
+}
+
+function deny(text) {
+  return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: text } };
+}
+
+// A Grep or Glob of the project while this session reviews a branch: the working tree is whatever
+// is checked out - in a stacked review, the stack's last part - and not the revision under review.
+// Of a 188-file run's lookups, 19 read the working tree or a branch name (2026-10-30). The search
+// goes to the same path in the target's snapshot; the search of the run's own folder, of a path
+// outside the project and of an untracked one stays as it is.
+function onSearch(input, env = process.env) {
+  const tool = input && input.tool_name;
+  if (tool !== 'Grep' && tool !== 'Glob') return null;
+  const stateFile = statePath(input.session_id, env);
+  const state = stateFile ? readState(stateFile) : null;
+  if (!state) return null;
+  const context = readJson(state.contextPath);
+  const project = context && typeof context.project === 'string' ? path.resolve(context.project) : null;
+  if (!project) return null;
+  // A staged or folder review reads the working tree itself (its snapshotDir is the project).
+  const live = (context.targets || []).filter((t) => t && t.workDir && t.snapshotDir && !samePath(t.snapshotDir, project) && fs.existsSync(t.workDir));
+  if (live.length === 0) return null;
+  const tied = state.agents[input.agent_id ? String(input.agent_id) : ''];
+  const target = live.find((t) => tied && samePath(t.workDir, tied)) || (live.length === 1 ? live[0] : null);
+  if (!target) return null;
+  const args = (input && input.tool_input) || {};
+  const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : project;
+  const asked = typeof args.path === 'string' && args.path.trim() ? path.resolve(cwd, args.path) : path.resolve(cwd);
+  if (!inside(asked, project) || inside(asked, path.join(project, '.claude')) || inside(asked, target.snapshotDir)) return null;
+  const rel = path.relative(project, asked).replace(/\\/g, '/');
+  const mapped = path.join(target.snapshotDir, rel);
+  const revision = target.revision ? target.revision.slice(0, 9) : target.branch;
+  if (!fs.existsSync(mapped)) {
+    if (!tracked(project, rel)) return null;
+    return deny(`codeReview: ${rel || '.'} nie istnieje w recenzowanej rewizji (${revision}) - drzewo robocze ma inną. Szukaj w target.snapshotDir (${target.snapshotDir.replace(/\\/g, '/')}): ścieżka po nim to ścieżka w repozytorium.`);
+  }
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      permissionDecisionReason: `codeReview: ${tool} w recenzowanej rewizji (${revision}): ${rel || '.'} w snapshotDir, nie w drzewie roboczym`,
+      updatedInput: { ...args, path: mapped.replace(/\\/g, '/') },
+    },
+  };
+}
+
+const handlers = { read: onRead, draft: onDraft, compact: onCompact, subagent: onSubagent, search: onSearch };
 
 function readStdin(deadlineMs) {
   return new Promise((resolve) => {
@@ -461,7 +592,7 @@ async function main() {
 
 module.exports = {
   parseArgs, stateDir, statePath, readState, dedupItems, skillLines, walkCard, position, onRead, onDraft, onCompact,
-  onSubagent, reattachedChars, oneTimeMarker,
+  onSubagent, onSearch, reattachedChars, oneTimeMarker,
 };
 
 if (require.main === module) main();

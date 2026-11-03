@@ -20,7 +20,8 @@
           "severity": "medium",
           "sameAs": [
             "models#10"
-          ]
+          ],
+          "okEvidence": "linia każdej deklaracji, której nazwę sprawdziłeś (L3, L7, L12), nie zakres pliku"
         }
       ]
     },
@@ -38,7 +39,7 @@
       "items": [
         {
           "id": "code-quality#1",
-          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies.",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies. A function or expression shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is not duplicated logic under this item, however often it repeats: it is never reported as code to extract into a reusable util (utils#9).",
           "facts": [
             "repeated-literal",
             "repeated-condition",
@@ -52,7 +53,11 @@
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
           "answer": "repo-search",
-          "severity": "high"
+          "severity": "high",
+          "handoff": [
+            "unit-tests#12"
+          ],
+          "severityInSpec": "medium"
         },
         {
           "id": "code-quality#3",

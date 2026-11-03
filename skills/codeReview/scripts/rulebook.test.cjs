@@ -271,7 +271,7 @@ test('two kinds disagreeing on an item\'s extras warn, and the first copy is kep
   const two = instructionWith('code-quality', ['No dead code.'], { 1: { facts: ['barrel-unused'] } });
   const rules = rulebookOf(t, [kind('a', '<name>.a.ts', [one]), kind('b', '<name>.b.ts', [two])]);
   assert.deepStrictEqual(rules.instructions.get('code-quality').extras.get(1), { facts: ['export-unused'] });
-  assert.match(rules.warnings.join('\n'), /code-quality#1 extras \(facts, probe, secondQuestion, answer, severity, sameAs, unverified, noSpec\) differ/);
+  assert.match(rules.warnings.join('\n'), /code-quality#1 extras \(facts, probe, secondQuestion, answer, severity, sameAs, unverified, noSpec, subject, handoff, companion, okEvidence, severityInSpec\) differ/);
 });
 
 test('a project item restating a skill item replaces its extras too', (t) => {
@@ -456,4 +456,53 @@ test('a project kind copied from an older version is named as such', (t) => {
   const project = writeLayer(tempDir(t, 'rb-project-'), [kind('enum', '<name>.enum.ts', [old])]);
   const rules = rulebook.loadRulebook([skill, project]);
   assert.ok(rules.warnings.some((w) => w.includes('looks like a copy of an older version\'s kind')), rules.warnings.join('\n'));
+});
+
+test('an item\'s subject, handoff, companion, OK evidence and spec severity are read, and a bad one warns', (t) => {
+  const rules = rulebookOf(t, [
+    kind('template', '<name>.component.html', [instructionWith('a11y', ['Alt texts.', 'Labels.', 'Order.', 'Copies.'], {
+      1: { subject: ['<img', 'icon'], handoff: ['a11y#2'], okEvidence: 'linia każdego elementu' },
+      2: { subject: '(', companion: ['a11y#3'], severityInSpec: 'medium' },
+      3: { handoff: ['a11y#3', 'nope#9'], okEvidence: '', severityInSpec: 'huge', companion: 'a11y#1' },
+    })], { readChanged: true }),
+    kind('styles', '<name>.component.scss', [], { readChanged: 'yes' }),
+  ]);
+  const extras = rules.instructions.get('a11y').extras;
+  assert.deepStrictEqual(extras.get(1), { subject: ['<img', 'icon'], handoff: ['a11y#2'], okEvidence: 'linia każdego elementu' });
+  assert.deepStrictEqual(extras.get(2), { companion: ['a11y#3'], severityInSpec: 'medium' });
+  assert.deepStrictEqual(extras.get(3), { handoff: ['nope#9'] });
+  const warned = rules.warnings.join('\n');
+  assert.match(warned, /a11y#2 "subject" \["\("\] is not a regular expression - ignored/);
+  assert.match(warned, /a11y#3 "handoff" \["a11y#3"\] names no other item address/);
+  assert.match(warned, /a11y#3 "handoff" names nope#9, which no kind carries/);
+  assert.match(warned, /a11y#3 "okEvidence" is not a text/);
+  assert.match(warned, /a11y#3 "severityInSpec" "huge" is not one of/);
+  assert.match(warned, /a11y#3 "companion" "a11y#1" names no other item address/);
+  assert.match(warned, /kind "styles" readChanged "yes" is not true or false/);
+  assert.strictEqual(rules.kinds.find((k) => k.name === 'template').readChanged, true);
+  assert.strictEqual(rules.kinds.find((k) => k.name === 'styles').readChanged, false);
+});
+
+test('an item\'s subject absent from the file closes it; a file without text, or an item without one, never', () => {
+  assert.strictEqual(rulebook.subjectAbsent({ subject: ['<img', 'ICON'] }, '<div>{{ x }}</div>'), true);
+  assert.strictEqual(rulebook.subjectAbsent({ subject: ['<img', 'ICON'] }, '<c-lib-icon-button />'), false, 'case-insensitive');
+  assert.strictEqual(rulebook.subjectAbsent({ subject: ['<img'] }, null), false, 'a deleted or binary file keeps the item');
+  assert.strictEqual(rulebook.subjectAbsent({ severity: 'low' }, '<div></div>'), false);
+  assert.strictEqual(rulebook.subjectAbsent(null, ''), false);
+  assert.ok(rulebook.reSpecFile.test('src/a.component.spec.ts') && rulebook.reSpecFile.test('src/a.test.js') && !rulebook.reSpecFile.test('src/spec.helper.ts'));
+});
+
+test('the shipped rulebook loads without a warning, and its subjects close what the files do not hold', () => {
+  const rules = rulebook.loadRulebook([path.join(__dirname, '..', 'instructions')]);
+  assert.deepStrictEqual(rules.warnings, []);
+  const a11y = rules.instructions.get('accessibility');
+  const wrapper = '<dpx-ui-edit-media-dialog [isLoading]="isLoading()" (editMedia)="onEdit($event)" />\n';
+  assert.strictEqual(rulebook.subjectAbsent(a11y.extras.get(1), wrapper), true, 'no image, icon, button or link');
+  assert.strictEqual(rulebook.subjectAbsent(a11y.extras.get(32), wrapper), false, 'a dialog wrapper keeps the dialog items');
+  assert.strictEqual(rulebook.subjectAbsent(a11y.extras.get(1), '<button type="button" (click)="x()"><mat-icon>add</mat-icon></button>'), false);
+  assert.strictEqual(rulebook.subjectAbsent(rules.instructions.get('component-template').extras.get(8), '{{ value$ | async }}'), false);
+  assert.ok((rules.instructions.get('code-quality').extras.get(1).handoff || []).includes('unit-tests#12'));
+  assert.strictEqual(rules.instructions.get('code-quality').extras.get(1).severityInSpec, 'medium');
+  assert.strictEqual(rulebook.matchKind(rules, 'src/app/x/tests/__snapshots__/x.component.spec.ts.snap').kind.name, 'jest-snapshot');
+  assert.strictEqual(rules.kinds.find((k) => k.name === 'i18n-source').readChanged, true);
 });

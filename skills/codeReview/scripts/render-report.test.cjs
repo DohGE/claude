@@ -146,7 +146,7 @@ const REPORT = [
 test('parseArgs requires a report and derives the html path', () => {
   assert.deepStrictEqual(
     rr.parseArgs(['--report=reports/a-b.md']),
-    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false, light: false },
+    { report: 'reports/a-b.md', out: 'reports/a-b.html', project: '', mode: '', base: '', branch: '', stack: '', keepSource: false, onlyMd: false, withChecklist: false, withRuleText: false, light: false },
   );
   assert.strictEqual(rr.parseArgs(['--report=a.md', '--light']).light, true);
   const withRuleText = rr.parseArgs(['--report=a.md', '--with-checklist']);
@@ -2069,4 +2069,41 @@ test('a diff call that answers nothing warns once instead of silently flattening
 test('reportNameOf names a report by its run stamp and branch folder', () => {
   const out = path.resolve('doh', 'codeReview', 'runs', '2026-07-08-10-00-05', 'feature-a', 'raport.html');
   assert.strictEqual(rr.reportNameOf(out), '2026-07-08-10-00-05/feature-a/raport.html');
+});
+
+test('a finding on lines a later part of a stack changes is marked with the stack\'s tip', () => {
+  const report = rr.parseReport([
+    '# Code Review: part-1 → master | 2026-10-30 15:20',
+    '',
+    '## src/a.ts',
+    '',
+    '🟡 **Medium**',
+    '- **Linia:** 4, 9',
+    '- **Problem:** Opis.',
+    '- **Reguła:** general#2',
+    '- **Expected Result:** Poprawka.',
+    '',
+    '⚪ **Low**',
+    '- **Linia:** 30',
+    '- **Problem:** Inny.',
+    '- **Reguła:** general#3',
+    '- **Expected Result:** Poprawka.',
+    '',
+    '## src/b.ts',
+    '',
+    '⚪ **Low**',
+    '- **Linia:** 2',
+    '- **Problem:** Plik usunięty dalej.',
+    '- **Reguła:** general#1',
+    '- **Expected Result:** Poprawka.',
+    '',
+  ].join('\n'));
+  const marked = rr.attachStack(report, { tip: 'part-5', later: ['part-2', 'part-5'], files: { 'src/a.ts': [[8, 10]], 'src/b.ts': [[1, null]] } });
+  assert.strictEqual(marked, 2);
+  assert.deepStrictEqual(report.files.flatMap((file) => file.findings.map((f) => f.stack || null)), ['part-5', null, 'part-5']);
+  const payload = rr.buildPayload(report, 'raport.html');
+  assert.strictEqual(payload.files[0].findings[0].stack, 'part-5');
+  assert.ok(!('stack' in payload.files[0].findings[1]));
+  assert.strictEqual(rr.attachStack(report, null), 0);
+  assert.strictEqual(rr.parseArgs(['--report=r.md', '--stack=r.stack.json']).stack, 'r.stack.json');
 });

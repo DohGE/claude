@@ -199,7 +199,10 @@ function git(project, args, { env, input } = {}) {
 // `root` puts the tree elsewhere - where the review searches it after the scan (scanTargets).
 function exportTree({ project, source, workDir, isSkipped = () => false, scope = null, root = path.join(workDir, 'tree') }) {
   fs.mkdirSync(root, { recursive: true });
-  const keep = (p) => p !== '' && !isSkipped(p) && !isSnapshot(p) && (!scope || scope.has(p));
+  // The repository root's own files (tsconfig.json, angular.json, package.json, eslint config)
+  // stay in a narrowed tree: a rule's project-wide setting is read there, and a walker that did not
+  // find it in the snapshot read it with `git show` from another revision (2026-11-02).
+  const keep = (p) => p !== '' && !isSkipped(p) && !isSnapshot(p) && (!scope || scope.has(p) || !p.includes('/'));
   if (source.workTree) {
     const listed = new Set(git(project, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split('\0').filter(keep));
     let count = 0;
@@ -284,9 +287,10 @@ function runJscpd(root, workDir, invocation = jscpdInvocation()) {
 }
 
 // How many scans run at once: jscpd is one thread, and a review of four branches scanned them
-// one after another - 4 x 36 s of a 213 s context build (2026-10-27).
+// one after another - 4 x 36 s of a 213 s context build (2026-10-27). Up to six, like the walker
+// lanes: a stack of five branches waited a second round of 36 s for its fifth scan (2026-11-02).
 function defaultScanParallel(count, cpus = os.cpus().length) {
-  return Math.max(1, Math.min(count, 4, Math.floor(cpus / 2) || 1));
+  return Math.max(1, Math.min(count, 6, Math.floor(cpus / 2) || 1));
 }
 
 // Several scans side by side: `entries` are `{ root, workDir }`, the result one `{ report }` or

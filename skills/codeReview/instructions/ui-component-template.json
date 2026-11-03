@@ -40,7 +40,8 @@
               "pattern": "@for\\s*\\(\\s*(?<item>[\\w$]+)\\s+of\\s+[^;)]+;\\s*track\\s+(?<at>\\$index|\\k<item>)\\s*[;)]",
               "message": "`@for` śledzi po `$index` albo po samym elemencie"
             }
-          ]
+          ],
+          "subject": "@for|ngfor"
         },
         {
           "id": "component-template#4",
@@ -49,22 +50,30 @@
             {
               "builtin": "for-without-empty"
             }
-          ]
+          ],
+          "subject": "@for|ngfor"
         },
         {
           "id": "component-template#5",
-          "text": "Every `@switch` covers its fallback with `@default`, including when the subject is an enum (a member added later must not render nothing)."
+          "text": "Every `@switch` covers its fallback with `@default`, including when the subject is an enum (a member added later must not render nothing).",
+          "subject": "@switch|ngswitch"
         },
         {
           "id": "component-template#7",
           "text": "Class and style bindings use `[class.x]` / `[style.x.px]` — never `ngClass`/`ngStyle`.",
-          "severity": "low"
+          "severity": "low",
+          "subject": "ngclass|ngstyle|\\[class|\\[style"
         },
         {
           "id": "component-template#8",
           "text": "No `async` pipe — observables are converted with `toSignal()` in the component and the template reads the signal.",
           "severity": "low",
           "sameAs": [
+            "best-practices#12"
+          ],
+          "subject": "async",
+          "companion": [
+            "feature-component#4",
             "best-practices#12"
           ]
         },
@@ -80,7 +89,8 @@
           "text": "A translation containing HTML markup is rendered with `[innerHTML]=\"'key' | translate\"`, not interpolation — and `[innerHTML]` is used for nothing else: never bound to user-/API-derived values or concatenated HTML (see the security instruction).",
           "sameAs": [
             "security#2"
-          ]
+          ],
+          "subject": "innerhtml|translate"
         },
         {
           "id": "component-template#11",
@@ -110,7 +120,8 @@
         {
           "id": "component-template#15",
           "text": "Repeated markup between branches is extracted to `ng-template` + `[ngTemplateOutlet]` instead of being duplicated in `@if/@else`.",
-          "severity": "medium"
+          "severity": "medium",
+          "subject": "@if|@else|@switch|ngif|ngswitch"
         },
         {
           "id": "component-template#16",
@@ -133,21 +144,25 @@
         },
         {
           "id": "component-template#18",
-          "text": "`[disabled]` is never bound on an element that also carries `formControl`/`formControlName`/`formGroupName` — Angular warns about it and the reactive control keeps its own disabled state, so the binding stops reflecting the expression after the first change and the field stays enabled (or stuck disabled) while the template claims otherwise; the lock comes from the class through `control.disable({ emitEvent: false })`/`enable(...)` (the lock-signal pattern of the component instruction). `[disabled]` on a plain button or a non-form input is untouched by this rule."
+          "text": "`[disabled]` is never bound on an element that also carries `formControl`/`formControlName`/`formGroupName` — Angular warns about it and the reactive control keeps its own disabled state, so the binding stops reflecting the expression after the first change and the field stays enabled (or stuck disabled) while the template claims otherwise; the lock comes from the class through `control.disable({ emitEvent: false })`/`enable(...)` (the lock-signal pattern of the component instruction). `[disabled]` on a plain button or a non-form input is untouched by this rule.",
+          "subject": "disabled"
         },
         {
           "id": "component-template#19",
           "text": "A component or directive element that projects no content is self-closing (`<app-user-card [user]=\"user()\" />`), not an empty tag pair.",
-          "severity": "low"
+          "severity": "low",
+          "subject": "<[a-z][\\w]*-[\\w-]*[\\s>/]"
         },
         {
           "id": "component-template#20",
           "text": "Loop metadata comes from the `@for` block itself — `$index`, `$count`, `$first`, `$last`, `$even`, `$odd` (aliased with `let idx = $index` where a nested block shadows them); a counter signal maintained next to the loop, or an index threaded down from the parent, is a finding.",
-          "severity": "low"
+          "severity": "low",
+          "subject": "@for|ngfor|index|count"
         },
         {
           "id": "component-template#21",
-          "text": "Every `<button>` declares an explicit `type` (`type=\"button\"` unless it submits) — a missing `type` inside a form submits it (whether the element should be a `<button>` at all, and its labeling, belong to the accessibility instruction)."
+          "text": "Every `<button>` declares an explicit `type` (`type=\"button\"` unless it submits) — a missing `type` inside a form submits it (whether the element should be a `<button>` at all, and its labeling, belong to the accessibility instruction).",
+          "subject": "<button\\b"
         }
       ]
     },
@@ -188,6 +203,9 @@
             "general#7",
             "pipes#5",
             "component-template#9"
+          ],
+          "facts": [
+            "i18n-missing-key"
           ]
         }
       ]
@@ -200,7 +218,7 @@
       "items": [
         {
           "id": "architecture#9",
-          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach. A function shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is no such element: it is never reported for not reusing, or not becoming, a shared util.",
           "severity": "medium",
           "sameAs": [
             "component-template#16"
@@ -258,11 +276,13 @@
           "text": "`[innerHTML]` is bound only to trusted i18n translation values (`'key' | translate`); never to user input, API responses, query params or string-concatenated/interpolated HTML.",
           "sameAs": [
             "component-template#10"
-          ]
+          ],
+          "subject": "innerhtml"
         },
         {
           "id": "security#6",
-          "text": "External links with `target=\"_blank\"` carry `rel=\"noopener noreferrer\"`."
+          "text": "External links with `target=\"_blank\"` carry `rel=\"noopener noreferrer\"`.",
+          "subject": "_blank|target=|window\\.open"
         },
         {
           "id": "security#12",
@@ -272,7 +292,8 @@
               "pattern": "\\.(?<at>querySelector(?:All)?)\\s*(?:<[^>]*>)?\\(\\s*(?!['\"][^'\"]*['\"]\\s*\\)|`[^`$]*`\\s*\\))",
               "message": "`querySelector` z argumentem budowanym w kodzie"
             }
-          ]
+          ],
+          "subject": "innerhtml|srcdoc|bypasssecurity|\\[src\\]|\\[href\\]|href=|url|selector|queryselector|template|eval\\(|new function|document\\.|window\\.|params|response|upload|file|input"
         }
       ]
     },
@@ -286,7 +307,12 @@
         {
           "id": "performance#1",
           "text": "Every value read by a template is a signal (`signal`/`computed`/`input`/facade signal) — a plain mutable class field bound in the template is a defect under OnPush/zoneless (the UI silently goes stale when the field changes).",
-          "secondQuestion": "Które pola klasy czyta szablon i czy każde z nich to sygnał, `computed()` albo `input()`?"
+          "secondQuestion": "Które pola klasy czyta szablon i czy każde z nich to sygnał, `computed()` albo `input()`?",
+          "handoff": [
+            "component-template#8",
+            "feature-component#4",
+            "best-practices#12"
+          ]
         },
         {
           "id": "performance#2",
@@ -294,23 +320,28 @@
         },
         {
           "id": "performance#11",
-          "text": "`@defer`: above-the-fold/LCP content is never deferred — deferring it buys a layout shift and a slower LCP, not a faster one."
+          "text": "`@defer`: above-the-fold/LCP content is never deferred — deferring it buys a layout shift and a slower LCP, not a faster one.",
+          "subject": "@defer"
         },
         {
           "id": "performance#12",
-          "text": "`@defer`: nested blocks use different triggers; identical triggers cascade into one simultaneous load and defeat the split."
+          "text": "`@defer`: nested blocks use different triggers; identical triggers cascade into one simultaneous load and defeat the split.",
+          "subject": "@defer"
         },
         {
           "id": "performance#13",
-          "text": "`@defer`: the deferred component is imported from its concrete file, never through a barrel `index.ts` — a barrel import keeps it in the main bundle and the block defers nothing."
+          "text": "`@defer`: the deferred component is imported from its concrete file, never through a barrel `index.ts` — a barrel import keeps it in the main bundle and the block defers nothing.",
+          "subject": "@defer"
         },
         {
           "id": "performance#14",
-          "text": "`@defer`: `viewport`/`interaction`/`hover` triggers declare a `@placeholder` with a single root element (the trigger needs exactly one element to observe)."
+          "text": "`@defer`: `viewport`/`interaction`/`hover` triggers declare a `@placeholder` with a single root element (the trigger needs exactly one element to observe).",
+          "subject": "@defer"
         },
         {
           "id": "performance#15",
-          "text": "Images: the LCP/hero image is marked `priority`; every `ngSrc` image declares `width` + `height` (or `fill` with a positioned parent) so it cannot shift layout."
+          "text": "Images: the LCP/hero image is marked `priority`; every `ngSrc` image declares `width` + `height` (or `fill` with a positioned parent) so it cannot shift layout.",
+          "subject": "<img|ngsrc|ngoptimizedimage|<picture"
         }
       ]
     },
@@ -330,11 +361,13 @@
       "items": [
         {
           "id": "accessibility#1",
-          "text": "Every non-text element carries a text alternative: `<img>` has `[alt]` (empty `alt=\"\"` only for decorative images, `aria-hidden=\"true\"` on decorative inline `<svg>`/icon), icon-only buttons and links get an `aria-label` resolved from an i18n key, and no alternative is a filename, a key path or the word \"image\"/\"icon\" (1.1.1)."
+          "text": "Every non-text element carries a text alternative: `<img>` has `[alt]` (empty `alt=\"\"` only for decorative images, `aria-hidden=\"true\"` on decorative inline `<svg>`/icon), icon-only buttons and links get an `aria-label` resolved from an i18n key, and no alternative is a filename, a key path or the word \"image\"/\"icon\" (1.1.1).",
+          "subject": "<img|<svg|<picture|<canvas|<video|<audio|<object|<embed|<area\\b|icon|button|<a\\b|routerlink|href|ngsrc|\\[src\\]|\\ssrc=|role=\"img\"|background-image|content:\\s*url"
         },
         {
           "id": "accessibility#2",
-          "text": "Structure comes from semantics, not from styling: headings are real `h1`–`h6` in order without skipped levels (one `h1` per view), lists are `ul`/`ol`/`li`, tabular data is a `table` with `th` + `scope`, grouped radios/checkboxes sit in `fieldset` + `legend` — a `div` styled to look like a heading, list or table is a defect (1.3.1, 2.4.6)."
+          "text": "Structure comes from semantics, not from styling: headings are real `h1`–`h6` in order without skipped levels (one `h1` per view), lists are `ul`/`ol`/`li`, tabular data is a `table` with `th` + `scope`, grouped radios/checkboxes sit in `fieldset` + `legend` — a `div` styled to look like a heading, list or table is a defect (1.3.1, 2.4.6).",
+          "subject": "<h[1-6]\\b|<ul\\b|<ol\\b|<li\\b|<dl\\b|<table|<th\\b|<tr\\b|<td\\b|<fieldset|<legend|<div\\b|<span\\b|<p\\b|<section|<article|<aside|role=|heading|\\blist\\b|table|font-size|font-weight"
         },
         {
           "id": "accessibility#3",
@@ -342,66 +375,81 @@
         },
         {
           "id": "accessibility#4",
-          "text": "Every form control is programmatically labeled — `<label for>`, `aria-label` or `aria-labelledby`; a `placeholder` is never the only label, the label is not visually hidden away from the control it names, and required/optional state is conveyed by text or `aria-required`, not by a red asterisk alone (1.3.1, 3.3.2)."
+          "text": "Every form control is programmatically labeled — `<label for>`, `aria-label` or `aria-labelledby`; a `placeholder` is never the only label, the label is not visually hidden away from the control it names, and required/optional state is conveyed by text or `aria-required`, not by a red asterisk alone (1.3.1, 3.3.2).",
+          "subject": "<input|<select|<textarea|formcontrol|ngmodel|<label|placeholder|contenteditable|input|select|checkbox|radio|toggle|slider|textarea|datepicker|autocomplete|combobox|searchbox|spinbutton|textbox|listbox|switch"
         },
         {
           "id": "accessibility#5",
-          "text": "Inputs collecting the user's own data declare the matching `autocomplete` token (`name`, `email`, `tel`, `street-address`, `postal-code`, `current-password`…) (1.3.5)."
+          "text": "Inputs collecting the user's own data declare the matching `autocomplete` token (`name`, `email`, `tel`, `street-address`, `postal-code`, `current-password`…) (1.3.5).",
+          "subject": "<input|autocomplete|formcontrol|ngmodel|input"
         },
         {
           "id": "accessibility#6",
-          "text": "Color is never the only carrier of meaning: error, required, selected, active and link states also differ by text, icon, underline, weight or shape (1.4.1)."
+          "text": "Color is never the only carrier of meaning: error, required, selected, active and link states also differ by text, icon, underline, weight or shape (1.4.1).",
+          "subject": "error|invalid|required|selected|active|success|warning|danger|disabled|checked|current|\\[class|ngclass|\\[style|color|background|border|outline|text-decoration|underline|font-weight|status|state"
         },
         {
           "id": "accessibility#7",
-          "text": "Contrast ratios of any color pair introduced or changed in the diff hold: ≥ 4.5:1 for text (≥ 3:1 for ≥ 24px, or ≥ 19px bold), ≥ 3:1 for UI component boundaries, icons, chart marks, focus indicators and state borders — a hard-coded hex/`rgb()` or a new theme token is checked against its background, not assumed (1.4.3, 1.4.11)."
+          "text": "Contrast ratios of any color pair introduced or changed in the diff hold: ≥ 4.5:1 for text (≥ 3:1 for ≥ 24px, or ≥ 19px bold), ≥ 3:1 for UI component boundaries, icons, chart marks, focus indicators and state borders — a hard-coded hex/`rgb()` or a new theme token is checked against its background, not assumed (1.4.3, 1.4.11).",
+          "subject": "#[0-9a-f]{3,8}\\b|rgba?\\(|hsla?\\(|color|background|border|fill|stroke|var\\(--|\\$[a-z][\\w-]*|theme|palette|opacity"
         },
         {
           "id": "accessibility#8",
-          "text": "Layout survives zoom and reflow: sizes in `rem`/relative units, no fixed `px` heights or `overflow: hidden` clipping translated text, content usable at 320 CSS px width (400% zoom) without two-dimensional scrolling and at 200% text zoom; the viewport meta never sets `user-scalable=no` or `maximum-scale=1`, and no layout breaks under increased line-height/letter/word spacing (1.4.4, 1.4.10, 1.4.12)."
+          "text": "Layout survives zoom and reflow: sizes in `rem`/relative units, no fixed `px` heights or `overflow: hidden` clipping translated text, content usable at 320 CSS px width (400% zoom) without two-dimensional scrolling and at 200% text zoom; the viewport meta never sets `user-scalable=no` or `maximum-scale=1`, and no layout breaks under increased line-height/letter/word spacing (1.4.4, 1.4.10, 1.4.12).",
+          "subject": "\\d+(?:\\.\\d+)?px|height|width|overflow|viewport|user-scalable|maximum-scale|style=|\\[style|position|line-height|letter-spacing|word-spacing|white-space|text-overflow|clamp|vh\\b|vw\\b"
         },
         {
           "id": "accessibility#10",
-          "text": "Tooltips, popovers and hover cards are dismissible with Escape, stay visible while the pointer moves onto them, and open on `focus` as well as `mouseenter` — a hover-only tooltip is a defect (1.4.13)."
+          "text": "Tooltips, popovers and hover cards are dismissible with Escape, stay visible while the pointer moves onto them, and open on `focus` as well as `mouseenter` — a hover-only tooltip is a defect (1.4.13).",
+          "subject": "tooltip|popover|hover|mouseenter|mouseover|mouseleave|overlay|hovercard|\\btitle=|\\[title\\]"
         },
         {
           "id": "accessibility#11",
           "text": "Every interactive element is reachable and operable by keyboard: interaction sits on native `<button type=\"…\">` / `<a href>`; a `(click)` on a `div`/`span`/icon is a finding unless the element also declares `role`, `tabindex=\"0\"` and Enter/Space handling, and every hover-only behavior has a focus equivalent (2.1.1).",
           "probe": {
             "builtin": "hover-without-focus"
-          }
+          },
+          "subject": "\\((?:click|dblclick|keydown|keyup|keypress|mouse\\w*|pointer\\w*|touch\\w*|focus|blur|tap|press)\\b|button|<a\\b|routerlink|href|tabindex|role=|hostlistener|addeventlistener|renderer|host\\s*:"
         },
         {
           "id": "accessibility#12",
-          "text": "`tabindex` is only `0` or `-1` — a positive value rewrites the focus order; DOM order matches visual order (no `order`, `row-reverse` or absolute positioning that reorders focusable content); a programmatic `.focus()` targets an element that can actually receive focus (a native control, or a container the diff also gives `tabindex=\"-1\"`) — moving focus to a plain `div` silently does nothing (1.3.2, 2.4.3)."
+          "text": "`tabindex` is only `0` or `-1` — a positive value rewrites the focus order; DOM order matches visual order (no `order`, `row-reverse` or absolute positioning that reorders focusable content); a programmatic `.focus()` targets an element that can actually receive focus (a native control, or a container the diff also gives `tabindex=\"-1\"`) — moving focus to a plain `div` silently does nothing (1.3.2, 2.4.3).",
+          "subject": "tabindex|\\.focus\\(|cdkfocus|autofocus|focus|\\border\\s*:|row-reverse|column-reverse|position:\\s*(?:absolute|fixed)|flex-direction|grid-(?:row|column|area)"
         },
         {
           "id": "accessibility#13",
-          "text": "Focus is visible: no `outline: none` / `outline: 0` without an equally visible `:focus-visible` replacement of at least 3:1 contrast against its surroundings (2.4.7, 1.4.11)."
+          "text": "Focus is visible: no `outline: none` / `outline: 0` without an equally visible `:focus-visible` replacement of at least 3:1 contrast against its surroundings (2.4.7, 1.4.11).",
+          "subject": "outline|:focus|focus-visible|focus-within"
         },
         {
           "id": "accessibility#15",
-          "text": "Opening an overlay (dialog, drawer, menu) moves focus into it and focus cycles inside it: nothing outside it is reachable while it is open, and no other construct traps focus (2.1.2, 2.4.3)."
+          "text": "Opening an overlay (dialog, drawer, menu) moves focus into it and focus cycles inside it: nothing outside it is reachable while it is open, and no other construct traps focus (2.1.2, 2.4.3).",
+          "subject": "dialog|drawer|menu|overlay|modal|sidenav|popover|popup|trapfocus|focustrap|bottom-?sheet|<dialog|panel|flyout|lightbox"
         },
         {
           "id": "accessibility#16",
-          "text": "Drag interactions (reorderable lists, sliders, drag-and-drop, swipe) have a single-pointer and keyboard alternative — buttons, arrow keys or a select; path-based or multipoint gestures (pinch, swipe) always have a simple-pointer equivalent, and actions fire on `pointerup`/`click`, never on `pointerdown`/`mousedown` (2.5.1, 2.5.2, 2.5.7)."
+          "text": "Drag interactions (reorderable lists, sliders, drag-and-drop, swipe) have a single-pointer and keyboard alternative — buttons, arrow keys or a select; path-based or multipoint gestures (pinch, swipe) always have a simple-pointer equivalent, and actions fire on `pointerup`/`click`, never on `pointerdown`/`mousedown` (2.5.1, 2.5.2, 2.5.7).",
+          "subject": "drag|drop|slider|swipe|pinch|pointerdown|mousedown|touchstart|sortable|reorder|type=\"range\"|gesture|hammer"
         },
         {
           "id": "accessibility#17",
-          "text": "Pointer targets are at least 24×24 CSS px, or spaced so that 24px circles centered on them do not overlap — an icon-only button, chip close or table row action sized below that is a finding (2.5.8)."
+          "text": "Pointer targets are at least 24×24 CSS px, or spaced so that 24px circles centered on them do not overlap — an icon-only button, chip close or table row action sized below that is a finding (2.5.8).",
+          "subject": "button|icon|chip|<a\\b|routerlink|href|\\(click\\)|checkbox|radio|toggle|tab\\b|link|\\d+(?:\\.\\d+)?px|width|height"
         },
         {
           "id": "accessibility#18",
-          "text": "The accessible name contains the visible label text: an `aria-label` that replaces the visible i18n text with different wording breaks voice control — extend the visible text, don't contradict it (2.5.3)."
+          "text": "The accessible name contains the visible label text: an `aria-label` that replaces the visible i18n text with different wording breaks voice control — extend the visible text, don't contradict it (2.5.3).",
+          "subject": "aria-label|aria-labelledby|arialabel"
         },
         {
           "id": "accessibility#20",
-          "text": "Moving, auto-updating and time-limited content can be controlled: carousels, tickers, auto-advancing steps and polling counters have pause/stop, time limits can be extended, nothing flashes more than three times per second, and non-essential animation respects `prefers-reduced-motion` (2.2.1, 2.2.2, 2.3.1)."
+          "text": "Moving, auto-updating and time-limited content can be controlled: carousels, tickers, auto-advancing steps and polling counters have pause/stop, time limits can be extended, nothing flashes more than three times per second, and non-essential animation respects `prefers-reduced-motion` (2.2.1, 2.2.2, 2.3.1).",
+          "subject": "carousel|ticker|interval|timer|setinterval|settimeout|poll|animation|animate|@keyframes|keyframes|autoplay|marquee|blink|countdown|transition|marquee|slide|autoadvance|refresh"
         },
         {
           "id": "accessibility#21",
-          "text": "Focus or input alone never changes context: focusing a field, selecting an option or typing must not navigate, submit, reopen a dialog or move focus — context changes come from an explicit activation (3.2.1, 3.2.2)."
+          "text": "Focus or input alone never changes context: focusing a field, selecting an option or typing must not navigate, submit, reopen a dialog or move focus — context changes come from an explicit activation (3.2.1, 3.2.2).",
+          "subject": "\\((?:focus|blur|input|change|keyup|keydown|keypress|selectionchange|valuechange|ngmodelchange|optionselected|selected|opened|closed)\\)|valuechanges|selectionchange|focus|onchange|oninput"
         },
         {
           "id": "accessibility#22",
@@ -412,56 +460,69 @@
         },
         {
           "id": "accessibility#23",
-          "text": "Validation errors are identified in text (never by red border or color alone), are programmatically tied to their control (`aria-describedby` + `aria-invalid`), suggest the correction when it is known, and a failed submit moves focus to the first invalid control or to the error summary (3.3.1, 3.3.3)."
+          "text": "Validation errors are identified in text (never by red border or color alone), are programmatically tied to their control (`aria-describedby` + `aria-invalid`), suggest the correction when it is known, and a failed submit moves focus to the first invalid control or to the error summary (3.3.1, 3.3.3).",
+          "subject": "error|invalid|validat|formcontrol|required|aria-invalid|aria-describedby|<form|ngmodel|submit"
         },
         {
           "id": "accessibility#24",
           "text": "Submissions that are legal, financial or destructive (delete, irreversible state change) are reversible, checked or confirmed before they commit (3.3.4).",
-          "secondQuestion": "Które akcje pliku są nieodwracalne, prawne albo finansowe (usunięcie, wysyłka, płatność) i jaki krok przeglądu, potwierdzenia lub cofnięcia ma każda?"
+          "secondQuestion": "Które akcje pliku są nieodwracalne, prawne albo finansowe (usunięcie, wysyłka, płatność) i jaki krok przeglądu, potwierdzenia lub cofnięcia ma każda?",
+          "subject": "delete|remove|destroy|submit|confirm|irreversible|purge|expire|erase|wipe|reset|cancel|payment|\\bpay|order|transfer|revoke|disable|format|overwrite|clear"
         },
         {
           "id": "accessibility#25",
-          "text": "Multi-step flows never ask for information the user already entered: wizard steps and re-authentication prefill or offer the earlier value instead of requiring it to be retyped (3.3.7)."
+          "text": "Multi-step flows never ask for information the user already entered: wizard steps and re-authentication prefill or offer the earlier value instead of requiring it to be retyped (3.3.7).",
+          "subject": "step|wizard|stepper|reauth|password|multi-?page|next|previous"
         },
         {
           "id": "accessibility#26",
-          "text": "Authentication never requires a cognitive function test without an alternative — no hand-transcribed codes, puzzles or memorization as the only path; password, OTP and email fields allow paste and autofill (`(paste)=\"$event.preventDefault()\"`, `autocomplete=\"off\"` or `off`-style blocking on credentials is a finding) (3.3.8)."
+          "text": "Authentication never requires a cognitive function test without an alternative — no hand-transcribed codes, puzzles or memorization as the only path; password, OTP and email fields allow paste and autofill (`(paste)=\"$event.preventDefault()\"`, `autocomplete=\"off\"` or `off`-style blocking on credentials is a finding) (3.3.8).",
+          "subject": "password|otp|login|logon|signin|sign-in|auth|credential|captcha|paste|autocomplete=\"off\"|totp|mfa|2fa|passcode|pin\\b"
         },
         {
           "id": "accessibility#27",
-          "text": "Custom widgets expose name, role and value: `role` matches actual behavior, required relations are present and bound to the driving signal rather than left static (`aria-expanded`, `aria-controls`, `aria-selected`, `aria-checked`, `aria-current`), ARIA attribute names and values are valid, focusable content is never inside `aria-hidden=\"true\"`, and `role=\"presentation\"`/`none` never lands on an interactive element — a native element is used wherever one exists instead of rebuilding it with ARIA (4.1.2)."
+          "text": "Custom widgets expose name, role and value: `role` matches actual behavior, required relations are present and bound to the driving signal rather than left static (`aria-expanded`, `aria-controls`, `aria-selected`, `aria-checked`, `aria-current`), ARIA attribute names and values are valid, focusable content is never inside `aria-hidden=\"true\"`, and `role=\"presentation\"`/`none` never lands on an interactive element — a native element is used wherever one exists instead of rebuilding it with ARIA (4.1.2).",
+          "subject": "role=|aria-|\\[attr\\.(?:aria|role)|attr\\.role|tabindex|contenteditable|setattribute"
         },
         {
           "id": "accessibility#28",
-          "text": "A control that must stay discoverable while unavailable (a submit button explaining why it is blocked) uses `aria-disabled=\"true\"` plus a no-op handler rather than the `disabled` attribute, which removes it from the tab order and from the explanation it needs (4.1.2, 3.3.1)."
+          "text": "A control that must stay discoverable while unavailable (a submit button explaining why it is blocked) uses `aria-disabled=\"true\"` plus a no-op handler rather than the `disabled` attribute, which removes it from the tab order and from the explanation it needs (4.1.2, 3.3.1).",
+          "subject": "disabled"
         },
         {
           "id": "accessibility#29",
-          "text": "Status messages reach assistive technology without stealing focus: save results, async failures, filter result counts and validation summaries render through the shared alert/snackbar component or into an `aria-live` region (`polite`, `assertive` only for errors) that already exists in the DOM before the message is inserted (4.1.3)."
+          "text": "Status messages reach assistive technology without stealing focus: save results, async failures, filter result counts and validation summaries render through the shared alert/snackbar component or into an `aria-live` region (`polite`, `assertive` only for errors) that already exists in the DOM before the message is inserted (4.1.3).",
+          "subject": "alert|snackbar|toast|aria-live|\\blive\\b|status|message|notif|error|success|warning|saved|loading|spinner|progress|result|count|empty|role=\"(?:status|alert|log)\""
         },
         {
           "id": "accessibility#30",
-          "text": "Media carries its alternatives: prerecorded video has captions and, where visuals convey information, an audio description; audio that plays automatically for more than 3 seconds can be paused or stopped (1.2.2, 1.2.5, 1.4.2)."
+          "text": "Media carries its alternatives: prerecorded video has captions and, where visuals convey information, an audio description; audio that plays automatically for more than 3 seconds can be paused or stopped (1.2.2, 1.2.5, 1.4.2).",
+          "subject": "<video|<audio|<track|autoplay|youtube|vimeo|<iframe|<embed|<object|\\.mp4|\\.webm|\\.mp3|\\.ogg|\\.wav|media-player|player"
         },
         {
           "id": "accessibility#31",
-          "text": "Link text says where the link goes: `Click here`/`Read more`/a bare URL is a finding — the visible text (or its `aria-label`) names the destination or the action, and a link opening a new tab or starting a download announces that in its accessible name (2.4.4)."
+          "text": "Link text says where the link goes: `Click here`/`Read more`/a bare URL is a finding — the visible text (or its `aria-label`) names the destination or the action, and a link opening a new tab or starting a download announces that in its accessible name (2.4.4).",
+          "subject": "<a\\b|routerlink|href|target=\"_blank\"|download|link"
         },
         {
           "id": "accessibility#32",
-          "text": "An overlay container declares `role=\"dialog\"` (`alertdialog` for an urgent confirmation) and `aria-modal=\"true\"` — written in the template or set by the overlay service that opens it (4.1.2)."
+          "text": "An overlay container declares `role=\"dialog\"` (`alertdialog` for an urgent confirmation) and `aria-modal=\"true\"` — written in the template or set by the overlay service that opens it (4.1.2).",
+          "subject": "dialog|modal|overlay|drawer|popover|bottom-?sheet|sidenav|menu|cdk-overlay|alertdialog|popup|panel|flyout|lightbox"
         },
         {
           "id": "accessibility#33",
-          "text": "An overlay has an accessible name: `aria-labelledby` pointing at its visible title, or an `aria-label` resolved from an i18n key (4.1.2)."
+          "text": "An overlay has an accessible name: `aria-labelledby` pointing at its visible title, or an `aria-label` resolved from an i18n key (4.1.2).",
+          "subject": "dialog|modal|overlay|drawer|popover|bottom-?sheet|sidenav|menu|cdk-overlay|alertdialog|popup|panel|flyout|lightbox"
         },
         {
           "id": "accessibility#34",
-          "text": "Escape closes an open overlay (2.1.2)."
+          "text": "Escape closes an open overlay (2.1.2).",
+          "subject": "dialog|modal|overlay|drawer|popover|bottom-?sheet|sidenav|menu|cdk-overlay|alertdialog|popup|panel|flyout|lightbox|tooltip"
         },
         {
           "id": "accessibility#35",
-          "text": "Closing an overlay returns focus to the element that opened it (2.4.3)."
+          "text": "Closing an overlay returns focus to the element that opened it (2.4.3).",
+          "subject": "dialog|modal|overlay|drawer|popover|bottom-?sheet|sidenav|menu|cdk-overlay|alertdialog|popup|panel|flyout|lightbox"
         }
       ]
     },
@@ -479,7 +540,7 @@
       "items": [
         {
           "id": "code-quality#1",
-          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies.",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies. A function or expression shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is not duplicated logic under this item, however often it repeats: it is never reported as code to extract into a reusable util (utils#9).",
           "facts": [
             "repeated-literal",
             "repeated-condition",
@@ -493,7 +554,11 @@
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
           "answer": "repo-search",
-          "severity": "high"
+          "severity": "high",
+          "handoff": [
+            "unit-tests#12"
+          ],
+          "severityInSpec": "medium"
         },
         {
           "id": "code-quality#8",

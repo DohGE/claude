@@ -22,6 +22,7 @@ That is the branch a reviewer most often wants finished off.
 | `/doh:fixPr feature/a --dry-run` | collect and report only — no worktree, no agent, no change anywhere |
 | `/doh:fixPr feature/a --no-push` | commit stays local; threads are then NOT resolved |
 | `/doh:fixPr feature/a --keep-worktree` | leave the worktrees in place for inspection |
+| `/doh:fixPr feature/a --local=da3d32cd,b4309764` | fix those findings of the branch's doh codeReview reports (the 8-hex id on a finding of the report page, newest run first) instead of the pull request's comments; everything else - worktree, gate, commit, rebase, push - as without it, and no thread is resolved |
 | `/doh:fixPr feature/a --project=<path>` | against the repository at `<path>` instead of the current directory |
 
 The branch list is split on `,` and `;`, exactly like `codeReview`. Git allows both characters inside a
@@ -173,6 +174,18 @@ reads only that file; the full log it may only Grep, for one test name the excer
 cause. It is the same discipline the skill applies to comment bodies.
 
 ## Order of work
+
+1. Read every unresolved thread to its last reply (replies carry the details the discussion settled),
+   the conversation and the review summaries - or, under `--local`, the picked codeReview findings.
+2. Fix them.
+3. Check every comment again against the final code, and Grep the uses of everything the fixes
+   changed, so nothing outside the comments breaks.
+4. Review the run's own change with `/doh:codeReview staged --project=<worktree> --only-md` and apply
+   the findings whose fix leaves behaviour as it is; the rest are named in the report.
+5. Bring the gate green.
+6. Commit, rebase onto `origin/<base>` (a conflict, or a gate the rebase turned red, leaves the commit
+   un-rebased), push - `--force-with-lease` pinned to the remote state the run started from when the
+   rebase rewrote the branch.
 
 Comments first, then the gate. There is no separate baseline run before the fixes: it would name
 exactly which failures pre-dated the run, at the price of a second full `build` on every branch, and

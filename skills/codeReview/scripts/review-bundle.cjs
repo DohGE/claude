@@ -20,8 +20,12 @@ const render = require('./render-report.cjs');
 // renamed, a binding is silently not enforced.
 const linePrefix = { strong: 'FAKT', hint: 'WSKAZÓWKA', probe: 'SONDA', second: 'drugie pytanie:', answer: 'odpowiedź skryptu:' };
 // What the plan says of an item beyond its text: the severity its finding carries, the item of
-// another instruction that states the same requirement, the verdict no review can do better than.
-const itemPrefix = { severity: 'ważność stała:', sameAs: 'ta sama wada:', prepared: 'gotowy werdykt:' };
+// another instruction that states the same requirement, the verdict no review can do better than,
+// what its OK cites, and the items its OK may name because it hands them part of its subject.
+const itemPrefix = { severity: 'ważność stała:', sameAs: 'ta sama wada:', prepared: 'gotowy werdykt:', evidence: 'dowód OK:', handoff: 'przekazuje:' };
+// FIXED IDENTIFIER: the evidence of the OK line the part check writes for an item the script closed
+// (rulebook.cjs subjectAbsent) - `brak wystąpień` for the check, the rest for the reader.
+const closedEvidence = 'brak wystąpień - zamknięte przez skrypt';
 const factsFileName = 'facts.json';
 const crossBundleName = 'cross-file.bundle.md';
 const notesFileName = 'rulebook-notes.md';
@@ -57,7 +61,7 @@ const windowLimits = { tokens: 130000, fileTokens: 14000, charsPerToken: 3, file
 // plan does not need it whole, and past `bundleChars` the sections a verdict needs least go
 // first, each replaced by a line saying so. The cross bundle gets the line cut only.
 const bundleCaps = { lineChars: 1500, bundleChars: 200000 };
-const optionalSections = ['## Fakty spoza planu (bez wymogu)', '## Użycia składowych', '## Eksporty tego pliku i ich konsumenci', '## Spec', '## Kandydaci duplikacji (jscpd)'];
+const optionalSections = ['## Fakty spoza planu (bez wymogu)', '## Użycia składowych', '## Eksporty tego pliku i ich konsumenci', '## Spec', '## Usunięte deklaracje i ich użycia', '## Kandydaci duplikacji (jscpd)'];
 // FIXED IDENTIFIERS. The two replies a window's walker ends with, which SKILL.md tells the main
 // conversation to read, and the file name of a window's brief.
 const windowReplies = { done: 'WINDOW DONE', stopped: 'WINDOW STOPPED' };
@@ -166,7 +170,58 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
     if (e.answer) out.answer = e.answer;
     if (Object.keys(out).length > 0) items[address] = out;
   }
-  return { items, info: unbound };
+  // The items whose subject the file does not hold (rulebook.cjs subjectAbsent), in plan order:
+  // the part check writes their `OK (brak wystąpień)` line, so the walker never reads them. An item
+  // the bundle points a line at, or asks a second question about, stays the walker's, and so does
+  // one with a prepared verdict, which the check writes in already.
+  const closed = [];
+  for (const { step, instruction } of steps) {
+    for (const n of step.numbers) {
+      const address = `${step.id}#${n}`;
+      const extra = instruction.extras.get(n);
+      if (!items[address] && !(extra && extra.unverified) && rulebook.subjectAbsent(extra, text)) closed.push(address);
+    }
+  }
+  return { items, info: unbound, ...(closed.length > 0 ? { closed } : {}) };
+}
+
+// A binding kept to the lines a walk reads (a data file read in ranges, readRangesOf): a fact or a
+// probe hit elsewhere in the file points at a line the walker never sees, and a verdict could only
+// guess at it - the base translation file's bundle listed every duplicate phrase of its 3,000
+// lines, 35 kB, for a diff of ten keys (2026-11-02). A fact keeps the lines inside the ranges, and
+// goes when none is left.
+// A narrowed fact's text keeps the parts naming its kept lines (`…: "A" - a (L56); "B" - b (L870)`
+// keeps `"B" - b (L870)`), or its first 300 characters.
+function narrowText(text, kept) {
+  const value = String(text);
+  const re = new RegExp(`(?<![\\w])L(?:${kept.join('|')})(?!\\d)`);
+  const colon = value.indexOf(': ');
+  const prefix = colon > 0 && colon < 160 ? value.slice(0, colon + 2) : '';
+  const parts = value.slice(prefix.length).split('; ').filter((part) => re.test(part));
+  if (parts.length > 0) return `${prefix}${parts.join('; ').replace(/\.?$/, '.')}`;
+  return value.length > 300 ? `${value.slice(0, 300)} …` : value;
+}
+
+function narrowBinding(bound, ranges) {
+  const within = (line) => ranges.some(([from, to]) => line >= from && line <= to);
+  const keepFacts = (facts) => (facts || []).map((fact) => {
+    const lines = fact.lines.filter(within);
+    return lines.length === fact.lines.length ? fact : { ...fact, lines, text: narrowText(fact.text, lines) };
+  }).filter((fact) => fact.lines.length > 0);
+  const items = {};
+  for (const [address, binding] of Object.entries(bound.items || {})) {
+    const out = {};
+    const strong = keepFacts(binding.strong);
+    const hints = keepFacts(binding.hints);
+    const probes = (binding.probes || []).filter((hit) => within(hit.line));
+    if (strong.length) out.strong = strong;
+    if (hints.length) out.hints = hints;
+    if (probes.length) out.probes = probes;
+    if (binding.secondQuestion) out.secondQuestion = binding.secondQuestion;
+    if (binding.answer) out.answer = binding.answer;
+    if (Object.keys(out).length > 0) items[address] = out;
+  }
+  return { ...bound, items, info: keepFacts(bound.info) };
 }
 
 // The lines one item's verdict owes, as the bundle prints them under the item.
@@ -204,12 +259,26 @@ function renderMembers(rows, root) {
   });
 }
 
-// repo-facts' specsByFile rows: the specs importing the file and their cases.
-function renderSpecs(specs, root) {
+// repo-facts' specsByFile rows: the specs importing the file and their cases. The file's own spec
+// (its name with `.spec`) is listed with its cases; so are the specs of a file that has none of its
+// own, up to `specCaps.casesOf` of them. Every other spec is a name: an enum imported by forty specs
+// listed 22 kB of their test titles in its bundle (2026-10-30), none of them about the enum.
+const specCaps = { cases: 25, casesOf: 2, names: 8 };
+function renderSpecs(specs, root, filePath = null) {
   if (specs.length === 0) return ['- żaden spec nie importuje tego pliku'];
-  return specs.map((s) => `- ${short(s.path, root)}: ${s.cases.length > 0
-    ? capped(s.cases.map((c) => `${c.kind} L${c.line} "${c.title}"`), 25)
+  const stem = filePath ? path.posix.basename(String(filePath)).replace(/\.[cm]?[jt]sx?$/i, '') : null;
+  const own = (s) => stem !== null && path.posix.basename(String(s.path)).replace(/\.(?:spec|test)\.[cm]?[jt]sx?$/i, '') === stem;
+  const mine = specs.filter(own);
+  const others = specs.filter((s) => !own(s));
+  const withCases = mine.length > 0 ? mine : others.length <= specCaps.casesOf ? others : [];
+  const out = withCases.map((s) => `- ${short(s.path, root)}: ${s.cases.length > 0
+    ? capped(s.cases.map((c) => `${c.kind} L${c.line} "${c.title}"`), specCaps.cases)
     : 'bez przypadków describe/it'}`);
+  const named = specs.filter((s) => !withCases.includes(s));
+  if (named.length > 0) {
+    out.push(`- ${mine.length > 0 ? 'inne spec' : 'spec'} importujące ten plik, bez przypadków (${named.length}): ${capped(named.map((s) => `${short(s.path, root)} (${s.cases.length})`), specCaps.names)}`);
+  }
+  return out;
 }
 
 function renderCandidates(candidates, withPath, numbered = false) {
@@ -220,16 +289,28 @@ function renderCandidates(candidates, withPath, numbered = false) {
   return candidates.map((c, k) => `- ${label(k)}${withPath ? `${c.path}:` : 'L'}${c.lines} powtarza ${c.sources.join('; ')}${rest(c)} (${c.kinds.join(', ')})`);
 }
 
+// The fixed severity of an item's findings in this file: `severityInSpec` in a spec file, else
+// its own `severity`, else null (the instruction's, printed under its heading, applies).
+function itemSeverity(extra, spec) {
+  if (!extra) return null;
+  return (spec && extra.severityInSpec) || extra.severity || null;
+}
+
 // What the plan says of one item beyond its text (rulebook extras): the severity its finding
 // carries when it differs from the instruction's, the partner items of this plan stating the
-// same requirement, and the verdict to copy when no review can reach a better one.
-function renderItemRules(instruction, address, extra, inPlan) {
+// same requirement, the verdict to copy when no review can reach a better one, what an OK cites,
+// and the items of this plan an OK may name because the item hands them part of its subject.
+function renderItemRules(instruction, address, extra, inPlan, spec = false) {
   if (!extra) return [];
   const out = [];
-  if (extra.severity && extra.severity !== instruction.severity) out.push(`  - ${itemPrefix.severity} ${severityText(extra.severity)}`);
+  const severity = itemSeverity(extra, spec);
+  if (severity && severity !== instruction.severity) out.push(`  - ${itemPrefix.severity} ${severityText(severity)}`);
   const partners = (extra.sameAs || []).filter((partner) => inPlan.has(partner));
   if (partners.length > 0) out.push(`  - ${itemPrefix.sameAs} ${partners.join(', ')}`);
   if (extra.unverified) out.push(`  - ${itemPrefix.prepared} [ ] ${address} — NIEZWERYFIKOWANE: ${extra.unverified}`);
+  if (extra.okEvidence) out.push(`  - ${itemPrefix.evidence} ${extra.okEvidence}`);
+  const handoff = (extra.handoff || []).filter((target) => inPlan.has(target));
+  if (handoff.length > 0) out.push(`  - ${itemPrefix.handoff} ${handoff.join(', ')} - OK tej pozycji może wskazać ten adres obok linii, gdy to, co widzisz, jest jego przedmiotem`);
   return out;
 }
 
@@ -248,11 +329,14 @@ function renderWriteRules({ file, kind, instructions, bound, lineCount }) {
     out.push(`- Pozycja z \`${linePrefix.strong}\`, \`${linePrefix.hint}\`, \`${linePrefix.probe}\` albo \`${linePrefix.second}\`: własna linia, dowód cytuje każdą wskazaną linię; ${linePrefix.strong} ustępuje tylko \`fakt nie dotyczy: <czemu>\`.`);
   }
   const perFile = steps.filter(({ instruction }) => instruction.findings === 'per-file').map(({ step }) => step.id);
-  if (perFile.length > 0) out.push(`- ${perFile.join(', ')}: jedno znalezisko na plik, pole Reguła wymienia każdą złamaną pozycję.`);
-  if (steps.some(({ instruction }) => instruction.severity) || extras.some((extra) => extra.severity)) {
+  if (perFile.length > 0) out.push(`- ${perFile.join(', ')}: jedno znalezisko na plik, pole Reguła wymienia każdą złamaną pozycję; OK spełnione w innym pliku może objąć zakres jej pozycji ścieżką tego pliku.`);
+  if (steps.some(({ instruction }) => instruction.severity) || extras.some((extra) => extra.severity || extra.severityInSpec)) {
     out.push('- Znalezisko pod pozycją z ważnością stałą ma tę ważność (przy kilku adresach najwyższą).');
   }
   if (extras.some((extra) => extra.unverified)) out.push('- Gotowy werdykt dopisuje hook, gdy linii brak; OK takiej pozycji jest odrzucane.');
+  if ((bound.closed || []).length > 0) {
+    out.push(`- Pozycje zamknięte przez skrypt dopisuje hook jako \`OK (${closedEvidence})\`: nie piszesz ich linii. Gdy mimo to widzisz w pliku ich przedmiot, daj pozycji własną linię z werdyktem - Twoja linia wygrywa.`);
+  }
   out.push('- Szkielet bloku niżej: adresy w kolejności planu, `…` to miejsce werdyktu; linię z zakresem rozbij, gdy któraś jej pozycja nie jest `OK (brak wystąpień)` ani `BRAMKA`.', '', ...renderSkeleton({ file, kind, instructions, bound }));
   return out;
 }
@@ -271,6 +355,7 @@ function pointedLinesOf(binding) {
 // check writes it in (check-part.cjs fillPart). `…` is where the verdict goes.
 function renderSkeleton({ file, kind, instructions, bound }) {
   const out = [];
+  const closed = new Set(bound.closed || []);
   for (const step of kind ? kind.plan : []) {
     const instruction = instructions.get(step.id);
     if (!instruction) continue;
@@ -282,7 +367,7 @@ function renderSkeleton({ file, kind, instructions, bound }) {
     for (const n of step.numbers) {
       const extra = instruction.extras.get(n) || {};
       const binding = bound.items[`${step.id}#${n}`];
-      if (extra.unverified) {
+      if (extra.unverified || closed.has(`${step.id}#${n}`)) {
         flush();
       } else if (binding) {
         flush();
@@ -314,7 +399,8 @@ function renderDuties({ kind, instructions, bound }) {
       if ((b.hints || []).length) what.push(`${linePrefix.hint} ${b.hints.map((f) => lineList(f.lines)).join(', ')}`);
       if ((b.probes || []).length) what.push(`${linePrefix.probe} ${b.probes.map((h) => `L${h.line}`).join(', ')}`);
       if (b.secondQuestion) what.push(linePrefix.second.replace(/:$/, ''));
-      if (extra.unverified) what.push(itemPrefix.prepared.replace(/:$/, ''));
+      // A prepared verdict owes nothing: the check writes it in.
+      if (extra.unverified && !what.length) continue;
       if ((extra.sameAs || []).length) what.push(itemPrefix.sameAs.replace(/:$/, ''));
       if (what.length) out.push(`- ${address}: ${what.join('; ')}`);
     }
@@ -337,7 +423,7 @@ function renderMechanical(file, { reason, map = {}, leftovers = { total: 0, hits
   const words = Object.entries(map).map(([from, to]) => `\`${from}\` → \`${to}\``).join(', ');
   const out = [
     `Cały diff tego pliku: ${reason === 'substitution' ? `podmiana słów ${words}` : mechanicalReasons[reason] || reason}.`,
-    `Sprawdź to w diffie. Zgadza się: tylko dwa pytania bramki zmian mechanicznych (references/walk.md, Step 3) i marker \`<!-- coverage: ${file.path} mechanical -->\` bez bloku checklisty. Diff zmienia zachowanie: checklista jak zwykle.`,
+    `Sprawdź to w diffie. Zgadza się: tylko dwa pytania bramki zmian mechanicznych (references/walk.md, Step 3) i marker \`<!-- coverage: ${file.path} mechanical -->\` bez bloku checklisty. Zmieniona linia, której ta sekcja nie wyjaśnia, to zachowanie: checklista jak zwykle.`,
   ];
   if (Object.keys(map).length > 0) {
     out.push('', leftovers.total > 0
@@ -348,17 +434,37 @@ function renderMechanical(file, { reason, map = {}, leftovers = { total: 0, hits
   return out;
 }
 
+// The names whose declaration this file's diff removed (mechanical.cjs removedDeclarations) and
+// where the reviewed revision still uses them - the first answer to "did the change break
+// something", which the walk otherwise searched for name by name.
+function renderRemoved(removed, root) {
+  return removed.map(({ name, total, hits }) => (total === 0
+    ? `- \`${name}\`: nigdzie - żadne użycie nie zostało`
+    : `- \`${name}\`: ${total} ${total === 1 ? 'miejsce' : 'miejsc(a)'} - ${capped(hits.map((h) => `${short(h.path, root)}:${h.line}`), 8)}${total > hits.length ? ' …' : ''}`));
+}
+
 function renderBundle({
   file, kind, instructions, bound = { items: {}, info: [] }, exports = [], members = [], specs = null, candidates = [], factRoot = '',
-  partial = false, lineCount = null, partPath = null, batch = null, next = null, mechanical = null, fullPath = null,
+  partial = false, lineCount = null, partPath = null, batch = null, next = null, mechanical = null, fullPath = null, removed = [],
 }) {
   const out = [`# ${file.path}`, ''];
   out.push(kind
     ? `- rodzaj: ${kind.name} - ${kind.role}`
     : '- rodzaj: brak - żaden rodzaj pliku nie opisuje tej ścieżki; recenzja tylko wobec CLAUDE.md i punktów uniwersalnych');
   const changed = file.status === 'A' ? 'cały plik' : file.status === 'D' ? 'brak (plik usunięty)' : (file.changedLines || 'brak');
-  out.push(`- status: ${file.status}${file.oldPath ? ` (dawniej ${file.oldPath})` : ''}; zmienione linie: ${changed}; pozycji planu: ${file.checklistTotal}`);
-  if (file.contentPath) out.push(`- treść: ${file.contentPath}`);
+  const closed = new Set(bound.closed || []);
+  const closedNote = closed.size > 0 ? ` (${closed.size} zamknął skrypt: przedmiotu brak w pliku)` : '';
+  out.push(`- status: ${file.status}${file.oldPath ? ` (dawniej ${file.oldPath})` : ''}; zmienione linie: ${changed}; pozycji planu: ${file.checklistTotal}${closedNote}`);
+  // What the walk needs of a rename, here rather than in every walker's system prompt.
+  if (/^R/.test(file.status || '') && file.oldPath) {
+    out.push(`- zmiana nazwy: nazwę i miejsce porównujesz parą \`${file.oldPath} → ${file.path}\`, nie diffem; diff pokazuje \`rename from\`/\`rename to\` i tylko naprawdę zmienione hunki - plik nie jest "cały nowy"${file.changedLines === '' ? '; zmienione linie puste: sama zmiana nazwy, nie usunięcie treści' : ''}`);
+  }
+  // The file's length beside its content: a line number past it is another file's (a refused
+  // part's most common cause, 2026-11-02).
+  if (file.contentPath) out.push(`- treść: ${file.contentPath}${lineCount ? ` (${lineCount} linii - numer większy to linia innego pliku albo diffu)` : ''}`);
+  if (file.contentPath && file.readRanges) {
+    out.push(`- odczyt treści: plik danych - tylko zakresy ${file.readRanges.map(([from, to]) => `L${from}-${to}`).join(', ')} (Read z offset i limit: ${rangeReads(file.readRanges)}); reszty pliku diff nie dotknął, a fakty skryptu ją obejmują`);
+  }
   if (file.diffPath) out.push(`- diff: ${file.diffPath}`);
   if (partPath) out.push(`- część: ${partPath}`);
   if (batch) out.push(`- partia: ${batch.join(', ')} - przejścia po kolei, części razem w jednej odpowiedzi`);
@@ -376,6 +482,7 @@ function renderBundle({
     }
     out.push('');
     if (exports.length > 0) out.push('## Eksporty tego pliku i ich konsumenci', '', ...renderExports(exports, factRoot), '');
+    if (removed.length > 0) out.push('## Usunięte deklaracje i ich użycia', '', ...renderRemoved(removed, factRoot), '');
     out.push('## Zapis części', '', `- Zmiana mechaniczna: jeden Write - znaleziska dwóch pytań bramki (o ile są) i marker \`<!-- coverage: ${file.path} mechanical -->\`, bez bloku checklisty.`, '');
     if (next) out.push('## Dalej', '', ...next, '');
     return `${out.join('\n').replace(/\n+$/, '')}\n`;
@@ -391,17 +498,26 @@ function renderBundle({
   out.push('', '## Plan', '');
   if (!kind || kind.plan.length === 0) out.push('Brak pozycji do przejścia.', '');
   const inPlan = new Set((kind ? kind.plan : []).flatMap((step) => step.numbers.map((n) => `${step.id}#${n}`)));
+  const spec = rulebook.reSpecFile.test(file.path);
   for (const step of kind ? kind.plan : []) {
     const instruction = instructions.get(step.id);
     if (!instruction) continue;
     out.push(`### ${instruction.name} (\`${step.id}:${rulebook.formatItemSpec(step.numbers)}\`)`);
     if (instruction.gate) out.push(`Bramka: ${instruction.gate}`);
     if (instruction.severity) out.push(`Ważność stała: ${severityText(instruction.severity)}`);
+    const shut = step.numbers.filter((n) => closed.has(`${step.id}#${n}`));
+    if (shut.length > 0) out.push(`- zamknięte przez skrypt (przedmiotu brak w pliku; linie dopisze hook): ${step.id}#${rulebook.formatItemSpec(shut).replace(/,/g, ',#')}`);
+    // A prepared verdict is the rulebook's answer for an item no reading of the code settles
+    // (unit-tests#24-25: test-first order, a green run): the check writes it in, so its text is
+    // nothing to walk - 45 of 174 files of one run had it as their only open items (2026-11-02).
+    const ready = step.numbers.filter((n) => !closed.has(`${step.id}#${n}`) && (instruction.extras.get(n) || {}).unverified);
+    if (ready.length > 0) out.push(`- ${itemPrefix.prepared.replace(/:$/, '')} (linie dopisze hook, nie przechodzisz): ${step.id}#${rulebook.formatItemSpec(ready).replace(/,/g, ',#')}`);
     for (const n of step.numbers) {
       const address = `${step.id}#${n}`;
+      if (closed.has(address) || ready.includes(n)) continue;
       out.push(`- ${address}: ${instruction.items.get(n)}`);
       out.push(...renderBinding(bound.items[address]));
-      out.push(...renderItemRules(instruction, address, instruction.extras.get(n), inPlan));
+      out.push(...renderItemRules(instruction, address, instruction.extras.get(n), inPlan, spec));
     }
     out.push('');
   }
@@ -409,7 +525,8 @@ function renderBundle({
   if (members.length > 0) {
     out.push('## Użycia składowych', '', 'Gdzie pada nazwa (całe słowo): ten plik, jego szablon, pliki importujące klasę i ich szablony.', ...renderMembers(members, factRoot), '');
   }
-  if (specs) out.push('## Spec', '', ...renderSpecs(specs, factRoot), '');
+  if (specs) out.push('## Spec', '', ...renderSpecs(specs, factRoot, file.path), '');
+  if (removed.length > 0) out.push('## Usunięte deklaracje i ich użycia', '', 'Nazwy, których deklarację usunął diff tego pliku, i gdzie przeglądana rewizja ich jeszcze używa (całe słowo):', ...renderRemoved(removed, factRoot), '');
   if (candidates.length > 0) out.push('## Kandydaci duplikacji (jscpd)', '', ...renderCandidates(candidates, false), '');
   if (bound.info.length > 0) {
     out.push('## Fakty spoza planu (bez wymogu)', '');
@@ -521,9 +638,83 @@ function cutWindows(batches, weights, share, limits) {
   return windows.map((window) => window.batches);
 }
 
-// Every Read a walk opens with: the bundle, the content and the diff of each file of a batch.
+// The parts of a data file a walk reads (a kind's `readChanged`, e.g. the base translation file):
+// every changed line with `margin` lines around it, merged - or null when that is most of the file
+// anyway. A 3,000-line `en.json` was a window of its own, read whole for the ten keys a diff
+// added (2026-10-30); the facts of the script cover the rest of it (duplicate values, unused keys).
+const readMargin = 6;
+function readRangesOf(changedLines, lineCount, margin = readMargin) {
+  const spans = [];
+  for (const piece of String(changedLines || '').split(',')) {
+    const m = piece.trim().match(/^(\d+)(?:-(\d+))?$/);
+    if (!m) continue;
+    spans.push([Math.max(1, Number(m[1]) - margin), Math.min(lineCount || Infinity, Number(m[2] || m[1]) + margin)]);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last && span[0] <= last[1] + 1) last[1] = Math.max(last[1], span[1]);
+    else merged.push([...span]);
+  }
+  const read = merged.reduce((sum, [from, to]) => sum + to - from + 1, 0);
+  return merged.length > 0 && lineCount && read <= lineCount / 2 ? merged : null;
+}
+
+// The text those ranges hold: what the window planning weighs instead of the whole file.
+function textOfRanges(text, ranges) {
+  const lines = String(text).split('\n');
+  return ranges.map(([from, to]) => lines.slice(from - 1, to).join('\n')).join('\n');
+}
+
+// A range open at its end (`to` null) reads to the file's end.
+const rangeReads = (ranges) => ranges.map(([from, to]) => (to === null || to === undefined ? `offset ${from}` : `offset ${from}, limit ${to - from + 1}`)).join('; ');
+
+// A Read returns at most 25,000 tokens and refuses the whole file past that - a refusal that costs
+// a turn: four cross-file passes of one run began that way (2026-11-02, 33-42k tokens). Bundles of
+// 60 kB were still read whole, so 45 kB a page (a line counted as the Read shows it: its number,
+// and at most 2,000 characters) leaves room for what is appended after the pages were cut. Past
+// 2,000 lines a Read stops on its own, so a page is shorter than that too.
+const pageLimits = { chars: 45000, lines: 1800 };
+// The pages a long text is read in, as `[from, to]` line ranges (the last one `[from, null]`, to
+// the end), or null when one Read takes it whole.
+function pagesOf(text, limits = pageLimits) {
+  if (typeof text !== 'string') return null;
+  const lines = text.split('\n');
+  if (text.endsWith('\n')) lines.pop();
+  const cost = (line) => Math.min(line.length, 2000) + 8;
+  let total = 0;
+  for (const line of lines) total += cost(line);
+  if (total <= limits.chars && lines.length <= limits.lines) return null;
+  const pages = [];
+  let from = 1;
+  let chars = 0;
+  lines.forEach((line, i) => {
+    const number = i + 1;
+    if (number > from && (chars + cost(line) > limits.chars || number - from >= limits.lines)) {
+      pages.push([from, number - 1]);
+      from = number;
+      chars = 0;
+    }
+    chars += cost(line);
+  });
+  pages.push([from, null]);
+  return pages;
+}
+
+// A path with the Reads that take it whole: `<path> (Read: offset 1, limit 900; offset 901)`.
+const pagedRead = (file, pages) => (pages && pages.length > 1 ? `${file} (Read: ${rangeReads(pages)})` : file);
+
+// Every Read a walk opens with: the bundle, the content and the diff of each file of a batch. A
+// data file read in ranges names them: one Read per range, with its offset and limit.
+// A file past one Read's limit (`bundlePages`, `contentPages`, `diffPages` - pagesOf) is read in
+// pages, each its own Read of the same message.
 function readsOf(files) {
-  return files.flatMap((file) => [file.bundlePath, file.contentPath, file.diffPath].filter(Boolean));
+  return files.flatMap((file) => [
+    file.bundlePath && pagedRead(file.bundlePath, file.bundlePages),
+    file.contentPath && file.readRanges ? `${file.contentPath} (Read: ${rangeReads(file.readRanges)})` : file.contentPath && pagedRead(file.contentPath, file.contentPages),
+    file.diffPath && pagedRead(file.diffPath, file.diffPages),
+  ].filter(Boolean));
 }
 
 // The `## Dalej` lines of a batch's last bundle: the next batch's Reads, which ride with this
@@ -535,7 +726,7 @@ function renderNext({ nextFiles = [], crossBundlePath, crossPartPath, crossBrief
     ? ['Z zapisem części tej partii, w tej samej odpowiedzi, przeczytaj (Read) następną:', ...readsOf(nextFiles).map((p) => `- ${p}`)]
     : [
       ...(crossBriefPath
-        ? [`Ostatni plik celu. Przejście międzyplikowe robi świeży agent: z zapisem części wyślij \`doh:codereview-walker\` z promptem \`Read ${crossBriefPath} and follow it.\` i czekaj na \`${crossReplies.done}\`. Bez narzędzia Agent przeczytaj (Read) z zapisem części:`]
+        ? [`Ostatni plik celu. Przejście międzyplikowe robi świeży agent: z zapisem części wyślij \`doh:codereview-cross\` z promptem \`Read ${crossBriefPath} and follow it.\` i czekaj na \`${crossReplies.done}\`. Bez narzędzia Agent przeczytaj (Read) z zapisem części:`]
         : ['Ostatni plik celu. Z zapisem części przeczytaj (Read) przejście międzyplikowe:']),
       `- ${crossBundlePath}`,
       `- ${skillDir}/references/cross-file.md`,
@@ -543,11 +734,12 @@ function renderNext({ nextFiles = [], crossBundlePath, crossPartPath, crossBrief
     ];
   if (!window) return own;
   const range = window.first === window.last ? `${window.first}` : `${window.first}-${window.last}`;
+  // What a walker of the window does is the brief's own last point; the rest is for a conversation
+  // that walks the target itself (a window that failed), so it stays one line of Reads.
   return [
-    `Koniec okna (${range}):`,
-    `- walker okna: zapisz części tej partii, niczego więcej nie czytaj i odpowiedz jedną linią \`${windowReplies.done} ${range}\`;`,
-    '- bez okien (całość prowadzisz sam):',
-    ...own.map((line) => `  ${line}`),
+    `Koniec okna (${range}): walker okna zapisuje części tej partii i odpowiada jedną linią \`${windowReplies.done} ${range}\`, niczego więcej nie czytając.`,
+    `Rozmowa, która przechodzi cel sama: ${own[0]}`,
+    ...own.slice(1),
   ];
 }
 
@@ -591,14 +783,41 @@ function renderWindowBrief({ index, total, target, batches }) {
 // What the cross-file pass's own agent reads first (SKILL.md Step 3, Windows): a fresh
 // conversation, so the pass is not the tail of a walk that is already deep in its context, and
 // a part the check refuses until every question and candidate has its verdict.
-function renderCrossBrief({ target, crossBundlePath, crossPartPath, closingPartPath = null }) {
+function renderCrossBrief({ target, crossBundlePath, crossPartPath, closingPartPath = null, crossPages = null }) {
   const out = ['# Cross-file pass', ''];
   out.push('You make the cross-file pass of this target, and nothing else: every file part is on disk.');
-  out.push(`1. Read in ONE message: ${crossBundlePath} and ${skillDir}/references/cross-file.md (\`<SKILL_DIR>\` is ${skillDir}). The verdict forms are those of your system prompt; a conversation without them Reads ${walkRulesPath} with them.`);
+  const read = crossPages && crossPages.length > 1
+    ? `Read ${crossBundlePath} in ${crossPages.length} pages, one Read each, all in ONE message (${rangeReads(crossPages)}) - whole, it is past one Read's limit`
+    : `Read ${crossBundlePath}`;
+  out.push(`1. ${read}. The rules of the pass are in your system prompt, the \`doh:codereview-cross\` definition (\`<SKILL_DIR>\` in them is ${skillDir}); an agent started without them Reads ${skillDir}/references/cross-file.md and ${walkRulesPath} in the same message.`);
   out.push(`2. Follow the reference: one round of lookups, an explicit verdict for each of its five questions and each jscpd candidate in the part's \`${questionsOpen}\` block, then the part ${crossPartPath} in one Write${closingPartPath ? `, and ${closingPartPath} when the target found nothing` : ''}.`);
   out.push(`3. The assembly is not yours: once the part is written, reply with exactly one line, \`${crossReplies.done}\`, and nothing else.`);
   out.push(`4. If you cannot go on - the Write is still refused after two fixes, a file you need is missing - reply with the one line \`${crossReplies.stopped}: <reason>\`. Never write a part through the shell.`, '');
   out.push('The `target.*` keys the reference names, for this target (a key missing here is false):', '', '```json', JSON.stringify(target, null, 2), '```');
+  return `${out.join('\n')}\n`;
+}
+
+// FIXED IDENTIFIERS: the brief of the agent that closes a target's open items before its cross-file
+// pass (check-part.cjs `--gaps`), and its replies.
+const gapsBriefName = 'gaps.brief.md';
+const gapsReplies = { none: 'GAPS NONE', done: 'GAPS DONE', stopped: 'GAPS STOPPED' };
+
+// What that agent reads first: one script lists the items the file parts left open for a file
+// outside the review that the reviewed revision holds; the agent reads those files and gives the
+// items a verdict, Edit by Edit, each checked by the hook as any part is.
+function renderGapsBrief({ target }) {
+  const command = `node "${skillDir}/scripts/check-part.cjs" --report="${target.reportPath}" --gaps`;
+  const out = ['# Open items outside the review', ''];
+  out.push('You close the checklist items the file parts of this target left open for a file outside the review, and nothing else. Every file part is on disk; the cross-file pass follows you.');
+  out.push(`1. Run (Bash): \`${command}\`. When it prints \`${gapsReplies.none}\`, reply with exactly one line, \`${gapsReplies.done}\`, and stop.`);
+  out.push('2. Otherwise, for each part it lists, Read in ONE message: the part, the file\'s bundle (`paczka:` - the text of each item stands under its address), the file\'s content (`treść:`) and every outside file it names (`czytaj`).');
+  out.push('3. Give each listed item the verdict the outside file now settles, replacing its `[ ] … — NIEZWERYFIKOWANE: poza recenzją: …` line in the part with ONE Edit per part:');
+  out.push('   - the outside file meets the item for this file: `[x] <address> — OK (<repository path of the outside file>)`, one line per item;');
+  out.push('   - this file\'s changed lines break it: `[x] <address> <2-6 word label> — NARUSZENIE (<lines>)` and a finding in the part\'s format (references/walk.md Step 4) above its checklist block, its `**Reguła:**` naming the address;');
+  out.push('   - the outside file does not settle it: leave the line as it is.');
+  out.push('   A line holding several addresses is split into one line per item. Change nothing else of a part: the hook checks every Edit, and a refused Edit names the line to fix.');
+  out.push(`4. Reply with exactly one line, \`${gapsReplies.done}\`; if you cannot go on, \`${gapsReplies.stopped}: <reason>\`.`, '');
+  out.push('The `target.*` keys the walk rules name, for this target:', '', '```json', JSON.stringify(target, null, 2), '```');
   return `${out.join('\n')}\n`;
 }
 
@@ -653,8 +872,7 @@ function renderCrossBundle({
   if (candidates === null) out.push('- skan się nie odbył (powód w ostrzeżeniach kontekstu)');
   else if (candidates.length === 0) out.push('- brak');
   else out.push(...renderCandidates(candidates, true, true));
-  out.push('', reportedStart, ...renderReported(null), reportedEnd, '');
-  out.push('## Zapis części', '');
+  out.push('', '## Zapis części', '');
   out.push(`- Jeden Write: znaleziska przejścia, blok \`${questionsOpen}\` (zawsze) i blok \`<!-- unverified:\`, gdy lista "Otwarte w 3+ plikach" nie jest pusta; bez bloku checklisty i markera coverage.`);
   const count = (candidates || []).length;
   out.push(`- Blok questions: po jednej linii ${questionIds.question}#1-#${crossQuestions}${count ? ` i ${questionIds.candidate}#1-#${count} (każdy kandydat)` : ''} - OK z tym, co sprawdziłeś (kandydat: z powodem odrzucenia), NARUSZENIE z \`ścieżka:linie\` znaleziska tej części albo \`partNN\` części pliku, która je zgłasza, NIEZWERYFIKOWANE z powodem. Pusta część bez bloku jest odrzucana.`);
@@ -676,7 +894,25 @@ function renderCrossBundle({
     '    -->');
   out.push('', '    <!-- unverified:', '    [x] <adres> <etykieta> — NARUSZENIE (<ścieżka>:<linie>)', '    [x] <adres> <etykieta> — OK (<ścieżka>)',
     '    [ ] <adres> <etykieta> — NIEZWERYFIKOWANE: <narzędzie: | poza recenzją: | działająca aplikacja:> <czego zabrakło>', '    -->');
+  // The live section last: the hook rewrites it before every Read, and the pages cut before it
+  // (crossPagesOf) stay where they are whatever it grows to.
+  out.push('', reportedStart, ...renderReported(null), reportedEnd);
   return `${fitBundle(out.join('\n'), { keepWhole: '## Pozycje, pod którymi przejście raportuje', dropOptional: false })}\n`;
+}
+
+// The cross bundle's pages: its fixed text cut like any long file, and the live section, which
+// grows with every part on disk, a page of its own from its marker to the end. Null when the fixed
+// text leaves the live section room enough in one Read.
+function crossPagesOf(text, limits = pageLimits) {
+  const lines = String(text).split('\n');
+  const live = lines.indexOf(reportedStart);
+  if (live < 0) return pagesOf(text, limits);
+  const fixed = lines.slice(0, live).join('\n');
+  if (!pagesOf(fixed, { ...limits, chars: Math.floor(limits.chars * 0.6) })) return null;
+  const pages = pagesOf(fixed, limits) || [[1, null]];
+  pages[pages.length - 1][1] = live;
+  pages.push([live + 1, null]);
+  return pages;
 }
 
 // The live section of the cross bundle. `state` is null before any part is read, or
@@ -707,12 +943,15 @@ function withReported(text, state) {
 // instruction id or item address, the addresses stating one requirement, the prepared verdicts,
 // the addresses saying a file has no spec.
 function rulesOf(instructions) {
-  const out = { severity: {}, sameAs: {}, prepared: {}, noSpec: [] };
+  const out = { severity: {}, sameAs: {}, prepared: {}, noSpec: [], handoff: {}, companion: {}, severityInSpec: {} };
   for (const [id, instruction] of instructions) {
     if (instruction.severity) out.severity[id] = instruction.severity;
     for (const [n, extra] of instruction.extras) {
       if (extra.severity) out.severity[`${id}#${n}`] = extra.severity;
+      if (extra.severityInSpec) out.severityInSpec[`${id}#${n}`] = extra.severityInSpec;
       if (extra.sameAs && extra.sameAs.length > 0) out.sameAs[`${id}#${n}`] = extra.sameAs;
+      if (extra.handoff && extra.handoff.length > 0) out.handoff[`${id}#${n}`] = extra.handoff;
+      if (extra.companion && extra.companion.length > 0) out.companion[`${id}#${n}`] = extra.companion;
       if (extra.unverified) out.prepared[`${id}#${n}`] = extra.unverified;
       if (extra.noSpec) out.noSpec.push(`${id}#${n}`);
     }
@@ -740,10 +979,11 @@ function factsDocument({ files, factRoot = '', partial = false, rules = null }) 
 }
 
 module.exports = {
-  linePrefix, itemPrefix, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
+  linePrefix, itemPrefix, closedEvidence, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
   reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, windowReplies, windowBriefName, skillDir,
   crossBriefName, crossReplies, questionsOpen, questionIds, crossQuestions, walkRulesPath, bundleCaps,
   bindFile, renderBinding, renderBundle, renderCrossBundle, renderCrossBrief, renderRulebookNotes, factsDocument, fitBundle, renderSkeleton,
-  planBatches, planWindows, walkTokens, readsOf, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
+  pageLimits, pagesOf, pagedRead, crossPagesOf, gapsBriefName, gapsReplies, renderGapsBrief,
+  planBatches, planWindows, walkTokens, readsOf, readRangesOf, textOfRanges, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
   mechanicalLimits, mechanicalClass, limitsOfClass, renderMechanical,
 };

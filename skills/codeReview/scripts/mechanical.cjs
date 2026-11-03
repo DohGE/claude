@@ -127,4 +127,51 @@ function leftovers(map, texts, limit = leftoverLimit) {
   return { total, hits };
 }
 
-module.exports = { minWordLength, leftoverLimit, substitutionMap, applyMap, isImportLine, classify, diffLines, leftovers };
+// A top-level declaration a line makes, at its first column: `export const x`, `class X`,
+// `export interface X`, `type X =`, `enum X`, `function x` - a local variable of a spec is no name
+// other files use.
+const reDeclaration = /^(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:abstract\s+)?(?:const|let|var|function\*?|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
+// Shorter names are too common to search for.
+const minNameLength = 4;
+
+// The names whose declaration a target's diff removed and declared nowhere again, each with the
+// files whose diff removed it: `patchOf(path)` is a file's own patch.
+function removedDeclarations(files, patchOf) {
+  const removed = new Map();
+  const declared = new Set();
+  for (const file of files) {
+    const { removed: gone, added } = diffLines(patchOf(file.path));
+    for (const line of added) for (const m of line.matchAll(reDeclaration)) declared.add(m[1]);
+    for (const line of gone) {
+      if (/^\s*(?:\/\/|\*|\/\*)/.test(line)) continue;
+      for (const m of line.matchAll(reDeclaration)) {
+        if (m[1].length < minNameLength) continue;
+        if (!removed.has(m[1])) removed.set(m[1], []);
+        if (!removed.get(m[1]).includes(file.path)) removed.get(m[1]).push(file.path);
+      }
+    }
+  }
+  for (const name of declared) removed.delete(name);
+  return removed;
+}
+
+// Where `names` still stand, whole words, in `texts` (path -> text): per name its count and the
+// first places.
+function usesLeft(names, texts, limit = leftoverLimit) {
+  const out = new Map(names.map((name) => [name, { total: 0, hits: [] }]));
+  if (names.length === 0) return out;
+  const pattern = new RegExp(`(?<![\\w$])(${names.map(escape).join('|')})(?![\\w$])`, 'g');
+  for (const [file, text] of texts) {
+    if (typeof text !== 'string') continue;
+    text.split(/\r?\n/).forEach((line, i) => {
+      for (const m of line.matchAll(pattern)) {
+        const entry = out.get(m[1]);
+        entry.total++;
+        if (entry.hits.length < limit) entry.hits.push({ path: file, line: i + 1 });
+      }
+    });
+  }
+  return out;
+}
+
+module.exports = { minWordLength, leftoverLimit, substitutionMap, applyMap, isImportLine, classify, diffLines, leftovers, removedDeclarations, usesLeft };

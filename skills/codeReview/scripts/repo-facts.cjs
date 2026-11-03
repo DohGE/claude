@@ -30,9 +30,12 @@ const factKinds = [
   'spec-zone-based', 'stub-under-multiple-tokens', 'enum-variant-untested', 'snapshot-field-drift',
   'projector-inputs', 'projector-argument-order', 'action-unconsumed', 'template-symbol-not-imported',
   'barrel-bypass', 'dto-casing-mixed', 'component-injects-data-access', 'state-key-literal', 'input-binding-missing',
+  // Written by review-context.cjs, which knows the target's diff: a snapshot changed while neither
+  // its spec nor the code the spec renders changed in the same target.
+  'snapshot-without-change',
 ];
 // Kinds that only point at a line: another reading of the code is as likely as the defect.
-const hintKinds = new Set(['export-single-importer', 'pipe-single-template', 'snapshot-missing', 'projector-inputs']);
+const hintKinds = new Set(['export-single-importer', 'pipe-single-template', 'snapshot-missing', 'projector-inputs', 'snapshot-without-change']);
 // FIXED IDENTIFIERS as well: a probe's `builtin` names one of these.
 const builtinProbes = ['for-without-empty', 'signal-reads-without-let', 'markup-repeat', 'area-root-file', 'hover-without-focus', 'action-label-mismatch'];
 // And an item's `answer` names one of these: a second question the script answers from
@@ -48,6 +51,8 @@ const reDeclaration = /\.d\.ts$/;
 const rePipeFile = /\.pipe\.[cm]?[jt]s$/;
 const reKeyShaped = /^[A-Za-z][\w-]*(?:\.[\w-]+)+$/;
 const reLocaleDir = /(?:^|\/)(?:i18n|locales?|translations?|lang)\//;
+// A dotted literal naming a file, never a translation key.
+const reFileLike = /\.(?:[cm]?[jt]sx?|json|html?|s?css|less|svg|png|jpe?g|gif|ico|md|txt|ya?ml)$/i;
 // Files nothing imports by design: the bundler, the test runner or the server starts them.
 const reEntryFile = /(?:^|\/)(?:main|main\.server|server|app\.config\.server|app\.routes\.server|polyfills|test|setup-jest|test-setup|jest\.config|karma\.conf|playwright\.config|cypress\.config)\.[cm]?[jt]s$/;
 const resolveExtensions = ['', '.ts', '.tsx', '.d.ts', '.js', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js'];
@@ -812,6 +817,14 @@ function i18nFacts(index, add, cross, { list: locales, base }) {
   const reHtmlKey = /(['"])([A-Za-z][\w-]*(?:\.[\w-]+)+)\1\s*\|\s*translate\b|\btranslate\s*=\s*"([A-Za-z][\w-]*(?:\.[\w-]+)+)"|\[translate\]\s*=\s*"'([A-Za-z][\w-]*(?:\.[\w-]+)+)'"/g;
   const reScriptKey = /\.(?:instant|get|stream|selectTranslate)\s*\(\s*(['"`])([A-Za-z][\w-]*(?:\.[\w-]+)+)\1|\b(?:translate|marker|_)\s*\(\s*(['"`])([A-Za-z][\w-]*(?:\.[\w-]+)+)\3/g;
   const rePrefix = /(['"`])((?:[A-Za-z][\w-]*\.)+)\1\s*\+|`((?:[A-Za-z][\w-]*\.)+)\$\{/g;
+  // A key handed to something other than a translate call - an alert service, a dialog config -
+  // is a string literal of three segments or more whose parent is an object of the base file. Such
+  // a literal the base file lacks is a key no translation will find: the part-1 High of a stacked
+  // run (2026-10-30) was an alert's key renamed in en.json and not in the effect that shows it.
+  // A hint: the literal may still be something else.
+  const reKeyShape = /^[A-Za-z][\w-]*(?:\.[\w-]+){2,}$/;
+  const objectKeys = new Set(parsed.get(base).objects.map((o) => o.key));
+  const literalKeys = [];
   const sources = [...index.sourceScripts, ...index.templates];
   for (const p of sources) {
     const scan = index.scans.get(p);
@@ -822,6 +835,11 @@ function i18nFacts(index, add, cross, { list: locales, base }) {
     } else {
       for (const m of scan.code.matchAll(reScriptKey)) requested.push({ path: p, key: m[2] || m[4], line: at(m.index) });
       for (const s of scan.strings) if (!s.interpolated) literals.add(s.value);
+      for (const s of scan.strings) {
+        if (s.interpolated || !reKeyShape.test(s.value) || baseKeys.has(s.value) || reFileLike.test(s.value)) continue;
+        if (!objectKeys.has(s.value.slice(0, s.value.lastIndexOf('.')))) continue;
+        literalKeys.push({ path: p, key: s.value, line: at(s.start) });
+      }
       // An inline template's keys count like a template file's.
       for (const s of scan.strings) {
         for (const m of s.value.matchAll(reHtmlKey)) requested.push({ path: p, key: m[2] || m[3] || m[4], line: at(s.start) });
@@ -830,10 +848,16 @@ function i18nFacts(index, add, cross, { list: locales, base }) {
     }
     for (const m of scan.code.matchAll(rePrefix)) prefixes.add(m[2] || m[3]);
   }
-  const missing = requested.filter((r) => !baseKeys.has(r.key));
+  const asked = requested.filter((r) => !baseKeys.has(r.key));
+  const said = new Set(asked.map((r) => `${r.path}\n${r.key}\n${r.line}`));
+  const unasked = literalKeys.filter((r) => !said.has(`${r.path}\n${r.key}\n${r.line}`));
+  const missing = [...asked, ...unasked];
   const baseName = short(base, index.root);
-  for (const r of missing) {
+  for (const r of asked) {
     add(r.path, 'i18n-missing-key', [r.line], `klucz "${r.key}" (L${r.line}) nie istnieje w ${baseName}.`);
+  }
+  for (const r of unasked) {
+    add(r.path, 'i18n-missing-key', [r.line], `literał "${r.key}" (L${r.line}) ma kształt klucza tłumaczenia, a jego rodzic ${r.key.slice(0, r.key.lastIndexOf('.'))} jest w ${baseName}, który nie ma tego klucza.`, { hint: true });
   }
   if (missing.length > 0) {
     const byKey = new Map();
@@ -1618,18 +1642,28 @@ function projectorFacts(index, add) {
 }
 
 // A createActionGroup event nothing outside its declaration refers to (comments ignored).
+// Every `.name` member access of the sources is counted once, and an event is consumed when its
+// name is accessed outside its own declaration: one regular expression per event over every
+// source took 35 of the 42 s the facts of a 4,700-file repository took (2026-11-02), per target.
+const reMemberAccess = /\.\s*([A-Za-z_$][\w$]*)/g;
+function memberAccesses(text, into = new Map()) {
+  for (const m of String(text).matchAll(reMemberAccess)) into.set(m[1], (into.get(m[1]) || 0) + 1);
+  return into;
+}
+
 function unconsumedActionFacts(index, add) {
-  const sources = index.sourceScripts.map((p) => ({ p, bare: index.scans.get(p).bare || index.scans.get(p).code }));
+  const accesses = new Map();
+  for (const p of index.sourceScripts) memberAccesses(index.scans.get(p).bare || index.scans.get(p).code, accesses);
   for (const p of index.sourceScripts) {
     const scan = index.scans.get(p);
     for (const m of scan.bare.matchAll(/\bcreateActionGroup\s*\(/g)) {
       const open = m.index + m[0].length - 1;
       const close = matchBracket(scan.bare, open);
       if (close < 0) continue;
+      const inside = memberAccesses(scan.bare.slice(open, close));
       for (const e of scan.code.slice(open, close).matchAll(/^\s*(['"])([^'"\n]+)\1\s*:/gm)) {
         const name = actionName(e[2]);
-        const re = new RegExp(`\\.\\s*${name}\\b`);
-        const used = sources.some((s) => (s.p === p ? re.test(s.bare.slice(0, open) + s.bare.slice(close)) : re.test(s.bare)));
+        const used = (accesses.get(name) || 0) - (inside.get(name) || 0) > 0;
         if (used) continue;
         const line = lineAt(scan.starts, open + e.index + e[0].search(/['"]/));
         add(p, 'action-unconsumed', [line], `zdarzenie '${e[2]}' (L${line}) nie ma konsumenta - żaden reducer, efekt ani komponent nie odwołuje się do .${name} (komentarze się nie liczą).`);
@@ -1753,7 +1787,9 @@ function importFacts(index, add) {
         label = mine.name;
         entry = mine;
       } else {
-        const ext = externalSymbols[u.kind][u.name];
+        // Own keys only: a template's `| toString` read Object.prototype.toString here, and the
+        // whole facts pass died on it (`names.includes is not a function`).
+        const ext = Object.prototype.hasOwnProperty.call(externalSymbols[u.kind], u.name) ? externalSymbols[u.kind][u.name] : null;
         if (!ext || satisfied(ext)) continue;
         label = ext.join('/');
       }

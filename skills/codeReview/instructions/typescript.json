@@ -20,6 +20,9 @@
             "general#7",
             "pipes#5",
             "component-template#9"
+          ],
+          "facts": [
+            "i18n-missing-key"
           ]
         }
       ]
@@ -60,7 +63,7 @@
         },
         {
           "id": "architecture#9",
-          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach.",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach. A function shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is no such element: it is never reported for not reusing, or not becoming, a shared util.",
           "severity": "medium",
           "sameAs": [
             "component-template#16"
@@ -85,7 +88,8 @@
           "severity": "medium",
           "sameAs": [
             "models#10"
-          ]
+          ],
+          "okEvidence": "linia każdej deklaracji, której nazwę sprawdziłeś (L3, L7, L12), nie zakres pliku"
         }
       ]
     },
@@ -139,14 +143,16 @@
       "items": [
         {
           "id": "security#3",
-          "text": "No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings."
+          "text": "No DOM injection that bypasses Angular sanitization: no `nativeElement.innerHTML`/`outerHTML`, `insertAdjacentHTML`, `document.write`, manual `<script>`/`<iframe>` creation; DOM changes go through templates and bindings.",
+          "subject": "innerhtml|outerhtml|insertadjacenthtml|document\\.write|createelement|<script|<iframe|nativeelement|renderer|bypasssecurity|domsanitizer"
         },
         {
           "id": "security#9",
           "text": "`HttpClient` XSRF protection stays enabled — `withNoXsrfProtection()` is forbidden; `withCredentials`/`credentials: 'include'` is added only for a reviewed, documented cross-origin case.",
           "sameAs": [
             "app-config#2"
-          ]
+          ],
+          "subject": "xsrf|withcredentials|credentials|providehttpclient|httpclient"
         },
         {
           "id": "security#10",
@@ -154,7 +160,8 @@
           "sameAs": [
             "interceptors#7",
             "http-service#10"
-          ]
+          ],
+          "subject": "authorization|bearer|token|cookie|header|interceptor|credential"
         },
         {
           "id": "security#12",
@@ -164,7 +171,8 @@
               "pattern": "\\.(?<at>querySelector(?:All)?)\\s*(?:<[^>]*>)?\\(\\s*(?!['\"][^'\"]*['\"]\\s*\\)|`[^`$]*`\\s*\\))",
               "message": "`querySelector` z argumentem budowanym w kodzie"
             }
-          ]
+          ],
+          "subject": "innerhtml|srcdoc|bypasssecurity|\\[src\\]|\\[href\\]|href=|url|selector|queryselector|template|eval\\(|new function|document\\.|window\\.|params|response|upload|file|input"
         }
       ]
     },
@@ -177,23 +185,28 @@
       "items": [
         {
           "id": "performance#5",
-          "text": "`effect()` never writes signals to emulate derivation — derived state is `computed()`; dependent-but-locally-resettable state is `linkedSignal()`."
+          "text": "`effect()` never writes signals to emulate derivation — derived state is `computed()`; dependent-but-locally-resettable state is `linkedSignal()`.",
+          "subject": "effect\\s*\\("
         },
         {
           "id": "performance#7",
-          "text": "An `effect()` that starts a timer, listener or subscription registers its teardown through the `onCleanup` callback; without it every re-run stacks another one."
+          "text": "An `effect()` that starts a timer, listener or subscription registers its teardown through the `onCleanup` callback; without it every re-run stacks another one.",
+          "subject": "effect\\s*\\("
         },
         {
           "id": "performance#8",
-          "text": "An `effect()` reading a signal it must not depend on (a value it only samples — a form snapshot read while reacting to a lock flag) wraps that read in `untracked()`; an accidental dependency turns the effect into a loop."
+          "text": "An `effect()` reading a signal it must not depend on (a value it only samples — a form snapshot read while reacting to a lock flag) wraps that read in `untracked()`; an accidental dependency turns the effect into a loop.",
+          "subject": "effect\\s*\\("
         },
         {
           "id": "performance#9",
-          "text": "`resource`/`httpResource` reads are guarded with `hasValue()` before `.value()` (an errored resource throws on read); a resource depending on another resource derives its `params` from the source resource's signal, never by calling the source's `.value()` inside the loader."
+          "text": "`resource`/`httpResource` reads are guarded with `hasValue()` before `.value()` (an errored resource throws on read); a resource depending on another resource derives its `params` from the source resource's signal, never by calling the source's `.value()` inside the loader.",
+          "subject": "resource"
         },
         {
           "id": "performance#16",
-          "text": "Long-lived async work is bounded: polling/intervals take their period from the central app config and are explicitly stopped — no unbounded `setInterval`/`timer` outliving its view or effect."
+          "text": "Long-lived async work is bounded: polling/intervals take their period from the central app config and are explicitly stopped — no unbounded `setInterval`/`timer` outliving its view or effect.",
+          "subject": "setinterval|interval|timer|poll|repeat|retry"
         }
       ]
     },
@@ -211,7 +224,7 @@
       "items": [
         {
           "id": "code-quality#1",
-          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies.",
+          "text": "No duplicated logic: the same expression, condition, transformation, mapping, validator set, literal/const value or markup fragment appearing three or more times — in one file, across the files of this diff, or re-implemented next to an existing shared util, component, builder, model or i18n key, which counts as one of the copies (look for them with the Grep tool over the target's `snapshotDir`, the reviewed revision exported for this run, or with its `commands.grep` when it has none). Two occurrences are not a finding under this item. Test data a spec repeats in its own cases (fixture objects, the same literal in several cases) is unit-tests#12's, never this item's; logic a spec repeats stays here. Report every copy at the place that should reuse instead of repeat, and name the other copies. A function or expression shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is not duplicated logic under this item, however often it repeats: it is never reported as code to extract into a reusable util (utils#9).",
           "facts": [
             "repeated-literal",
             "repeated-condition",
@@ -225,7 +238,11 @@
           ],
           "secondQuestion": "Które wyrażenia, pola, mapowania i literały tego pliku wyszukano w pozostałych plikach (stan, szablony, utils, modele, i18n) i z jakim wynikiem?",
           "answer": "repo-search",
-          "severity": "high"
+          "severity": "high",
+          "handoff": [
+            "unit-tests#12"
+          ],
+          "severityInSpec": "medium"
         },
         {
           "id": "code-quality#3",
@@ -274,7 +291,8 @@
         },
         {
           "id": "test-coverage#2",
-          "text": "Do not assume coverage from the spec's mere existence — enumerate the behavioral cases the changed lines introduce and cross-check each one against the spec's actual test cases."
+          "text": "Do not assume coverage from the spec's mere existence — enumerate the behavioral cases the changed lines introduce and cross-check each one against the spec's actual test cases.",
+          "okEvidence": "linia każdego zmienionego zachowania i ścieżka spec z liniami przypadków, które je sprawdzają, nie zakres pliku"
         },
         {
           "id": "test-coverage#3",

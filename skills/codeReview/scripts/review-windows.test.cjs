@@ -89,3 +89,47 @@ test('a stopped window is started once more; one that stops twice holds the cros
   assert.strictEqual(broken.result.cross, null);
   assert.ok(!broken.calls.some((c) => c.prompt.includes('cross-file')));
 });
+
+test('the cross-file pass goes to its own agent, and the run folder\'s copy walks with the args written into it', async () => {
+  const baked = { dir: 'w', lanes: 1, windows: [['1-2', '', '']], cross: { model: '', effort: '' } };
+  const copy = body.replace(/^const baked = null$/m, `const baked = ${JSON.stringify(baked)}`);
+  assert.notStrictEqual(copy, body, 'the script has the line review-context.cjs writes the args into');
+  const calls = [];
+  const agent = async (prompt, options) => {
+    calls.push({ prompt, options });
+    return prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE 1-2';
+  };
+  const parallel = (thunks) => Promise.all(thunks.map((thunk) => thunk()));
+  const result = await new AsyncFunction('agent', 'parallel', 'phase', 'log', 'args', copy)(agent, parallel, () => {}, () => {}, undefined);
+  assert.deepStrictEqual(calls.map((c) => [c.prompt, c.options.agentType]), [
+    ['Read w/window01.md and follow it.', 'doh:codereview-walker'],
+    ['Read w/cross-file.brief.md and follow it.', 'doh:codereview-cross'],
+  ]);
+  assert.strictEqual(result.cross, 'CROSS DONE');
+});
+
+test('a window carrying verdicts from an earlier part of the stack starts after the window that walks them', async () => {
+  const args = {
+    lanes: 3,
+    targets: [
+      { dir: 'a', windows: [['1-2', '', ''], ['3-4', '', '']], cross: {} },
+      { dir: 'b', windows: [['1-2', '', '', ['1:2']]], cross: {} },
+    ],
+  };
+  const order = [];
+  const { result, most } = await runWorkflow(args, (prompt) => {
+    order.push(prompt);
+    return prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x';
+  });
+  assert.deepStrictEqual(result.targets.map((t) => t.failed), [[], []]);
+  assert.ok(order.indexOf('Read b/window01.md and follow it.') > order.indexOf('Read a/window02.md and follow it.'), 'the reply of a/window02 comes first');
+  assert.strictEqual(most, 2, 'three lanes, but b/window01 waits for a/window02');
+});
+
+test('a target with a gaps step closes its open items before its cross-file pass', async () => {
+  const args = { lanes: 1, targets: [{ dir: 'a', windows: [['1-2', '', '']], cross: {}, gaps: { model: 'sonnet', effort: 'medium' } }] };
+  const { result, calls } = await runWorkflow(args, (prompt) => (prompt.includes('gaps') ? 'GAPS DONE' : prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));
+  assert.deepStrictEqual(calls.map((c) => c.prompt), ['Read a/window01.md and follow it.', `Read a/${bundle.gapsBriefName} and follow it.`, `Read a/${bundle.crossBriefName} and follow it.`]);
+  assert.deepStrictEqual([calls[1].options.agentType, calls[1].options.model, calls[1].options.effort], ['doh:codereview-walker', 'sonnet', 'medium']);
+  assert.deepStrictEqual([result.targets[0].gaps, result.targets[0].cross], ['GAPS DONE', 'CROSS DONE']);
+});

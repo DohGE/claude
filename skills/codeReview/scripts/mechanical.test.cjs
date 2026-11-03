@@ -58,3 +58,24 @@ test('the old words still in the reviewed revision are listed with their place',
   assert.deepStrictEqual(mechanical.leftovers({ minio: 's3' }, texts), { total: 1, hits: [{ path: 'src/a.ts', line: 2, text: 'const b = goToMinIO();' }] });
   assert.deepStrictEqual(mechanical.leftovers({}, texts), { total: 0, hits: [] });
 });
+
+test('the names a diff removed the declaration of, and where the revision still uses them', () => {
+  const patch = [
+    'diff --git a/src/a.enum.ts b/src/a.enum.ts',
+    '@@ -1,4 +1,3 @@',
+    '-export enum TapeMediaType {',
+    '-  const localOnly = 1;',
+    '-// const Commented = 1;',
+    '-export class MovedThing {}',
+    '+export enum MediaType {',
+    '',
+  ].join('\n');
+  const moved = ['diff --git a/src/b.ts b/src/b.ts', '@@ -0,0 +1 @@', '+export class MovedThing {}', ''].join('\n');
+  const removed = mechanical.removedDeclarations([{ path: 'src/a.enum.ts' }, { path: 'src/b.ts' }], (p) => (p === 'src/a.enum.ts' ? patch : moved));
+  assert.deepStrictEqual([...removed], [['TapeMediaType', ['src/a.enum.ts']]], 'an indented local, a comment and a name declared again are not removed');
+  const left = mechanical.usesLeft(['TapeMediaType', 'Gone'], new Map([
+    ['src/c.ts', 'import { TapeMediaType } from "./a";\nconst x = TapeMediaTypeLabel;\nfoo(TapeMediaType.X);'],
+  ]));
+  assert.deepStrictEqual(left.get('TapeMediaType'), { total: 2, hits: [{ path: 'src/c.ts', line: 1 }, { path: 'src/c.ts', line: 3 }] });
+  assert.deepStrictEqual(left.get('Gone'), { total: 0, hits: [] });
+});

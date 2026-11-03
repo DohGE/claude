@@ -173,7 +173,7 @@ test('every shipped agent template renders with the placeholders its skill docum
     SKILL_DIR: '/k', LANGUAGE: 'Polish', EFFORT: '',
     BRANCH: 'feature/a', PR_NUMBER: '7', PR_URL: 'https://gh/p/7',
     COMMENTS: '/c.json', REPORT: '/r.md', COMMIT_MESSAGE: 'feat(X): CR', PUSH: 'yes',
-    CHECKS_DIR: '/c/checks', COMMIT_PREFIX: 'feat(X)', INSTALLED: 'yes',
+    CHECKS_DIR: '/c/checks', COMMIT_PREFIX: 'feat(X)', INSTALLED: 'yes', BASE: 'master',
   };
   let count = 0;
   for (const skill of ['implementNewFeature', 'fixPr']) {
