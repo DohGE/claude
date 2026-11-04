@@ -228,3 +228,23 @@ test('stop: a large orchestrator context earns one /compact hint per 100k of gro
   const other = fixture(t, { mention: false, tasks: [task('t1', 5)] });
   assert.strictEqual(hooks.onStop(other.input, other.env), null, 'a session that drives no run hears nothing');
 });
+
+test('restartServer: open i orphaned dokładają flagi launchera, bez nich zostaje jak było', () => {
+  const calls = [];
+  const spawn = (cmd, args) => {
+    calls.push([cmd, args.slice(-2)]);
+    return { status: 0, stdout: '{"port":9999}' };
+  };
+  const run = { dir: 'D:/p/.claude/doh/20261103-090000', project: 'D:/p' };
+  assert.deepStrictEqual(hooks.restartServer(run, { spawn, platform: 'win32', open: true, orphaned: true }), { ok: true, port: 9999 });
+  hooks.restartServer(run, { spawn, platform: 'linux', open: true, orphaned: true });
+  hooks.restartServer(run, { spawn, platform: 'win32' });
+  assert.deepStrictEqual(calls, [['powershell', ['-Open', '-Orphaned']], ['bash', ['--open', '--orphaned']],
+    ['powershell', ['-ProjectDir', 'D:/p']]]);
+  const stderr = 'C:\\x\\start-server.ps1 : serv\r\ner exited before it was listening. port 9999 is already in use\r\n'
+    + '    + CategoryInfo          : NotSpecified: (:) [Write-Error]\r\n';
+  assert.deepStrictEqual(hooks.restartServer(run, { spawn: () => ({ status: 1, stdout: '', stderr }), platform: 'win32' }),
+    { ok: false, error: 'server exited before it was listening. port 9999 is already in use' });
+  assert.deepStrictEqual(hooks.restartServer(run, { spawn: () => ({ status: 1, stdout: '', stderr: 'port taken\nmore\n' }), platform: 'linux' }),
+    { ok: false, error: 'port taken' });
+});

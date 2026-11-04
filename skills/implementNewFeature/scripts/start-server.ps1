@@ -7,7 +7,9 @@ param(
   # Where the sessions of the tasks added from the stepper open (launch-orchestrator.cjs);
   # the current directory when not given.
   [string]$ProjectDir = '',
-  [switch]$Open
+  [switch]$Open,
+  # The run is resumed after its sessions were closed (resume-run.cjs): server.cjs --orphaned.
+  [switch]$Orphaned
 )
 $ErrorActionPreference = 'Stop'
 if (-not $ProjectDir) { $ProjectDir = (Get-Location).ProviderPath }
@@ -51,6 +53,7 @@ if (Test-Path $serverJson) {
 function ConvertTo-Arg([string]$s) { '"' + ($s -replace '(\\+)$', '$1$1') + '"' }
 $nodeArgs = @((ConvertTo-Arg $serverJs), '--session-dir', (ConvertTo-Arg $SessionDir), '--port', "$Port",
   '--project', (ConvertTo-Arg $ProjectDir))
+if ($Orphaned) { $nodeArgs += '--orphaned' }
 $log = Join-Path $SessionDir 'server.log'
 $outLog = Join-Path $SessionDir 'server.out.log'
 

@@ -275,15 +275,27 @@ function deadRun(input, env = process.env) {
 }
 
 // The launcher of SKILL.md Setup point 4, without `-Open`: the user's tab reconnects by itself.
-function restartServer(run, { spawn = require('node:child_process').spawnSync, platform = process.platform } = {}) {
+// resume-run.cjs adds both flags: after the sessions were closed the tab is usually gone too, and
+// none of the orchestrators the state names is alive.
+function restartServer(run, { spawn = require('node:child_process').spawnSync, platform = process.platform,
+  open = false, orphaned = false } = {}) {
   const scripts = path.join(skillDir, 'scripts');
   const [cmd, args] = platform === 'win32'
-    ? ['powershell', ['-NoProfile', '-File', path.join(scripts, 'start-server.ps1'), '-SessionDir', run.dir, '-ProjectDir', run.project]]
-    : ['bash', [path.join(scripts, 'start-server.sh'), '--session-dir', run.dir, '--project-dir', run.project]];
+    ? ['powershell', ['-NoProfile', '-File', path.join(scripts, 'start-server.ps1'), '-SessionDir', run.dir, '-ProjectDir', run.project,
+      ...(open ? ['-Open'] : []), ...(orphaned ? ['-Orphaned'] : [])]]
+    : ['bash', [path.join(scripts, 'start-server.sh'), '--session-dir', run.dir, '--project-dir', run.project,
+      ...(open ? ['--open'] : []), ...(orphaned ? ['--orphaned'] : [])]];
   const res = spawn(cmd, args, { encoding: 'utf8', timeout: 30000, windowsHide: true });
   const port = String(res.stdout || '').match(/"port":\s*(\d+)/);
   if (res.status === 0 && port) return { ok: true, port: Number(port[1]) };
-  return { ok: false, error: (String(res.stderr || res.stdout || '').trim().split('\n')[0]) || `exit ${res.status}` };
+  return { ok: false, error: launcherError(String(res.stderr || res.stdout || ''), platform) || `exit ${res.status}` };
+}
+
+// PowerShell's Write-Error wraps its record at the console width - mid-word, CRLF, behind
+// `<script> : ` - and follows it with `+ CategoryInfo` lines; its first line alone said "serv".
+function launcherError(text, platform) {
+  if (platform !== 'win32') return text.trim().split('\n')[0].trim();
+  return text.split(/\r?\n\s*\+ /)[0].replace(/\r?\n/g, '').replace(/^.*?\.ps1 : /, '').trim();
 }
 
 // SessionStart(resume): a session resumed in a new process gets none of SKILL.md back and finds a

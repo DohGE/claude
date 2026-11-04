@@ -693,12 +693,17 @@ function createApp(sessionDir, opts = {}) {
   // Each task's orchestrator as this process has seen it: { session, listening, seen, gone }.
   // Not persisted - only a poll proves a session alive, and none has reached a server that
   // has just started. A session the state names counts as seen at the start, so a restart
-  // does not hand its task to whichever session polls first.
+  // does not hand its task to whichever session polls first - unless the run is resumed after
+  // its sessions were closed (`orphaned`, resume-run.cjs): then each one is gone already, and the
+  // session opened for its task takes it over at the first poll instead of being turned away
+  // for ORCHESTRATOR_IDLE_MS.
   const startedAt = Date.now();
   const live = new Map();
   for (const t of state.tasks) {
     if (t.orchestrator && t.orchestrator.session) {
-      live.set(t.id, { session: t.orchestrator.session, listening: 0, seen: startedAt, gone: false });
+      live.set(t.id, opts.orphaned
+        ? { session: t.orchestrator.session, listening: 0, seen: 0, gone: true }
+        : { session: t.orchestrator.session, listening: 0, seen: startedAt, gone: false });
     }
   }
 
@@ -1653,13 +1658,13 @@ function main() {
   };
   const sessionDir = get('--session-dir');
   if (!sessionDir) {
-    console.error('usage: node server.cjs --session-dir <dir> [--port <n>] [--project <dir>]');
+    console.error('usage: node server.cjs --session-dir <dir> [--port <n>] [--project <dir>] [--orphaned]');
     process.exit(1);
   }
   // The project is where every task's own orchestrator is started; the launchers pass the
   // directory they were run from, which is the one the run's first session works in.
   const app = createApp(path.resolve(sessionDir), { onShutdown: () => process.exit(0),
-    project: get('--project'), launchOrchestrator });
+    project: get('--project'), launchOrchestrator, orphaned: args.includes('--orphaned') });
   // `--port 0` (the tests) still means "any free port"; everything else defaults to
   // the fixed one.
   const arg = get('--port');
