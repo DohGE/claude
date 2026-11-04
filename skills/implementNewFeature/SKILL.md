@@ -1,7 +1,7 @@
 ---
 name: implementNewFeature
-description: Use when the user wants a complete feature implemented end-to-end - runs a pipeline (Requirements, Implementation, Code Review, Validation & E2E, Final Code Review) with optional Feature Refinement, Mockups and Story Description steps and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, the requirements form stays editable until implementation starts (its settings - every sub-agent's model and effort, both reviews, the commit message - until the task finishes), and a finished task can be committed, pushed and opened as a pull request from the summary screen; the orchestrator coordinates sub-agents and keeps the main context clean
-argument-hint: "[--attach <taskId> --port <n>]"
+description: Use when the user wants a complete feature implemented end-to-end - runs a pipeline (Requirements, Implementation, Code Review, Validation & E2E, Final Code Review) with optional Feature Refinement, Mockups and Story Description steps and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, the requirements form stays editable until implementation starts (its settings - every sub-agent's model and effort, both reviews, the commit message - until the task finishes), and a finished task can be committed, pushed and opened as a pull request from the summary screen; a run whose sessions were closed is resumed in one command (`--resume`, or offered on a plain start), every unfinished task in a session of its own; the orchestrator coordinates sub-agents and keeps the main context clean
+argument-hint: "[--resume [<stamp>]] | [--attach <taskId> --port <n>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -18,7 +18,7 @@ You are the **orchestrator**. You never implement, test, or review code yourself
 Sub-agents do all heavy work; you hold only: task records, step statuses, artifact paths, short summaries.
 Dynamic texts (questions, reports, summary) stay in the user's conversation language; UI chrome is English.
 Arguments with `--attach <taskId> --port <n>` start this session at "Attach"; any other start runs
-"Setup" (both at the end of this file). Each step's own instructions are a file of
+"Setup", which goes to "Resume" for `--resume [<stamp>]` or an unfinished run (all three at the end of this file). Each step's own instructions are a file of
 `references/steps/` — "Steps" below says which, and when to read it.
 
 <!-- lean-mode:start (generated from shared/caveman-ultra.md) -->
@@ -532,6 +532,15 @@ never pays for the mockup protocol.
 ## Setup
 
 1. `SKILL_DIR` = this skill's base directory (given in the skill header). `PROJECT` = current working directory.
+   Then, in the foreground: `node "<SKILL_DIR>/scripts/resume-run.cjs" --project "<PROJECT>" --list`.
+   It prints a JSON array, newest first, of the project's runs that still have work (a task whose
+   form was sent and whose final summary is not shown, state written in the last 14 days):
+   `{stamp, dir, updatedAt, serverUp, tasks: [<one line per unfinished task>]}`.
+   - `--resume` in the arguments → "Resume", with the stamp after it if one is given.
+   - the array is empty → point 2.
+   - otherwise ask with AskUserQuestion, in the user's language, before anything else: one option
+     per run, at most the 3 newest (label `Resume <stamp>`, description its task lines), and
+     `Start a new run`. A run → "Resume" with its stamp. A new run → point 2.
 2. Pick the session root by whether the project already has a `.claude/` folder:
    - `PROJECT/.claude/` exists → `SESSION = <PROJECT>/.claude/doh/<yyyyMMdd-HHmmss>`, and ensure
      `<PROJECT>/.claude/doh/.gitignore` exists holding `*`, `!.gitignore`, `!instructions/` and
@@ -583,6 +592,25 @@ never pays for the mockup protocol.
      credentials to fill it in.
 5. A run starts with one task, `t1`, and this session is its orchestrator: `T = t1`. POST
    `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}` and enter the event loop.
+
+## Resume
+
+A run whose sessions were closed — terminals shut, the machine restarted — keeps all of its state in
+`<SESSION>/pipeline-state.json`; this brings it back without the user hunting old sessions down.
+
+1. Run, in the foreground: `node "<SKILL_DIR>/scripts/resume-run.cjs" --project "<PROJECT>" --resume [<stamp>]`
+   (no stamp: the newest run of the list). It starts the run's server again when it is down —
+   with the browser tab, and with every old orchestrator counted as gone — and opens a terminal
+   with a fresh `--attach` session for each unfinished task that has no living orchestrator,
+   except the first, which is this session's. It prints one JSON object:
+   `{stamp, sessionDir, port, restarted, self, launched: [{taskId, launched, command, cwd, error?}], running: [{taskId, status}]}`.
+2. `error` → show it and stop your turn; `port 9999 is already in use` is another run's stepper,
+   closed from its "Shut down server" button (Setup point 4).
+3. Tell the user, in one short message: the stepper is at `http://127.0.0.1:<port>/`; each
+   `launched` task with `launched: false` comes with its `command` to run in a terminal opened in
+   its `cwd`; `running` tasks already have a session and are left alone.
+4. `self` null → every task has a session: stop. Otherwise go on at "Attach" with `T` = `self`
+   and `PORT` = `port` — never restart the server or write `models.json`: the run has both.
 
 ## Attach
 

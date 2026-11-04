@@ -2391,3 +2391,28 @@ test('a mockup artifact request and its link stay on the task', async t => {
   task = await task0(base);
   assert.deepStrictEqual(task.mockupArtifact, { requested: true, url: 'https://claude.ai/artifact/abc' });
 });
+
+test('po restarcie orkiestratory ze stanu liczą się za żywe; z orphaned (wznowienie runu) - od razu za zamknięte', async t => {
+  const dir = tmpDir();
+  const app1 = createApp(dir, { starterSession: null });
+  const base1 = await listen(app1);
+  await post(base1, '/api/tasks', { values: {} });
+  await fetch(`${base1}/api/answer?taskId=t1&session=old1`);
+  await fetch(`${base1}/api/answer?taskId=t2&session=old2`);
+  await new Promise(r => app1.server.close(r));
+
+  const launcher = async () => ({ launched: true, command: 'claude "x"', cwd: 'D:/proj' });
+  const kept = createApp(dir, { starterSession: null, launchOrchestrator: launcher });
+  const baseKept = await listen(kept);
+  assert.equal((await fetch(`${baseKept}/api/answer?taskId=t1&session=new`)).status, 409);
+  assert.equal((await post(baseKept, '/api/orchestrator/launch', { taskId: 't2' })).status, 409);
+  await new Promise(r => kept.server.close(r));
+
+  const app = createApp(dir, { starterSession: null, orphaned: true, launchOrchestrator: launcher });
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  assert.deepStrictEqual((await getState(base)).orchestrators.t1, { status: 'closed', session: 'old1', launchError: null });
+  assert.equal((await fetch(`${base}/api/answer?taskId=t1&session=new`)).status, 200);
+  assert.equal((await getState(base)).tasks[0].orchestrator.session, 'new');
+  assert.equal((await (await post(base, '/api/orchestrator/launch', { taskId: 't2' })).json()).launched, true);
+});
