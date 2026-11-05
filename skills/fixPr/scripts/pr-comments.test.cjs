@@ -58,8 +58,9 @@ function fakeFindPr(prs) {
 test('parseArgs parses the documented flags and refuses anything else', () => {
   assert.deepStrictEqual(
     pc.parseArgs(['--branches=a;b', '--project=/tmp/x']),
-    { branches: 'a;b', project: '/tmp/x', skillDir: '', replay: '', local: null },
+    { branches: 'a;b', project: '/tmp/x', skillDir: '', replay: '', local: null, task: '' },
   );
+  assert.strictEqual(pc.parseArgs(['--branches=a', '--task= add … to the Load into label ']).task, 'add … to the Load into label');
   assert.throws(() => pc.parseArgs(['--branch=a']), /Unknown argument/);
   assert.throws(() => pc.parseArgs(['staged']), /Unknown argument/);
 });
@@ -403,10 +404,11 @@ test('the brief holds the agent contract and nothing else', () => {
   assert.strictEqual(span.originalStartLine, 10);
 
   // Conversation entries and review summaries answer to the same rule, and a review
-  // keeps the one field that is its own: the verdict it was submitted under.
+  // keeps the one field that is its own: the verdict it was submitted under. The id rides:
+  // the agent's verdicts name the item by it and verify-fix.cjs checks every one is there.
   assert.deepStrictEqual(
     pc.briefNote({ id: 9, author: 'bob', isBot: false, body: 'rename it', createdAt: 'd', url: 'u' }),
-    { author: 'bob', isBot: false, body: 'rename it', url: 'u' });
+    { author: 'bob', isBot: false, body: 'rename it', url: 'u', id: 9 });
   assert.strictEqual(pc.briefNote({ author: 'bob', body: 'b', url: 'u', state: 'CHANGES_REQUESTED' }).state, 'CHANGES_REQUESTED');
 });
 
@@ -514,4 +516,74 @@ test('remoteTips reads every branch tip from one ls-remote and skips what the re
   assert.deepStrictEqual(calls, [['ls-remote', 'origin', 'refs/heads/a', 'refs/heads/feat/b', 'refs/heads/gone']]);
   assert.deepStrictEqual([...tips], [['a', sha('1')], ['feat/b', sha('2')]]);
   assert.strictEqual(pc.remoteTips('/p', ['a'], () => null).size, 0, 'no remote, no tips');
+});
+
+test('a --task travels to the agent as one more item, and the parts above the branch are found for the cascade', (t) => {
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-skill-'));
+  const children = { 'part-1': ['part-2'], 'part-2': ['part-3', 'part-3b'], 'part-3': [] };
+  const result = pc.collect({
+    project: dir,
+    branches: 'part-1',
+    skillDir,
+    task: 'add … to the Load into context-menu label',
+    api: fakeApi({}),
+    findOpenPr: fakeFindPr({ 'part-1': { number: 7, title: 'feat(T-1): X', url: 'u', base: 'main' } }),
+    openChildren: (branch) => children[branch] || [],
+    remoteTips: () => new Map(),
+  });
+  const [target] = result.targets;
+  assert.deepStrictEqual(target.stack.above, ['part-2', 'part-3']);
+  assert.ok(result.warnings.some((w) => /part-2 has 2 open pull requests based on it/.test(w)));
+  assert.ok(!result.warnings.some((w) => /no open comments/.test(w)), 'a task is work');
+  assert.strictEqual(target.counts.candidates, 1);
+  assert.strictEqual(JSON.parse(fs.readFileSync(target.commentsPath, 'utf8')).task, 'add … to the Load into context-menu label');
+});
+
+test('a bot report repeated on every push travels once, newest copy, cut to its head', (t) => {
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-skill-'));
+  const cve = (sha) => ({ id: sha.length, author: 'scanner', isBot: true, body: `### Detected Vulnerabilities:\n- image:${sha} (alpine)\n${'x'.repeat(3000)}`, createdAt: 'd', url: `u-${sha}` });
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    api: fakeApi({ conversation: [cve('34e2f00a3a'), { id: 5, author: 'ann', isBot: false, body: 'rename it', url: 'h' }, cve('45cd8350ce4ff9'), cve('8f8defaf33824340f2')] }),
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(T-1): X', url: 'u', base: 'main' } }),
+  });
+  const [target] = result.targets;
+  const payload = JSON.parse(fs.readFileSync(target.commentsPath, 'utf8'));
+  assert.deepStrictEqual(payload.conversation.map((c) => c.url), ['h', 'u-8f8defaf33824340f2']);
+  assert.strictEqual(payload.botDuplicatesDropped, 2);
+  assert.match(payload.conversation[1].body, /more characters of this bot report left out/);
+  assert.strictEqual(target.counts.conversation, 2);
+  assert.strictEqual(target.counts.candidates, 2);
+});
+
+test('the screenshots and recordings of comments ride on the comment that holds them', (t) => {
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-skill-'));
+  const seen = [];
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    api: fakeApi({
+      threads: [thread({ comments: [{ id: 41, author: 'ann', body: 'see ![shot](https://github.com/user-attachments/assets/aaaa-1)', url: 'u' }] })],
+      reviews: [{ id: 3, author: 'bob', isBot: false, state: 'COMMENTED', body: 'row stays lit:\n\nhttps://github.com/user-attachments/assets/bbbb-2\n', url: 'r' }],
+    }),
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(T-1): X', url: 'u', base: 'main' } }),
+    collectMedia: (args) => {
+      seen.push(args);
+      return { media: new Map(args.items.map((i) => [i.key, [{ url: 'x', kind: i.kind === 'review' ? 'video' : 'image', path: `${args.dir}/${i.key}.bin` }]])), warnings: ['one failed'] };
+    },
+  });
+  assert.strictEqual(seen.length, 1);
+  assert.deepStrictEqual(seen[0].items.map((i) => [i.key, i.kind, i.id]), [['thread-1-1', 'review-comment', 41], ['review-3', 'review', 3]]);
+  assert.match(seen[0].dir, /feat-a-fix-pr-media$/);
+  const payload = JSON.parse(fs.readFileSync(result.targets[0].commentsPath, 'utf8'));
+  assert.strictEqual(payload.threads[0].comments[0].media[0].kind, 'image');
+  assert.strictEqual(payload.reviews[0].media[0].kind, 'video');
+  assert.strictEqual(result.targets[0].counts.media, 2);
+  assert.ok(result.warnings.some((w) => /feat\/a: one failed/.test(w)));
 });

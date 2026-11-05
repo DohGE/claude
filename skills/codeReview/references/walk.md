@@ -122,6 +122,11 @@ For each file:
    (`node "<SKILL_DIR>/scripts/…"`) and the one `sed -n '<N>p'` below only: it searches with the
    Grep tool, lists with Glob and reads with Read, and its file's diff is `diffPath`, computed
    against the target's base - never a `git diff` of its own.
+   Any OTHER file - a consumer, a copy, the place a symbol is used or declared - is read around
+   the Grep hit that sent you there: `offset` about 20 lines above the hit, `limit` 60, the Reads
+   of several hits in one message. A whole other file only when the item judges its structure
+   (member order, imports, its placement). One walker of 2026-11-05 made 80 Reads, most of them
+   whole neighbouring files, for a 10-file diff; every one of them was carried in each later turn.
    A path the brief or a `## Dalej` lists as `<path> (Read: offset 1, limit 900; offset 901)` is
    past what one Read returns: issue each page as its own Read, all in the same message.
    `contentPath` is `null` for a status `D` file and for a binary one — review it from the diff

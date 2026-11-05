@@ -15,7 +15,7 @@
   "notes": [
     "The instructions place interceptors at app level but name no folder; any location inside `src/app/<area>/` is the finding interceptors#2 describes."
   ],
-  "itemCount": 35,
+  "itemCount": 37,
   "instructions": [
     {
       "id": "interceptors",
@@ -117,7 +117,7 @@
         },
         {
           "id": "architecture#6",
-          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, spec fixtures several specs share in `shared/mocks/`, HTTP in `data-access/services/`, state files - the signal store and an NgRx slice's files - in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed. A type, interface, enum or const used only inside its own file may stay there, without `export`; once it is exported or a second file needs it, it moves to `models/`.",
+          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, spec fixtures several specs share in `shared/mocks/`, HTTP in `data-access/services/`, state files - the signal store and an NgRx slice's files - in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed. A type, interface, enum or const used only inside its own file may stay there, without `export`; once it is exported or a second file needs it, it moves to `models/`. Spec fixtures and mocks several specs share are `<name>.mock.ts` files in the area's `shared/mocks/` - never a `*.fixtures.ts` file, and never under the `tests/` folder of a util or another layer.",
           "severity": "medium",
           "probe": [
             {
@@ -138,8 +138,8 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2,14-15,17-18",
-      "checklistSize": 18,
+      "selectedItems": "2,14-15,17-19",
+      "checklistSize": 19,
       "items": [
         {
           "id": "general#2",
@@ -180,6 +180,11 @@
           "id": "general#18",
           "text": "A long method is split into small, focused private helpers of the same file, each named after its one job; the split never creates a shared util or a new file for single-consumer logic (the utils instruction decides extraction).",
           "severity": "low"
+        },
+        {
+          "id": "general#19",
+          "text": "One import declaration per module specifier: two `import` statements from the same path (`../../../models` twice) are merged into one.",
+          "severity": "low"
         }
       ]
     },
@@ -189,8 +194,8 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "21,25",
-      "checklistSize": 26,
+      "selectedItems": "21,25,28",
+      "checklistSize": 28,
       "items": [
         {
           "id": "best-practices#21",
@@ -203,6 +208,11 @@
           "subject": [
             "rxjs/operators"
           ]
+        },
+        {
+          "id": "best-practices#28",
+          "text": "A value whose type allows `null` or `undefined` (an optional API field, a `string | null` message) that goes into user-facing text - a translation parameter, a toast or notification message, an interpolation - gets a fallback (`message ?? ''`) or a guard: otherwise the user reads the literal \"null\" or \"undefined\".",
+          "severity": "medium"
         }
       ]
     },
@@ -242,7 +252,7 @@
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
       "selectedItems": "1,3-5,8",
-      "checklistSize": 13,
+      "checklistSize": 15,
       "items": [
         {
           "id": "code-quality#1",
@@ -268,7 +278,7 @@
         },
         {
           "id": "code-quality#3",
-          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change.",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change. This includes a public store, facade or service member (a field, a signal, a selector exposed through a facade, a method) that nothing in the repository reads, and a parameter every caller passes the same constant (`null`, `undefined`, `false`) - it is dropped, or given that value as its default.",
           "facts": [
             "export-unused",
             "barrel-unused",

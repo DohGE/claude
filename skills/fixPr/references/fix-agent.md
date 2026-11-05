@@ -42,7 +42,27 @@ the run of 2026-11-03. So:
 
   It waits under four minutes and prints `PART_READY <file>` or `PART_PENDING <file>` (FIXED
   IDENTIFIERS). `PART_PENDING` → run it again. Never end your turn while background work runs.
+  Waiting on two things at once - the self-review and the first gate pass (step 4) - give both:
+  `--path="<a>" --path="<b>" --nonempty` returns as soon as either is ready, and you act on that
+  one while the other still runs. On 2026-11-05 agents spent up to 27 minutes in nine
+  back-to-back waits on the review alone, with the gate not yet started.
 - No other call of yours blocks for four minutes either: no `sleep`, no foreground build.
+
+## The worktree's tools - three things that cost a run its time
+
+- **Edit only what you Read.** The Edit and Write tools refuse a file this conversation has not
+  read with the Read tool; a `cat`, `sed -n` or `grep` in Bash does not count. Read the file (or
+  the range you change) with Read before the first Edit of it. About twenty refused edits went
+  to that on 2026-11-05.
+- **Tests run through the gate.** Never call `jest` with a list of spec files: past ~8 000
+  characters Windows refuses the command line ("The command line is too long"). Run
+  `checks.cjs --only=test` (step 5); for one spec while you work, give jest that ONE path.
+- **`node_modules` is not yours.** It is a link to the main checkout's (`dependencies.linked`).
+  Never run `npm ci`, `npm install` or `yarn` here, never delete, `rmdir` or rename
+  `node_modules`: an install through the link empties the main checkout's packages for every
+  worktree of every run. A gate that fails for a missing package (`Cannot find module`,
+  `jest: not found`) is no repair of yours - end with the `error` JSON naming it, and the user
+  installs once in the main checkout.
 
 ## Step 1 — Read the work
 
@@ -67,9 +87,23 @@ into a message.
   have moved since the review - and make the code what `expected` says. `rejected` holds for a
   finding on the same three grounds as for a comment.
 
+- `task` — present when the user ran the skill with `--task`: one more change they want in this
+  branch, in their own words (`add … to the Load into context-menu label`). It is a request like
+  a review thread, never `answered`, and its verdict names the item `task`.
+
+`conversation[]` and `reviews[]` entries carry the `id` your verdict names them by.
+
 `isOutdated: true` means the code moved under the thread: `line` is `null` and `originalLine` points
 into a diff that no longer applies. Find the subject by the CONTENT of the thread's `diffHunk`,
 never by the number — a line number from a stale diff points at whatever now sits there.
+
+A comment, a reply or a review with screenshots or a recording carries `media[]`: each entry's
+`path` is the downloaded file, a video also has `frames[]` - still images taken from it. Look at
+every image and every frame with the Read tool BEFORE you give that item its verdict: "add padding
+to the checkbox details" means the box the screenshot circles, and "the row should stay
+highlighted" is what the recording shows happening. An entry with `error` could not be fetched:
+work from the words, and say in `summary` that the picture was missing. Your verdict of such an
+item carries `"sawMedia": true` once you have looked.
 
 ## Step 2 — Give every item a verdict
 
@@ -88,6 +122,10 @@ skipped, and "there were a lot of them" is not a verdict.
   That default is for `conversation[]` alone. An inline thread with `isBot: true` sits on a real
   line and gets the same reading as any other thread - the flag says who is speaking, not what
   the comment is worth.
+
+A review summary or a comment that numbers several requests ("1- … 2- …") gets ALL of them done
+before its verdict is `fixed`; one of them left is the whole item left. Name each point and what
+you did about it in the report.
 
 A thread is one unit of work: read EVERY comment of it, to the LAST one, before deciding. Reviewers
 routinely open with a complaint and close with "actually, leave it" — verdicting on the first comment
@@ -156,6 +194,12 @@ Once every item has its verdict and its fix, check the work before anything else
    and dispatch it again until it finds none. Without the Agent tool, make that search yourself and
    say so in `summary`. This is the codeReview rulebook's `general#14`.
 
+4. **What the screen shows is checked by a person.** A fix that changed a stylesheet or a template
+   (`.scss`, `.css`, `.html`) changes how the page looks, and neither the gate nor the review sees
+   that. List every such file in `uiUnverified` (Final message), with the comment it answers, so
+   the summary tells the user what to look at. When the comment came with a screenshot, say in
+   the report which part of it your change addresses.
+
 Record what this step found and changed under `## Weryfikacja komentarzy` (point 1 of step 6).
 
 ## Step 4 — Review your own change before the commit
@@ -177,8 +221,13 @@ nothing else of the branch.
        When the skill cannot finish, write FAILED <reason> into that file instead and end with
        REVIEW FAILED <reason>.
 
-2. Wait for `{{REPORT}}.review.txt` with `wait-part.cjs --nonempty` (see Waiting), then Read it: a path
-   is the report, `FAILED <reason>` is a review that did not run.
+2. Right after it, start gate pass 1 in the background (step 5 says how) - unless `{{INSTALLED}}`
+   is `no`. The review takes ten to twenty minutes and the gate needs no review to start: a red
+   step found now is repaired while the review still runs. Then wait for whichever lands first:
+   `wait-part.cjs --path="{{REPORT}}.review.txt" --path="{{CHECKS_DIR}}/gate-1.json" --nonempty`.
+   A ready gate → act on it (step 5) and wait again for the review. A ready review → Read
+   `{{REPORT}}.review.txt`: a path is the report, `FAILED <reason>` is a review that did not run.
+   Its findings change code, so the LAST gate pass (step 5) always runs after them.
 
 Then read the report and apply its findings, one by one, under the same rules as a comment fix:
 
@@ -375,14 +424,18 @@ The following are not repairs, and none of them may appear in your commit:
        ever run), `rebased: false`, the red command in `summary`, and go on un-rebased. Green →
        `rebased: true`.
    With `{{PUSH}}` `no`, rebase all the same: the user pushes the branch as it is.
-5. Push, but only when `{{PUSH}}` is `yes`.
-   - Not rebased: `git -C "{{ROOT}}" push origin {{BRANCH}}` - plain push.
+5. Push, but only when `{{PUSH}}` is `yes`, through the script that retries what fails for a
+   moment (GitHub's `fatal error in commit_refs_rules`, a 5xx, a dropped connection) and never a
+   rejection:
+   - Not rebased: `node "{{SKILL_DIR}}/scripts/restack.cjs" --action=push --worktree="{{ROOT}}" --branch={{BRANCH}}` - plain push.
    - Rebased: the branch's history was rewritten on purpose, so the push replaces it, guarded by
-     the remote state you saw: `git -C "{{ROOT}}" push --force-with-lease={{BRANCH}}:<remote-sha> origin {{BRANCH}}`.
-     Never a bare `--force`, never a lease without `<remote-sha>`.
-   A rejected push means the branch moved on the remote WHILE you were working: do not fight it -
-   no second rebase, no other force. Report `pushed: false` with the rejection text in `summary` and
-   leave the commit sitting on the local branch for the user.
+     the remote state you saw: the same command with `--lease=<remote-sha>` (a
+     `--force-with-lease={{BRANCH}}:<remote-sha>` push). Never a bare `--force`, never a lease
+     without `<remote-sha>`.
+   Its JSON says `pushed`, `attempts` and, for a refusal, `rejected: true`. A rejected push means
+   the branch moved on the remote WHILE you were working: do not fight it - no second rebase, no
+   other force. Report `pushed: false` with the rejection text in `summary` and leave the commit
+   sitting on the local branch for the user.
 6. Write the report with the Write tool to `{{REPORT}}.txt` (the harness refuses a sub-agent a `.md`
    file), then move it into place with Bash: `mv -f "{{REPORT}}.txt" "{{REPORT}}"`. Never a heredoc:
    its quoting and backslashes broke a report of 2026-11-03. One write: a report
@@ -393,6 +446,10 @@ The following are not repairs, and none of them may appear in your commit:
        - Commit: <sha + message | nie powstał: reason>
        - Rebase na {{BASE}}: <done | not needed | kept (keep-base) | held for the orchestrator | abandoned: reason>
        - Push: <done | done, force-with-lease after rebase | skipped (--no-push) | failed: reason>
+7. Write the JSON object of your final message (below), byte for byte the same, to
+   `{{REPORT}}.result.json` with the Write tool. The orchestrator checks it item by item against
+   `{{COMMENTS}}` (verify-fix.cjs): an item with no verdict there is reported to the user as a
+   comment this run left unhandled.
 
 ## Rules
 
@@ -412,6 +469,12 @@ The following are not repairs, and none of them may appear in your commit:
   claim on the pull request that the reviewer's comment was addressed.
 - `fixedFindingIds` carries the `id` of every `findings[]` entry (`--local`) you verdicted `fixed`;
   such a run has no thread, so its `fixedThreadIds` is empty.
+- `verdicts` holds ONE entry per item of `{{COMMENTS}}`, none left out and none made up:
+  `{"item":"thread:<id>"|"conversation:<id>"|"review:<id>"|"finding:<id>"|"task","verdict":"fixed|rejected|answered","ground":"<for rejected and answered: the ground, one line>","sawMedia":true}`
+  (`sawMedia` only on an item with `media[]`, once you looked at it). A bot's conversation
+  comment answered as CI noise needs no ground.
+- `uiUnverified` lists the stylesheets and templates your commit changes (step 3, point 4), each
+  `{"path":"<repo-relative>","item":"<the verdict item it answers>"}`.
 - `fixedVia` maps a fixed thread whose fix landed in other files than the one it sits on to those
   repo-relative paths - keys renamed in `en.json` for a thread on an effects file. A thread is closed
   only when the commit changes its own file or one of these: four threads of 2026-11-03 stayed open
@@ -422,8 +485,8 @@ The following are not repairs, and none of them may appear in your commit:
 End your final message with a single JSON object and nothing after it:
 
 - Success (including a run that legitimately committed nothing):
-  `{"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
+  `{"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
 - Gate still red after three passes, or any failure that left the work unfinished:
-  `{"type":"error","report":"<in {{LANGUAGE}}: which commands are still red and why, what is in the worktree now, what you already fixed>","fixed":<N>,"fixedThreadIds":[],"checksFixed":[],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}]}`
+  `{"type":"error","report":"<in {{LANGUAGE}}: which commands are still red and why, what is in the worktree now, what you already fixed>","fixed":<N>,"fixedThreadIds":[],"verdicts":[…as above, for the items you got to…],"checksFixed":[],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}]}`
   `fixedThreadIds` and `checksFixed` are empty on this path, always: nothing was committed or pushed,
   so nothing may be claimed as addressed or repaired.

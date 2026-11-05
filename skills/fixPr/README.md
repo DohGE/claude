@@ -23,6 +23,7 @@ That is the branch a reviewer most often wants finished off.
 | `/doh:fixPr feature/a --no-push` | commit stays local; threads are then NOT resolved |
 | `/doh:fixPr feature/a --keep-worktree` | leave the worktrees in place for inspection |
 | `/doh:fixPr feature/a --local=da3d32cd,b4309764` | fix those findings of the branch's doh codeReview reports (the 8-hex id on a finding of the report page, newest run first) instead of the pull request's comments; everything else - worktree, gate, commit, rebase, push - as without it, and no thread is resolved |
+| `/doh:fixPr part-1 --task="add … to the Load into label"` | one more change the user wants in that branch, beside its comments; the open pull requests based on it are moved onto the result afterwards (`restack.cjs --action=cascade`) |
 | `/doh:fixPr feature/a --project=<path>` | against the repository at `<path>` instead of the current directory |
 
 The branch list is split on `,` and `;`, exactly like `codeReview`. Git allows both characters inside a
@@ -53,6 +54,19 @@ subject by content rather than by a number that now means something else.
 Comments from a GitHub App are flagged `isBot` wherever they appear — inline threads included. A
 flagged **conversation** comment is treated as noise by default, unless it names a concrete defect;
 an inline one is read like any other thread, because it is anchored to a line of the change.
+A bot report posted again on every push (a vulnerability scan) travels once: its newest copy, cut to
+its first 1 500 characters (`botDuplicatesDropped` counts the rest).
+
+**Screenshots and recordings.** Every image and video a comment, a thread reply or a review summary
+attaches (`<img>`, `![]()`, a bare `github.com/user-attachments/assets/…` link) is downloaded by
+`pr-media.cjs` into `{branch}-fix-pr-media/` and rides on its comment as `media[]`. A private
+repository answers the plain URL with a login page; the comment's rendered HTML (`body_html`) holds a
+short-lived signed copy, which is fetched instead. The token only ever goes to `github.com`. A
+recording becomes up to 8 still frames (`frames[]`): with `ffmpeg` on `PATH` (or `DOH_FFMPEG`), else
+the plugin's Playwright drives the installed Chrome - GitHub recordings are H.264, which Playwright's
+own Chromium and its bundled ffmpeg cannot decode. The agent looks at every image and frame before it
+gives that comment a verdict (`sawMedia`). Measured on the DPXN-11967 part-4 review: one screenshot
+and one recording, 8 frames, 6.6 s.
 
 ## Verdicts
 
@@ -253,6 +267,20 @@ brings the gate green and pushes the same way. A part that did not land leaves i
 was, and its children move onto that. After the run, `restack.cjs --action=verify` names every part
 that does not sit on its parent, with the command that moves it.
 
+Two parts that only appended at the same spot - a translation key each, an enum member each, an
+export each - no longer stop the move. `land` merges such a conflict itself: a JSON file key by key
+(both sides' new keys kept in place, a key both changed differently refused, and only a file that
+`JSON.stringify` reproduces byte for byte), any other file only where every conflicting hunk is two
+insertions with an empty base. It does so only when the gate runs after the move, which proves the
+merge; `autoResolved[]` names each file and how. On 2026-11-05 four restacks of DPXN-11967 stopped on
+exactly these (`en.json`, `ButtonTooltip`), each spending a conflict agent.
+
+`restack.cjs --action=cascade` moves every part above a changed one, bottom-up, with no agent - after
+a `--task` on part-1, the parts 2..n the run did not name. Each part gets a worktree for the move and
+loses it after; the first part that does not land stops the climb (`waiting[]`) and keeps its
+worktree for the conflict agent. `--action=push` is the agents' push: it retries what fails for a
+moment (`fatal error in commit_refs_rules`, a 5xx, a dropped connection) and never a rejection.
+
 Each closed thread gets a reply naming the commit first (`--no-reply` leaves it out), and a thread
 whose fix landed in another file than its own - keys renamed in `en.json` for a thread on an effects
 file - is closed when the commit changes that file (`fixedVia`).
@@ -282,6 +310,17 @@ spelling, so those files age out instead of sitting in the folder for good.
 The terminal summary is Polish and names, per branch: the commit message the agent actually used and
 whether it was pushed, the fixed/rejected/answered counts, every rejection with its ground, which
 checks were repaired and which are still red, and the report path.
+
+**Every comment checked at the end.** The agent writes its final JSON to `{report}.result.json`,
+with a verdict per item of the comments file (`verdicts[]`). `verify-fix.cjs` holds the two against
+each other and, once something was pushed, against the pull request as GitHub has it then: an item
+with no verdict, a rejection without its ground, pictures the agent did not look at, `fixed` threads
+missing from `fixedThreadIds` (or the other way round), a fixed thread GitHub still shows open, and a
+thread opened while the agent worked. Each gap is a line of the summary, so a review summary with two
+numbered requests cannot come back half done without anybody saying so - the part-4 review of
+2026-11-05 asked for a padding and a row highlight, and only the user noticed the second.
+The agent also lists `uiUnverified`: the stylesheets and templates its commit changes, whose look no
+gate checks, for the user to open.
 
 ## GitHub access
 
@@ -333,9 +372,11 @@ Its gate starts red twice: a `var` in a file no comment touches (lint), and the 
 | `scripts/pr-api.cjs` | GraphQL review threads and the resolve mutation, plus the two REST lists |
 | `scripts/pr-comments.cjs` | argument parsing, the commit prefix and `CR` message, and the per-branch comment JSON |
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
-| `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap, removal |
-| `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit |
-| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`) and checks a stack after the run (`verify`) |
+| `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`), removal (links first, git's own reason on a refusal, the main `node_modules` counted before and after) |
+| `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice |
+| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append conflicts merged), checks a stack after the run (`verify`), moves the parts above a changed one (`cascade`) and pushes with retry (`push`) |
+| `scripts/pr-media.cjs` | downloads the screenshots and recordings of the comments, a recording as still frames |
+| `scripts/verify-fix.cjs` | the end-of-run check that every comment got a verdict, and that GitHub agrees |
 | `references/restack-agent.md` | the brief of the agent that resolves a conflict `restack.cjs` stopped at |
 | `scripts/score-fix.cjs` | the quality meter's scorer: verdicts, checks on the result, landing, scope, gate |
 | `test-key/` | the meter's fixture (`fixture/`, built by `make-fixture.cjs`), its key (`key.json`) and the reference fix (`solution/`) |

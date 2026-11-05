@@ -247,12 +247,45 @@ const unlinkOne = (p) => {
 // tree is the one this branch asks for, and only when git ignores the link - a `node_modules/`
 // pattern matches no link, and the link would then be one `git add` away from a commit.
 // The link is the danger `remove` unlinks first: git's recursive delete walks into a junction.
+// Whether the main checkout's `node_modules` holds what its package.json declares. On
+// 2026-11-05 it held two folders of ~1000 (@babel, @nx - emptied the day before): five worktrees
+// linked it, five agents found the gate dead one after another, each spent turns on why, and
+// two ran `npm ci` against an unreachable registry. Answered before the link, it stops the run
+// with one sentence the user can act on.
+function dependencyHealth(project) {
+  let pkg;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(project, 'package.json'), 'utf8'));
+  } catch {
+    return { ok: true, missing: [], declared: 0 };
+  }
+  const names = [...new Set([...Object.keys(pkg.dependencies || {}), ...Object.keys(pkg.devDependencies || {})])];
+  const missing = names.filter((name) => !fs.existsSync(path.join(project, 'node_modules', name, 'package.json')));
+  return { ok: missing.length === 0, missing, declared: names.length };
+}
+
+const entriesOf = (dir) => {
+  try {
+    return fs.readdirSync(dir).length;
+  } catch {
+    return null;
+  }
+};
+
 function linkDependencies(project, root, manager, isIgnored = (dir) => tryGit(dir, ['check-ignore', '-q', 'node_modules']) !== null) {
   const lock = lockfileOf[manager];
   const source = path.join(project, 'node_modules');
   const target = path.join(root, 'node_modules');
   if (!lock || !sameText(path.join(project, lock), path.join(root, lock))) return { linked: false, reason: 'its lockfile differs from the main checkout' };
   if (!isDirectory(source)) return { linked: false, reason: 'the main checkout has no node_modules' };
+  const health = dependencyHealth(project);
+  if (!health.ok) {
+    return {
+      linked: false,
+      mainBroken: true,
+      reason: `the main checkout's node_modules misses ${health.missing.length} of ${health.declared} declared packages (${health.missing.slice(0, 3).join(', ')}${health.missing.length > 3 ? ', …' : ''}): run \`${manager} ${manager === 'npm' ? 'ci' : 'install'}\` in ${project} first - never inside a worktree, whose node_modules is a link to it`,
+    };
+  }
   if (fs.existsSync(target)) return { linked: false, reason: 'the worktree already has a node_modules' };
   try {
     fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
@@ -274,6 +307,9 @@ function provideDependencies(project, root, { mode = 'auto', install = installDe
   if (mode !== 'install') {
     const link = linkDependencies(project, root, manager, isIgnored);
     if (link.linked) return { manager, linked: true, error: null };
+    // A broken main checkout is the user's to repair, once, before the run - not five installs
+    // in five worktrees against a registry that may not even answer.
+    if (link.mainBroken) return { manager, linked: false, mainBroken: true, error: link.reason };
     if (mode === 'link') return { manager, linked: false, error: `node_modules could not be linked: ${link.reason}` };
   }
   return { ...install(root), linked: false };
@@ -504,7 +540,10 @@ function add(options) {
   const deps = provideDependencies(project, worktree, { mode: options.deps || 'auto' });
   result.dependencies = deps;
   result.installed = Boolean(deps.manager) && !deps.error;
-  if (deps.error) {
+  if (deps.mainBroken) {
+    result.mainBroken = true;
+    result.warnings.push(`No dependencies for the gate: ${deps.error}.`);
+  } else if (deps.error) {
     // Not fatal: the fixing itself needs no dependency tree, only the
     // verification gate does. It reports its own failure, and saying so here is
     // what keeps that failure from reading as "the fixes broke the build".
@@ -540,10 +579,41 @@ function remove(options) {
   const kept = keepReports(project, worktree, options.branch || path.basename(worktree));
   result.keptReportsDir = kept.dir;
   result.keptReports = kept.reports;
+  const mainModules = path.join(project, 'node_modules');
+  const before = entriesOf(mainModules);
   result.unlinked = unlinkLinks(worktree).map((p) => path.relative(worktree, p));
-  if (tryGit(project, ['worktree', 'remove', worktree]) === null) {
-    result.errors.push(refused);
+  // Still a link after the unlink → git would walk into the main checkout's folder. Stop.
+  const leftLink = ['node_modules'].map((n) => path.join(worktree, n)).find((p) => {
+    try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; }
+  });
+  if (leftLink) {
+    result.errors.push(`${leftLink} is still a link after unlinking; nothing was removed, so the folder it points at is safe. Remove the link by hand (rmdir, never a recursive delete), then run remove again.`);
     return result;
+  }
+  let gitError = '';
+  try {
+    git(project, ['worktree', 'remove', worktree]);
+  } catch (err) {
+    gitError = String((err && err.stderr) || (err && err.message) || '').trim().split(/\r?\n/).filter(Boolean).pop() || 'git worktree remove failed';
+  }
+  if (gitError) {
+    // git deletes file by file and stops at the first it cannot (a file another process holds
+    // open, Windows). The tree is then half gone and the status above was clean: say what git
+    // said and what is left, not "it holds modified files" (2026-11-05: two such refusals left
+    // folders emptied while the message claimed uncommitted work).
+    const left = entriesOf(worktree);
+    if (left === null || left === 0) {
+      tryGit(project, ['worktree', 'prune']);
+      try { fs.rmdirSync(worktree); } catch { /* gone already */ }
+      result.warnings.push(`git worktree remove reported "${gitError}", but the worktree folder is ${left === null ? 'gone' : 'empty'}; pruned it.`);
+    } else {
+      result.errors.push(`git worktree remove stopped at "${gitError}" with ${left} entries left in ${worktree}; nothing uncommitted was there (status was clean). A process may hold a file open - close it (editor, test watcher, terminal in that folder), then run remove again.`);
+      return result;
+    }
+  }
+  const after = entriesOf(mainModules);
+  if (before !== null && after !== null && after < before) {
+    result.errors.push(`The main checkout's node_modules went from ${before} to ${after} entries while ${worktree} was removed. Run the install in ${project} before the next run.`);
   }
   result.removed = true;
   // The skill's own parent only ever holds its worktrees, so an empty one is
@@ -567,7 +637,7 @@ function main() {
 module.exports = {
   parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
   detectPackageManager, installDependencies, installFailure, copyEnvFiles, copyLocalFiles, isLocalConfig,
-  linkDependencies, provideDependencies, copyDohConfig, keepReports,
+  linkDependencies, provideDependencies, copyDohConfig, keepReports, dependencyHealth,
   add, remove, git, tryGit,
 };
 

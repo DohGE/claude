@@ -5,13 +5,13 @@
   "notes": [
     "Fallback: the spec of a component, guard, pipe, directive, service, state file or util has its own kind."
   ],
-  "itemCount": 44,
+  "itemCount": 47,
   "instructions": [
     {
       "id": "unit-tests",
       "name": "Unit tests (common)",
-      "selectedItems": "1-2,4,6-13,15-16,19-20,22-28",
-      "checklistSize": 28,
+      "selectedItems": "1-2,4,6-13,15-16,19-20,22-29",
+      "checklistSize": 29,
       "items": [
         {
           "id": "unit-tests#1",
@@ -85,7 +85,13 @@
         },
         {
           "id": "unit-tests#15",
-          "text": "Any spy or mock called with arguments is asserted on those arguments with `toHaveBeenCalledWith(...)` (or `toHaveBeenLastCalledWith(...)` for effect-driven repeats) — a bare `toHaveBeenCalled()`/`toHaveBeenCalledTimes(n)` that ignores the payload is insufficient; `toHaveBeenCalled()` is reserved for genuinely argument-less calls. Such a call is never asserted with an empty `toHaveBeenCalledWith()`."
+          "text": "Any spy or mock called with arguments is asserted on those arguments with `toHaveBeenCalledWith(...)` (or `toHaveBeenLastCalledWith(...)` for effect-driven repeats) — a bare `toHaveBeenCalled()`/`toHaveBeenCalledTimes(n)` that ignores the payload is insufficient; `toHaveBeenCalled()` is reserved for genuinely argument-less calls. Such a call is never asserted with an empty `toHaveBeenCalledWith()`.",
+          "probe": [
+            {
+              "pattern": "\\.(?<at>toHaveBeenCalledWith)\\(\\s*\\)",
+              "message": "puste `toHaveBeenCalledWith()` - wywołanie bez argumentów sprawdza `toHaveBeenCalled()`"
+            }
+          ]
         },
         {
           "id": "unit-tests#16",
@@ -145,14 +151,19 @@
           "subject": [
             "\\bdone\\b"
           ]
+        },
+        {
+          "id": "unit-tests#29",
+          "text": "One `it` verifies one behaviour: a test that triggers two independent actions or asserts two unrelated outcomes is split into two `it`s, each title naming its own behaviour - one failure then says which behaviour broke.",
+          "severity": "low"
         }
       ]
     },
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2-4,14-15,17",
-      "checklistSize": 18,
+      "selectedItems": "2-4,14-15,17,19",
+      "checklistSize": 19,
       "items": [
         {
           "id": "general#2",
@@ -198,6 +209,11 @@
             "//",
             "/\\*"
           ]
+        },
+        {
+          "id": "general#19",
+          "text": "One import declaration per module specifier: two `import` statements from the same path (`../../../models` twice) are merged into one.",
+          "severity": "low"
         }
       ]
     },
@@ -208,7 +224,7 @@
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
       "selectedItems": "1-2,22,25",
-      "checklistSize": 26,
+      "checklistSize": 28,
       "items": [
         {
           "id": "best-practices#1",
@@ -216,11 +232,17 @@
           "severity": "medium",
           "sameAs": [
             "utils#2"
+          ],
+          "probe": [
+            {
+              "pattern": "\\b(?:input|model|signal)<(?<at>boolean|number|string)>\\(\\s*(?:true|false|-?\\d[\\d_.]*|'[^']*'|\"[^\"]*\")\\s*\\)",
+              "message": "argument typu powtarza typ, który wartość domyślna już wyznacza"
+            }
           ]
         },
         {
           "id": "best-practices#2",
-          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `input(<default>)`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction.",
+          "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `input(<default>)`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction. A view-model object a component or mapper builds for the template with fields of its own (a row extended with a tooltip, a disabled reason, a label) is typed by a named interface in `models/`, never left as an inferred object literal nobody declared.",
           "severity": "low"
         },
         {
@@ -247,8 +269,8 @@
         "This instruction OWNS duplication, dead/unnecessary code, boilerplate and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1-5,8",
-      "checklistSize": 13,
+      "selectedItems": "1-5,8,15",
+      "checklistSize": 15,
       "items": [
         {
           "id": "code-quality#1",
@@ -281,7 +303,7 @@
         },
         {
           "id": "code-quality#3",
-          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change.",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change. This includes a public store, facade or service member (a field, a signal, a selector exposed through a facade, a method) that nothing in the repository reads, and a parameter every caller passes the same constant (`null`, `undefined`, `false`) - it is dropped, or given that value as its default.",
           "facts": [
             "export-unused",
             "barrel-unused",
@@ -300,6 +322,11 @@
         {
           "id": "code-quality#8",
           "text": "Code is consistent with its surroundings: one concept keeps one name everywhere (and one name never denotes two concepts), sibling cases are solved the same way (same guard style, same mapping approach, same error handling, same async style), related functions keep the same parameter order and return shape, and members keep the file's established ordering. Code that answers an already-answered question differently is a finding at the new location. A name that merely breaks a naming convention (casing, abbreviation) is not this rule — it is a finding only under the instruction that sets that convention. An inconsistency is a finding only when each variant is valid by itself; when a variant breaks another item, that item's finding is the one reported.",
+          "severity": "low"
+        },
+        {
+          "id": "code-quality#15",
+          "text": "A property chain repeated three times or more in one function or test (`component.form.controls.x`, `fixture.componentInstance.y`) is destructured once at its top (`const { labelMethod, capacity } = component.form.controls;`).",
           "severity": "low"
         }
       ]

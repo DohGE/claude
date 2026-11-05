@@ -2,7 +2,7 @@
   "kind": "feature-component-template",
   "pattern": "src/app/**/components-<area>/feature/<name>/<name>.component.html",
   "role": "Template of a feature or dialog component.",
-  "itemCount": 77,
+  "itemCount": 78,
   "instructions": [
     {
       "id": "component-template",
@@ -103,7 +103,7 @@
         },
         {
           "id": "component-template#13",
-          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant), its value naming the element's role or intent - never its translated text. On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template.",
+          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant), its value naming the element's role or intent - never its translated text. On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template. The element name ends with the kind of control it hooks - `-input`, `-select`, `-checkbox`, `-toggle`, `-radio`, `-button`, `-link` - never a generic `-control`, `-field` or `-element`.",
           "severity": "medium"
         },
         {
@@ -234,7 +234,7 @@
       "id": "general",
       "name": "General code rules",
       "selectedItems": "7,14",
-      "checklistSize": 18,
+      "checklistSize": 19,
       "items": [
         {
           "id": "general#7",
@@ -259,7 +259,7 @@
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
       "selectedItems": "12,19",
-      "checklistSize": 26,
+      "checklistSize": 28,
       "items": [
         {
           "id": "best-practices#12",
@@ -377,7 +377,7 @@
       "items": [
         {
           "id": "accessibility#1",
-          "text": "Every non-text element carries a text alternative: `<img>` has `[alt]` (empty `alt=\"\"` only for decorative images, `aria-hidden=\"true\"` on decorative inline `<svg>`/icon), icon-only buttons and links get an `aria-label` resolved from an i18n key, and no alternative is a filename, a key path or the word \"image\"/\"icon\" (1.1.1).",
+          "text": "Every non-text element carries a text alternative: `<img>` has `[alt]` (empty `alt=\"\"` only for decorative images, `aria-hidden=\"true\"` on decorative inline `<svg>`/icon), icon-only buttons and links get an `aria-label` resolved from an i18n key, and no alternative is a filename, a key path or the word \"image\"/\"icon\" (1.1.1). A button whose visible content is only an icon and whose tooltip changes with its state - a disabled reason replacing the action name - carries its own `aria-label` with the action name: a button component that falls back to its tooltip for the accessible name otherwise announces \"To unload a tape, the drive must contain a tape\" and never the action.",
           "subject": "<img|<svg|<picture|<canvas|<video|<audio|<object|<embed|<area\\b|icon|button|<a\\b|routerlink|href|ngsrc|\\[src\\]|\\ssrc=|role=\"img\"|background-image|content:\\s*url"
         },
         {
@@ -551,8 +551,8 @@
         "This instruction OWNS duplication, dead/unnecessary code, boilerplate and inconsistency: when another instruction or the cross-file pass covers the same occurrence (the architecture \"reuse before creating\" rule, the duplication-drift and naming-consistency questions, a jscpd candidate from the context), the occurrence is reported ONCE — here, with the severity above.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
-      "selectedItems": "1,8-9,12-13",
-      "checklistSize": 13,
+      "selectedItems": "1,8-9,12-14",
+      "checklistSize": 15,
       "items": [
         {
           "id": "code-quality#1",
@@ -592,6 +592,11 @@
         {
           "id": "code-quality#13",
           "text": "No template boilerplate: scaffolding and generator leftovers (placeholder markup, `TODO` stubs nothing tracks), values re-declared although the framework already defaults to them, and ceremony that adds no behavior."
+        },
+        {
+          "id": "code-quality#14",
+          "text": "No guard that repeats what the callee already guarantees: a click handler re-checking the disabled state or the disabled reason of a button component that already suppresses clicks while disabled, a second null check of a value the caller already narrowed, an `@if` repeating the condition of the block around it. The redundant guard reads as if the case could happen, and it is one more place to change.",
+          "severity": "low"
         }
       ]
     }

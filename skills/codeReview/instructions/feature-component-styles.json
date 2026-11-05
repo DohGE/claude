@@ -74,7 +74,7 @@
       "id": "general",
       "name": "General code rules",
       "selectedItems": "14",
-      "checklistSize": 18,
+      "checklistSize": 19,
       "items": [
         {
           "id": "general#14",
@@ -161,7 +161,7 @@
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
       "selectedItems": "1,8,10",
-      "checklistSize": 13,
+      "checklistSize": 15,
       "items": [
         {
           "id": "code-quality#1",
