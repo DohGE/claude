@@ -2,6 +2,10 @@
   "kind": "feature-component-styles",
   "pattern": "src/app/**/components-<area>/feature/<name>/<name>.component.scss",
   "role": "Stylesheet of a feature or dialog component.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "itemCount": 23,
   "instructions": [
     {

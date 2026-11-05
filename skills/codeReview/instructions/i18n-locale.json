@@ -2,6 +2,10 @@
   "kind": "i18n-locale",
   "pattern": "i18n/<lang>.json",
   "role": "Translation file of a non-source language, maintained outside code changes.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "i18n#1",

@@ -2,6 +2,10 @@
   "kind": "eslintrc",
   "pattern": ".eslintrc*",
   "role": "ESLint configuration in the legacy `.eslintrc*` format.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "general#12",

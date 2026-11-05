@@ -2,6 +2,10 @@
   "kind": "i18n-source",
   "pattern": "i18n/en.json",
   "role": "Source-language (English) translation file — the only i18n file edited by hand.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "i18n#1",

@@ -2,6 +2,10 @@
   "kind": "tsconfig",
   "pattern": "tsconfig.json",
   "role": "Root TypeScript compiler configuration.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "general#12",

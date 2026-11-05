@@ -197,8 +197,20 @@ function git(project, args, { env, input } = {}) {
 // and untracked files, not the ignored ones.
 // `scope` (review-scope.cjs) narrows it to the projects the review reaches; null is the whole tree.
 // `root` puts the tree elsewhere - where the review searches it after the scan (scanTargets).
+// A kept tree lies under the project's `.claude/`, which a repository usually ignores: ripgrep -
+// the Grep and Glob tools - then searched the snapshot and answered "No files found" for 106 of
+// 122 directory searches (2026-11-05), so a usage or a copy the walker looked for was "absent".
+// `.ignore` outranks every `.gitignore` above it, and `!*` lets the whole reviewed revision back
+// in; the tree holds only the files git lists, so nothing ignored comes back with it.
+const searchableMarker = { name: '.ignore', text: '!*\n' };
+
 function exportTree({ project, source, workDir, isSkipped = () => false, scope = null, root = path.join(workDir, 'tree') }) {
   fs.mkdirSync(root, { recursive: true });
+  // Written last: a repository that tracks its own `.ignore` would otherwise put it back.
+  const done = (count) => {
+    fs.writeFileSync(path.join(root, searchableMarker.name), searchableMarker.text);
+    return { root, count };
+  };
   // The repository root's own files (tsconfig.json, angular.json, package.json, eslint config)
   // stay in a narrowed tree: a rule's project-wide setting is read there, and a walker that did not
   // find it in the snapshot read it with `git show` from another revision (2026-11-02).
@@ -214,7 +226,7 @@ function exportTree({ project, source, workDir, isSkipped = () => false, scope =
       fs.copyFileSync(from, path.join(root, rel));
       count++;
     }
-    return { root, count };
+    return done(count);
   }
   // LFS pointers stay pointers: the objects behind them are binaries jscpd skips,
   // and fetching them would turn a scan into a download.
@@ -229,7 +241,7 @@ function exportTree({ project, source, workDir, isSkipped = () => false, scope =
       input: listed.map((p) => `${p}\0`).join(''),
     });
   }
-  return { root, count: listed.length };
+  return done(listed.length);
 }
 
 // npx runs the pinned jscpd without installing anything into the project. It is
@@ -306,6 +318,7 @@ function runJscpdMany(entries, { parallel = defaultScanParallel(entries.length),
   };
   if (entries.length === 0) return [];
   if (entries.length === 1 || parallel <= 1) return entries.map((entry) => attempt(() => runJscpd(entry.root, entry.workDir, invocation)));
+  warmUp(invocation);
   const calls = entries.map((entry) => jscpdCall(entry.root, entry.workDir, invocation));
   const res = spawnSync(process.execPath, [__filename, '--run-many'], {
     input: JSON.stringify({ calls, parallel }),
@@ -317,7 +330,29 @@ function runJscpdMany(entries, { parallel = defaultScanParallel(entries.length),
   try {
     outcomes = JSON.parse(res.stdout || '[]');
   } catch {}
-  return calls.map((call, i) => attempt(() => readReport(call.report, outcomes[i] || { error: res.error, stderr: res.stderr, status: res.status })));
+  // A scan that failed beside the others gets one more run alone: the cache is filled by now.
+  return calls.map((call, i) => {
+    const first = attempt(() => readReport(call.report, outcomes[i] || { error: res.error, stderr: res.stderr, status: res.status }));
+    return first.error ? attempt(() => runJscpd(entries[i].root, entries[i].workDir, invocation)) : first;
+  });
+}
+
+// Parallel npx runs of a package not yet in its cache unpack it into one folder at once, and
+// every run of a four-branch review failed its own way - TAR_ENTRY_ERROR, ENOENT, "'jscpd' is
+// not recognized" (2026-11-05). One run alone fills the cache first; only npx needs it.
+function warmUp(invocation, run = spawnSync) {
+  if (!invocation.args.some((a) => a.startsWith('--package='))) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'doh-cpd-warm-'));
+  try {
+    const args = [...invocation.args, '--version'];
+    run(invocation.shell ? [invocation.command, ...args].join(' ') : invocation.command, invocation.shell ? [] : args, {
+      cwd: dir, shell: invocation.shell, windowsHide: true, encoding: 'utf8', timeout: timeoutMs,
+    });
+  } catch {} finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch {}
+  }
 }
 
 // The child of runJscpdMany: every call, `parallel` at a time; prints each one's exit as JSON.
@@ -428,8 +463,8 @@ function scanTargets(jobs, { run = runJscpdMany, parallel } = {}) {
 }
 
 module.exports = {
-  candidateLimit, maxCopies, sourceLimit, changedShare, pickCandidates, exportTree, jscpdInvocation, runJscpd, scanDuplicates,
-  runJscpdMany, scanTargets, defaultScanParallel,
+  candidateLimit, maxCopies, sourceLimit, searchableMarker, changedShare, pickCandidates, exportTree, jscpdInvocation, runJscpd, scanDuplicates,
+  runJscpdMany, scanTargets, defaultScanParallel, warmUp,
 };
 
 if (require.main === module && process.argv[2] === '--run-many') {

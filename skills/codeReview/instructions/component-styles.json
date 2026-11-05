@@ -2,6 +2,10 @@
   "kind": "component-styles",
   "pattern": "<name>.component.(scss|css|sass|less)",
   "role": "Stylesheet of a component.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "itemCount": 23,
   "instructions": [
     {

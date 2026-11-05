@@ -2,6 +2,10 @@
   "kind": "stylesheet",
   "pattern": "*.(scss|css|sass|less)",
   "role": "Global or partial stylesheet outside any component (theme, global styles).",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "notes": [
     "No component owns it: the component-styles instruction does not apply."
   ],

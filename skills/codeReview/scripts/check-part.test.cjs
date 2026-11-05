@@ -155,8 +155,23 @@ test('an OK met in another file names that file, which has to exist', (t) => {
   // Its lines are that file's: no bound and no whole-file span of this one applies.
   assert.deepStrictEqual(check(f, 1, general1('tests/a.spec.ts L1-40')), []);
   has(check(f, 1, general1('tests/missing.spec.ts')), 'nie wskazuje linii tego pliku, istniejącego pliku');
-  has(check(f, 1, general1('a.ts')), 'nie wskazuje linii tego pliku, istniejącego pliku');
+  has(check(f, 1, general1('a.ts')), 'to ścieżka tego samego pliku - dowodem są jego linie');
+  has(check(f, 1, general1('src/a.ts')), 'to ścieżka tego samego pliku');
   has(check(f, 1, partA({ general13: '[x] general#1,#3 — OK (tests/a.spec.ts)' })), 'jedno OK na 2 pozycji');
+});
+
+test('an OK reads its lines from the opening list: a note after ";" cites other lines and values', (t) => {
+  const f = fixture(t);
+  const general1 = (evidence) => partA({ general13: `[x] general#1 — OK (${evidence})\n[x] general#3 — OK (brak wystąpień)` });
+  // src/a.ts has 20 lines; the note's numbers are a value, a spec's lines, methods left alone.
+  assert.deepStrictEqual(check(f, 1, general1('L6; komentarz podaje powód wartości 2^31-1')), []);
+  assert.deepStrictEqual(check(f, 1, general1('L5, L7; metody klasy L35-123 niezmienione')), []);
+  assert.deepStrictEqual(check(f, 1, general1('L2; spec L40, L54')), []);
+  // The opening list is still checked, and a note alone still holds lines.
+  has(check(f, 1, general1('L25; uwaga')), 'dowód OK wskazuje linie 25, a plik ma 20 linii');
+  has(check(f, 1, general1('L25; uwaga')), 'linie innego pliku (spec) stoją po jego ścieżce');
+  has(check(f, 1, general1('L1-20; cały plik')), 'obejmuje 20 z 20 linii pliku');
+  has(check(f, 1, general1('sprawdzone; L1-20')), 'obejmuje 20 z 20 linii pliku');
 });
 
 test('ticks and findings are one record', (t) => {
