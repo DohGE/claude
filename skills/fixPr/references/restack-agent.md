@@ -54,9 +54,10 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
    `errorsPath` and repair what your resolution broke - nothing else; at most two more passes. Still
    red → `git -C "{{ROOT}}" reset --hard <before>` and end with the `error` JSON.
 5. Push, only when `{{PUSH}}` is `yes`:
-   `git -C "{{ROOT}}" push --force-with-lease={{BRANCH}}:{{LEASE}} origin {{BRANCH}}`. A rejection means
-   somebody pushed to the branch during the run: never retry with another force. Report `pushed: false`
-   with the rejection text.
+   `node "{{SKILL_DIR}}/scripts/restack.cjs" --action=push --worktree="{{ROOT}}" --branch={{BRANCH}} --lease={{LEASE}}`
+   (a `--force-with-lease={{BRANCH}}:{{LEASE}}` push that retries a transient GitHub failure). A
+   rejection (`rejected: true`) means somebody pushed to the branch during the run: never retry
+   with another force. Report `pushed: false` with the rejection text.
 
 ## Rules
 

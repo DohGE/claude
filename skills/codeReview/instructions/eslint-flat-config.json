@@ -2,6 +2,10 @@
   "kind": "eslint-flat-config",
   "pattern": "eslint.config.*",
   "role": "ESLint flat configuration.",
+  "walker": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
   "describedBy": [
     {
       "id": "general#12",
@@ -14,7 +18,7 @@
       "id": "general",
       "name": "General code rules",
       "selectedItems": "12",
-      "checklistSize": 18,
+      "checklistSize": 19,
       "items": [
         {
           "id": "general#12",

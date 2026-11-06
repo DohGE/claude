@@ -447,7 +447,14 @@ function checkReason(at, reason, finder) {
 // (a second question's answer, a probe's note) cites other files' lines and counts, and holds
 // parentheses of its own (`user()`), so it is cut off before the numbers are read.
 function violationLines(after) {
-  if (!after.startsWith('(')) return [];
+  return numbersIn(leadingList(after));
+}
+
+// The list that opens a verdict's parenthesis, before its first `;` or note prefix: an OK's lines
+// are read there too. Its note cites the lines of a spec, a value (`2^31-1`) or the methods it
+// left alone, and 6 of 16 refused parts of one run were such a note read as lines (2026-11-05).
+function leadingList(after) {
+  if (!after.startsWith('(')) return '';
   let depth = 0;
   let end = after.length;
   for (let i = 0; i < after.length; i++) {
@@ -457,8 +464,7 @@ function violationLines(after) {
       break;
     }
   }
-  const listed = after.slice(1, end).split(new RegExp(`;|${bundle.linePrefix.second}|${bundle.linePrefix.probe}|${bundle.linePrefix.strong}|${bundle.linePrefix.hint}`))[0];
-  return numbersIn(listed);
+  return after.slice(1, end).split(new RegExp(`;|${bundle.linePrefix.second}|${bundle.linePrefix.probe}|${bundle.linePrefix.strong}|${bundle.linePrefix.hint}`))[0];
 }
 
 // `ctx.handoff` - the addresses the item hands part of its subject to (rulebook `handoff`): named
@@ -508,14 +514,22 @@ function checkTickLine(line, gates, count, finder = null, ctx = {}) {
     } else if (items > 1 && (numbered || elsewhere || !absent)) {
       problems.push(`${at}: jedno OK na ${items} pozycji z dowodem "(${inner})" - linie i pliki są dowodem jednej pozycji. Każda pozycja, której przedmiot występuje w pliku, ma własną linię z liniami, z których odczytano jej werdykt; w jedną linię zwijają się tylko pozycje, których przedmiotu plik nie zawiera: "— OK (${noOccurrence})".`);
     } else if (!absent && !numbered && !elsewhere) {
-      problems.push(`${at}: dowód OK "(${whole})" nie wskazuje linii tego pliku, istniejącego pliku ani "${noOccurrence}".`);
+      // A walker names the reviewed spec itself as the spec meeting the requirement (2 of 16).
+      const self = ctx.selfPath || '';
+      const itself = self && (inner.replace(/\\/g, '/').match(/[\w@+~.-]*(?:\/[\w@+~.-]+)*\.[A-Za-z][\w-]*/g) || [])
+        .some((token) => token === self || self.endsWith(`/${token.replace(/^\.?\//, '')}`));
+      problems.push(itself
+        ? `${at}: dowód OK "(${whole})" to ścieżka tego samego pliku - dowodem są jego linie: "— OK (L12, L18)".`
+        : `${at}: dowód OK "(${whole})" nie wskazuje linii tego pliku, istniejącego pliku ani "${noOccurrence}".`);
     } else if (!elsewhere && count) {
-      const spans = citedSpans(inner);
+      // The lines are read from the opening list when it has any: what follows a `;` is a note.
+      const lead = leadingList(after);
+      const spans = citedSpans(citedSpans(lead).length ? lead : inner);
       const beyond = [...new Set(spans.flat().filter((k) => k > count))];
       const covered = new Set();
       for (const [from, to] of spans) for (let k = Math.max(1, from); k <= Math.min(to, count); k++) covered.add(k);
       if (beyond.length) {
-        problems.push(`${at}: dowód OK wskazuje linie ${beyond.join(', ')}, a plik ma ${count} linii - numery pochodzą z Read pliku contentPath.${ctx.beyondHint ? ctx.beyondHint(Math.max(...beyond)) : ''}`);
+        problems.push(`${at}: dowód OK wskazuje linie ${beyond.join(', ')}, a plik ma ${count} linii - numery pochodzą z Read pliku contentPath; linie innego pliku (spec) stoją po jego ścieżce: "— OK (L12; tests/a.spec.ts:L40)".${ctx.beyondHint ? ctx.beyondHint(Math.max(...beyond)) : ''}`);
       } else if (!absent && count >= wholeFileMinLines && covered.size >= count * wholeFileShare) {
         problems.push(`${at}: dowód OK "(${inner})" obejmuje ${covered.size} z ${count} linii pliku - to cały plik, nie miejsce, z którego odczytano werdykt. Podaj linie, które rozstrzygają tę pozycję: deklarację, wywołanie, wiązanie, element, a przy regule kolejności pierwszą linię każdego elementu. Zakaz, którego przedmiotu plik nie zawiera, to "— OK (${noOccurrence})", a wymaganie spełnione w innym pliku (spec, trasa) wskazuje ten plik ścieżką.`);
       }
@@ -694,6 +708,7 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
     problems.push(...checkTickLine(line, gates, count, finder, {
       handoff: new Set(handoffOf.map((address) => address.toLowerCase())), handoffOf, perFile: perFileIds.has(line.id),
       beyondHint: (highest) => beyondHint(target, number, highest, options.lineCount),
+      selfPath: file.path,
     }));
     for (const k of line.numbers || []) {
       const address = `${line.id}#${k}`;

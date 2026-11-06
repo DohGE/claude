@@ -14,7 +14,7 @@
     {
       "id": "unit-tests",
       "name": "Unit tests (common)",
-      "checklistSize": 28,
+      "checklistSize": 29,
       "selectedItems": "1,23",
       "items": [
         {

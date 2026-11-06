@@ -207,6 +207,42 @@ function resolveThread(project, threadId, send = github.request) {
   return { resolved: true, error: null };
 }
 
+// A failure worth one more try: GitHub's 5xx, a dropped connection, a timed-out child. A 4xx
+// is an answer - the token, the id or the request is wrong, and asking again changes nothing.
+// On 2026-11-05 two resolves of one run came back `HTTP 502`; the retried reply then went out
+// twice on a thread, because the first one had landed despite the 502.
+function isTransient(error) {
+  return /\bHTTP 5\d\d\b|\b50[234]\b|bad gateway|service unavailable|gateway time-?out|request process failed|unreadable response|timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|fetch failed|secondary rate limit/i.test(String(error || ''));
+}
+
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// `call` returns `{ error }` among its fields; a transient error is retried after each of
+// `delays`, anything else comes back at once. `beforeRetry` runs before every retry and may
+// return a final answer of its own - the reply checks there whether the "failed" call landed.
+function withRetry(call, { delays = [2000, 6000], wait = sleepMs, beforeRetry = null } = {}) {
+  let answer = call();
+  for (const delay of delays) {
+    if (!answer || !answer.error || !isTransient(answer.error)) return answer;
+    wait(delay);
+    if (beforeRetry) {
+      const settled = beforeRetry(answer);
+      if (settled) return settled;
+    }
+    answer = call();
+  }
+  return answer;
+}
+
+// Whether one of the thread's comments already starts with `prefix` - the reply a 502 hid.
+function threadHasReply(project, threadId, prefix, send = github.request) {
+  const { comments, error } = restOfThread(project, threadId, null, send);
+  if (error && comments.length === 0) return { found: false, error };
+  return { found: comments.some((c) => String(c.body || '').trim().startsWith(prefix)), error: null };
+}
+
 // The reply resolve-threads.cjs posts before it closes a thread: which commit fixed it.
 function replyToThread(project, threadId, body, send = github.request) {
   const { data, error } = graphql(project, replyMutation, { id: threadId, body }, send);
@@ -287,6 +323,6 @@ function reviewBodies(project, slug, number, send = github.request) {
 
 module.exports = {
   graphql, reviewThreads, restOfThread, resolveThread, replyToThread, issueComments, reviewBodies,
-  normalizeThread, normalizeComment, stripAnchor,
+  normalizeThread, normalizeComment, stripAnchor, isTransient, withRetry, threadHasReply, sleepMs,
   threadsQuery, threadCommentsQuery, resolveMutation, replyMutation,
 };

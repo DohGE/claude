@@ -127,15 +127,28 @@ function resolveAll(options, api = prApi, wait = pause, files = null) {
     if (calls > 0) wait();
     calls += 1;
   };
+  // A 5xx is retried; a reply is retried only once the thread shows it did not land after all,
+  // and a thread already carrying this commit's reply (an earlier run, a hidden 502) gets none.
+  const retry = (call, beforeRetry) => (api.withRetry || prApi.withRetry)(call, { wait, beforeRetry });
+  const hasReply = (id, prefix) => (api.threadHasReply ? api.threadHasReply(project, id, prefix) : { found: false });
+  result.alreadyReplied = [];
   ids.forEach((id) => {
     if (reply) {
+      const prefix = `Fixed in ${String(options.commit).slice(0, 12)}`;
       pace();
-      const answer = api.replyToThread(project, id, replyBody(options.commit, (options.via && options.via[id]) || []));
-      if (answer.replied) result.replied.push(id);
-      else result.replyFailed.push({ id, error: answer.error || 'unknown failure' });
+      if (hasReply(id, prefix).found) {
+        result.alreadyReplied.push(id);
+      } else {
+        const answer = retry(
+          () => api.replyToThread(project, id, replyBody(options.commit, (options.via && options.via[id]) || [])),
+          () => (hasReply(id, prefix).found ? { replied: true, error: null } : null),
+        );
+        if (answer.replied) result.replied.push(id);
+        else result.replyFailed.push({ id, error: answer.error || 'unknown failure' });
+      }
     }
     pace();
-    const { resolved, error } = api.resolveThread(project, id);
+    const { resolved, error } = retry(() => api.resolveThread(project, id));
     if (resolved) result.resolved.push(id);
     else result.failed.push({ id, error: error || 'unknown failure' });
   });

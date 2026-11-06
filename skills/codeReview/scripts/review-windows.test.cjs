@@ -126,6 +126,21 @@ test('a window carrying verdicts from an earlier part of the stack starts after 
   assert.strictEqual(most, 2, 'three lanes, but b/window01 waits for a/window02');
 });
 
+test('the lanes start the costliest ready window first, of whichever target', async () => {
+  const args = {
+    lanes: 1,
+    targets: [
+      { dir: 'a', windows: [['1-2', '', ''], ['3-4', '', '']], costs: [10, 20], cross: {} },
+      { dir: 'b', windows: [['1-2', '', ''], ['3-4', '', '', ['1:1']]], costs: [30, 90], cross: {} },
+      { dir: 'c', windows: [['1-2', '', '']], cross: {} },
+    ],
+  };
+  const { calls } = await runWorkflow(args, (prompt) => (prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));
+  const windows = calls.map((c) => c.prompt).filter((p) => p.includes('/window')).map((p) => p.slice('Read '.length, -' and follow it.'.length));
+  assert.deepStrictEqual(windows, ['b/window01.md', 'a/window02.md', 'a/window01.md', 'b/window02.md', 'c/window01.md'],
+    'b/window02 is the costliest but waits for a/window01; without costs a window counts as 0 and keeps its order');
+});
+
 test('a target with a gaps step closes its open items before its cross-file pass', async () => {
   const args = { lanes: 1, targets: [{ dir: 'a', windows: [['1-2', '', '']], cross: {}, gaps: { model: 'sonnet', effort: 'medium' } }] };
   const { result, calls } = await runWorkflow(args, (prompt) => (prompt.includes('gaps') ? 'GAPS DONE' : prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));

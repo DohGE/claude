@@ -171,6 +171,49 @@ test('a folder review exports the working tree with untracked files and without 
   assert.ok(!fs.existsSync(path.join(exported.root, 'secret.ts')));
 });
 
+test('an exported tree lets ripgrep in although the repository ignores the folder it lies in', (t) => {
+  const dir = initRepo(t, 'dup-repo-');
+  commitFile(dir, '.ignore', 'src/\n', 'own ignore');
+  commitFile(dir, 'src/a.ts', 'x\n', 'base');
+  const exported = dup.exportTree({ project: dir, source: { ref: 'HEAD' }, workDir: tempDir(t, 'dup-work-') });
+  assert.strictEqual(readText(path.join(exported.root, '.ignore')), dup.searchableMarker.text, 'the marker wins over a tracked .ignore');
+  assert.strictEqual(dup.searchableMarker.text.trim(), '!*');
+  assert.strictEqual(exported.count, 2);
+});
+
+test('npx is warmed up once before scans run side by side; a direct jscpd is not', (t) => {
+  const calls = [];
+  const fake = (command, args, options) => { calls.push({ command, args, cwd: options.cwd }); return { status: 0 }; };
+  dup.warmUp({ command: process.execPath, args: ['npx-cli.js', '--yes', '--package=jscpd@5.3.1', '--', 'jscpd'], shell: false }, fake);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].args[calls[0].args.length - 1], '--version');
+  assert.ok(!fs.existsSync(calls[0].cwd), 'the warm-up folder is removed');
+  dup.warmUp({ command: process.execPath, args: ['fake-jscpd.cjs'], shell: false }, fake);
+  assert.strictEqual(calls.length, 1, 'no npx, nothing to fill');
+});
+
+test('a scan that failed beside the others runs once more alone', (t) => {
+  const dir = tempDir(t, 'dup-retry-');
+  const fake = path.join(dir, 'fake-jscpd.cjs');
+  fs.writeFileSync(fake, [
+    "const fs = require('node:fs');",
+    'const args = process.argv.slice(2);',
+    "const output = args[args.indexOf('--output') + 1];",
+    "const flag = require('node:path').join(process.cwd(), '..', 'tried');",
+    "if (process.cwd().includes('flaky') && !fs.existsSync(flag)) { fs.writeFileSync(flag, ''); process.exit(1); }",
+    'fs.mkdirSync(output, { recursive: true });',
+    "fs.writeFileSync(output + '/jscpd-report.json', JSON.stringify({ duplicates: [] }));",
+  ].join('\n'));
+  const entries = ['ok', 'flaky'].map((name) => {
+    const workDir = path.join(dir, name);
+    fs.mkdirSync(path.join(workDir, 'tree'), { recursive: true });
+    return { root: path.join(workDir, 'tree'), workDir };
+  });
+  const results = dup.runJscpdMany(entries, { parallel: 2, invocation: { command: process.execPath, args: [fake], shell: false } });
+  assert.deepStrictEqual(results.map((r) => r.error), [undefined, undefined]);
+  assert.ok(fs.existsSync(path.join(dir, 'flaky', 'tried')), 'the first run of the flaky scan failed');
+});
+
 test('jscpd is pinned and runs through the npx next to this node, without a shell', () => {
   const nodeDir = path.join(path.sep, 'opt', 'node');
   const execPath = path.join(nodeDir, 'node');

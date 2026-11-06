@@ -125,6 +125,37 @@ test('every resolved thread gets a reply naming the commit, before it is closed'
   assert.strictEqual(calls.filter((c) => c[0] === 'reply').length, 2, '--no-reply posts nothing');
 });
 
+test('a 502 is retried, and a reply that landed despite it is never posted twice', (t) => {
+  // 2026-11-05: a resolve came back HTTP 502, was retried by hand, and the thread got the same
+  // "Fixed in" reply twice - the first one had landed.
+  const { dir, comments } = commentsFile(t, [{ id: 'A', path: 'src/a.ts' }, { id: 'B', path: 'src/b.ts' }, { id: 'C', path: 'src/c.ts' }]);
+  const posted = { A: [], B: ['Fixed in 0123456789ab.'], C: [] };
+  const calls = [];
+  let resolveFailures = 1;
+  const api = {
+    threadHasReply: (project, id, prefix) => ({ found: posted[id].some((b) => b.startsWith(prefix)) }),
+    replyToThread: (project, id, body) => {
+      calls.push(['reply', id]);
+      posted[id].push(body);
+      // A's reply lands but the answer is lost in a 502.
+      return id === 'A' && posted.A.length === 1 ? { replied: false, error: 'HTTP 502' } : { replied: true, error: null };
+    },
+    resolveThread: (project, id) => {
+      calls.push(['resolve', id]);
+      if (id === 'C' && resolveFailures > 0) { resolveFailures -= 1; return { resolved: false, error: 'Server Error - HTTP 503' }; }
+      return id === 'B' ? { resolved: false, error: 'Resource not accessible by integration' } : { resolved: true, error: null };
+    },
+  };
+  const files = new Set(['src/a.ts', 'src/b.ts', 'src/c.ts']);
+  const result = rt.resolveAll({ project: '/p', threads: ['A', 'B', 'C'], comments, root: dir, commit: '0123456789abcdef' }, api, () => {}, files);
+  assert.deepStrictEqual(posted.A, ['Fixed in 0123456789ab.'], 'the lost answer is not a second reply');
+  assert.deepStrictEqual(result.replied, ['A', 'C']);
+  assert.deepStrictEqual(result.alreadyReplied, ['B']);
+  assert.deepStrictEqual(result.resolved, ['A', 'C'], 'a 503 on C is retried');
+  assert.deepStrictEqual(result.failed, [{ id: 'B', error: 'Resource not accessible by integration' }], 'a 4xx-style refusal is not retried');
+  assert.strictEqual(calls.filter((c) => c[0] === 'resolve' && c[1] === 'B').length, 1);
+});
+
 test('parseArgs reads --via and --no-reply', () => {
   const args = rt.parseArgs(['--threads=PRRT_a==,B', '--via=PRRT_a==:src/en.json|src/pl.json;B:x/y z.ts', '--no-reply']);
   assert.deepStrictEqual(args.via, { 'PRRT_a==': ['src/en.json', 'src/pl.json'], B: ['x/y z.ts'] });

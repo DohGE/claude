@@ -24,6 +24,8 @@ export const meta = {
 //              order; the fourth entry, when there is one, names the windows (of `targets`, both counted
 //              from 1) that walk the files this window carries verdicts from - a later part of a
 //              stack waits for them, so their parts are on disk when its bundles are read
+//     costs    [<tokens>, ...] per window, optional: the output its walk is estimated to write - the
+//              walk's time - and the lanes start the costliest ready window first
 //     cross    { model, effort } of the cross-file pass's agent
 //     gaps     { model, effort } of the agent that closes the items left open for a readable outside
 //              file before the cross-file pass; absent, there is no such step
@@ -59,6 +61,7 @@ const targets = (single ? [{ dir: input.dir, windows: input.windows, cross: inpu
     model: w[1] || '',
     effort: w[2] || '',
     after: Array.isArray(w[3]) ? w[3].map(String) : [],
+    cost: Number((t.costs || [])[k]) || 0,
     brief: `${dir}/window${pad(k + 1)}.md`,
   }))
   return { dir, name, windows, cross: t.cross || {}, gaps: t.gaps || null, results: [], left: windows.length, failed: [], reply: null, gapsReply: null }
@@ -102,11 +105,14 @@ const wakeAll = () => {
 // A window whose files carry verdicts from an earlier part of the stack waits for the windows that
 // walk those files; one naming no window of this run waits for nothing.
 const ready = (job) => job.w.after.every((key) => finished.has(key) || !known.has(key))
-// Each lane takes the first window, of whichever target, that is free to start, as soon as its
-// walker is done; with none free it waits for the next window to finish.
+// Each lane takes the costliest window, of whichever target, that is free to start (the first one
+// on a tie), as soon as its walker is done; with none free it waits for the next window to finish.
+// In file order the six windows of the first target took every lane, and the 12-minute window of
+// the third started six minutes late and ended the run (2026-11-05).
+const next = () => jobs.reduce((best, j) => (j.state === 'pending' && ready(j) && (!best || j.w.cost > best.w.cost) ? j : best), null)
 const lane = async () => {
   for (;;) {
-    const job = jobs.find((j) => j.state === 'pending' && ready(j))
+    const job = next()
     if (!job) {
       if (!jobs.some((j) => j.state === 'pending')) return
       await new Promise((resolve) => waiting.push(resolve))

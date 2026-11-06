@@ -24,7 +24,7 @@ const defaultSkillDir = path.resolve(__dirname, '..');
 const artifactsRetain = 30;
 
 function parseArgs(argv) {
-  const args = { branches: '', project: process.cwd(), skillDir: '', replay: '', local: null };
+  const args = { branches: '', project: process.cwd(), skillDir: '', replay: '', local: null, task: '' };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -33,11 +33,12 @@ function parseArgs(argv) {
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'skill-dir') args.skillDir = m[2];
     else if (m[1] === 'replay') args.replay = m[2];
+    else if (m[1] === 'task') args.task = m[2].trim();
     else if (m[1] === 'local') args.local = m[2].split(/[\s,;]+/).map((id) => id.trim().toLowerCase()).filter(Boolean);
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir, --replay, --local).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir, --replay, --local, --task).`);
   }
   if (args.local !== null && args.local.length === 0) {
     throw new Error('--local needs the ids of the codeReview findings to fix (--local="da3d32cd,b4309764").');
@@ -163,7 +164,48 @@ function briefComment(comment) {
   };
   // Present only where it differs from the thread anchor, which is where it matters.
   if ('diffHunk' in comment) out.diffHunk = comment.diffHunk;
+  if (comment.media) out.media = comment.media;
   return out;
+}
+
+// A scanner bot posts the same report on every push: three copies of one CVE table sat in the
+// conversation of each DPXN-11967 part (2026-11-05), ~2k tokens apiece, every one `answered`.
+// Only the newest copy of each bot report travels, cut to its head; the count says how many went.
+const botBodyChars = 1500;
+function dedupeBotNotes(notes) {
+  const keyOf = (n) => `${n.author}\n${String(n.body || '').replace(/[0-9a-f]{7,40}/gi, '#').replace(/\s+/g, ' ').trim().slice(0, 80)}`;
+  const newest = new Map();
+  notes.forEach((n, i) => { if (n.isBot) newest.set(keyOf(n), i); });
+  const kept = [];
+  let dropped = 0;
+  notes.forEach((n, i) => {
+    if (!n.isBot) { kept.push(n); return; }
+    if (newest.get(keyOf(n)) !== i) { dropped += 1; return; }
+    const body = String(n.body || '');
+    kept.push(body.length > botBodyChars ? { ...n, body: `${body.slice(0, botBodyChars)}\n[... ${body.length - botBodyChars} more characters of this bot report left out]` } : n);
+  });
+  return { notes: kept, dropped };
+}
+
+// Attachments of every comment, thread reply and review summary, downloaded once for the run
+// (pr-media.cjs). Each one comes back on its comment as `media[]`.
+function attachMedia(open, notes, reviews, ctx, found, pr, mediaDir) {
+  const items = [];
+  open.forEach((thread, t) => (thread.comments || []).forEach((c, k) => items.push({ key: `thread-${t + 1}-${k + 1}`, kind: 'review-comment', id: c.id, body: c.body, target: c })));
+  notes.forEach((n) => items.push({ key: `conversation-${n.id}`, kind: 'issue-comment', id: n.id, body: n.body, target: n }));
+  reviews.forEach((r) => items.push({ key: `review-${r.id}`, kind: 'review', id: r.id, body: r.body, target: r }));
+  const withMedia = items.filter((item) => require('./pr-media.cjs').mediaUrls(item.body).length > 0);
+  if (withMedia.length === 0) return { count: 0, warnings: [] };
+  const { media, warnings } = ctx.collectMedia({ project: ctx.project, slug: found.slug, prNumber: pr.number, items: withMedia, dir: mediaDir });
+  let count = 0;
+  for (const item of withMedia) {
+    const entries = media.get(item.key);
+    if (entries && entries.length) {
+      item.target.media = entries;
+      count += entries.length;
+    }
+  }
+  return { count, warnings };
 }
 
 function briefThread(thread) {
@@ -186,7 +228,11 @@ function briefThread(thread) {
 
 function briefNote(note) {
   const out = { author: note.author, isBot: Boolean(note.isBot), body: note.body, url: note.url };
+  // The id is what the agent's `verdicts[]` names a conversation comment or a review by, and
+  // what verify-fix.cjs checks every item of this file against.
+  if (note.id != null) out.id = note.id;
   if (note.state) out.state = note.state;
+  if (note.media) out.media = note.media;
   return out;
 }
 
@@ -265,6 +311,8 @@ function artifactPaths(branch, reportsDir, stamp) {
     // as the brief, and outside the worktree for the same reason as the report: a
     // build log written inside the checkout is a file the commit could pick up.
     checksDir: path.join(branchDir, `${dir}-fix-pr-checks`),
+    // The screenshots and recordings of the comments (pr-media.cjs), replaced each run.
+    mediaDir: path.join(branchDir, `${dir}-fix-pr-media`),
   };
 }
 
@@ -285,6 +333,7 @@ function collectLocal(branch, pr, commitMessage, ctx) {
     commitMessage,
     generatedAt: new Date(ctx.now).toISOString(),
     source: 'local',
+    ...(ctx.task ? { task: ctx.task } : {}),
     threads: [],
     conversation: [],
     reviews: [],
@@ -309,8 +358,9 @@ function collectLocal(branch, pr, commitMessage, ctx) {
       outdatedThreads: 0,
       conversation: 0,
       reviews: 0,
-      candidates: findings.length,
-      humanCandidates: findings.length,
+      candidates: findings.length + (ctx.task ? 1 : 0),
+      humanCandidates: findings.length + (ctx.task ? 1 : 0),
+      ...(ctx.task ? { task: true } : {}),
     },
   };
 }
@@ -377,7 +427,7 @@ function collectBranch(branch, ctx) {
   // pull request, and one with every comment resolved can still be sitting on a
   // red build - which is exactly the branch a reviewer expects this skill to
   // finish off. The warning says what the run narrowed to, not that it stopped.
-  if (candidates === 0) {
+  if (candidates === 0 && !ctx.task) {
     result.warnings.push(`${branch}: pull request #${pr.number} has no open comments${resolvedCount ? ` (${resolvedCount} thread(s) already resolved)` : ''}; this run will only bring its checks green.`);
   }
 
@@ -394,15 +444,28 @@ function collectBranch(branch, ctx) {
     result.warnings.push(`${branch}: every open comment on #${pr.number} came from a GitHub App - no reviewer has written one. They are still fixed on their merits; nobody is waiting on the result.`);
   }
 
-  const { commentsPath, reportPath, promptPath, checksDir } = artifactPaths(branch, reportsDir, stamp);
+  const { commentsPath, reportPath, promptPath, checksDir, mediaDir } = artifactPaths(branch, reportsDir, stamp);
+  const bots = dedupeBotNotes(conversation.comments);
+  let mediaCount = 0;
+  if (ctx.collectMedia) {
+    try {
+      const attached = attachMedia(open, bots.notes, reviews.reviews, ctx, found, pr, mediaDir);
+      mediaCount = attached.count;
+      for (const w of attached.warnings) result.warnings.push(`${branch}: ${w}`);
+    } catch (err) {
+      result.warnings.push(`${branch}: the attachments of the comments could not be downloaded (${(err && err.message) || err}); the agent reads their words only.`);
+    }
+  }
   const payload = {
     branch,
     pr: { number: pr.number, title: pr.title, url: pr.url, base: pr.base },
     commitMessage,
     generatedAt: new Date(ctx.now).toISOString(),
     resolvedThreadCount: resolvedCount,
+    ...(bots.dropped ? { botDuplicatesDropped: bots.dropped } : {}),
+    ...(ctx.task ? { task: ctx.task } : {}),
     threads: open.map(briefThread),
-    conversation: conversation.comments.map(briefNote),
+    conversation: bots.notes.map(briefNote),
     reviews: reviews.reviews.map(briefNote),
   };
   fs.writeFileSync(commentsPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -421,10 +484,12 @@ function collectBranch(branch, ctx) {
       openThreads: open.length,
       resolvedThreads: resolvedCount,
       outdatedThreads: open.filter((thread) => thread.isOutdated).length,
-      conversation: conversation.comments.length,
+      conversation: bots.notes.length,
       reviews: reviews.reviews.length,
-      candidates,
+      candidates: candidates - bots.dropped + (ctx.task ? 1 : 0),
+      ...(ctx.task ? { task: true } : {}),
       humanCandidates,
+      ...(mediaCount ? { media: mediaCount } : {}),
     },
   };
 }
@@ -495,6 +560,28 @@ function annotateStacks(targets, tips = new Map()) {
   return { targets: ordered, stacks, warnings };
 }
 
+// The open pull requests based on `branch`: the parts of its stack above it. A follow-up task
+// (--task) on part-1 changes what part-2..5 sit on, and those are moved after it lands
+// (restack.cjs --action=cascade) - even when the run named part-1 alone.
+function openChildren(project, branch, request = github.request) {
+  const slug = github.repoSlug(project);
+  if (!slug) return [];
+  const res = request(project, { path: `/repos/${slug.owner}/${slug.repo}/pulls?state=open&per_page=100&base=${encodeURIComponent(branch)}` });
+  return res && res.ok && Array.isArray(res.json) ? res.json.map((pr) => pr.head && pr.head.ref).filter(Boolean) : [];
+}
+
+function stackAbove(branch, childrenOf, warnings, limit = 20) {
+  const chain = [];
+  for (let at = branch; chain.length < limit;) {
+    const kids = childrenOf(at).filter((k) => k !== branch && !chain.includes(k));
+    if (kids.length === 0) break;
+    if (kids.length > 1) warnings.push(`${at} has ${kids.length} open pull requests based on it (${kids.join(', ')}); only ${kids[0]} and the parts above it are moved after the task.`);
+    chain.push(kids[0]);
+    at = kids[0];
+  }
+  return chain;
+}
+
 function collect(options) {
   const project = path.resolve(options.project || process.cwd());
   const skillDir = options.skillDir || defaultSkillDir;
@@ -545,7 +632,13 @@ function collect(options) {
 
   const ts = formatTimestamp(now);
   const local = Array.isArray(options.local) ? options.local : null;
-  const ctx = { project, reportsDir, stamp: `${ts.date}-${ts.time}`, api, findPr, result, now, skillDir, local, matched: new Set() };
+  // Attachments come from GitHub itself: never in a replay, and in a test only when it hands in
+  // its own collector.
+  const collectMedia = options.collectMedia !== undefined
+    ? options.collectMedia
+    : (replay || options.api || options.media === false ? null : (args) => require('./pr-media.cjs').collectMedia({ ...args, token: github.token(project), request: github.request }));
+  const task = String(options.task || '').trim() || null;
+  const ctx = { project, reportsDir, stamp: `${ts.date}-${ts.time}`, api, findPr, result, now, skillDir, local, matched: new Set(), collectMedia, task };
   for (const branch of names) {
     const target = collectBranch(branch, ctx);
     if (target) result.targets.push(target);
@@ -556,6 +649,14 @@ function collect(options) {
   result.targets = stacked.targets;
   result.stacks = stacked.stacks;
   result.warnings.push(...stacked.warnings);
+  if (task && !replay) {
+    const childrenOf = options.openChildren || ((branch) => openChildren(project, branch));
+    for (const t of result.targets) {
+      if (t.stack && t.stack.children.length) continue;
+      const above = stackAbove(t.branch, childrenOf, result.warnings);
+      if (above.length) t.stack.above = above;
+    }
+  }
   if (local) {
     const missing = local.filter((id) => !ctx.matched.has(id));
     if (missing.length > 0) {
@@ -580,6 +681,6 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf, annotateStacks, remoteTips };
+module.exports = { openChildren, stackAbove, dedupeBotNotes, parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf, annotateStacks, remoteTips };
 
 if (require.main === module) main();

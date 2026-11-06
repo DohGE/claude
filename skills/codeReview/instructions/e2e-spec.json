@@ -6,13 +6,13 @@
   "notes": [
     "The unit-tests instruction names e2e only to exclude it, so only the general code rules apply."
   ],
-  "itemCount": 9,
+  "itemCount": 10,
   "instructions": [
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2,14-15,17",
-      "checklistSize": 18,
+      "selectedItems": "2,14-15,17,19",
+      "checklistSize": 19,
       "items": [
         {
           "id": "general#2",
@@ -48,6 +48,11 @@
             "//",
             "/\\*"
           ]
+        },
+        {
+          "id": "general#19",
+          "text": "One import declaration per module specifier: two `import` statements from the same path (`../../../models` twice) are merged into one.",
+          "severity": "low"
         }
       ]
     },
@@ -61,7 +66,7 @@
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
       "selectedItems": "1,3-5,8",
-      "checklistSize": 13,
+      "checklistSize": 15,
       "items": [
         {
           "id": "code-quality#1",
@@ -87,7 +92,7 @@
         },
         {
           "id": "code-quality#3",
-          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change.",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change. This includes a public store, facade or service member (a field, a signal, a selector exposed through a facade, a method) that nothing in the repository reads, and a parameter every caller passes the same constant (`null`, `undefined`, `false`) - it is dropped, or given that value as its default.",
           "facts": [
             "export-unused",
             "barrel-unused",

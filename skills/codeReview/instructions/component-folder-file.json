@@ -16,7 +16,7 @@
   "notes": [
     "Mixed declarations in a component folder: the components-folder placement rules say where each declaration belongs."
   ],
-  "itemCount": 23,
+  "itemCount": 24,
   "instructions": [
     {
       "id": "components-folder",
@@ -74,7 +74,7 @@
         },
         {
           "id": "architecture#6",
-          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, spec fixtures several specs share in `shared/mocks/`, HTTP in `data-access/services/`, state files - the signal store and an NgRx slice's files - in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed. A type, interface, enum or const used only inside its own file may stay there, without `export`; once it is exported or a second file needs it, it moves to `models/`.",
+          "text": "Every file lives in its dedicated location: types/enums/consts in `models/`, pure functions in `shared/utils/`, guards in `shared/guards/`, pipes in `shared/pipes/`, directives in `shared/directives/`, spec fixtures several specs share in `shared/mocks/`, HTTP in `data-access/services/`, state files - the signal store and an NgRx slice's files - in `data-access/+state/`; next to a component file only `*.component.*` files and a `tests/` folder are allowed. A type, interface, enum or const used only inside its own file may stay there, without `export`; once it is exported or a second file needs it, it moves to `models/`. Spec fixtures and mocks several specs share are `<name>.mock.ts` files in the area's `shared/mocks/` - never a `*.fixtures.ts` file, and never under the `tests/` folder of a util or another layer.",
           "severity": "medium",
           "probe": [
             {
@@ -95,8 +95,8 @@
     {
       "id": "general",
       "name": "General code rules",
-      "selectedItems": "2,14-15,17",
-      "checklistSize": 18,
+      "selectedItems": "2,14-15,17,19",
+      "checklistSize": 19,
       "items": [
         {
           "id": "general#2",
@@ -132,6 +132,11 @@
             "//",
             "/\\*"
           ]
+        },
+        {
+          "id": "general#19",
+          "text": "One import declaration per module specifier: two `import` statements from the same path (`../../../models` twice) are merged into one.",
+          "severity": "low"
         }
       ]
     },
@@ -142,7 +147,7 @@
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
       "selectedItems": "25",
-      "checklistSize": 26,
+      "checklistSize": 28,
       "items": [
         {
           "id": "best-practices#25",
@@ -164,7 +169,7 @@
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. A copy that the diff ADDS of pre-existing code is a finding (anchored on the new copy) once the code exists three or more times; duplication, dead code or inconsistency living entirely in untouched lines is not."
       ],
       "selectedItems": "1,3-5,8",
-      "checklistSize": 13,
+      "checklistSize": 15,
       "items": [
         {
           "id": "code-quality#1",
@@ -190,7 +195,7 @@
         },
         {
           "id": "code-quality#3",
-          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change.",
+          "text": "No unused code: unused imports, variables, consts, parameters, private fields and methods, unreachable statements, dead branches, exported symbols with no consumer left in the repo, inputs/outputs nothing binds, and leftovers of an earlier iteration of this very change. This includes a public store, facade or service member (a field, a signal, a selector exposed through a facade, a method) that nothing in the repository reads, and a parameter every caller passes the same constant (`null`, `undefined`, `false`) - it is dropped, or given that value as its default.",
           "facts": [
             "export-unused",
             "barrel-unused",

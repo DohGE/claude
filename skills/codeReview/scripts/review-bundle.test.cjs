@@ -221,6 +221,33 @@ test('a target too long for one conversation is cut into even windows of whole b
   assert.strictEqual(rb.walkTokens(30000), rb.windowLimits.fileTokens + 10000, 'a third of the characters Reads bring');
 });
 
+test('the cross-file pass sees the repository facts that name a reviewed file, and the ones that name none', () => {
+  const files = [{ path: 'projects/a/src/x.ts' }, { path: 'projects/a/src/assets/i18n/en.json' }];
+  const cross = [
+    'Eksporty bez konsumenta: projects/b/src/y.ts:5 Y, projects/b/src/z.ts:3 Z',
+    'Powtórzona wartość "v": projects/b/src/y.ts:9, projects/a/src/x.ts:12',
+    'Nieużywane klucze projects/a/src/assets/i18n/en.json: a.b, c.d',
+    'Obszar storage ma trasy i w shared/routes/, i w shell/',
+  ];
+  assert.deepStrictEqual(rb.crossInScope(cross, files), { lines: cross.slice(1), dropped: 1 });
+  assert.deepStrictEqual(rb.crossInScope(['Importy: src/x.ts:1 -> ../b'], files, 'projects/a').lines, ['Importy: src/x.ts:1 -> ../b'], 'paths relative to the fact root');
+});
+
+test('a window holds as much output as the others: a walk that writes much is cut although its reads fit', () => {
+  const alone = (count) => Array.from({ length: count }, (_, k) => [k + 1]);
+  const light = () => 10000;
+  // Four files that fit one window's reads but write 35k each: no window writes more than 50k.
+  const heavy = rb.planWindows(alone(4), light, undefined, () => '', undefined, () => 35000);
+  assert.deepStrictEqual(heavy, [[[1]], [[2]], [[3]], [[4]]]);
+  const mixed = rb.planWindows(alone(6), light, undefined, () => '', undefined, (number) => (number <= 2 ? 30000 : 5000));
+  assert.ok(mixed.every((window) => window.flat().reduce((sum, number) => sum + (number <= 2 ? 30000 : 5000), 0) <= rb.windowLimits.outTokens), JSON.stringify(mixed));
+  assert.deepStrictEqual(mixed.flat(2), alone(6).flat(), 'in order, each file once');
+  assert.deepStrictEqual(rb.planWindows(alone(4), light, undefined, () => '', undefined, () => 10000), [], 'under both limits: no windows');
+  // The estimate: items and written lines, a mechanical walk at a flat cost.
+  assert.strictEqual(rb.walkOutput({ items: 100, changed: 50 }), 100 * rb.outputCost.perItem + 50 * rb.outputCost.perChangedLine);
+  assert.strictEqual(rb.walkOutput({ items: 100, changed: 50, mechanical: true }), rb.outputCost.mechanical);
+});
+
 test('files the script found mechanical share bigger windows of their own, at a lighter cost per file', () => {
   const alone = (count) => Array.from({ length: count }, (_, k) => [k + 1]);
   const mech = (batch) => (batch[0] > 4 ? `${rb.mechanicalClass}sonnet|medium` : '');
@@ -540,6 +567,12 @@ test('a data file is read in the ranges its diff touched, and owes answers only 
   assert.deepStrictEqual(rb.readRangesOf('20, 200', 300, 6), [[14, 26], [194, 206]]);
   assert.strictEqual(rb.readRangesOf('2-90', 100, 6), null, 'most of the file is the whole file');
   assert.strictEqual(rb.readRangesOf('', 100), null);
+  const deleted = '@@ -40,2 +39,0 @@\n-  "a": 1,\n-  "b": 2,\n@@ -90 +87,0 @@\n-  "c": 3,\n@@ -1,2 +0,0 @@\n-{\n-}\n';
+  assert.strictEqual(rb.deletionAnchorsOf(deleted), '39-40, 87-88, 1', 'a gap is read around the lines on both sides');
+  assert.strictEqual(rb.deletionAnchorsOf('@@ -3,2 +3,4 @@\n'), '', 'a hunk that wrote lines has changedLines');
+  const withContext = 'diff --git a/en.json b/en.json\n--- a/en.json\n+++ b/en.json\n@@ -10,7 +10,5 @@\n   "x": 1,\n   "y": 2,\n   "z": 3,\n-  "gone": 4,\n-  "gone2": 5,\n   "w": 6,\n';
+  assert.strictEqual(rb.deletionAnchorsOf(withContext), '12-13', 'the gap after the third context line, as in the new file');
+  assert.deepStrictEqual(rb.readRangesOf(rb.deletionAnchorsOf(deleted), 300, 6), [[1, 7], [33, 46], [81, 94]]);
   assert.strictEqual(rb.textOfRanges('a\nb\nc\nd\ne', [[2, 3], [5, 5]]), 'b\nc\ne');
   const file = { path: 'i18n/en.json', bundlePath: 'w/1.bundle.md', contentPath: 'w/1-en.json', diffPath: 'w/1.diff', readRanges: [[14, 36]] };
   assert.deepStrictEqual(rb.readsOf([file]), ['w/1.bundle.md', 'w/1-en.json (Read: offset 14, limit 23)', 'w/1.diff']);

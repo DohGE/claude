@@ -1709,6 +1709,7 @@ function buildContext(options) {
       f.diffPath = null;
       if (mechanicalOf.has(f.path)) f.mechanical = mechanicalOf.get(f.path);
       let diffChars = 0;
+      let patchText = null;
       if (f.status !== 'D') {
         if (!blobs) {
           f.contentPath = `${project.replace(/\\/g, '/')}/${f.path}`;
@@ -1729,6 +1730,7 @@ function buildContext(options) {
         if (patch) {
           f.diffPath = `${stem}.diff`;
           diffChars = patch.length;
+          patchText = patch;
           const diffPages = reviewBundle.pagesOf(patch);
           if (diffPages) f.diffPages = diffPages;
           writes.push([f.diffPath, patch.endsWith('\n') ? patch : `${patch}\n`]);
@@ -1740,8 +1742,10 @@ function buildContext(options) {
       const text = reviewedTexts.has(f.path) ? reviewedTexts.get(f.path) : null;
       // A data file its kind reads where the diff touched it (rulebook `readChanged`): the walk
       // reads those ranges, and the window planning weighs them instead of the whole file.
-      if (kind && kind.readChanged && text !== null && f.changedLines && (f.status === 'M' || f.status === 'R')) {
-        const ranges = reviewBundle.readRangesOf(f.changedLines, reviewBundle.lineCountOf(text));
+      // A diff that only deleted lines is read around its gaps.
+      const touched = f.changedLines || (f.changedLines === '' ? reviewBundle.deletionAnchorsOf(patchText) : '');
+      if (kind && kind.readChanged && text !== null && touched && (f.status === 'M' || f.status === 'R')) {
+        const ranges = reviewBundle.readRangesOf(touched, reviewBundle.lineCountOf(text));
         if (ranges) f.readRanges = ranges;
       }
       // A content past one Read's limit is read in pages (review-bundle.cjs pagesOf).
@@ -1842,7 +1846,19 @@ function buildContext(options) {
     // The windows - runs of whole batches, one sub-agent each - and the first and last file of each.
     // A resume with drafts of refused parts is walked by the conversation that promotes them.
     const drafts = target.resume && Array.isArray(target.resume.drafts) && target.resume.drafts.length > 0;
-    const windows = options.windows === false || drafts
+    // What each file's walk writes (reviewBundle.walkOutput): a window's time, and its place in
+    // the workflow's queue.
+    const outOf = (number) => {
+      const b = bundleOf.get(number);
+      const changed = b.file.changedLines === null || b.file.changedLines === undefined
+        ? b.lineCount || 0
+        : String(b.file.changedLines).split(',').reduce((sum, range) => {
+          const [from, to = from] = range.trim().split('-').map(Number);
+          return Number.isFinite(from) ? sum + Math.max(1, to - from + 1) : sum;
+        }, 0);
+      return reviewBundle.walkOutput({ items: b.file.checklistTotal || 0, changed, mechanical: isMechanical(number) });
+    };
+    const planned = options.windows === false || drafts
       ? []
       : reviewBundle.planWindows(
         batches,
@@ -1850,7 +1866,22 @@ function buildContext(options) {
         undefined,
         (batch) => walkerKey(batch[0]),
         reviewBundle.limitsOfClass,
+        outOf,
       );
+    // A run of several targets walks every one of them in the workflow: one it left to the main
+    // conversation was walked there one file after another while the workflow ran, and took that
+    // conversation from 68k to 226k tokens with the 70 kB walk read into it (2026-11-05). Each
+    // run of one walker setting is a window, so no file goes to a model its kind does not ask for.
+    const windowEveryTarget = options.windows !== false && !drafts && planned.length === 0 && batches.length > 0
+      && result.targets.filter((t) => t.files && t.files.length > 0).length > 1;
+    const windows = windowEveryTarget
+      ? batches.reduce((runs, batch) => {
+        const last = runs[runs.length - 1];
+        if (last && walkerKey(last[0][0]) === walkerKey(batch[0])) last.push(batch);
+        else runs.push([batch]);
+        return runs;
+      }, [])
+      : planned;
     const windowSpans = windows.map((window) => [window[0][0], window[window.length - 1][window[window.length - 1].length - 1]]);
     const windowEnds = new Map(windowSpans.map(([first, last]) => [last, { first, last }]));
     const byNumber = new Map(bundles.map((b) => [b.number, b]));
@@ -1935,6 +1966,7 @@ function buildContext(options) {
         lastPart: reviewBundle.partPathOf(target.reportPath, windowSpans[k][1], n),
         ...(model ? { model } : {}),
         ...(effort ? { effort } : {}),
+        cost: window.flat().reduce((sum, number) => sum + outOf(number), 0),
       };
     });
     target.batches = batches.filter((batch) => batch.length > 1).map((batch) => [batch[0], batch[batch.length - 1]]);
@@ -2372,6 +2404,8 @@ function runWorkflow(result, options) {
         const after = afterOf(target, w);
         return [`${w.files[0]}-${w.files[1]}`, w.model || '', w.effort || '', ...(after.length ? [after] : [])];
       }),
+      // The lanes start the costliest window first (review-windows.js).
+      costs: target.windows.map((w) => w.cost || 0),
       cross: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
       // Light work - read a named file, settle an item - on the light model.
       ...(target.gapsBriefPath ? { gaps: { model: 'sonnet', effort: 'medium' } } : {}),

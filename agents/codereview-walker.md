@@ -147,6 +147,11 @@ For each file:
    (`node "<SKILL_DIR>/scripts/…"`) and the one `sed -n '<N>p'` below only: it searches with the
    Grep tool, lists with Glob and reads with Read, and its file's diff is `diffPath`, computed
    against the target's base - never a `git diff` of its own.
+   Any OTHER file - a consumer, a copy, the place a symbol is used or declared - is read around
+   the Grep hit that sent you there: `offset` about 20 lines above the hit, `limit` 60, the Reads
+   of several hits in one message. A whole other file only when the item judges its structure
+   (member order, imports, its placement). One walker of 2026-11-05 made 80 Reads, most of them
+   whole neighbouring files, for a 10-file diff; every one of them was carried in each later turn.
    A path the brief or a `## Dalej` lists as `<path> (Read: offset 1, limit 900; offset 901)` is
    past what one Read returns: issue each page as its own Read, all in the same message.
    `contentPath` is `null` for a status `D` file and for a binary one — review it from the diff
@@ -182,6 +187,8 @@ For each file:
    and refuses a path the reviewed revision lacks), and `git grep`/`git show`/`git diff` or a
    recursive shell grep of the working tree is refused. `target.revision` is the reviewed commit.
    The searches one file needs do not depend on one another: issue them all as parallel calls in ONE message, because every message is one more request that carries the whole conversation again.
+   Collect them first: after the file's Reads, list every rule that asks "does it exist elsewhere" and every symbol to follow, then send all their Greps and Globs at once; a window of 52 messages spent most of them on one search each (2026-11-05).
+   The Grep tool is ripgrep: no lookaround (`(?!`, `(?=`) and no backreference - a rejected pattern searched nothing; split it into plain alternatives.
    Never `cd` and never list a folder through Bash (`ls`, `find`): a compound shell command can stop
    at a permission prompt while the walk waits. The Glob tool lists one - e.g. which parts are on
    disk (`raport.part*.md`).
@@ -536,8 +543,11 @@ For each file:
      - the path of the file that meets the requirement when it is met outside this one — a spec
        (`tests/user-card.component.spec.ts`), the routes file that provides a facade — read from
        this file's folder, the facts' root or the project root; the check refuses a path that does
-       not exist;
+       not exist; the reviewed file's own path is no evidence - a spec under review cites its lines;
      - `brak wystąpień` when the rule's subject does not occur in the file at all.
+     The lines are read from the list before the first `;`; what follows is a note. A line of
+     another file stands after its path (`OK (L12; tests/a.spec.ts:L40)`), never as `spec L40`,
+     which reads as a line of this file.
      `brak wystąpień` is a verdict for a PROHIBITION only — for a requirement, a missing subject is
      a finding, never an absence to wave through.
      Lines and a path are the evidence of ONE item; only `brak wystąpień` closes a range - and a

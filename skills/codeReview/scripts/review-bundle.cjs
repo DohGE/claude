@@ -55,7 +55,15 @@ const batchLimits = { fileLines: 60, fileItems: 60, files: 3, lines: 150, items:
 // 100k and 6 files: on a 115-file run that was 63 windows, 37 of them a single file behind a
 // multi-MB bundle, and 63 walker starts. With bundles back under 256 KB, light files fill a
 // window up to 10 and the walk stays below the compaction line.
-const windowLimits = { tokens: 130000, fileTokens: 14000, charsPerToken: 3, files: 10 };
+const windowLimits = { tokens: 130000, fileTokens: 14000, charsPerToken: 3, files: 10, outTokens: 50000 };
+// What a walk writes is its time: windows ran at ~100 output tokens a second, and a window's output
+// followed its checklist items and its written lines (2026-11-05, 13 windows: 15k-77k tokens, 2-12
+// minutes). `outTokens` caps a window's estimate, so that no window outlasts the others by far;
+// a mechanical file's walk is the gate's two questions.
+const outputCost = { perItem: 100, perChangedLine: 60, mechanical: 1500 };
+function walkOutput({ items = 0, changed = 0, mechanical = false } = {}) {
+  return mechanical ? outputCost.mechanical : items * outputCost.perItem + changed * outputCost.perChangedLine;
+}
 // A Read shows at most 2 000 characters of a line and refuses a file over 256 KB, and a bundle
 // it cannot open is a file walked blind: a bundle line past `lineChars` is cut wherever the
 // plan does not need it whole, and past `bundleChars` the sections a verdict needs least go
@@ -582,10 +590,13 @@ const limitsOfClass = (cls) => (String(cls || '').startsWith(mechanicalClass) ? 
 // window. The cuts fall where the running weight crosses a multiple of the share every window
 // gets, so that no window is a stub that pays the walker's start for a file or two; a batch over
 // a limit has a window of its own.
-function planWindows(batches, weigh, limits = windowLimits, classOf = () => '', limitsOf = () => limits) {
+// `weighOut(number)` is the output a file's walk writes (walkOutput): a window holds at most
+// `limits.outTokens` of it.
+function planWindows(batches, weigh, limits = windowLimits, classOf = () => '', limitsOf = () => limits, weighOut = () => 0) {
   const total = batches.reduce((sum, batch) => sum + batch.reduce((s, number) => s + weigh(number), 0), 0);
   const files = batches.reduce((sum, batch) => sum + batch.length, 0);
-  if (total <= limits.tokens && files <= limits.files) return [];
+  const out = batches.reduce((sum, batch) => sum + batch.reduce((s, number) => s + weighOut(number), 0), 0);
+  if (total <= limits.tokens && files <= limits.files && !(limits.outTokens && out > limits.outTokens)) return [];
   // Each run of one walker setting is cut on its own, so its windows come out even too - by the
   // limits of its class (`limitsOf`).
   const segments = [];
@@ -595,45 +606,59 @@ function planWindows(batches, weigh, limits = windowLimits, classOf = () => '', 
     if (last && last.cls === cls) last.batches.push(batch);
     else segments.push({ cls, batches: [batch] });
   }
-  return segments.flatMap((segment) => evenWindows(segment.batches, weigh, limitsOf(segment.cls)));
+  return segments.flatMap((segment) => evenWindows(segment.batches, weigh, limitsOf(segment.cls), weighOut));
 }
 
 // One run of batches as even windows: one window when it fits one. A share a window cannot hold
 // in whole batches leaves a stub behind each overflow: one more window, a smaller share, until
-// the cut comes out at the count it was planned for.
-function evenWindows(batches, weigh, limits) {
+// the cut comes out at the count it was planned for. The share is the larger of the input's and
+// the output's, each measured against its own limit.
+function evenWindows(batches, weigh, limits, weighOut = () => 0) {
   const weights = batches.map((batch) => batch.reduce((sum, number) => sum + weigh(number), 0));
+  const outs = batches.map((batch) => batch.reduce((sum, number) => sum + weighOut(number), 0));
   const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const totalOut = outs.reduce((sum, out) => sum + out, 0);
+  const outLimit = limits.outTokens || Infinity;
   const files = batches.reduce((sum, batch) => sum + batch.length, 0);
-  if (total <= limits.tokens && files <= limits.files) return [batches];
-  const base = Math.max(Math.ceil(total / limits.tokens), Math.ceil(files / limits.files));
+  if (total <= limits.tokens && files <= limits.files && totalOut <= outLimit) return [batches];
+  const base = Math.max(Math.ceil(total / limits.tokens), Math.ceil(files / limits.files), Number.isFinite(outLimit) ? Math.ceil(totalOut / outLimit) : 1);
+  // One measure for the cut: each batch's larger fraction of its limit.
+  const shares = batches.map((_, k) => Math.max(weights[k] / limits.tokens, Number.isFinite(outLimit) ? outs[k] / outLimit : 0));
+  const totalShare = shares.reduce((sum, share) => sum + share, 0);
   let best = null;
   for (let count = base; count <= base + 3; count++) {
-    const plan = cutWindows(batches, weights, total / count, limits);
+    const plan = cutWindows(batches, shares, totalShare / count, { ...limits, weights, outs, outLimit });
     if (plan.length === count) return plan;
     if (!best || plan.length < best.length) best = plan;
   }
   return best;
 }
 
-function cutWindows(batches, weights, share, limits) {
+// `shares` place the cuts; `limits.weights` and `limits.outs` (the input and output of each batch)
+// are what a window may not exceed.
+function cutWindows(batches, shares, share, limits) {
   const windows = [];
   let current = null;
   let tokens = 0;
+  let out = 0;
   let before = 0;
   batches.forEach((batch, k) => {
-    const slot = Math.floor((before + weights[k] / 2) / share);
+    const weight = limits.weights[k];
+    const written = limits.outs[k];
+    const slot = Math.floor((before + shares[k] / 2) / share);
     const fits = current !== null && slot === current.slot
-      && tokens + weights[k] <= limits.tokens && current.files + batch.length <= limits.files;
+      && tokens + weight <= limits.tokens && current.files + batch.length <= limits.files && out + written <= limits.outLimit;
     if (!fits) {
       current = { slot, files: 0, batches: [] };
       windows.push(current);
       tokens = 0;
+      out = 0;
     }
     current.batches.push(batch);
     current.files += batch.length;
-    tokens += weights[k];
-    before += weights[k];
+    tokens += weight;
+    out += written;
+    before += shares[k];
   });
   return windows.map((window) => window.batches);
 }
@@ -659,6 +684,36 @@ function readRangesOf(changedLines, lineCount, margin = readMargin) {
   }
   const read = merged.reduce((sum, [from, to]) => sum + to - from + 1, 0);
   return merged.length > 0 && lineCount && read <= lineCount / 2 ? merged : null;
+}
+
+// Where a diff that only deleted lines left its gaps, as `changedLines` would spell them: the new
+// file's line before and after each gap. A data file whose diff dropped keys has `changedLines`
+// "" and was read whole - 2,300 lines of en.json in three pages for one removed key (2026-11-05).
+// The patch may carry context lines: the new file's line number is followed through each hunk.
+function deletionAnchorsOf(patch) {
+  const anchors = [];
+  let line = null;
+  let gap = false;
+  for (const text of String(patch || '').split(/\r?\n/)) {
+    const header = text.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (header) {
+      // A hunk that writes nothing names the line before its gap; any other its first line.
+      line = header[2] === '0' ? Number(header[1]) + 1 : Number(header[1]);
+      gap = false;
+      continue;
+    }
+    if (line === null || text.startsWith('\\')) continue;
+    if (text.startsWith('-') && !text.startsWith('---')) {
+      if (!gap) anchors.push(line > 1 ? `${line - 1}-${line}` : '1');
+      gap = true;
+    } else if (text.startsWith('+') || text.startsWith(' ')) {
+      line++;
+      gap = false;
+    } else if (text.startsWith('diff ')) {
+      line = null;
+    }
+  }
+  return anchors.join(', ');
 }
 
 // The text those ranges hold: what the window planning weighs instead of the whole file.
@@ -835,6 +890,27 @@ function renderTargetFiles(files, workDir) {
   return ['## Pliki celu', '', `Treść i diff pliku, w \`${workDir || '<katalog roboczy>'}/\`, o ile nazwa nie zaczyna się od \`/\` albo litery dysku:`, ...rows, ''];
 }
 
+// The repository-wide facts the cross-file pass can report on: a fact that names files keeps its
+// line only when one of them is reviewed - the pass reports what the diff touched, and the facts
+// of a four-file review were 54 kB of the project's own unused exports, keys and repeated values
+// (2026-11-05). A fact that names no file (a key list, a layout rule) stays.
+const factPathToken = /(?:[\w@+~.-]+\/)+[\w@+~.-]+\.[A-Za-z][\w-]*/g;
+function crossInScope(cross, files, factRoot = '') {
+  const reviewed = new Set();
+  for (const file of files) {
+    reviewed.add(file.path);
+    if (factRoot && file.path.startsWith(`${factRoot}/`)) reviewed.add(file.path.slice(factRoot.length + 1));
+  }
+  const lines = [];
+  let dropped = 0;
+  for (const line of cross) {
+    const named = String(line).match(factPathToken) || [];
+    if (named.length === 0 || named.some((p) => reviewed.has(p) || reviewed.has(p.replace(/^\.\//, '')))) lines.push(line);
+    else dropped++;
+  }
+  return { lines, dropped };
+}
+
 // The cross-file pass's bundle: the repository-wide facts, the files it may open, the items it
 // reports under, the jscpd candidates of the whole target and where the import ledger is.
 // `walked` maps an instruction id to the item numbers this run's plans walk.
@@ -852,7 +928,10 @@ function renderCrossBundle({
   if (factRoot) out.push(`- ścieżki w faktach: względem \`${factRoot}/\``);
   if (partial) out.push('- fakty z części repozytorium (limit albo błąd git): brak wpisu niczego nie dowodzi');
   if (importLedger) out.push(`- księga importów: ${importLedger}`);
-  out.push('', '## Fakty międzyplikowe', '', ...(cross.length > 0 ? cross.map((line) => `- ${line}`) : ['- brak']), '');
+  const scoped = files.length > 0 ? crossInScope(cross, files, factRoot) : { lines: cross, dropped: 0 };
+  out.push('', '## Fakty międzyplikowe', '', ...(scoped.lines.length > 0 ? scoped.lines.map((line) => `- ${line}`) : ['- brak']));
+  if (scoped.dropped > 0) out.push(`- pominięte: ${scoped.dropped} fakt(y) o plikach spoza recenzji`);
+  out.push('');
   if (files.length > 0) out.push(...renderTargetFiles(files, workDir));
   out.push('## Pozycje, pod którymi przejście raportuje', '');
   for (const [id, only] of crossInstructions) {
@@ -980,10 +1059,10 @@ function factsDocument({ files, factRoot = '', partial = false, rules = null }) 
 
 module.exports = {
   linePrefix, itemPrefix, closedEvidence, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
-  reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, windowReplies, windowBriefName, skillDir,
+  reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, outputCost, walkOutput, crossInScope, windowReplies, windowBriefName, skillDir,
   crossBriefName, crossReplies, questionsOpen, questionIds, crossQuestions, walkRulesPath, bundleCaps,
   bindFile, renderBinding, renderBundle, renderCrossBundle, renderCrossBrief, renderRulebookNotes, factsDocument, fitBundle, renderSkeleton,
   pageLimits, pagesOf, pagedRead, crossPagesOf, gapsBriefName, gapsReplies, renderGapsBrief,
-  planBatches, planWindows, walkTokens, readsOf, readRangesOf, textOfRanges, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
+  planBatches, planWindows, walkTokens, readsOf, readRangesOf, deletionAnchorsOf, textOfRanges, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
   mechanicalLimits, mechanicalClass, limitsOfClass, renderMechanical,
 };

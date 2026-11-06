@@ -430,6 +430,20 @@ test('provideDependencies installs when the lockfile differs, git would not igno
   assert.deepStrictEqual(installed, [differs.root, visible.root, asked.root]);
 });
 
+// 2026-11-05: the main checkout's node_modules held @babel and @nx alone; five worktrees linked
+// it and five agents found a dead gate one after another.
+test('provideDependencies refuses to link a main node_modules that misses declared packages, and installs nothing', (t) => {
+  const { project, root } = depsDirs(t, '{}\n', '{}\n');
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ dependencies: { pkg: '1' }, devDependencies: { '@angular/core': '1', jest: '1' } }));
+  fs.writeFileSync(path.join(project, 'node_modules', 'pkg', 'package.json'), '{}');
+  const deps = wt.provideDependencies(project, root, { install: () => { throw new Error('must not install'); }, isIgnored: () => true });
+  assert.strictEqual(deps.linked, false);
+  assert.strictEqual(deps.mainBroken, true);
+  assert.match(deps.error, /misses 2 of 3 declared packages \(@angular\/core, jest\): run `npm ci` in .+ first/);
+  assert.ok(!fs.existsSync(path.join(root, 'node_modules')));
+  assert.deepStrictEqual(wt.dependencyHealth(path.join(project, 'nowhere')), { ok: true, missing: [], declared: 0 });
+});
+
 // The rulebook and the gate config live in the gitignored `.claude/doh/`, which a worktree
 // checked out from HEAD does not have: the self-review of 2026-11-03 ran without the
 // project's naming rules.

@@ -764,7 +764,9 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   const settings = JSON.parse(brief.slice(brief.indexOf('```json') + 7, brief.lastIndexOf('```')));
   // The windows walk side by side, and the Workflow tool gets the same plan in a few bytes.
   assert.strictEqual(t0.parallel, 2);
-  assert.deepStrictEqual(workflowArgs(ctx), { lanes: 2, targets: [{ dir: t0.workDir, windows: [['1-4', '', ''], ['5-8', '', '']], cross: { model: '', effort: '' }, gaps: { model: 'sonnet', effort: 'medium' } }] });
+  const costs = t0.windows.map((w) => w.cost);
+  assert.ok(costs.every((cost) => cost > 0), 'each window carries the output its walk is estimated to write');
+  assert.deepStrictEqual(workflowArgs(ctx), { lanes: 2, targets: [{ dir: t0.workDir, windows: [['1-4', '', ''], ['5-8', '', '']], costs, cross: { model: '', effort: '' }, gaps: { model: 'sonnet', effort: 'medium' } }] });
   const runDir = path.dirname(path.dirname(t0.reportPath)).replace(/\\/g, '/');
   assert.strictEqual(ctx.workflow.scriptPath, `${runDir}/review-windows.js`, 'inside the project, where the Workflow tool may read it');
   // The skill's script with the run's args on its `baked` line, and nothing else changed.
@@ -2288,6 +2290,25 @@ test('every windowed target of a run goes to one workflow, whose lanes the targe
   assert.strictEqual(workflowArgs(rc.buildContext({ mode: 'branches', branches: 'feature/a;feature/b', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 13), parallel: 2 })).lanes, 2);
   // Every target is assembled by one command, which ends with the run's summary.
   assert.match(ctx.commands.assembleAll, /check-part\.cjs" --context=".*" --assemble-all$/);
+});
+
+test('in a run of several targets a small one is walked in the workflow too, not by the main conversation', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
+  run(dir, ['checkout', '-q', '-b', 'feature/big', 'main']);
+  for (let n = 1; n <= 8; n++) commitFile(dir, `src/big${n}.ts`, body(n), `big${n}`);
+  run(dir, ['checkout', '-q', '-b', 'feature/small', 'main']);
+  commitFile(dir, 'src/small.ts', 'export const s = 1;\n', 'small');
+  run(dir, ['checkout', '-q', 'main']);
+  const both = rc.buildContext({ mode: 'branches', branches: 'feature/big;feature/small', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 20) });
+  assert.deepStrictEqual(both.errors, []);
+  const small = both.targets[1];
+  assert.deepStrictEqual(small.windows.map((w) => w.files), [[1, 1]]);
+  assert.ok(!small.crossInline, 'its cross-file pass is a fresh agent in the workflow');
+  assert.deepStrictEqual(workflowArgs(both).targets.map((x) => x.dir), both.targets.map((x) => x.workDir));
+  const alone = rc.buildContext({ mode: 'branches', branches: 'feature/small', project: dir, skillDir: makeSkillDir(t, [FACT_KIND]), now: new Date(2026, 6, 15, 17, 21) });
+  assert.deepStrictEqual(alone.targets[0].windows, [], 'a run of one small target is still walked where it was started');
+  assert.ok(alone.targets[0].crossInline);
 });
 
 test('oldSideRanges reads the old side of every hunk, and a file a later part deletes to its end', () => {

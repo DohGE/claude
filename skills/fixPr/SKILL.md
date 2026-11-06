@@ -1,7 +1,7 @@
 ---
 name: fixPr
 description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title, rebased onto the base - a stack of pull requests (each based on another one's branch) lands bottom-up, each part moved onto its landed parent; with --local=<ids> it fixes those findings of the branch's doh codeReview reports instead of the pull request comments
-argument-hint: "<branch>[;<branch>…] [--local=<id>[,<id>…]] [--dry-run] [--no-push] [--no-reply] [--keep-worktree] [--project=<path>]"
+argument-hint: "<branch>[;<branch>…] [--local=<id>[,<id>…]] [--task=\"<change>\"] [--dry-run] [--no-push] [--no-reply] [--keep-worktree] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -127,6 +127,12 @@ Without that tool, re-read the file or re-run the command with narrower output.
      else stays as it is: the pull request still names the base, the commit message and the push, and
      its gate is brought green. A `--local` with no id → stop and say, in Polish, that it needs the
      ids (`/doh:fixPr feature/a --local=da3d32cd,b4309764`).
+   - `--task="<change>"` → `TASK=<change>`: one more change the user wants in the named branch,
+     beside its comments - the request of 2026-11-05 "add … to the Load into tooltip of part-1".
+     It reaches the agent as the comments file's `task` item. Free text the user wrote after the
+     branch list, with no flag ("…; additionally in part-1 add …"), is the same thing: pass it as
+     `--task` for the branch it names, and run that branch alone when it is the only one the
+     text names, beside the others.
 3. Everything REMAINING is the branch list, verbatim. The collector splits it on `,` and `;`.
    No arguments at all → stop and say, in Polish, that the skill needs at least one branch name
    (`/doh:fixPr feature/a;feature/b`). Never fall back to the current branch: a run that
@@ -136,7 +142,13 @@ Without that tool, re-read the file or re-run the command with narrower output.
 
 Run (Bash tool):
 
-    node "<SKILL_DIR>/scripts/pr-comments.cjs" --branches="<arguments verbatim>" --project="<PROJECT>" [--local="<LOCAL>"]
+    node "<SKILL_DIR>/scripts/pr-comments.cjs" --branches="<arguments verbatim>" --project="<PROJECT>" [--local="<LOCAL>"] [--task="<TASK>"]
+
+It also downloads the screenshots and recordings the comments hold (pr-media.cjs) next to the
+comments file, a recording turned into still frames, and drops all but the newest copy of a bot
+report repeated on every push. `counts.media` says how many attachments the agent gets; a
+warning names any it could not fetch. With `--task`, a branch with open pull requests based on
+it carries them in `stack.above` (bottom-first): they move after it in Step 5.
 
 With `--local` it reads no comment of the pull request: each target's `commentsPath` holds the
 matched `findings[]`, the target carries `local: true` and `counts.findings`, and a warning names
@@ -198,6 +210,13 @@ a worktree down: it unlinks first, where git's own recursive delete walks into t
 
 Keep each branch's `installed` from this JSON: it becomes `INSTALLED` in Step 4a, and it is the one
 thing that decides whether the agent runs the gate at all.
+
+`mainBroken: true` → the main checkout's `node_modules` misses packages its `package.json`
+declares, so no worktree can have a gate. STOP the run before any agent: remove the worktrees
+made so far (`--action=remove`), and tell the user, in Polish, the warning's command to run in
+their checkout (`npm ci`), and that the run is to be started again after it. On 2026-11-05 five
+agents found that out one by one, two ran `npm ci` themselves against a registry the VPN did not
+reach, and one sat 135 minutes waiting for the user.
 
 ## Step 4 — One background agent per branch
 
@@ -301,14 +320,37 @@ On `{"type":"result", …}` (for a held part: once `restack.cjs` or its conflict
    agent called those threads fixed, but its commit does not touch their files, so they stay open.
    Report `failed[]` entries in Polish — usually a token that may not resolve other people's threads.
    A failed resolve never fails the branch: the fix is pushed, and an open thread is a leftover the
-   user can close by hand.
-2. **Remove the worktree**, unless `--keep-worktree` was passed or the agent reported
+   user can close by hand. A 5xx is retried there, and a thread that already carries this commit's
+   reply gets no second one.
+2. **Check that every comment was handled** - always, `{"type":"error"}` included:
+
+       node "<SKILL_DIR>/scripts/verify-fix.cjs" --comments="<commentsPath>" --result="<reportPath>.result.json" --project="<PROJECT>" --remote=<yes when anything was pushed, else no>
+
+   It holds the agent's `verdicts[]` against every item of the comments file and, with
+   `--remote=yes`, against the pull request as GitHub has it now. `ok: false` names each gap:
+   `unaccounted` (an item with no verdict), `noGround`, `inconsistent`, `mediaNotSeen` (pictures
+   the agent did not look at), `stillOpen` (a fixed thread GitHub still shows open), `newSinceRun`
+   (a thread opened while the agent worked). Each one goes into the summary under its own heading;
+   none is fixed by you. A missing result file is itself the gap: say the agent left no verdicts.
+3. **Move the parts above a `--task` branch.** A target with `stack.above` that landed and pushed
+   changed what those parts sit on. Move them, bottom-up, with no agent (Bash, background):
+
+       node "<SKILL_DIR>/scripts/restack.cjs" --action=cascade --project="<PROJECT>" --stack="<branch>;<stack.above joined by ;>" --from="<branch>" --from-old-tip="<remoteTipAtStart>" --checks-dir="<checksDir>/cascade" --push=<yes|no>
+
+   Conflicts where both sides only appended (translation keys, enum members, exports) are merged
+   in the script and proved by the gate. Every `parts[]` entry is a row of the summary; one with
+   `status: conflict` keeps its `worktree` - spawn the conflict agent on it as in Step 5's
+   `conflict` (its `PARENT` the part below, `OLD_TIP` its `oldParentTip`), then run the cascade
+   again `--from` that part. `waiting[]` are the parts above a stop, left where they were.
+4. **Remove the worktree**, unless `--keep-worktree` was passed or the agent reported
    `committed: false` with work still in the tree:
 
        node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"
 
-   A refusal here means the worktree still holds uncommitted files: report the path in Polish and
-   leave it alone. Never reach for `--force` — that would delete the very work the gate protected.
+   A refusal here quotes git's own reason: uncommitted files, or a file another process holds
+   open (Windows). Report the path and that reason in Polish and leave it alone. Never reach for
+   `--force`, a recursive delete or `Remove-Item -Recurse` — that would delete the very work the
+   gate protected, and through a link the main checkout's `node_modules` with it.
    The self-review's report sat inside the worktree: `keptReports` names where `remove` moved it,
    and the summary prints that path, never the agent's `reviewReport`.
 
@@ -340,6 +382,12 @@ Then print one summary, in Polish, and nothing else:
   fixed and how many it left, with the ground of each left one from the report the agent wrote;
 - for every REJECTED comment, its one-line ground — this is the part the user has to act on, and it
   exists nowhere else in their terminal;
+- the comment check (Step 5 point 2) per branch: "wszystkie <total> komentarze obsłużone" when
+  `ok`, otherwise every gap with its author and url - a comment with no verdict first;
+- every `uiUnverified` file of the agent, with the comment it answers: the look of those changes
+  was checked by nobody, and the user is the one to open the page;
+- a `--task`: whether it was done, and the cascade's rows (each part moved, merged on its own,
+  or stopped with why);
 - the gate per branch: which commands the agent repaired (`checksFixed`), which passed, which were
   skipped and why, and which are STILL red — a red one is the reason there is no commit, so it is
   named with the path of its log rather than summarised;
