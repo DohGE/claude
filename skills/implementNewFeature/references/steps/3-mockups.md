@@ -68,7 +68,8 @@ session when there is none) — the agent's brief says how.
        screen as a Claude artifact. The agent is not involved and the round stays up for review.
        Run `node "<SKILL_DIR>/scripts/mockup-artifact.cjs" "<SESSION>/tasks/T" --title="<T's branch>"`
        → one JSON line, `{page, files, screens}` (or `{error}`): a gallery page of every view and
-       state at desktop and mobile width, and the screens and stylesheets it frames. Publish it with
+       state at desktop and mobile width, and the screens it frames, each with its stylesheets, images
+       and fonts inlined (the sandboxed frame loads no other file of the artifact). Publish it with
        the Artifact tool - `file_path` = `page`, `files` = `files`, a one-sentence description naming
        the feature - always from that same `page` path, so a later press updates the same artifact.
        Then POST `{"taskId":"T","step":3,"mockupArtifact":"<url>","mockupChat":{"role":"agent","text":"Claude artifact: <url>"}}`
