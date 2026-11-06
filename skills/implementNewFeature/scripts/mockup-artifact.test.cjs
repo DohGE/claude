@@ -40,12 +40,15 @@ function round(t) {
   return task;
 }
 
-test('a round becomes one gallery page and the screens and stylesheets it frames', (t) => {
+test('a round becomes one gallery page and the screens it frames', (t) => {
   const task = round(t);
   const result = ma.buildArtifact(task, { title: 'feature/users' });
   const out = path.join(task, ma.ARTIFACT_DIR);
   assert.strictEqual(result.page, path.join(out, 'index.html'));
-  assert.deepStrictEqual(Object.keys(result.files).sort(), ['0-login.html', '1-users.html', 'project-web.css', 'story-btn.css'], 'only what a screen links; nothing outside the folder');
+  assert.deepStrictEqual(Object.keys(result.files).sort(), ['0-login.html', '1-users.html'], 'the screens only; nothing outside the folder');
+  const login = fs.readFileSync(result.files['0-login.html'], 'utf8');
+  assert.ok(login.includes('body { margin: 0; }') && login.includes('.btn { color: red; }'), 'the stylesheets travel inside the screen');
+  assert.ok(!login.includes('.x {}'), 'a stylesheet no screen links stays out');
   for (const [name, file] of Object.entries(result.files)) {
     assert.strictEqual(file, path.join(out, name));
     assert.ok(fs.existsSync(file), name);
@@ -58,6 +61,40 @@ test('a round becomes one gallery page and the screens and stylesheets it frames
   assert.match(page, /prefers-color-scheme: dark/);
   assert.ok(page.includes('"id":"0.1"') && page.includes('"file":"0-login.html"'));
   assert.ok(!page.includes('outside.html'));
+});
+
+// The artifact frames each screen in a sandboxed iframe (an opaque origin), and the artifact host
+// does not serve its other files to that origin: a linked stylesheet, image or font never loads.
+test('every stylesheet, image and font a screen uses is inlined, so the sandboxed frame needs no other file', (t) => {
+  const task = tempDir(t, 'ma-inline-');
+  const dir = path.join(task, 'generated-mockups');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ screens: [
+    { id: '0.0', view: 'Nodes', title: 'List', file: '0-nodes.html' },
+  ] }));
+  fs.writeFileSync(path.join(dir, '0-nodes.html'), [
+    '<head><link href="project-web.css" rel="stylesheet"><link rel=\'stylesheet\' href=\'story.css\' media="all"></head>',
+    '<img alt="logo" src="logo.svg"><link rel="icon" href="https://cdn.example/x.png">',
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'project-web.css'), '@font-face { font-family: X; src: url("x.woff2") format("woff2"); }\n.a::after { content: "</style>"; }\n.bg { background: url(data:image/png;base64,AAAA); }');
+  fs.writeFileSync(path.join(dir, 'story.css'), '.btn { background-image: url(\'logo.svg\'); }');
+  fs.writeFileSync(path.join(dir, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  fs.writeFileSync(path.join(dir, 'x.woff2'), Buffer.from([1, 2, 3]));
+
+  const result = ma.buildArtifact(task);
+  assert.deepStrictEqual(Object.keys(result.files), ['0-nodes.html'], 'only the screens are published');
+  const html = fs.readFileSync(result.files['0-nodes.html'], 'utf8');
+  assert.ok(!/<link[^>]*rel=["']?stylesheet/i.test(html), 'no stylesheet link is left');
+  assert.match(html, /<style data-inlined="project-web\.css">/);
+  assert.match(html, /<style data-inlined="story\.css" media="all">/);
+  assert.ok(html.includes('src: url("data:font/woff2;base64,AQID")'), 'a font becomes a data URI');
+  assert.ok(html.includes('content: "<\\/style>"'), 'a closing tag inside the CSS cannot end the style element');
+  assert.ok(html.includes('url(data:image/png;base64,AAAA)'), 'a data URI stays as it was');
+  const svg = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64')}`;
+  assert.ok(html.includes(`src="${svg}"`), 'an image a screen links becomes a data URI');
+  assert.ok(html.includes(`url('${svg}')`), 'an image a stylesheet links becomes a data URI');
+  assert.ok(html.includes('href="https://cdn.example/x.png"'), 'an absolute URL is left alone');
+  assert.ok(!fs.existsSync(path.join(task, ma.ARTIFACT_DIR, 'project-web.css')));
 });
 
 test('a task with no round has nothing to publish, and says so', (t) => {

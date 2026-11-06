@@ -3,8 +3,11 @@
 // The round of mockups on screen as a Claude artifact (references/steps/3-mockups.md, the
 // "Create Claude artifact" button): one gallery page - the views and their states as tabs, a
 // desktop and a mobile width, each state framed the way the stepper's preview frames it
-// (`<file>#<id>`, sandboxed scripts) - and the files it frames: every view of the manifest and
-// every stylesheet a view links by bare name (the project's own, a story's component styles).
+// (`<file>#<id>`, sandboxed scripts) - and the files it frames: every view of the manifest, each
+// one self-contained. The sandboxed frame is an opaque origin the artifact host serves no other
+// file to, so every stylesheet a view links by bare name (the project's own, a story's component
+// styles) goes into the view as a <style>, and every image or font a view or its stylesheets name
+// by bare name goes in as a data: URI.
 // Only the orchestrator can publish an artifact; this writes what it publishes.
 //
 // Usage: node mockup-artifact.cjs <taskDir> [--title=<text>]
@@ -15,12 +18,50 @@ const path = require('node:path');
 
 const MOCKUP_DIR = 'generated-mockups';
 const ARTIFACT_DIR = 'mockup-artifact';
-// What a view may link by bare name and the gallery carries along.
-const reLinked = /(?:href|src)\s*=\s*["']([^"'/\\?#]+\.(?:css|png|svg|jpe?g|webp|gif|woff2?))["']/gi;
 const VIEWPORTS = { Desktop: { width: 1280, height: 800 }, Mobile: { width: 390, height: 780 } };
+// What a view or its stylesheets may name by bare name and the artifact carries as a data: URI.
+const MEDIA = {
+  png: 'image/png', svg: 'image/svg+xml', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
+  woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
+};
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const bare = (name) => typeof name === 'string' && name !== '' && name === path.basename(name) && !name.startsWith('.');
+const ext = (name) => (name.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || '';
+
+// A file of the round named by bare name (a query or a fragment dropped), or null.
+function roundFile(dir, ref) {
+  const name = String(ref).split(/[?#]/)[0];
+  return bare(name) && fs.existsSync(path.join(dir, name)) ? name : null;
+}
+
+function dataUri(dir, ref) {
+  const name = roundFile(dir, ref);
+  const media = name && MEDIA[ext(name)];
+  return media ? `data:${media};base64,${fs.readFileSync(path.join(dir, name)).toString('base64')}` : null;
+}
+
+const inlineUrls = (text, dir) => text.replace(/url\(\s*(["']?)([^"')\s]+)\1\s*\)/gi,
+  (whole, q, ref) => { const uri = dataUri(dir, ref); return uri ? `url(${q}${uri}${q})` : whole; });
+
+function attr(tag, name) {
+  const m = tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i'));
+  return m ? (m[1] ?? m[2] ?? m[3]) : null;
+}
+
+// One view made self-contained: images and fonts it names become data: URIs, and each
+// stylesheet it links becomes a <style> carrying that stylesheet, its own references inlined too.
+function selfContained(html, dir) {
+  const withAssets = inlineUrls(html, dir).replace(/(\s(?:src|href)\s*=\s*)(["'])([^"']+)\2/gi,
+    (whole, lead, q, ref) => { const uri = dataUri(dir, ref); return uri ? `${lead}${q}${uri}${q}` : whole; });
+  return withAssets.replace(/<link\b[^>]*>/gi, (tag) => {
+    const name = /(^|\s)stylesheet(\s|$)/i.test(attr(tag, 'rel') || '') && roundFile(dir, attr(tag, 'href') || '');
+    if (!name || ext(name) !== 'css') return tag;
+    const media = attr(tag, 'media');
+    const css = inlineUrls(fs.readFileSync(path.join(dir, name), 'utf8'), dir).replace(/<\/style/gi, '<\\/style');
+    return `<style data-inlined="${esc(name)}"${media ? ` media="${esc(media)}"` : ''}>${css}</style>`;
+  });
+}
 
 // The state buttons of one view: a view drawn in both themes splits them into a Light mode and a
 // Dark mode row (a dark twin's title ends in `(dark)`, shown without it), else one unlabelled row.
@@ -127,15 +168,9 @@ function buildArtifact(taskDir, { title = null } = {}) {
   const out = path.join(path.resolve(taskDir), ARTIFACT_DIR);
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
-  const names = new Set(screens.map((s) => s.file));
-  for (const view of [...names]) {
-    for (const m of fs.readFileSync(path.join(src, view), 'utf8').matchAll(reLinked)) {
-      if (bare(m[1]) && fs.existsSync(path.join(src, m[1]))) names.add(m[1]);
-    }
-  }
   const files = {};
-  for (const name of [...names].sort()) {
-    fs.copyFileSync(path.join(src, name), path.join(out, name));
+  for (const name of [...new Set(screens.map((s) => s.file))].sort()) {
+    fs.writeFileSync(path.join(out, name), selfContained(fs.readFileSync(path.join(src, name), 'utf8'), src));
     files[name] = path.join(out, name);
   }
   const page = path.join(out, 'index.html');
