@@ -66,10 +66,35 @@ function parseArgs(argv) {
 // contains `{{SOMETHING}}` is written through untouched instead of being
 // substituted a second time or reported as missing. Replacement is by function,
 // so `$&` and `$1` inside a value stay the characters the caller passed.
+//
+// Conditional blocks: `{{#if NAME=a|b}}…{{/if}}` (or `NAME!=a`) keep their text only when the
+// value matches. A brief carries the path of every landing mode, push setting and input kind,
+// and each agent reads all of it on every turn; the blocks drop what this agent will never do
+// (fix-agent.md went from 37 KB to the one path it follows). A tag alone on its line takes the
+// line with it. Blocks nest; a condition on a name nobody set is reported missing.
+const innermostBlock = /\{\{#if ([A-Z][A-Z0-9_]*)(!?=)([^}]*)\}\}((?:(?!\{\{#if )[\s\S])*?)\{\{\/if\}\}/;
+const lonelyTag = /^[ \t]*(\{\{#if [^}]+\}\}|\{\{\/if\}\})[ \t]*\r?\n/gm;
+
+function resolveBlocks(template, values, used, missing) {
+  let text = String(template).replace(lonelyTag, '$1');
+  for (let m = text.match(innermostBlock); m; m = text.match(innermostBlock)) {
+    const [whole, name, op, alternatives, body] = m;
+    let keep = false;
+    if (Object.prototype.hasOwnProperty.call(values, name)) {
+      used.add(name);
+      const hit = alternatives.split('|').map((s) => s.trim()).includes(String(values[name]).trim());
+      keep = op === '=' ? hit : !hit;
+    } else missing.add(name);
+    text = text.slice(0, m.index) + (keep ? body : '') + text.slice(m.index + whole.length);
+  }
+  if (/\{\{#if |\{\{\/if\}\}/.test(text)) throw new Error('The template has an unclosed {{#if}} or a stray {{/if}}.');
+  return text;
+}
+
 function render(template, values) {
   const used = new Set();
   const missing = new Set();
-  const text = String(template).replace(placeholder, (full, name) => {
+  const text = resolveBlocks(template, values, used, missing).replace(placeholder, (full, name) => {
     if (Object.prototype.hasOwnProperty.call(values, name)) {
       used.add(name);
       return values[name];

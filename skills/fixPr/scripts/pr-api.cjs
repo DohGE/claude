@@ -67,6 +67,21 @@ const replyMutation = `mutation($id:ID!,$body:String!){
 // `res.ok` alone says nothing: a query the token may not run comes back as a
 // perfectly successful response carrying no data at all.
 function graphql(project, query, variables, send = github.request) {
+  // A read is asked again after a 5xx or a dropped connection; a mutation never is here (a
+  // retried reply posted twice, 2026-11-05 - replyToThread checks first, in withRetry).
+  if (!/^\s*mutation\b/.test(query)) return retriedRead(() => graphqlOnce(project, query, variables, send));
+  return graphqlOnce(project, query, variables, send);
+}
+
+// Reads that fail for a moment are tried again: on 2026-11-06 one `fetch failed` on the review
+// threads of part-2 dropped it from the run, and part-1 - its parent - was then treated as a
+// branch with nothing above it. `readRetry` is the schedule; a test sets its `wait`.
+const readRetry = { delays: [2000, 6000], wait: null };
+function retriedRead(call) {
+  return withRetry(call, { delays: readRetry.delays, wait: readRetry.wait || sleepMs });
+}
+
+function graphqlOnce(project, query, variables, send) {
   const res = send(project, { url: graphqlUrl, method: 'POST', body: { query, variables } });
   if (!res || !res.ok) return { data: null, error: (res && res.error) || `HTTP ${(res && res.status) || 0}` };
   if (!res.json) return { data: null, error: 'the GraphQL response could not be read' };
@@ -259,7 +274,10 @@ const restPerPage = 100;
 function restList(project, pathFor, send, map) {
   const out = [];
   for (let page = 1; page <= maxPages; page++) {
-    const res = send(project, { path: pathFor(page) });
+    const res = retriedRead(() => {
+      const r = send(project, { path: pathFor(page) });
+      return r && r.ok ? r : { ...(r || {}), error: (r && (r.error || (r.status ? `HTTP ${r.status}` : ''))) || 'the request failed' };
+    });
     if (!res || !res.ok) return { items: out, error: (res && res.error) || 'the request failed', truncated: true };
     const nodes = Array.isArray(res.json) ? res.json : [];
     for (const node of nodes) {
@@ -322,7 +340,7 @@ function reviewBodies(project, slug, number, send = github.request) {
 }
 
 module.exports = {
-  graphql, reviewThreads, restOfThread, resolveThread, replyToThread, issueComments, reviewBodies,
+  graphql, reviewThreads, restOfThread, resolveThread, replyToThread, issueComments, reviewBodies, readRetry,
   normalizeThread, normalizeComment, stripAnchor, isTransient, withRetry, threadHasReply, sleepMs,
   threadsQuery, threadCommentsQuery, resolveMutation, replyMutation,
 };

@@ -445,6 +445,13 @@ function collectBranch(branch, ctx) {
   }
 
   const { commentsPath, reportPath, promptPath, checksDir, mediaDir } = artifactPaths(branch, reportsDir, stamp);
+  // The gate's files of an earlier run: on 2026-11-06 two agents found gate-2.json taken by one
+  // and wrote their pass beside it as gate-2.json.tmp. Each run starts with the folder empty.
+  try {
+    fs.rmSync(checksDir, { recursive: true, force: true });
+  } catch {
+    // a log another process holds stays; the passes of this run overwrite their own files
+  }
   const bots = dedupeBotNotes(conversation.comments);
   let mediaCount = 0;
   if (ctx.collectMedia) {
@@ -514,7 +521,14 @@ function remoteTips(project, branches, run = tryGit) {
 // the bottom only commits (`hold`) and the orchestrator moves it onto its parent once that one
 // has landed (restack.cjs); the bottom keeps its base unless it no longer merges (`keep-base`),
 // since a rebase there rewrites every part above it; a branch outside any stack `rebase`s.
-function annotateStacks(targets, tips = new Map()) {
+//
+// The stack is read from GitHub too (`gh`: `isPrHead(branch)`, `childrenOf(branch)`), never from
+// the named branches alone. On 2026-11-06 part-2's threads failed to load, and part-1 - alone
+// in the run - came out `rebase`: its agent would have rebased it onto master under four open
+// pull requests. The same day part-4, named alone, came out `rebase` with no parent. A part whose
+// base is another open pull request's branch is held; one with open pull requests above it keeps
+// its base, and those parts travel as `stack.above` for the cascade after it lands.
+function annotateStacks(targets, tips = new Map(), gh = null) {
   const warnings = [];
   const byBranch = new Map(targets.map((t) => [t.branch, t]));
   const parentOf = new Map();
@@ -550,13 +564,30 @@ function annotateStacks(targets, tips = new Map()) {
     visit(t.branch, chain);
     if (chain.length > 1) stacks.push(chain);
   }
+  const isPrHead = (gh && gh.isPrHead) || (() => false);
+  const named = new Set(targets.map((t) => t.branch));
   for (const t of ordered) {
-    const parent = parentOf.get(t.branch) || null;
+    let parent = parentOf.get(t.branch) || null;
+    const base = t.pr && t.pr.base;
+    const outside = !parent && Boolean(base) && base !== t.branch && !named.has(base) && isPrHead(base);
+    if (outside) parent = base;
     const children = childrenOf.get(t.branch);
+    const above = children.length === 0 && gh && gh.childrenOf ? stackAbove(t.branch, gh.childrenOf, warnings) : [];
     t.remoteTipAtStart = tips.get(t.branch) || null;
     t.stack = { parent, children, parentTipAtStart: parent ? tips.get(parent) || null : null };
-    t.landing = parent ? 'hold' : children.length > 0 ? 'keep-base' : 'rebase';
+    if (outside) t.stack.parentOutsideRun = true;
+    if (above.length) t.stack.above = above;
+    t.landing = parent ? 'hold' : children.length > 0 || above.length > 0 ? 'keep-base' : 'rebase';
   }
+  // Every open pull request stacked above a part, in the run or not: what its fix must not break
+  // (the brief's ABOVE, symbol-uses.cjs --refs).
+  const allAbove = (branch, seen = new Set()) => {
+    const t = byBranch.get(branch);
+    if (!t || seen.has(branch)) return [];
+    seen.add(branch);
+    return [...t.stack.children.flatMap((c) => [c, ...allAbove(c, seen)]), ...(t.stack.above || [])];
+  };
+  for (const t of ordered) t.stack.allAbove = allAbove(t.branch);
   return { targets: ordered, stacks, warnings };
 }
 
@@ -644,17 +675,30 @@ function collect(options) {
     if (target) result.targets.push(target);
   }
   // A replayed review reads nothing from the network, the remote's tips included.
-  const tips = replay ? new Map() : (options.remoteTips || remoteTips)(project, result.targets.map((t) => t.branch));
-  const stacked = annotateStacks(result.targets, tips);
+  const tipNames = [...new Set(result.targets.flatMap((t) => [t.branch, t.pr && t.pr.base].filter(Boolean)))];
+  const tips = replay ? new Map() : (options.remoteTips || remoteTips)(project, tipNames);
+  const heads = new Map();
+  const gh = replay ? null : {
+    isPrHead: options.isPrHead || ((branch) => {
+      if (!heads.has(branch)) {
+        const found = findPr(project, branch);
+        heads.set(branch, Boolean(found && found.pr));
+      }
+      return heads.get(branch);
+    }),
+    childrenOf: options.openChildren || ((branch) => openChildren(project, branch)),
+  };
+  const stacked = annotateStacks(result.targets, tips, gh);
   result.targets = stacked.targets;
   result.stacks = stacked.stacks;
   result.warnings.push(...stacked.warnings);
-  if (task && !replay) {
-    const childrenOf = options.openChildren || ((branch) => openChildren(project, branch));
-    for (const t of result.targets) {
-      if (t.stack && t.stack.children.length) continue;
-      const above = stackAbove(t.branch, childrenOf, result.warnings);
-      if (above.length) t.stack.above = above;
+  // A branch of the stack that could not be collected still moves: say where it sits.
+  const collected = new Set(result.targets.map((t) => t.branch));
+  for (const t of result.targets) {
+    for (const name of [...(t.stack.above || []), t.stack.parentOutsideRun ? t.stack.parent : null].filter(Boolean)) {
+      if (names.includes(name) && !collected.has(name)) {
+        result.warnings.push(`${name} was named but could not be collected (see errors); it is still part of the stack of ${t.branch}, which ${t.stack.parent === name ? 'is held on it' : 'keeps its base, and moves it with the cascade after landing'}.`);
+      }
     }
   }
   if (local) {
@@ -674,6 +718,7 @@ function main() {
     // stays the one SKILL.md prints.
     if (!args.replay && process.env.DOH_FIXPR_REPLAY) args.replay = process.env.DOH_FIXPR_REPLAY;
     result = collect(args);
+    writeRunFile(result);
   } catch (err) {
     result = { targets: [], errors: [String((err && err.message) || err)], warnings: [] };
   }
@@ -681,6 +726,19 @@ function main() {
   process.exit(result.targets.length > 0 ? 0 : 1);
 }
 
-module.exports = { openChildren, stackAbove, dedupeBotNotes, parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf, annotateStacks, remoteTips };
+// The run's state, for the scripts that act on it later: `restack.cjs --run=<file>` takes a
+// part's worktree, parent, tips and checks folder from here (eight flags the orchestrator used
+// to copy by hand, part by part), and `verify --run` its pairs.
+function writeRunFile(result) {
+  if (!result.targets || result.targets.length === 0) return null;
+  const dir = path.dirname(path.dirname(result.targets[0].commentsPath));
+  const stamp = formatTimestamp(new Date());
+  const file = path.join(dir, `fixpr-run-${stamp.date}-${stamp.time}.json`);
+  result.runPath = file;
+  fs.writeFileSync(file, `${JSON.stringify({ project: result.project, targets: result.targets, stacks: result.stacks }, null, 1)}\n`);
+  return file;
+}
+
+module.exports = { writeRunFile, openChildren, stackAbove, dedupeBotNotes, parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf, annotateStacks, remoteTips };
 
 if (require.main === module) main();

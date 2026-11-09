@@ -9,9 +9,19 @@ Conflicting files: {{FILES}}
 Check logs: `{{CHECKS_DIR}}` | Skill dir: `{{SKILL_DIR}}` | Push: `{{PUSH}}` | User language: `{{LANGUAGE}}`
 
 `{{ROOT}}` is the `git worktree` of `{{BRANCH}}`, a part of a stack of pull requests: its base is
-`{{PARENT}}`, another branch of the same run. `{{PARENT}}` has just landed with its own review fixes,
-and `restack.cjs` stopped moving this branch onto it at a conflict in the files above. Work only
-inside `{{ROOT}}`.
+`{{PARENT}}`, another open pull request's branch. `{{PARENT}}` has just landed (its review fixes, or
+a move onto a newer base), and `restack.cjs` stopped moving this branch onto it at a conflict in
+the files above. Work only inside `{{ROOT}}`, and never `cd` anywhere: every command takes
+`git -C "{{ROOT}}"` or an absolute path (a shell left in `{{ROOT}}` holds the folder open, and its
+removal then fails).
+{{#if PARENT_CHANGES!=none}}
+
+What `{{PARENT}}`'s own fix removed or renamed that this branch may still use (its agent's
+`stackImpact`): {{PARENT_CHANGES}}
+Bring this branch's uses in line with that change - the parent's side is reviewed work. A use
+that cannot follow it without changing what this branch does is the `error` case of point 3: name
+it, and the user decides (on 2026-11-06 a removed state flag still drove a dialog of part-3).
+{{/if}}
 
 ## Mission
 
@@ -44,8 +54,13 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
    `^(<<<<<<<|=======|>>>>>>>)`); then
    `GIT_EDITOR=true git -C "{{ROOT}}" -c rerere.enabled=true rebase --continue`. rerere records each
    resolution, so the next move of this branch resolves the same conflict on its own.
-   Two changes that contradict each other - no line can hold both → `git -C "{{ROOT}}" rebase --abort`
-   and end with the `error` JSON, naming the file and the two changes.
+   Two changes that contradict each other - no line can hold both → first keep what you did
+   resolve: write every file you settled, `git -C "{{ROOT}}" add <those files>` and
+   `git -C "{{ROOT}}" -c rerere.enabled=true rerere` (rerere records a resolution only at that
+   point; on 2026-11-06 an abort before it threw three settled files away, and the next attempt
+   resolved them again). Then `git -C "{{ROOT}}" rebase --abort` and end with the `error` JSON,
+   naming the file and the two changes, with a choice the user can answer in one word (A: keep the
+   parent's change and adapt this branch's use; B: …).
 4. Run the gate in the background (Bash, `run_in_background: true`):
 
        node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{PARENT}}" --result-file="{{CHECKS_DIR}}/gate-restack-<n>.json"
@@ -67,7 +82,8 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
 
 ## Final message
 
-End with a single JSON object and nothing after it:
+Your final message IS one of these JSON objects - alone, no text before or after it (the plugin's
+SubagentStop hook sends a message with prose back once):
 
 - `{"type":"result","rebased":true,"pushed":<bool>,"commit":"<HEAD sha>","resolvedFiles":["<path>",…],"gate":"green|skipped","summary":"<in {{LANGUAGE}}: per file, what each side changed and how you combined them; the push>"}`
 - `{"type":"error","report":"<in {{LANGUAGE}}: the file and why it could not be resolved, or the red step; the state of the worktree>","resolvedFiles":["<path>",…]}`

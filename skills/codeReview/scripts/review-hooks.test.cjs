@@ -416,7 +416,9 @@ test('registration: the plugin runs every codeReview hook, SKILL.md none of them
   // A sub-agent starts and ends with a conversation of its own: what was shown is forgotten both times.
   const forgets = run('review-hooks.cjs', ['--event=subagent'], 10).hooks[0];
   assert.deepStrictEqual(config.hooks.SubagentStart.flatMap((group) => group.hooks).filter((h) => h.args.some((a) => a.endsWith('review-hooks.cjs'))), [forgets]);
-  assert.deepStrictEqual(config.hooks.SubagentStop, [{ hooks: [forgets] }]);
+  // SubagentStop also runs fixPr's agent-stop.cjs (a fix agent ends with its JSON alone).
+  assert.deepStrictEqual(config.hooks.SubagentStop.flatMap((group) => group.hooks).filter((h) => h.args.some((a) => a.endsWith('review-hooks.cjs'))), [forgets]);
+  assert.ok(config.hooks.SubagentStop.flatMap((group) => group.hooks).some((h) => h.args.some((a) => a.endsWith('fixPr/scripts/agent-stop.cjs'))));
   for (const event of ['read', 'draft', 'compact', 'subagent', 'search']) assert.strictEqual(hooks.parseArgs([`--event=${event}`]).event, event);
 });
 

@@ -124,15 +124,25 @@ Each branch is fixed in `<parent of project>/<project name>-worktrees/fixpr-<bra
 the repository, never inside it, so nothing a run creates can be staged by the project or walked by
 its test runner. The same shape `implementNewFeature` uses.
 
-Before the worktree is created, the branch is fetched and its relation to `origin` decided. Four
+Before the worktree is created, the branch is fetched and its relation to `origin` decided. These
 states are **refused**, each with the fix in the message, and none of them is forced through:
 
 | State | Why it is refused |
 |---|---|
-| already checked out somewhere | usually the user's own terminal; two working copies of one branch diverge silently |
+| checked out somewhere AND holding commits origin lacks | a fix made beside them would leave them behind |
 | no `origin/<branch>` | the fix could never reach the pull request |
 | diverged from `origin/<branch>` | no push could succeed, and rebasing on the user's behalf is not this skill's call |
-| the worktree directory already exists | a previous run left it; inspect it rather than overwrite it |
+| a folder in the way that holds something of its own | a registered worktree, a `.git`, a link, or a file the branch does not have - named in the message |
+
+A branch the user has checked out (and pushed) is no longer refused: it is worked on a branch of the
+run's own, `doh-fixpr/<branch>`, made from `origin/<branch>`, and every push sends `HEAD` to
+`refs/heads/<branch>` (`heldBy`, `localBranch`). On 2026-11-06 part-4 of a stack fell out of a run
+because the user's terminal stood on it. `remove` deletes `doh-fixpr/<branch>` once origin holds it.
+
+A folder left by an earlier run - empty, or holding only files ignored by the project or identical to
+the branch's own (a removal that stopped half way) - is removed by `add` itself. Three such folders of
+2026-11-06, left by a "Permission denied" on remove, blocked their branches until the user deleted
+them. `remove` now retries the last `rmdir` for about 15 seconds before it leaves a held folder.
 
 A branch that is **behind** its remote is fast-forwarded first, so the fixes are built on the code the
 reviewer actually saw. A branch that is **ahead** keeps its unpushed commits and they ride along.
@@ -258,6 +268,21 @@ Its parts are fixed side by side but land bottom-up: landed side by side on 2026
 rebase onto master rewrote the commits part-2 sat on (part-2's rebase then conflicted), and part-4
 pushed before part-3 had, so every part above part-1 had to be moved by hand.
 
+The stack is read from GitHub, not only from the named branches: a part whose base is another open
+pull request's branch is held on it (`stack.parentOutsideRun`), a part with open pull requests above
+it keeps its base and carries them as `stack.above`, and `stack.allAbove` lists every part above a
+target. On 2026-11-06 a failed fetch of part-2 made part-1 a plain `rebase`, and part-4 named alone
+came out with no parent at all. Reads of GitHub that fail for a moment are retried (`pr-api.cjs`).
+
+A fix that removes or renames something the parts above still use is caught before the commit
+(`symbol-uses.cjs --refs=origin/<part>`), and reported as `stackImpact`: the orchestrator passes it to
+the agents of those parts while they still work, and to their conflict agent as `PARENT_CHANGES`.
+A held part's agent runs lint, typecheck and tests only; its build runs once, at the landing
+(`restack.cjs --pending-steps=build`), and a move that leaves the tree as it was runs no gate.
+
+`--restack` moves the whole stack onto its newest base before any fix (`/doh:restack`), so the fixes
+land once on current code. `/doh:restack` alone (skills/restack) is the same climb without fixes.
+
 `restack.cjs --action=land` moves a held part once its parent has landed: it fetches the parent,
 replays only the part's own commits onto it (`git rebase --onto origin/<parent> <parent tip at the
 start>`, with `rerere` on), runs the gate in the part's worktree when the move brought new code under
@@ -363,6 +388,19 @@ Its gate starts red twice: a `var` in a file no comment touches (lint), and the 
 
 `test-key/solution/` is the reference fix; the scorer's own tests land it and expect 11 of 11 with no problem.
 
+## Permissions
+
+`restack.cjs` force-pushes (with a lease) and `worktree.cjs` creates and removes folders, so the
+auto-mode classifier may stop a call it cannot attribute - it refused a hand-made restack script on
+2026-11-06. Allow the plugin's own scripts once, in `~/.claude/settings.json` (`permissions.allow`;
+`*` matches any version folder; the user's path, in both slash styles):
+
+    "Bash(node \"C:/Users/<you>/.claude/plugins/cache/implement-new-feature/doh/*)",
+    "Bash(node \"C:\\Users\\<you>\\.claude\\plugins\\cache\\implement-new-feature\\doh\\*)"
+
+An allow rule applies in auto mode unless `autoMode.classifyAllShell` is on. Claude cannot add the
+rule itself: editing its own settings is refused as self-modification.
+
 ## Files
 
 | Path | Role |
@@ -374,13 +412,15 @@ Its gate starts red twice: a `var` in a file no comment touches (lint), and the 
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
 | `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`), removal (links first, git's own reason on a refusal, the main `node_modules` counted before and after) |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice |
-| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append conflicts merged), checks a stack after the run (`verify`), moves the parts above a changed one (`cascade`) and pushes with retry (`push`) |
+| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append conflicts merged, `--run` reads the part from the run file, `--pending-steps`, `--summary`), checks a stack (`verify`, `--run`), moves the parts above a changed one (`cascade`), moves a whole stack onto its base (`stack`, `plan` - /doh:restack) and pushes `HEAD` with retry (`push`) |
+| `scripts/symbol-uses.cjs` | where names are still used - in the worktree (a rename's leftovers) and in the parts stacked above (`--refs`) |
+| `scripts/agent-stop.cjs` | SubagentStop hook: a fix or restack agent ends with its JSON object alone, and never while its own background work runs |
 | `scripts/pr-media.cjs` | downloads the screenshots and recordings of the comments, a recording as still frames |
 | `scripts/verify-fix.cjs` | the end-of-run check that every comment got a verdict, and that GitHub agrees |
 | `references/restack-agent.md` | the brief of the agent that resolves a conflict `restack.cjs` stopped at |
 | `scripts/score-fix.cjs` | the quality meter's scorer: verdicts, checks on the result, landing, scope, gate |
 | `test-key/` | the meter's fixture (`fixture/`, built by `make-fixture.cjs`), its key (`key.json`) and the reference fix (`solution/`) |
-| `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled, so the orchestrator hands the agent a path instead of carrying the brief twice |
+| `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled and only the `{{#if …}}` blocks of this agent kept (its landing, push, inputs), so the orchestrator hands the agent a path instead of carrying the brief twice |
 
 `pr-api.cjs` and `pr-comments.cjs` require `../../codeReview/scripts/github.cjs` and
 `../../codeReview/scripts/review-context.cjs` — the token discovery, the pull request lookup, the HTTP

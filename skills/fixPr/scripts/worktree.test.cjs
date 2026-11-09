@@ -22,7 +22,7 @@ function commitFile(dir, file, content, message) {
 }
 
 function makeRepo(t) {
-  const dir = fs.realpathSync(tempDir(t, 'fpc-repo-'));
+  const dir = fs.realpathSync.native(tempDir(t, 'fpc-repo-'));
   run(dir, ['init', '-q', '-b', 'main']);
   run(dir, ['config', 'user.email', 'test@test.local']);
   run(dir, ['config', 'user.name', 'Test']);
@@ -113,12 +113,48 @@ test('worktreeHolding finds the main checkout, which is the branch the user is s
   assert.strictEqual(wt.worktreeHolding(dir, 'other'), null);
 });
 
-test('add refuses a branch that is already checked out somewhere', (t) => {
+test('add works on a branch the user has checked out, through a branch of its own', (t) => {
+  // 2026-11-06: part-4 sat in the user's checkout and fell out of the run. The fix now goes
+  // onto doh-fixpr/<branch>, made from origin, and is pushed to origin/<branch>.
   const dir = makeRepo(t);
   fakeRemoteBranch(dir, 'main');
   const result = wt.add({ project: dir, branch: 'main', bootstrap: false });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.created, true);
+  assert.strictEqual(result.localBranch, 'doh-fixpr/main');
+  assert.strictEqual(result.heldBy, dir);
+  assert.strictEqual(run(result.worktree, ['rev-parse', '--abbrev-ref', 'HEAD']), 'doh-fixpr/main');
+  assert.ok(result.warnings.some((w) => /checked out in/.test(w) && /pull --rebase/.test(w)));
+});
+
+test('add still refuses a checked-out branch that holds commits origin does not have', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'main');
+  commitFile(dir, 'local.txt', 'l\n', 'local only');
+  const result = wt.add({ project: dir, branch: 'main', bootstrap: false });
   assert.strictEqual(result.created, false);
-  assert.match(result.errors[0], /already checked out/);
+  assert.match(result.errors[0], /checked out in .* 1 commit/);
+});
+
+test('remove deletes the run\'s own branch once origin holds its commits', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'main');
+  const added = wt.add({ project: dir, branch: 'main', bootstrap: false });
+  const removed = wt.remove({ project: dir, branch: 'main' });
+  assert.deepStrictEqual(removed.errors, []);
+  assert.strictEqual(removed.removed, true);
+  assert.strictEqual(wt.refExists(dir, 'refs/heads/doh-fixpr/main'), false);
+  assert.ok(!fs.existsSync(added.worktree));
+});
+
+test('remove keeps the run\'s own branch when it holds a commit origin lacks', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'main');
+  const added = wt.add({ project: dir, branch: 'main', bootstrap: false });
+  commitFile(added.worktree, 'fix.txt', 'f\n', 'unpushed fix');
+  const removed = wt.remove({ project: dir, branch: 'main' });
+  assert.strictEqual(wt.refExists(dir, 'refs/heads/doh-fixpr/main'), true);
+  assert.ok(removed.warnings.some((w) => /doh-fixpr\/main/.test(w)));
 });
 
 test('add refuses a branch that has no remote counterpart to push to', (t) => {
@@ -168,14 +204,77 @@ test('add fast-forwards a branch that is behind its remote before any fixing sta
   assert.ok(result.warnings.some((w) => /Fast-forwarded/.test(w)));
 });
 
-test('add refuses to reuse a directory that is already there', (t) => {
+test('add clears an empty folder an earlier run left behind', (t) => {
+  // 2026-11-06: three empty fixpr-* folders, left by a remove that hit "Permission denied",
+  // stopped the next run of their branches until the user deleted them by hand.
   const dir = makeRepo(t);
   fakeRemoteBranch(dir, 'feat');
   const at = wt.worktreePathFor(dir, 'feat');
   fs.mkdirSync(at, { recursive: true });
   const result = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.created, true);
+  assert.ok(result.warnings.some((w) => /leftover/.test(w) && /empty/.test(w)));
+});
+
+test('add clears a half-deleted folder holding only the branch\'s own and ignored files', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, '.gitignore', 'dist/\n', 'ignore');
+  commitFile(dir, 'src/a.txt', 'a\n', 'a');
+  fakeRemoteBranch(dir, 'feat');
+  const at = wt.worktreePathFor(dir, 'feat');
+  fs.mkdirSync(path.join(at, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(at, 'src', 'a.txt'), 'a\n');
+  fs.mkdirSync(path.join(at, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(at, 'dist', 'out.js'), 'x');
+  const result = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(result.created, true);
+});
+
+test('add refuses a leftover folder holding a file the branch does not have', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const at = wt.worktreePathFor(dir, 'feat');
+  fs.mkdirSync(at, { recursive: true });
+  fs.writeFileSync(path.join(at, 'README.md'), '# changed by hand\n');
+  const result = wt.add({ project: dir, branch: 'feat', bootstrap: false });
   assert.match(result.errors[0], /already exists/);
+  assert.match(result.errors[0], /README\.md/);
   assert.strictEqual(result.created, false);
+  assert.ok(fs.existsSync(path.join(at, 'README.md')));
+});
+
+test('add refuses a folder that is still a registered worktree', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const first = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  run(first.worktree, ['checkout', '-q', '--detach']);
+  const again = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  assert.match(again.errors[0], /already exists/);
+  assert.ok(fs.existsSync(first.worktree));
+});
+
+test('add names the project rulebook the worktree carries, or null', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, '.gitignore', '.claude/doh/\n', 'ignore doh');
+  fakeRemoteBranch(dir, 'feat');
+  fakeRemoteBranch(dir, 'other');
+  assert.strictEqual(wt.add({ project: dir, branch: 'feat', bootstrap: false }).rulebook, null);
+  fs.mkdirSync(path.join(dir, '.claude', 'doh', 'instructions'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'doh', 'instructions', 'general.md'), '# g\n');
+  const withRules = wt.add({ project: dir, branch: 'other', bootstrap: false });
+  assert.strictEqual(withRules.rulebook, path.join(withRules.worktree, '.claude', 'doh', 'instructions'));
+});
+
+test('removeEmptyDir retries a folder another process still holds, then gives up', () => {
+  let calls = 0;
+  const waits = [];
+  const ok = wt.removeEmptyDir('/x', { delays: [1, 2], wait: (ms) => waits.push(ms), rmdir: () => { calls += 1; if (calls < 3) throw new Error('EBUSY'); } });
+  assert.strictEqual(ok, true);
+  assert.deepStrictEqual(waits, [1, 2]);
+  const never = wt.removeEmptyDir('/x', { delays: [1], wait: () => {}, rmdir: () => { throw new Error('EPERM'); } });
+  assert.strictEqual(never, false);
 });
 
 test('add copies every .env file, including one nested in a package', (t) => {

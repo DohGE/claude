@@ -8,11 +8,17 @@ Comments: `{{COMMENTS}}` | Report: `{{REPORT}}` | Check logs: `{{CHECKS_DIR}}`
 Commit message, CR form: `{{COMMIT_MESSAGE}}` | Commit prefix: `{{COMMIT_PREFIX}}`
 Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | Push: `{{PUSH}}`
 Dependencies installed: `{{INSTALLED}}` | User language: `{{LANGUAGE}}` | Landing: `{{LANDING}}`
+Project rulebook: `{{RULEBOOK}}` | Open pull requests stacked above this one: `{{ABOVE}}`
 
 `{{ROOT}}` is a dedicated `git worktree` holding ONLY this branch. Read, write, install, test, stage
 and commit exclusively inside it. `{{PROJECT}}` is named so you can recognise the repository — never
-write there, never `cd` there, and never assume the two are the same path. `{{REPORT}}` deliberately
+write there, and never assume the two are the same path. `{{REPORT}}` deliberately
 sits outside `{{ROOT}}`, so writing it can never end up in your commit.
+
+Never `cd` anywhere - not into `{{ROOT}}` either. Every command takes `git -C "{{ROOT}}"` or an
+absolute path; a tool that needs a working directory runs in a subshell, `(cd "{{ROOT}}" && …)`.
+A shell left standing in `{{ROOT}}` holds the folder open on Windows, and the orchestrator's
+`worktree remove` then leaves it behind - three such folders blocked the next runs of 2026-11-06.
 
 ## Mission
 
@@ -78,6 +84,7 @@ into a message.
   resolved state for them, so ALL of them are here, including ones already dealt with and ones that
   were never a request. Step 2 is what sorts them out.
 - `reviews[]` — the summary a reviewer wrote above their inline comments, with its `state`.
+{{#if LOCAL=yes}}
 - `findings[]` — present when the user ran the skill with `--local` (`source: "local"`; the three
   lists above are then empty): the doh codeReview findings the user picked by id, each with `id`,
   `path`, `lines` (numbered as the reviewed revision had them), `severity`, `rule`, `problem`,
@@ -86,16 +93,20 @@ into a message.
   work, never `answered`. Find its code by `path` and by what `problem` describes - the branch may
   have moved since the review - and make the code what `expected` says. `rejected` holds for a
   finding on the same three grounds as for a comment.
+{{/if}}
+{{#if TASK=yes}}
 
 - `task` — present when the user ran the skill with `--task`: one more change they want in this
   branch, in their own words (`add … to the Load into context-menu label`). It is a request like
   a review thread, never `answered`, and its verdict names the item `task`.
+{{/if}}
 
 `conversation[]` and `reviews[]` entries carry the `id` your verdict names them by.
 
 `isOutdated: true` means the code moved under the thread: `line` is `null` and `originalLine` points
 into a diff that no longer applies. Find the subject by the CONTENT of the thread's `diffHunk`,
 never by the number — a line number from a stale diff points at whatever now sits there.
+{{#if MEDIA=yes}}
 
 A comment, a reply or a review with screenshots or a recording carries `media[]`: each entry's
 `path` is the downloaded file, a video also has `frames[]` - still images taken from it. Look at
@@ -104,6 +115,7 @@ to the checkbox details" means the box the screenshot circles, and "the row shou
 highlighted" is what the recording shows happening. An entry with `error` could not be fetched:
 work from the words, and say in `summary` that the picture was missing. Your verdict of such an
 item carries `"sawMedia": true` once you have looked.
+{{/if}}
 
 ## Step 2 — Give every item a verdict
 
@@ -143,7 +155,12 @@ Fix the code as you go, one item at a time, editing only what the comment is abo
 anything nobody asked about, and do not "improve" neighbouring code while you are in the file — every
 line you change beyond the comments is a line the reviewer has to review again.
 
-When the project ships a rulebook — `{{ROOT}}/.claude/doh/instructions/` — your fixes obey it like
+{{#if RULEBOOK=none}}
+The project ships no rulebook of its own (the worktree was checked when it was made): there are no
+project rules to look up, so do not search for any.
+{{/if}}
+{{#if RULEBOOK!=none}}
+The project ships a rulebook — `{{RULEBOOK}}` — and your fixes obey it like
 any other code in the repository.
 Read it per file, not whole: which of its rules bind a file depends on the file's kind, and reading
 them all up front spends the context your threads need.
@@ -155,12 +172,9 @@ Leave its `rules` file alone — that is the whole checklist, the doh review's o
 which are not this project's rules, and a comment fix is not the place to apply them.
 Files of one kind share one `projectRules`: skip one you already read, it stays binding for every
 file that returned it.
-`projectRules` null → the project's rulebook defines nothing for that file.
-`projectInstructionsDir` null → the project ships no rulebook. The worktree got a copy of the main
-checkout's gitignored `.claude/doh/` config (`instructions/`, `local/`, `checks.json`) when it was
-created; when `{{ROOT}}/.claude/doh/instructions/` is still absent but the main checkout has it, say so
-in `summary` instead of reaching outside `{{ROOT}}` for it. The matcher exiting
+`projectRules` null → the project's rulebook defines nothing for that file. The matcher exiting
 non-zero → go on without it and say so in `summary`.
+{{/if}}
 
 ## Step 3 — Check the fixes against the comments and the rest of the code
 
@@ -183,18 +197,33 @@ Once every item has its verdict and its fix, check the work before anything else
    never another locale's - the translation team owns those (rule i18n#1), even when a key you renamed
    leaves that language on its fallback until they catch up. Two runs of 2026-11-03 renamed keys in
    five locale files, and the user had them taken back by hand.
-3. **Every rename is verified by a sub-agent.** When your fixes renamed anything - a file or folder,
-   a symbol, a class member, an input/output, a selector, an action, a translation key, a CSS class,
-   a `data-test` value, a route path - dispatch a fresh verification sub-agent (Agent tool,
-   `general-purpose`, not in the background: it only searches) once the renames are written. Its
-   prompt lists every old and new name and `{{ROOT}}` as the only tree it reads; it Greps that tree
-   for every old name - whole words, string literals, dotted translation-key paths and the key's leaf
-   inside the nested `en.json` - skips every other locale file (an old key path there is the
-   translation team's, no leftover), and replies with each leftover `path:line`. Fix every leftover
-   and dispatch it again until it finds none. Without the Agent tool, make that search yourself and
-   say so in `summary`. This is the codeReview rulebook's `general#14`.
+3. **Every rename and removal is checked for leftovers.** When your fixes renamed or removed
+   anything - a file or folder, a symbol, a class member, an input/output, a selector, an action, a
+   translation key, a CSS class, a `data-test` value, a route path - run, once they are written:
 
-4. **What the screen shows is checked by a person.** A fix that changed a stylesheet or a template
+       node "{{SKILL_DIR}}/scripts/symbol-uses.cjs" --root="{{ROOT}}" --names="<old name>,<old name>,…"
+
+   It greps the worktree for every old name - whole words, dotted translation-key paths and the
+   key's leaf inside `en.json` - and skips the other locale files (an old key path there is the
+   translation team's, no leftover). Its JSON lists each use as `path:line`. Fix every leftover and
+   run it again until `uses` is empty. This is the codeReview rulebook's `general#14`; no sub-agent.
+{{#if ABOVE!=none}}
+4. **The pull requests above this one still build on it.** `{{ABOVE}}` are stacked on this
+   branch and land on it after you. Before the commit, run the same script against them, once for
+   every name your fixes removed, renamed or changed the signature of:
+
+       git -C "{{ROOT}}" fetch origin <each branch of {{ABOVE}}>
+       node "{{SKILL_DIR}}/scripts/symbol-uses.cjs" --root="{{ROOT}}" --names="<old names>" --refs="origin/<branch>,origin/<branch>"
+
+   A use there is code that breaks the moment that part moves onto yours - on 2026-11-06 part-1's
+   fix removed a state flag part-2..4 still read, and three conflict agents and a question to the
+   user followed. Where the comment allows it, take the fix that leaves the used name in place
+   (keep it next to the new one, narrow the change). Where it does not, make the fix anyway and
+   list every such name in `stackImpact` (Final message): the orchestrator hands it to the agents
+   of those parts, so they adapt before they land instead of after.
+{{/if}}
+
+5. **What the screen shows is checked by a person.** A fix that changed a stylesheet or a template
    (`.scss`, `.css`, `.html`) changes how the page looks, and neither the gate nor the review sees
    that. List every such file in `uiUnverified` (Final message), with the comment it answers, so
    the summary tells the user what to look at. When the comment came with a screenshot, say in
@@ -256,16 +285,31 @@ The gate is the project's own `lint`, `typecheck`, `test` and `build`. Every red
 whether your own fixes broke it or it was already red when you arrived makes no difference to what
 you do about it, only to what the report says about it.
 
+{{#if INSTALLED=no}}
 `{{INSTALLED}}` is `no` → the dependency install failed while the worktree was built. Do NOT run the
 gate: every command would fail for want of `node_modules`, and you would spend the run "repairing" a
 missing dependency tree. Record that in the report and in `summary`, leave `checksFixed` empty, and go
 to step 6.
-
-Otherwise, once before the first pass, `git -C "{{ROOT}}" fetch origin {{BASE}}`: the gate lists the
+{{/if}}
+{{#if INSTALLED=yes}}
+Once before the first pass, `git -C "{{ROOT}}" fetch origin {{BASE}}`: the gate lists the
 files the pull request changes against `origin/{{BASE}}`, and refuses (an `errors[]` entry) a base it
 cannot resolve. Then run pass `<n>` (1, 2, 3) in the background - Bash with `run_in_background: true`:
 
+{{#if LANDING=hold}}
+    node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{BASE}}" --only=lint,typecheck,test --result-file="{{CHECKS_DIR}}/gate-<n>.json"
+
+This part is held: the orchestrator moves it onto `{{BASE}}` once that one has landed and builds
+it there, on the code that is pushed (`restack.cjs --pending-steps=build`). A build of yours here
+would be thrown away with the move - up to four full builds per part on 2026-11-06. So your gate
+is lint, typecheck and the tests, and its answer is `partial`: a `partial` pass in which every step
+`passed` (or was `skipped`) is your green gate. `build` is not yours to run, and a red build at the
+landing is reported back to the user, not to you.
+{{/if}}
+{{#if LANDING!=hold}}
     node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{BASE}}" --result-file="{{CHECKS_DIR}}/gate-<n>.json"
+{{/if}}
+{{/if}}
 
 and wait for `{{CHECKS_DIR}}/gate-<n>.json` with `wait-part.cjs --nonempty` (see Waiting); then Read
 that file. It holds ONE JSON object: `gate` (`green` / `red` / `partial` / `skipped`), `gateSource` and
@@ -285,9 +329,14 @@ reading output: a `passed` step has nothing for you to read, and no output ever 
 - `gate: "skipped"` — the project has no `package.json`, so there was nothing to run. Record the
   reason and go to step 6. **A skipped gate is not a red one.**
 - `gate: "green"` — go to step 6.
+{{#if LANDING!=hold}}
 - `gate: "partial"` — this was a `--only` pass, so nothing failed among the commands it RAN and the
   rest were not looked at. It is not a green gate and it is not a licence to commit: run the full
   gate and act on that answer.
+{{/if}}
+{{#if LANDING=hold}}
+- `gate: "partial"` with every step `passed` or `skipped` — your green gate (see above): go to step 6.
+{{/if}}
 - `gate: "red"` — for each `failed` step, read its `errorsPath` with the Read tool and repair the CAUSE.
   That file is the failure lines alone, cut out of the output by the script: the failing tests, the
   compiler and lint errors with their locations, the summary count. Never Read `logPath` — it is the
@@ -301,7 +350,7 @@ worktree exactly as it is so the user can inspect it, write the report, and end 
 To re-run one command after a fix, add `--only=lint` (or `typecheck`, `test`, `build`) to the same
 command, in the background with a result file of its own, to run just that one and leave the other
 logs untouched. Such a pass answers `partial`, never `green` — your LAST pass
-must be a full run, because what you report as green has to be green together, not one step at a time.
+must be a full run{{#if LANDING=hold}} (for this held part: lint, typecheck and test together){{/if}}, because what you report as green has to be green together, not one step at a time.
 
 `checksFixed` is the list of `label`s of the steps that were `failed` in your FIRST pass and `passed`
 in your LAST. A step that only went red in pass two because a fix of yours broke it is NOT in that
@@ -397,17 +446,22 @@ The following are not repairs, and none of them may appear in your commit:
    `committed: false`, and say why in `summary`. If the tree is nonetheless dirty, name the files in
    `summary` and leave them; you revert nothing.
 4. Land the commit as `{{LANDING}}` says:
-   - `hold` — `{{BASE}}` is another branch of this run, fixed side by side: do NOT rebase and do NOT
+{{#if LANDING=hold}}
+   - `hold` — `{{BASE}}` is another open pull request's branch: do NOT rebase and do NOT
      push. The orchestrator moves your commit onto `{{BASE}}` once that one has landed, runs the gate
      and pushes (restack.cjs). Report `held: true`, `rebased: false`, `pushed: false`, and skip point 5.
      A rebase of yours here is what left part-2 on a part-1 that part-1's own rebase had rewritten.
-   - `keep-base` — other pull requests of this run are built on this branch, and a rebase here rewrites
+{{/if}}
+{{#if LANDING=keep-base}}
+   - `keep-base` — other open pull requests are built on this branch, and a rebase here rewrites
      every one of them. `git -C "{{ROOT}}" fetch origin {{BASE}}`, then
      `git -C "{{ROOT}}" merge-tree --write-tree --quiet origin/{{BASE}} HEAD`: exit 0 → it still merges
      cleanly, so no rebase (`rebased: false`, "keeps its base: stacked pull requests build on it" in
      `summary`); exit 1 → it no longer merges: rebase it exactly as `rebase` says below; any other exit
      → no rebase, and say so in `summary`.
-   - `rebase` — rebase the commit onto the current base, so the pull request lands on what `{{BASE}}`
+{{/if}}
+{{#if LANDING=rebase|keep-base}}
+   - `rebase`{{#if LANDING=keep-base}} (reached from `keep-base` only when it no longer merges){{/if}} — rebase the commit onto the current base, so the pull request lands on what `{{BASE}}`
      holds now:
      - `git -C "{{ROOT}}" rev-parse origin/{{BRANCH}}` → keep it as `<remote-sha>` (where the remote
        branch stood when you started);
@@ -423,10 +477,17 @@ The following are not repairs, and none of them may appear in your commit:
        "{{ROOT}}" reset --hard ORIG_HEAD` (back to your commit before the rebase - the only reset you
        ever run), `rebased: false`, the red command in `summary`, and go on un-rebased. Green →
        `rebased: true`.
+{{/if}}
+{{#if PUSH=no}}
    With `{{PUSH}}` `no`, rebase all the same: the user pushes the branch as it is.
-5. Push, but only when `{{PUSH}}` is `yes`, through the script that retries what fails for a
+5. No push: `{{PUSH}}` is `no`. Report `pushed: false`.
+{{/if}}
+{{#if PUSH=yes}}
+{{#if LANDING!=hold}}
+5. Push through the script that retries what fails for a
    moment (GitHub's `fatal error in commit_refs_rules`, a 5xx, a dropped connection) and never a
-   rejection:
+   rejection. It pushes `HEAD` to `origin/{{BRANCH}}`, whatever the local branch is called (a branch
+   the user has checked out is worked here on `doh-fixpr/{{BRANCH}}`):
    - Not rebased: `node "{{SKILL_DIR}}/scripts/restack.cjs" --action=push --worktree="{{ROOT}}" --branch={{BRANCH}}` - plain push.
    - Rebased: the branch's history was rewritten on purpose, so the push replaces it, guarded by
      the remote state you saw: the same command with `--lease=<remote-sha>` (a
@@ -436,6 +497,8 @@ The following are not repairs, and none of them may appear in your commit:
    the branch moved on the remote WHILE you were working: do not fight it - no second rebase, no
    other force. Report `pushed: false` with the rejection text in `summary` and leave the commit
    sitting on the local branch for the user.
+{{/if}}
+{{/if}}
 6. Write the report with the Write tool to `{{REPORT}}.txt` (the harness refuses a sub-agent a `.md`
    file), then move it into place with Bash: `mv -f "{{REPORT}}.txt" "{{REPORT}}"`. Never a heredoc:
    its quoting and backslashes broke a report of 2026-11-03. One write: a report
@@ -473,19 +536,27 @@ The following are not repairs, and none of them may appear in your commit:
   `{"item":"thread:<id>"|"conversation:<id>"|"review:<id>"|"finding:<id>"|"task","verdict":"fixed|rejected|answered","ground":"<for rejected and answered: the ground, one line>","sawMedia":true}`
   (`sawMedia` only on an item with `media[]`, once you looked at it). A bot's conversation
   comment answered as CI noise needs no ground.
-- `uiUnverified` lists the stylesheets and templates your commit changes (step 3, point 4), each
+- `uiUnverified` lists the stylesheets and templates your commit changes (step 3, point 5), each
   `{"path":"<repo-relative>","item":"<the verdict item it answers>"}`.
 - `fixedVia` maps a fixed thread whose fix landed in other files than the one it sits on to those
   repo-relative paths - keys renamed in `en.json` for a thread on an effects file. A thread is closed
   only when the commit changes its own file or one of these: four threads of 2026-11-03 stayed open
   for want of it. Leave a thread fixed in its own file out of the map.
 
+- `stackImpact` lists every name your commit removed, renamed or changed the signature of that a
+  pull request stacked above still uses (step 3, point 4), each
+  `{"symbol":"<old name>","change":"removed|renamed to <new>|signature: <what>","usedIn":["<branch>:<path>:<line>",…]}`;
+  `[]` when there is none or nothing is stacked above.
+
 ## Final message
 
-End your final message with a single JSON object and nothing after it:
+Your final message IS the JSON object below - alone. No heading, no summary, no text before or
+after it: the report file and the object's `summary` hold everything else, and the orchestrator
+reads this message whole. A final message with prose in it is sent back to you once (the
+plugin's SubagentStop hook), and so is a turn ended while your background work still runs.
 
 - Success (including a run that legitimately committed nothing):
-  `{"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
+  `{"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"stackImpact":[{"symbol":"<name>","change":"<change>","usedIn":["<branch>:<path>:<line>",…]},…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
 - Gate still red after three passes, or any failure that left the work unfinished:
   `{"type":"error","report":"<in {{LANGUAGE}}: which commands are still red and why, what is in the worktree now, what you already fixed>","fixed":<N>,"fixedThreadIds":[],"verdicts":[…as above, for the items you got to…],"checksFixed":[],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}]}`
   `fixedThreadIds` and `checksFixed` are empty on this path, always: nothing was committed or pushed,
