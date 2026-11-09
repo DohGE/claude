@@ -20,7 +20,7 @@ const SUMMARY = {
 };
 const ENV_JSON = JSON.stringify({
   uuid: '5f9c1b2a-0000-4000-8000-000000000001', lastMigration: 33, name: 'Mocki funkcji',
-  port: 3000, hostname: 'localhost', routes: []
+  port: 3000, hostname: '', routes: []
 }, null, 2);
 
 test.beforeEach(async () => {
@@ -74,7 +74,7 @@ test('panel kroku 7 pokazuje JSON z serwera i kopiuje go do schowka', async ({ p
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
   await openMockoonPanel(page);
   await expect(page.locator('#mockoonJson')).toContainText('"port": 3000');
-  await expect(page.locator('#mockoonJson')).toContainText('"hostname": "localhost"');
+  await expect(page.locator('#mockoonJson')).toContainText('"hostname": ""');
   await page.click('#copyMockoon');
   await expect(page.locator('#copyMockoon')).toHaveText('Copied');
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());

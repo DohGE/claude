@@ -9,7 +9,7 @@ It can run any number of times ("Regenerate" is the same step over the same file
 2. Spawn the mockoon agent from `references/mockoon-agent.md`, per "Spawning a sub-agent", on the
    model and effort `agents(T)` gives step 7 like any other step. It reads spec/plan (the task
    description and the story when refinement did not run), the contracts and the implemented code,
-   and writes `<SESSION>/tasks/T/mockoon.json` (one environment on `localhost:3000`). The browser
+   and writes `<SESSION>/tasks/T/mockoon.json` (one environment on port 3000, no hostname). The browser
    fetches that file itself from `/api/mockoon?taskId=T` — NEVER read it, never paste it into a
    message or into `/api/state`.
 3. `{"type":"result","routes":N,"summary"}` → POST `{"taskId":"T","step":7,"status":"completed","progress":100}`;

@@ -112,3 +112,29 @@ test('implementacja nie przyjmuje obrazków, a wiadomość bez nich nie ma klucz
     await page.click('#sendStepMessage');
     expect(await takeAnswer()).toEqual({ kind: 'message', step: 4, text: 'Pomiń migrację', taskId: 't1' });
   });
+
+test('Alt+V w polu odpowiedzi wkleja zrzut ze schowka na tackę', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await state({ step: 2, status: 'in_progress', activeStep: 2,
+    question: { id: 'q1', text: 'Ile ról?' } });
+  await page.goto(base);
+  await page.waitForSelector('#freeAnswer');
+  await page.click('#freeAnswer');
+  await page.keyboard.press('Alt+V');
+  await expect(page.locator('[data-attach-tray="answer"] .att-note')).toContainText('No picture on the clipboard');
+  // A picture the browser itself encoded: Chromium's clipboard decodes what it is given.
+  await page.evaluate(async () => {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 8, height: 8 });
+    canvas.getContext('2d').fillRect(0, 0, 8, 8);
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  });
+  await page.click('#freeAnswer');
+  await page.keyboard.press('Alt+V');
+  await expect(page.locator('[data-attach-tray="answer"] img')).toHaveCount(1);
+  await page.fill('#freeAnswer', 'Zrzut ze schowka');
+  await page.click('#send');
+  await page.click('#confirmOk');
+  const answer = await takeAnswer();
+  expect(names(answer)[0]).toMatch(/^1-screenshot-\d{8}-\d{6}-1\.png$/);
+});
