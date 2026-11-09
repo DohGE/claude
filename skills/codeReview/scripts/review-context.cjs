@@ -16,6 +16,7 @@ const repoFacts = require('./repo-facts.cjs');
 const reviewBundle = require('./review-bundle.cjs');
 const reviewScope = require('./review-scope.cjs');
 const mechanical = require('./mechanical.cjs');
+const patternChecks = require('./pattern-checks.cjs');
 
 const defaultSkillDir = path.resolve(__dirname, '..');
 const baseBranchNames = ['main', 'master', 'develop', 'dev'];
@@ -1795,6 +1796,9 @@ function buildContext(options) {
           partial: partialHere,
           mechanical: f.mechanical ? { reason: f.mechanical, map: learned, leftovers: leftOver } : null,
           removed: [...removedNames].filter(([, from]) => from.includes(f.path)).map(([name]) => ({ name, ...(namesLeft.get(name) || { total: 0, hits: [] }) })),
+          // Patterns a script finds for certain on the added lines (pattern-checks.cjs), each with
+          // the item it may break - for the walker to confirm or drop.
+          hints: patternChecks.hintsFor({ path: f.path, patch: patches.get(f.path) || '', content: universe.files && typeof universe.files.get === 'function' ? universe.files.get(f.path) || null : null }),
         },
       });
     });
@@ -2164,6 +2168,9 @@ function buildContext(options) {
         fs.writeFileSync(snapshotPathOf(target), JSON.stringify({
           at: now.toISOString(),
           reportPath: target.reportPath,
+          // The commit this review read: what is newer on the branch was reviewed by nobody
+          // (review-freshness.cjs; fixPr warns before a run, codeReview --since-last catches up).
+          ...(target.revision ? { revision: target.revision } : {}),
           // Folder mode reads the working tree, which has no blobs to record: its
           // snapshot only names the folder, so a resume continues the same one.
           ...(blobs ? { files: Object.fromEntries(blobs) } : { folder: target.folder }),

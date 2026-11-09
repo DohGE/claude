@@ -388,6 +388,30 @@ Its gate starts red twice: a `var` in a file no comment touches (lint), and the 
 
 `test-key/solution/` is the reference fix; the scorer's own tests land it and expect 11 of 11 with no problem.
 
+## Visual check
+
+A fix of what the user sees is looked at in the running app (`fix-agent.md` step 5b) when the project's
+`.claude/doh/checks.json` describes how to start it:
+
+    "visual": { "command": "npx ng serve dpx -c local --port {port}", "url": "http://localhost:{port}/#",
+                "backend": ["http://localhost:3000/"], "authFile": ".claude/doh/auth.json" }
+
+The agent preflights the backend (`e2e-preflight.cjs --fix`, which also copies the local proxy config
+the worktree lacks), starts the app through `task-processes.cjs`, writes one Playwright spec per
+checked comment - assertions of what the fix promises and a screenshot - and runs it through
+`checks.cjs --only=e2e` with implementNewFeature's Playwright. A failed assertion is a red step; an
+app that cannot start or a backend that does not answer skips the check, and the templates stay in
+`uiUnverified`. `authFile` (`{"login","password"}`, gitignored) is read by the gate script only.
+The orchestrator stops the app before it removes the worktree.
+
+## Lessons and freshness
+
+Each agent proposes `lessons` - the general rule behind a fixed comment - and the orchestrator offers
+them to the user after the run (`codeReview/scripts/pr-lessons.cjs`), into the project's
+`.claude/doh/local/pr-lessons-*.md` rules that every codeReview loads. Before the run, the collector
+warns about every branch with commits newer than its last codeReview
+(`codeReview/scripts/review-freshness.cjs`): reviewers saw that code, no review did.
+
 ## Permissions
 
 `restack.cjs` force-pushes (with a lease) and `worktree.cjs` creates and removes folders, so the

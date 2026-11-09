@@ -2,7 +2,7 @@
   "kind": "ui-component-template",
   "pattern": "src/app/**/components-<area>/ui/<name>/<name>.component.html",
   "role": "Template of a UI component.",
-  "itemCount": 77,
+  "itemCount": 78,
   "instructions": [
     {
       "id": "component-template",
@@ -186,8 +186,8 @@
     {
       "id": "i18n",
       "name": "Translations",
-      "selectedItems": "9,11",
-      "checklistSize": 12,
+      "selectedItems": "9,11,13",
+      "checklistSize": 13,
       "items": [
         {
           "id": "i18n#9",
@@ -210,6 +210,11 @@
           "facts": [
             "i18n-missing-key"
           ]
+        },
+        {
+          "id": "i18n#13",
+          "text": "A value interpolated into text a user reads - a translate parameter (`{ slot, barcode }`), a template interpolation, a string concatenation, a copied or exported message - that can be `null` or `undefined` has an explicit fallback (`?? ''`, `?? '—'`) or a message variant without it: ngx-translate renders a missing parameter as the raw `{{slot}}` placeholder, and a template or a concatenation renders the word `null`.",
+          "severity": "medium"
         }
       ]
     },

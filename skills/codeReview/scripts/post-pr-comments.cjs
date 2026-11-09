@@ -22,11 +22,15 @@ const maxCommentsPerReview = 50;
 const maxReviewBody = 60000;
 
 function parseArgs(argv) {
-  const args = { report: '', project: '', pr: '', include: [], exclude: [], all: false, dryRun: false };
+  const args = { report: '', project: '', pr: '', include: [], exclude: [], all: false, dryRun: false, dedupe: true };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--dry-run') {
       args.dryRun = true;
+      continue;
+    }
+    if (arg === '--no-dedupe') {
+      args.dedupe = false;
       continue;
     }
     if (arg === '--all') {
@@ -46,7 +50,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --project, --pr, --include, --exclude, --all, --dry-run).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --report, --project, --pr, --include, --exclude, --all, --dry-run, --no-dedupe).`);
   }
   if (!args.report) throw new Error('No report given (expected --report="path/to/report.html").');
   return args;
@@ -240,6 +244,62 @@ function continuedBody(payload, leftovers, part) {
   return full.join(String.fromCharCode(10));
 }
 
+// --- What the pull request already discusses ---------------------------------------------
+//
+// A finding a reviewer already raised on the pull request - in a thread, open or resolved - or
+// one an earlier run of this script already posted is not posted again: a second comment on a
+// settled point reopens it for everybody, and a resolved one says "fixed" where the finding
+// says "still wrong". It is a duplicate when it sits on the same file, near the same line
+// (within `nearLines`, the thread's original line for an outdated one), and says the same
+// thing: one backticked identifier in common, or enough shared words. A finding whose English
+// text an earlier review body already carries (the leftovers of a previous post) is one too.
+const nearLines = 5;
+const stopWords = new Set('the and for are but not you all any can had has have its may was were this that with from into than then them they will would should could when where which while what who whom why how use used uses using also only just more most such some same other each every here there these those does done make made line lines file code instead'.split(' '));
+
+const wordsOf = (text) => new Set(String(text || '').toLowerCase().replace(/`[^`]*`/g, ' ').match(/[a-z][a-z0-9_]{2,}/g)?.filter((w) => !stopWords.has(w)) || []);
+const codeOf = (text) => new Set([...String(text || '').matchAll(/`([^`\n]{2,80})`/g)].map((m) => m[1].trim().toLowerCase()).filter((c) => /[a-z]/i.test(c) && c.length >= 3));
+
+function overlap(a, b) {
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const w of a) if (b.has(w)) shared += 1;
+  return shared / Math.min(a.size, b.size);
+}
+
+function findDuplicate(finding, discussion) {
+  if (!discussion) return null;
+  const text = `${finding.prProblem || ''} ${finding.prExpected || ''}`;
+  const words = wordsOf(text);
+  const code = codeOf(text);
+  const ranges = parseLineRanges(finding.lines);
+  const lines = ranges.flatMap((r) => [r.start, r.end]);
+  for (const thread of discussion.threads || []) {
+    if (thread.path !== finding.path) continue;
+    const bodies = (thread.comments || []).map((c) => c.body || '');
+    // An earlier post of this very finding: its text, verbatim, anywhere in the file's threads.
+    if (finding.prProblem && bodies.some((b) => b.includes(finding.prProblem))) return { thread, how: 'posted before' };
+    const at = thread.line || thread.originalLine;
+    if (!at || !lines.some((n) => Math.abs(n - at) <= nearLines)) continue;
+    const theirs = bodies.join('\n');
+    const sharedCode = [...code].some((c) => codeOf(theirs).has(c));
+    if (sharedCode || overlap(words, wordsOf(theirs)) >= 0.34) return { thread, how: sharedCode ? 'same identifier, same place' : 'same words, same place' };
+  }
+  if (finding.prProblem && (discussion.bodies || []).some((b) => String(b).includes(finding.prProblem))) return { thread: null, how: 'in an earlier review body' };
+  return null;
+}
+
+// The pull request's review threads (resolved ones included) and its review and conversation
+// bodies, through fixPr's GraphQL layer. Only the real client reads GitHub: a test's stub
+// without `existingDiscussion` has nothing to compare against.
+function defaultExistingDiscussion(project, slug, number) {
+  const api = require('../../fixPr/scripts/pr-api.cjs');
+  const threads = api.reviewThreads(project, slug, number);
+  const reviews = api.reviewBodies(project, slug, number);
+  const notes = api.issueComments(project, slug, number);
+  const bodies = [...((reviews && reviews.items) || reviews.reviews || []), ...((notes && notes.items) || notes.comments || [])].map((x) => x.body || '');
+  return { threads: threads.threads || [], bodies, error: threads.error || null };
+}
+
 function chunk(items, size) {
   const out = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -322,6 +382,25 @@ function main(argv, api = github) {
     return 1;
   }
 
+  // What the pull request already says - in a thread, open or resolved, or in a review body -
+  // is not said again (`--no-dedupe` posts everything).
+  const lookup = api.existingDiscussion || (api === github ? defaultExistingDiscussion : null);
+  const discussion = args.dedupe && lookup ? lookup(project, slug, number) : null;
+  if (discussion && discussion.error) process.stderr.write(`Uwaga: nie udało się pobrać wszystkich wątków PR-a (${discussion.error}); deduplikacja widzi tylko to, co przyszło.\n`);
+  const skipped = [];
+  for (let i = findings.length - 1; i >= 0; i -= 1) {
+    const dup = findDuplicate(findings[i], discussion);
+    if (dup) skipped.unshift({ finding: findings[i], ...dup });
+    if (dup) findings.splice(i, 1);
+  }
+  if (skipped.length) {
+    process.stdout.write(`Pominięto ${skipped.length} znalezisk już omówionych w PR-ze:\n${skipped.map((s) => `- ${s.finding.id} ${s.finding.path}:${s.finding.lines} - ${s.how}${s.thread ? ` (${s.thread.isResolved ? 'wątek rozwiązany' : 'wątek otwarty'}${s.thread.comments && s.thread.comments[0] && s.thread.comments[0].url ? `, ${s.thread.comments[0].url}` : ''})` : ''}`).join('\n')}\n`);
+  }
+  if (!findings.length) {
+    process.stdout.write('Nic do wysłania: każde zaakceptowane znalezisko PR już omawia.\n');
+    return 0;
+  }
+
   const { comments, leftovers } = buildComments(findings, commentableLines(diff));
   const batches = chunk(comments, maxCommentsPerReview);
   // The summary may need more reviews than the comments do, or the other way round; the
@@ -372,5 +451,5 @@ function main(argv, api = github) {
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
-  parseArgs, parsePayload, commentableLines, anchorFor, renderBody, buildComments, summaryHeading, summaryBody, summaryBodies, chunk, main,
+  parseArgs, parsePayload, commentableLines, anchorFor, renderBody, buildComments, summaryHeading, summaryBody, summaryBodies, chunk, main, findDuplicate,
 };

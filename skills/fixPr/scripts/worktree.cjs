@@ -650,6 +650,14 @@ function add(options) {
   // The brief names the rulebook or says there is none, so no agent spends its calls looking.
   const rules = path.join(worktree, '.claude', 'doh', 'instructions');
   result.rulebook = isDirectory(rules) ? rules : null;
+  // How the app is started for a look at a fix (`checks.json` "visual": command, url, backend,
+  // authFile) - the fix agent's visual check; null when the project describes none.
+  try {
+    const checks = JSON.parse(fs.readFileSync(path.join(worktree, '.claude', 'doh', 'checks.json'), 'utf8'));
+    result.visual = checks && checks.visual && typeof checks.visual.command === 'string' ? checks.visual : null;
+  } catch {
+    result.visual = null;
+  }
   if (options.bootstrap === false) {
     result.dependencies = { manager: null, error: null, skipped: true };
     return result;

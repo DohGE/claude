@@ -65,7 +65,7 @@ const reChecklistItem = /^\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)#(\d+(?:-\d+)?(?:\s*
 // The cross-file part's answer for the items left open in several files. This parser
 // swallows it like any other comment; check-part.cjs reads its lines.
 const reUnverifiedOpen = /^<!--\s*unverified:\s*(-->)?$/;
-// The cross-file part's answers to its five questions and to each jscpd candidate
+// The cross-file part's answers to its six questions and to each jscpd candidate
 // (check-part.cjs checkQuestions): proof for the check like the block above, never shown.
 const reQuestionsOpen = /^<!--\s*questions:\s*(-->)?$/;
 // Widest range a single line may collapse: a guard against `#1-99999` silently

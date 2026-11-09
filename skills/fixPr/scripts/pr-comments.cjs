@@ -692,6 +692,21 @@ function collect(options) {
   result.targets = stacked.targets;
   result.stacks = stacked.stacks;
   result.warnings.push(...stacked.warnings);
+  // Code newer than the branch's last codeReview was read by the reviewers alone: on 2026-11-06,
+  // 9 of 24 threads of DPXN-11967 sat on such code. Named per branch, with the command that
+  // reviews just that, so the next round of comments is not the review the skill could have made.
+  if (!replay) {
+    try {
+      const freshness = (options.freshness || ((branches) => require('../../codeReview/scripts/review-freshness.cjs').check({ project, branches, bases: Object.fromEntries(result.targets.map((t) => [t.branch, t.pr && t.pr.base])) })))(result.targets.map((t) => t.branch));
+      for (const b of freshness.branches || []) {
+        const t = result.targets.find((x) => x.branch === b.branch);
+        if (t) t.review = { reviewedAt: b.reviewedAt, unreviewedCommits: b.unreviewedCommits, changedFiles: b.changedFiles.length, command: b.command };
+      }
+      result.warnings.push(...(freshness.warnings || []));
+    } catch {
+      // a review history that cannot be read is no reason to stop the fixes
+    }
+  }
   // A branch of the stack that could not be collected still moves: say where it sits.
   const collected = new Set(result.targets.map((t) => t.branch));
   for (const t of result.targets) {

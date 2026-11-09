@@ -1,7 +1,7 @@
 ---
 name: codeReview
 description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist; --light skips the rules of severity low and leaves Low findings and code snippets out) with severity, real line numbers, violated rule and expected result
-argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--since-last] [--walker-model=<model>] [--walker-effort=<low|medium|high|xhigh|max>] [--parallel=<n>] [--project=<path>]"
+argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--since-last] [--learn-from-prs=<n>] [--walker-model=<model>] [--walker-effort=<low|medium|high|xhigh|max>] [--parallel=<n>] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -173,6 +173,20 @@ After a compaction, the hook names what of them to read again.
      mid-way, `--since-last` therefore skips files nobody ever looked at, and an untouched tree comes
      back as "nothing to review". Re-review such a target in FULL (drop the flag) rather than trusting
      an empty incremental result.
+   - `--learn-from-prs=<n>` → before the review (or alone, with no other argument), turn what this
+     project's reviewers said on its last `<n>` closed pull requests into review rules:
+     1. `node "<SKILL_DIR>/scripts/pr-lessons.cjs" --action=history --project="<PROJECT>" --prs=<n> --out="<PROJECT>/.claude/doh/codeReview/pr-history.json"`
+        (`threads` 0 → say so in Polish and skip the rest of this point).
+     2. Render `<SKILL_DIR>/references/lessons-agent.md` with `<SKILL_DIR>/../../scripts/render-agent-prompt.cjs`
+        (`--set=HISTORY=<that json> --set=OUT=<PROJECT>/.claude/doh/codeReview/pr-lessons.json --set=PROJECT=<PROJECT>`)
+        and spawn one `general-purpose` agent on it (foreground); it ends with `LESSONS <count> <path>`.
+     3. `node "<SKILL_DIR>/scripts/pr-lessons.cjs" --action=list --project="<PROJECT>" --from="<that lessons json>"`:
+        show the user, in Polish, every candidate numbered, with the ones the project's rules already
+        hold (`known`) marked, and ask (AskUserQuestion: all new ones / only the numbers I type / none).
+     4. `node "<SKILL_DIR>/scripts/pr-lessons.cjs" --action=add --project="<PROJECT>" --from="<that lessons json>" [--pick=<numbers>]`
+        writes them to `.claude/doh/local/pr-lessons-<group>.md`; report the files. From then on
+        every review loads them like any project rule (`.claude/doh/local/`).
+     The fixPr skill feeds the same files after each run, from the comments its agents fixed.
 3. Map the REMAINING arguments to the context script EXACTLY like this:
    - no arguments → `--mode=auto`
    - the single word `staged` → `--mode=staged` (the script first runs `git add .`, so the review

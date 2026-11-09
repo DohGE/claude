@@ -5,7 +5,7 @@ tools: Read, Write, Edit, Grep, Glob, Bash
 model: inherit
 ---
 
-You make the cross-file pass of one codeReview target: the five questions and every jscpd candidate, answered once for all of the target's files, written as the target's cross-file part.
+You make the cross-file pass of one codeReview target: the six questions and every jscpd candidate, answered once for all of the target's files, written as the target's cross-file part.
 You do nothing else.
 
 - Your prompt names a brief file.
@@ -39,10 +39,10 @@ The pass works from `target.crossBundlePath` (a FIXED IDENTIFIER, like every key
 A cross-file fact is a lead, like a per-file `WSKAZÓWKA`: open the places it names, and report what the questions below find there.
 
 **One round of lookups.**
-What the five questions need from outside the bundle — the copies of every candidate, `target.importLedger`, the files of a derived-data flow or of the views compared, the searches of question 1 — is read in ONE message of parallel calls, then judged together.
+What the six questions need from outside the bundle — the copies of every candidate, `target.importLedger`, the files of a derived-data flow or of the views compared, the searches of question 1 — is read in ONE message of parallel calls, then judged together.
 A second round follows only a lead the first one opened, never a sweep of files that no fact, no finding of a file part and no question pointed at.
 
-Answer each of these five questions explicitly, against the diff as a whole, and record each answer — and each jscpd candidate's, numbered `jscpd#<n>` in the bundle — on a line of the part's `<!-- questions:` block (the bundle's `## Zapis części` shows it):
+Answer each of these six questions explicitly, against the diff as a whole, and record each answer — and each jscpd candidate's, numbered `jscpd#<n>` in the bundle — on a line of the part's `<!-- questions:` block (the bundle's `## Zapis części` shows it):
 
     <!-- questions:
     [x] pytanie#1 — OK (12 eksportów: grep po nazwie i wyrażeniu; 3 kandydatów otwartych)
@@ -50,6 +50,7 @@ Answer each of these five questions explicitly, against the diff as a whole, and
     [x] pytanie#3 — OK (przepływ akcji widoku: akcja, reducer, komponent)
     [x] pytanie#4 — NARUSZENIE (src/app/users/user.const.ts:12)
     [x] pytanie#5 — OK (brak wystąpień)
+    [x] pytanie#6 — OK (akcja zbiorcza i w wierszu: ten sam warunek, własne klucze)
     [x] jscpd#1 — OK (dane równoległe: pliki tłumaczeń)
     [x] jscpd#2 — NARUSZENIE (part07)
     -->
@@ -84,6 +85,9 @@ A `NARUSZENIE` points at its finding — `path:lines` of this part's finding, or
 5. View consistency (`accessibility#22`: WCAG 3.2.3, 3.2.4, 3.2.6) — when the diff renders navigation, a repeated control or a help mechanism in more than one view (a template, `index.html`, a layout component), compare them: the same navigation in the same relative order, the same function under the same label and icon, the same help link in the same relative place.
    No per-file walk can answer this — each template sees only itself.
    Report each inconsistency under `accessibility#22`, at a line the diff changed, naming the other view (`path:lines`).
+6. Sibling-action consistency — when the diff adds or changes an action that has siblings (the same operation as a bulk action and per row, in a toolbar and in a context menu; parallel operations like read/write, load/unload), compare each pair: the same precondition disables both (a row action that stays enabled where the bulk one is blocked), each tooltip, disabled reason and translation key names its OWN operation (a write button carrying the read reason, copied with the code), and the same shape of feedback (toast, result dialog).
+   No per-file walk sees both places, and on 2026-11-06 the reviewers of one stack found both kinds by hand.
+   Report each mismatch under the code-quality instruction (🟡 Medium), at the line the diff changed, naming the sibling (`path:lines`).
 
 **A defect a file part already reports is not reported again here.**
 The check refuses a finding of this part on a file whose part already reports those lines under the same address, or under one the bundle marks `ta sama wada`: remove it from this part.

@@ -263,8 +263,10 @@ test('add names the project rulebook the worktree carries, or null', (t) => {
   assert.strictEqual(wt.add({ project: dir, branch: 'feat', bootstrap: false }).rulebook, null);
   fs.mkdirSync(path.join(dir, '.claude', 'doh', 'instructions'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.claude', 'doh', 'instructions', 'general.md'), '# g\n');
+  fs.writeFileSync(path.join(dir, '.claude', 'doh', 'checks.json'), JSON.stringify({ visual: { command: 'npm start -- --port {port}', url: 'http://localhost:{port}/#' } }));
   const withRules = wt.add({ project: dir, branch: 'other', bootstrap: false });
   assert.strictEqual(withRules.rulebook, path.join(withRules.worktree, '.claude', 'doh', 'instructions'));
+  assert.strictEqual(withRules.visual.url, 'http://localhost:{port}/#', 'the visual check config travels with the copied checks.json');
 });
 
 test('removeEmptyDir retries a folder another process still holds, then gives up', () => {

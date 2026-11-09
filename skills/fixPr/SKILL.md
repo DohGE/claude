@@ -236,7 +236,10 @@ Two things that used to stop a branch no longer do, and are warnings to report i
 
 Report the other `warnings[]` too — a fast-forward, an install that failed or a missing lockfile
 (either way the gate will be skipped), and the `.env*` files copied in. Keep `rulebook` (a path or
-null) for Step 4a.
+null) and `visual` (how the app is started for a look at a fix - `.claude/doh/checks.json`
+`"visual": {"command":"npm run dpx:local -- --port {port}","url":"http://localhost:{port}/#","backend":["http://localhost:3001"],"authFile":".claude/doh/auth.json"}`
+- or null) for Step 4a. A project without `visual` gets no visual check; say once, in the summary,
+that adding it lets the agents look at their template and logic fixes in the running app.
 
 A worktree whose lockfile is the main checkout's gets that checkout's `node_modules` linked in
 (`dependencies.linked`) instead of an install, and a copy of its gitignored `.claude/doh/` config
@@ -263,7 +266,7 @@ the price.
 
 ### 4a — Render the brief
 
-    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=BASE=<pr.base> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language> --set=LANDING=<landing> --set=RULEBOOK=<rulebook|none> --set=ABOVE=<allAbove|none> --set=LOCAL=<yes|no> --set=TASK=<yes|no> --set=MEDIA=<yes|no>
+    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=BASE=<pr.base> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language> --set=LANDING=<landing> --set=RULEBOOK=<rulebook|none> --set=ABOVE=<allAbove|none> --set=LOCAL=<yes|no> --set=TASK=<yes|no> --set=MEDIA=<yes|no> --set=VISUAL=<visual as JSON|none>
 
 The brief holds blocks for every landing, push setting and input kind; the renderer keeps only this
 agent's (a held part's brief is a quarter shorter, and the agent reads it on every turn).
@@ -282,6 +285,7 @@ agent's (a held part's brief is a quarter shorter, and the agent reads it on eve
 | `RULEBOOK` | Step 3's `rulebook` path, or `none` when it is null - the agent then looks for no project rules |
 | `ABOVE` | the target's `stack.allAbove` joined by `, `, or `none` when it is empty |
 | `LOCAL`, `TASK`, `MEDIA` | `yes` when the target has `local: true`, `counts.task`, a `counts.media` above 0 - otherwise `no` |
+| `VISUAL` | Step 3's `visual` as one line of JSON (`{"command":…,"url":…,"backend":[…],"authFile":…}`), or `none` when it is null: the agent then has no step 5b (looking at a fix in the running app) |
 | `LANGUAGE` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved |
 
 `errors[]` non-empty → that branch is OUT of the run, exactly like a refused worktree: report the
@@ -403,8 +407,10 @@ On `{"type":"result", …}` (for a held part: once `restack.cjs` or its conflict
    landed target's `stackImpact`), then run the cascade again `--from` that part with
    `--from-old-tip` = that part's `oldTip`. `waiting[]` are the parts above a stop, left where they were.
 4. **Remove the worktree**, unless `--keep-worktree` was passed or the agent reported
-   `committed: false` with work still in the tree:
+   `committed: false` with work still in the tree. First stop whatever app the agent's visual
+   check left running (a dev server holds the folder open):
 
+       node "<SKILL_DIR>/../implementNewFeature/scripts/task-processes.cjs" cleanup --task-dir="<checksDir>/visual"
        node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"
 
    A refusal here quotes git's own reason: uncommitted files, or a file another process holds
@@ -421,6 +427,22 @@ re-derive it from the target, which only ever holds the `CR` form.
 
 On `{"type":"error", …}`: resolve nothing, remove nothing. Report the branch as failed, with the
 agent's report and the path of the worktree the user can go and inspect.
+
+## Step 5c — Keep what the comments taught (once, after every branch has landed)
+
+The agents' `lessons` are rules a fixed comment teaches - so the next `/doh:codeReview` raises them
+before a reviewer does. When any result carries one:
+
+    node "<SKILL_DIR>/../codeReview/scripts/pr-lessons.cjs" --action=list --project="<PROJECT>" --from="<each target's reportPath>.result.json,…"
+
+Show the user, in Polish, every candidate numbered (its rule, group and source), the ones the
+project's rules already hold (`known`) marked, and ask (AskUserQuestion): add all new ones / only
+the numbers I give / none. Then:
+
+    node "<SKILL_DIR>/../codeReview/scripts/pr-lessons.cjs" --action=add --project="<PROJECT>" --from="<the same files>" [--pick=<numbers>]
+
+It writes `.claude/doh/local/pr-lessons-<group>.md`, a project rule file codeReview loads; name the
+files in the summary. Never add one the user did not choose.
 
 ## Step 6 — Terminal summary (Polish)
 
@@ -447,6 +469,11 @@ Then print one summary, in Polish, and nothing else:
 - the comment check (Step 5 point 2) per branch: "wszystkie <total> komentarze obsłużone" when
   `ok`, otherwise every gap with its author and url - a comment with no verdict first;
 - every `stackImpact` item: the name a fix removed or renamed, and the parts above it that used it;
+- the visual check per branch: each `visualChecks` item with its result and screenshot path, and why
+  a skipped one was skipped;
+- every branch with code newer than its last codeReview (`review`, Step 2), with its command - the
+  next reviewers' comments start there;
+- the lessons added in Step 5c, with their files;
 - every branch worked on `doh-fixpr/<branch>` because the user had it checked out (`heldBy`), with
   `git pull --rebase` to run in that checkout;
 - every `uiUnverified` file of the agent, with the comment it answers: the look of those changes

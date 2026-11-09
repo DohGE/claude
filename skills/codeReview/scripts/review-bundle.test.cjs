@@ -637,3 +637,12 @@ test('the gaps brief runs the script that lists the open items and says how to s
   assert.ok(text.includes('check-part.cjs" --report="r/raport.md" --gaps'));
   assert.ok(text.includes(rb.gapsReplies.none) && text.includes(rb.gapsReplies.done) && text.includes(rb.gapsReplies.stopped));
 });
+
+test('the bundle lists the patterns a script found, each with the item to confirm or drop', () => {
+  const instructions = new Map();
+  const file = { path: 'a.component.html', status: 'M', changedLines: '2', checklistTotal: 0, contentPath: 'w/a.html' };
+  const text = rb.renderBundle({ file, kind: null, instructions, hints: [{ line: 2, item: 'component-template#2', note: '`rows()` is read 2 times' }] });
+  assert.ok(text.includes('## Wzorce wykryte skryptem'));
+  assert.ok(text.includes('- L2 → component-template#2: `rows()` is read 2 times'));
+  assert.ok(!rb.renderBundle({ file, kind: null, instructions }).includes('Wzorce wykryte'), 'no section without a hint');
+});
