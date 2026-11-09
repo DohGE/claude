@@ -47,8 +47,9 @@ function findingOf(overrides = {}) {
 test('parseArgs reads the report, the accepted pool, the exclusions and the dry run', () => {
   const args = pr.parseArgs(['--report=r.html', '--project=/repo', '--pr=7', '--include=c3 ,d4', '--exclude=a1, b2 ,', '--all', '--dry-run']);
   assert.deepStrictEqual(args, {
-    report: 'r.html', project: '/repo', pr: '7', include: ['c3', 'd4'], exclude: ['a1', 'b2'], all: true, dryRun: true,
+    report: 'r.html', project: '/repo', pr: '7', include: ['c3', 'd4'], exclude: ['a1', 'b2'], all: true, dryRun: true, dedupe: true,
   });
+  assert.strictEqual(pr.parseArgs(['--report=r.html', '--no-dedupe']).dedupe, false);
   assert.throws(() => pr.parseArgs([]), /No report given/);
   // This command publishes to a real PR: a dropped --exclude would post findings the
   // reviewer removed, and a dropped --dry-run would turn a rehearsal into a real review.
@@ -392,4 +393,45 @@ test('a refused review says how much of the run already reached the PR', (t) => 
   assert.strictEqual(result.code, 1);
   assert.match(result.err, /nic nie zostało wysłane/, 'a first-post failure says nothing landed');
   assert.match(result.err, /nie zdublować/, 'and warns about re-running blindly');
+});
+
+// ---------- what the pull request already discusses ----------
+
+const thread = (over = {}) => Object.assign({
+  path: 'src/a.ts', line: 3, originalLine: 3, isResolved: true,
+  comments: [{ author: 'reviewer', body: 'The `load()` call swallows every error.', url: 'https://gh/t1' }],
+}, over);
+
+test('findDuplicate matches a thread on the same file and place that names the same identifier or says the same', () => {
+  const f = findingOf({ prProblem: 'The `load()` call has no error handling.' });
+  assert.strictEqual(pr.findDuplicate(f, { threads: [thread()] }).how, 'same identifier, same place');
+  assert.strictEqual(pr.findDuplicate(f, { threads: [thread({ line: 40, originalLine: 40 })] }), null, 'far away is another point');
+  assert.strictEqual(pr.findDuplicate(f, { threads: [thread({ path: 'src/b.ts' })] }), null, 'another file is another point');
+  const words = findingOf({ prProblem: 'Errors from the loader are swallowed and never surfaced to the user.' });
+  const said = thread({ comments: [{ body: 'Loader errors are swallowed here, surface them to the user.' }] });
+  assert.strictEqual(pr.findDuplicate(words, { threads: [said] }).how, 'same words, same place');
+  assert.strictEqual(pr.findDuplicate(findingOf({ prProblem: 'Rename the variable.' }), { threads: [thread()] }), null);
+});
+
+test('findDuplicate recognises a finding an earlier post already carried, inline or in a review body', () => {
+  const f = findingOf();
+  assert.strictEqual(pr.findDuplicate(f, { threads: [thread({ line: 90, comments: [{ body: `${f.prProblem}\n\n**Expected result:** x` }] })] }).how, 'posted before');
+  assert.strictEqual(pr.findDuplicate(f, { threads: [], bodies: [`## Code review\n- ${f.prProblem}`] }).how, 'in an earlier review body');
+});
+
+test('main posts only what the pull request does not already discuss, and --no-dedupe posts all', (t) => {
+  const discussed = apiStub({ existingDiscussion: () => ({ threads: [thread({ comments: [{ body: 'The call has no error handling - wrap `load()`.' }] })], bodies: [] }) });
+  const once = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], discussed));
+  assert.strictEqual(once.code, 0, once.err);
+  assert.match(once.out, /Pominięto 1 znalezisk/);
+  assert.deepStrictEqual(discussed.posted[0].review.comments, [], 'the discussed finding is not posted inline');
+  const all = apiStub({ existingDiscussion: () => { throw new Error('not asked'); } });
+  const forced = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all', '--no-dedupe'], all));
+  assert.strictEqual(forced.code, 0, forced.err);
+  assert.strictEqual(all.posted[0].review.comments.length, 1);
+  const everything = apiStub({ existingDiscussion: () => ({ threads: [thread({ comments: [{ body: 'The call has no error handling.' }] })], bodies: ['- Outside the diff.'] }) });
+  const none = capture(() => pr.main([`--report=${reportFile(t, PAYLOAD)}`, '--all'], everything));
+  assert.strictEqual(none.code, 0);
+  assert.match(none.out, /Nic do wysłania/);
+  assert.strictEqual(everything.posted.length, 0);
 });

@@ -235,3 +235,106 @@ test('verify names every part that does not sit on its parent, with the command 
   assert.strictEqual(result.broken[0].command, `git rebase --onto origin/part-1 ${s.tips.a1} part-2`);
   assert.deepStrictEqual(restack.parsePairs('part-1>part-2@abcd, main>part-1'), [{ parent: 'part-1', child: 'part-2', oldTip: 'abcd' }, { parent: 'main', child: 'part-1', oldTip: null }]);
 });
+
+test('land pushes from a branch of the run\'s own to the pull request\'s branch', (t) => {
+  const s = stack(t);
+  const own = path.join(s.tree, '..', 'tree-own');
+  git(s.work, 'worktree', 'add', '-q', own, '-b', 'doh-fixpr/part-1', 'origin/part-1');
+  const fixed = commit(own, 'one.txt', 'part one, fixed\n', 'CR 1');
+  const result = restack.land({ worktree: own, branch: 'part-1', parent: 'main', remoteTipAtStart: s.tips.a1, gate: 'no', push: 'yes' });
+  assert.deepStrictEqual([result.status, result.pushed], ['landed', true]);
+  git(s.work, 'fetch', '-q', 'origin');
+  assert.strictEqual(git(s.work, 'rev-parse', 'origin/part-1'), fixed);
+});
+
+test('land skips the gate when the move leaves the tree as it was', (t) => {
+  const s = stack(t);
+  // part-1 rewritten without a change of content: only its message.
+  git(s.work, 'switch', '-q', 'part-1');
+  git(s.work, 'commit', '-q', '--amend', '-m', 'part 1, reworded');
+  git(s.work, 'push', '-q', '--force', 'origin', 'part-1');
+  const result = restack.land(
+    { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'no' },
+    { runGate: () => { throw new Error('no gate expected'); } },
+  );
+  assert.strictEqual(result.status, 'landed', JSON.stringify(result));
+  assert.strictEqual(result.rebased, true);
+  assert.strictEqual(result.gate.gate, 'skipped');
+});
+
+test('land runs the steps the fixing agent left to it, and a red one stops the push', (t) => {
+  const s = stack(t);
+  const asked = [];
+  const green = restack.land(
+    { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'no', pendingSteps: ['build'] },
+    { runGate: ({ only }) => { asked.push(only); return { gate: 'partial', steps: [{ label: 'build', status: 'passed' }] }; } },
+  );
+  assert.deepStrictEqual(asked, [['build']]);
+  assert.strictEqual(green.status, 'landed');
+  const red = restack.land(
+    { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'yes', pendingSteps: ['build'] },
+    { runGate: () => ({ gate: 'red', steps: [{ label: 'build', status: 'failed', errorsPath: '/x/build.errors.log' }] }) },
+  );
+  assert.strictEqual(red.status, 'gate-red');
+  assert.strictEqual(red.pushed, false);
+});
+
+test('a run file gives land its part and verify its pairs', (t) => {
+  const run = {
+    project: '/p',
+    targets: [
+      { branch: 'p1', worktree: '/w/p1', remoteTipAtStart: 'a', checksDir: '/c/p1', stack: { parent: null, children: ['p2'], parentTipAtStart: null } },
+      { branch: 'p2', worktree: '/w/p2', remoteTipAtStart: 'b', checksDir: '/c/p2', stack: { parent: 'p1', children: [], parentTipAtStart: 'a', above: ['p3', 'p4'] } },
+    ],
+  };
+  assert.deepStrictEqual(restack.landOptionsFromRun(run, 'p2'), { worktree: '/w/p2', branch: 'p2', parent: 'p1', parentTipAtStart: 'a', remoteTipAtStart: 'b', checksDir: path.join('/c/p2', 'restack') });
+  assert.deepStrictEqual(restack.pairsFromRun(run), [
+    { parent: 'p1', child: 'p2', oldTip: 'a' }, { parent: 'p2', child: 'p3', oldTip: 'b' }, { parent: 'p3', child: 'p4', oldTip: null },
+  ]);
+  const dir = fs.realpathSync(tempDir(t, 'fpc-run-'));
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const args = restack.parseArgs(['--action=land', `--run=${file}`, '--branch=p2', '--worktree=/elsewhere']);
+  assert.deepStrictEqual([args.worktree, args.parent, args.remoteTipAtStart], ['/elsewhere', 'p1', 'b'], 'a flag given explicitly wins');
+  assert.strictEqual(restack.parseArgs(['--action=verify', `--run=${file}`]).pairs.length, 3);
+});
+
+test('stack moves the bottom onto its base, then every part onto the one below, and resumes above a conflict', () => {
+  const calls = [];
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2', p3: 't3' },
+    discover: () => ({ stack: ['p1', 'p2', 'p3'], base: 'base', warnings: [] }),
+    worktree: { add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }), remove: () => ({ removed: true, warnings: [] }) },
+    land: (o) => {
+      calls.push([o.branch, o.parent, o.parentTipAtStart, o.remoteTipAtStart]);
+      return o.branch === 'p2' ? { status: 'conflict', conflictFiles: ['a.ts'], oldParentTip: 't1' } : { status: 'landed', commit: `n-${o.branch}`, pushed: true, rebased: true };
+    },
+  };
+  const first = restack.stackAction({ project: process.cwd(), stack: ['p2'], push: 'yes', gate: 'yes', ontoBase: 'yes' }, deps);
+  assert.deepStrictEqual(first.stack, ['p1', 'p2', 'p3']);
+  assert.deepStrictEqual(calls, [['p1', 'base', '', 't1'], ['p2', 'p1', 't1', 't2']]);
+  assert.deepStrictEqual(first.parts.map((p) => [p.branch, p.status, p.oldTip]), [['p1', 'landed', 't1'], ['p2', 'conflict', 't2']]);
+  assert.strictEqual(first.parts[1].worktree, '/w/p2');
+  assert.deepStrictEqual(first.waiting, ['p3']);
+  calls.length = 0;
+  deps.land = (o) => { calls.push([o.branch, o.parent, o.parentTipAtStart]); return { status: 'landed', commit: 'x', pushed: true, rebased: true }; };
+  const resumed = restack.stackAction({ project: process.cwd(), stack: ['p1', 'p2', 'p3'], base: 'base', start: 'p3', parentOldTip: 't2', push: 'yes', gate: 'yes', ontoBase: 'yes' }, deps);
+  assert.deepStrictEqual(calls, [['p3', 'p2', 't2']]);
+  assert.deepStrictEqual(resumed.parts.map((p) => p.status), ['landed']);
+  assert.ok(Object.keys(resumed.parts[0]).every((k) => !['steps'].includes(k)), 'compact parts');
+});
+
+test('discoverStack walks down the bases and up the open pull requests', () => {
+  const prs = { p1: { base: 'master' }, p2: { base: 'p1' }, p3: { base: 'p2' } };
+  const found = restack.discoverStack('/p', 'p2', { findPr: (b) => prs[b] || null, childrenOf: (b) => ({ p2: ['p3'] }[b] || []) });
+  assert.deepStrictEqual([found.stack, found.base], [['p1', 'p2', 'p3'], 'master']);
+});
+
+test('plan names the stack, its base and every pair that is off, moving nothing', () => {
+  const deps = {
+    discover: () => ({ stack: ['p1', 'p2'], base: 'main', prs: { p1: { number: 1, url: 'u1' } }, warnings: [] }),
+    verify: ({ pairs }) => ({ ok: [`${pairs[0].parent}>${pairs[0].child}`], broken: [{ parent: 'p1', child: 'p2', command: 'x' }], warnings: [], errors: [] }),
+  };
+  const out = restack.plan({ project: process.cwd(), stack: ['p2'] }, deps);
+  assert.deepStrictEqual([out.stack, out.base, out.ok, out.broken.length, out.prs.p1.number], [['p1', 'p2'], 'main', ['main>p1'], 1, 1]);
+});

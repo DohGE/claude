@@ -22,6 +22,13 @@
 //   node restack.cjs --action=push --worktree=<dir> --branch=<branch> [--lease=<sha>]
 //   node restack.cjs --action=cascade --project=<dir> --stack="<bottom>;<part>;..." --from=<part>
 //        [--from-old-tip=<sha>] [--checks-dir=<dir>] [--push=yes|no] [--gate=yes|no]
+//   node restack.cjs --action=plan --project=<dir> --stack="<part>"|"<bottom>;…" [--base=<branch>]
+//   node restack.cjs --action=stack --project=<dir> --stack="<bottom>;<part>;..."|"<any part>"
+//        [--base=<branch>] [--start=<part>] [--parent-old-tip=<sha>] [--onto-base=yes|no]
+//        [--checks-dir=<dir>] [--push=yes|no] [--gate=yes|no]
+// land and verify also take --run=<fixpr-run-*.json> (pr-comments.cjs): a part's worktree,
+// parent, tips and checks folder come from there. --summary=yes prints the compact form.
+// --pending-steps=build: gate steps the fixing agent left to the landing (a held part's build).
 // Prints one JSON object. land: `status` is landed | conflict | gate-red | push-rejected | error.
 
 const fs = require('node:fs');
@@ -34,7 +41,7 @@ const checksScript = path.join(__dirname, 'checks.cjs');
 function parseArgs(argv) {
   const args = {
     action: 'land', push: 'yes', gate: 'yes', autoResolve: 'yes', parentTipAtStart: '', remoteTipAtStart: '', checksDir: '', pairs: [],
-    lease: '', stack: [], from: '', fromOldTip: '',
+    lease: '', stack: [], from: '', fromOldTip: '', run: '', summary: 'no', pendingSteps: [], start: '', parentOldTip: '', base: '', ontoBase: 'yes',
   };
   const unknown = [];
   for (const arg of argv) {
@@ -57,17 +64,70 @@ function parseArgs(argv) {
     else if (m[1] === 'stack') args.stack = value.split(/[;,]/).map((s) => s.trim()).filter(Boolean);
     else if (m[1] === 'from') args.from = value;
     else if (m[1] === 'from-old-tip') args.fromOldTip = value;
+    else if (m[1] === 'run') args.run = value;
+    else if (m[1] === 'summary') args.summary = value;
+    else if (m[1] === 'pending-steps') args.pendingSteps = value.split(',').map((s) => s.trim()).filter(Boolean);
+    else if (m[1] === 'start') args.start = value;
+    else if (m[1] === 'parent-old-tip') args.parentOldTip = value;
+    else if (m[1] === 'base') args.base = value;
+    else if (m[1] === 'onto-base') args.ontoBase = value;
     else unknown.push(arg);
   }
   // This script rewrites and pushes a branch: a mistyped flag stops it.
-  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip).`);
-  if (!['land', 'verify', 'push', 'cascade'].includes(args.action)) throw new Error(`Unknown --action=${args.action} (expected land|verify|push|cascade).`);
-  if (![args.push, args.gate, args.autoResolve].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate and --auto-resolve take yes or no.');
-  if (args.action === 'land' && (!args.worktree || !args.branch || !args.parent)) throw new Error('land needs --worktree, --branch and --parent.');
-  if (args.action === 'verify' && (!args.project || args.pairs.length === 0)) throw new Error('verify needs --project and --pairs.');
+  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base).`);
+  if (!['land', 'verify', 'push', 'cascade', 'stack', 'plan'].includes(args.action)) throw new Error(`Unknown --action=${args.action} (expected land|verify|push|cascade|stack|plan).`);
+  if (![args.push, args.gate, args.autoResolve, args.summary, args.ontoBase].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate, --auto-resolve, --summary and --onto-base take yes or no.');
+  if (args.run) fillFromRun(args);
+  if (args.action === 'land' && (!args.worktree || !args.branch || !args.parent)) throw new Error('land needs --worktree, --branch and --parent (or --run and --branch).');
+  if (args.action === 'verify' && (!args.project || args.pairs.length === 0)) throw new Error('verify needs --project and --pairs (or --run).');
+  if (['stack', 'plan'].includes(args.action) && (!args.project || args.stack.length === 0)) throw new Error(`${args.action} needs --project and --stack.`);
+  if (args.action === 'stack' && args.start && args.stack.length > 1 && !args.stack.includes(args.start)) throw new Error('--start names a part of --stack.');
   if (args.action === 'push' && (!args.worktree || !args.branch)) throw new Error('push needs --worktree and --branch.');
   if (args.action === 'cascade' && (!args.project || args.stack.length < 2 || !args.stack.includes(args.from))) throw new Error('cascade needs --project, --stack with two parts or more, and --from naming one of them.');
   return args;
+}
+
+// --run=<fixpr-run-*.json>: what pr-comments.cjs collected. land takes the named part's worktree,
+// parent and tips from it (a flag given explicitly wins); verify takes every parent>child pair.
+function readRun(file) {
+  const run = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!run || !Array.isArray(run.targets)) throw new Error(`${file} is no fixPr run file (no targets).`);
+  return run;
+}
+
+function landOptionsFromRun(run, branch) {
+  const t = run.targets.find((x) => x.branch === branch);
+  if (!t) throw new Error(`${branch} is not a target of the run file.`);
+  const stack = t.stack || {};
+  return {
+    worktree: t.worktree, branch, parent: stack.parent || (t.pr && t.pr.base) || '',
+    parentTipAtStart: stack.parentTipAtStart || '', remoteTipAtStart: t.remoteTipAtStart || '',
+    checksDir: t.checksDir ? path.join(t.checksDir, 'restack') : '',
+  };
+}
+
+function pairsFromRun(run) {
+  const pairs = [];
+  for (const t of run.targets) {
+    const stack = t.stack || {};
+    if (stack.parent) pairs.push({ parent: stack.parent, child: t.branch, oldTip: stack.parentTipAtStart || null });
+    let below = t.branch;
+    for (const above of stack.above || []) {
+      pairs.push({ parent: below, child: above, oldTip: below === t.branch ? t.remoteTipAtStart || null : null });
+      below = above;
+    }
+  }
+  return pairs;
+}
+
+function fillFromRun(args) {
+  const run = readRun(args.run);
+  if (!args.project && run.project) args.project = run.project;
+  if (args.action === 'land' && args.branch) {
+    const from = landOptionsFromRun(run, args.branch);
+    for (const key of ['worktree', 'parent', 'parentTipAtStart', 'remoteTipAtStart', 'checksDir']) if (!args[key]) args[key] = from[key];
+  }
+  if (args.action === 'verify' && args.pairs.length === 0) args.pairs = pairsFromRun(run);
 }
 
 function parsePairs(text) {
@@ -88,8 +148,8 @@ function git(dir, args, env) {
 const firstLine = (text) => String(text || '').split(/\r?\n/).find((l) => l.trim()) || '';
 
 // The gate after a move, the fixing agent's own: checks.cjs on what the pull request changes.
-function defaultGate({ worktree, checksDir, parent }) {
-  const res = spawnSync(process.execPath, [checksScript, `--root=${worktree}`, `--out-dir=${checksDir}`, `--changed-since=origin/${parent}`], {
+function defaultGate({ worktree, checksDir, parent, only = [] }) {
+  const res = spawnSync(process.execPath, [checksScript, `--root=${worktree}`, `--out-dir=${checksDir}`, `--changed-since=origin/${parent}`, ...(only.length ? [`--only=${only.join(',')}`] : [])], {
     encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024,
   });
   try {
@@ -311,11 +371,25 @@ function land(options, { runGate = defaultGate } = {}) {
     result.rebased = true;
   }
 
+  const checksDir = options.checksDir ? path.resolve(options.checksDir) : path.join(tree, '..', `${path.basename(tree)}-restack-checks`);
+  // The full gate runs when the move changed the code under the part. A move that left the tree
+  // byte for byte as it was (the parent's commits rewritten, not changed) proves nothing new:
+  // on 2026-11-06 part-5 sat through a full gate after a move from 0e53405 onto 0e53405.
+  let fullGate = false;
+  const pending = (options.pendingSteps || []).filter(Boolean);
   if (result.rebased && options.gate !== 'no') {
-    const checksDir = options.checksDir ? path.resolve(options.checksDir) : path.join(tree, '..', `${path.basename(tree)}-restack-checks`);
-    const gate = runGate({ worktree: tree, checksDir, parent });
+    if (git(tree, ['diff', '--quiet', before, 'HEAD']).ok) {
+      result.gate = { gate: 'skipped', steps: [], errors: [], reason: 'the move left the tree as it was' };
+    } else {
+      fullGate = true;
+    }
+  }
+  // Steps the fixing agent left to the landing (a held part's build): they run here once, on
+  // the code that is pushed, when the full gate does not.
+  if (fullGate || (pending.length > 0 && options.gate !== 'no')) {
+    const gate = runGate({ worktree: tree, checksDir, parent, only: fullGate ? [] : pending });
     result.gate = gateSummary(gate);
-    if (gate.gate !== 'green' && gate.gate !== 'skipped') {
+    if (!['green', 'skipped', ...(fullGate ? [] : ['partial'])].includes(gate.gate) || (gate.steps || []).some((s) => s.status === 'failed')) {
       // `--keep`, not `--hard`: an uncommitted file the move did not touch stays as it was.
       if (!git(tree, ['reset', '--keep', before]).ok) result.warnings.push(`Could not take ${branch} back to ${before}; it holds the moved commits.`);
       result.status = 'gate-red';
@@ -335,9 +409,11 @@ function land(options, { runGate = defaultGate } = {}) {
     return result;
   }
   // A rewritten branch replaces the remote one only where it still stands where the run began.
+  // HEAD, not the local branch name: a branch the user has checked out is worked on a branch of
+  // the run's own (worktree.cjs), and pushed to the pull request's branch all the same.
   const pushArgs = result.rebased
-    ? (lease ? ['push', `--force-with-lease=${branch}:${lease}`, 'origin', branch] : null)
-    : ['push', 'origin', branch];
+    ? (lease ? ['push', `--force-with-lease=${branch}:${lease}`, 'origin', `HEAD:refs/heads/${branch}`] : null)
+    : ['push', 'origin', `HEAD:refs/heads/${branch}`];
   if (!pushArgs) return fail(`No remote tip to pin the lease to for ${branch}; push it yourself once checked.`);
   const pushed = pushWithRetry(tree, pushArgs, options.pushRetry);
   if (pushed.attempts > 1) result.warnings.push(`The push took ${pushed.attempts} attempts.`);
@@ -379,8 +455,8 @@ function verify(options) {
 function push(options, { pushRetry } = {}) {
   const tree = path.resolve(options.worktree);
   const args = options.lease
-    ? ['push', `--force-with-lease=${options.branch}:${options.lease}`, 'origin', options.branch]
-    : ['push', 'origin', options.branch];
+    ? ['push', `--force-with-lease=${options.branch}:${options.lease}`, 'origin', `HEAD:refs/heads/${options.branch}`]
+    : ['push', 'origin', `HEAD:refs/heads/${options.branch}`];
   const res = pushWithRetry(tree, args, pushRetry);
   const line = firstLine(String(res.err || '').split(/\r?\n/).find((l) => /rejected|stale|error|fatal/i.test(l)) || res.err);
   return { action: 'push', branch: options.branch, pushed: res.ok, attempts: res.attempts, rejected: !res.ok && rejectedPush.test(res.err), warnings: [], errors: res.ok ? [] : [line || 'push failed'] };
@@ -393,31 +469,65 @@ function push(options, { pushRetry } = {}) {
 // conflicts merged above this needs none. Each part gets a worktree of its own for the move and
 // loses it after; the first part that does not land stops the climb, and the ones above it wait.
 function cascade(options, deps = {}) {
+  const from = options.stack.indexOf(options.from);
+  const result = climb({ ...options, startIndex: from + 1, startParentOldTip: options.fromOldTip || '' }, deps);
+  return { action: 'cascade', from: options.from, ...result };
+}
+
+// The compact form of a part's landing - what an orchestrator acts on, nothing it only reads past:
+// the gate as its verdict and the red steps' excerpts, never every step's log path.
+function compactPart(p) {
+  const gate = p.gate || null;
+  return {
+    branch: p.branch, parent: p.parent || null, status: p.status, commit: p.commit || null, oldTip: p.oldTip || null,
+    rebased: Boolean(p.rebased), pushed: Boolean(p.pushed), gate: gate ? gate.gate : null,
+    redSteps: gate ? (gate.steps || []).filter((s) => s.status === 'failed').map((s) => ({ label: s.label, errorsPath: s.errorsPath || null })) : [],
+    conflictFiles: p.conflictFiles || [], oldParentTip: p.oldParentTip || null,
+    autoResolved: (p.autoResolved || []).map((r) => r.file || r), worktree: p.worktree || null,
+    warnings: p.warnings || [], errors: p.errors || [],
+  };
+}
+
+// Moves parts of a stack bottom-up from stack[startIndex], each onto where its parent stands now:
+// a worktree per part (worktree.cjs, which also takes a branch the user has checked out), land,
+// the worktree taken down. The first part that does not land stops the climb and keeps its
+// worktree for the conflict agent; the parts above it wait. Each part carries `oldTip` - where
+// it stood before - which is what the part above moves off when the climb resumes there.
+function climb(options, deps = {}) {
   const worktree = deps.worktree || require('./worktree.cjs');
   const landPart = deps.land || land;
   const project = path.resolve(options.project);
-  const stack = options.stack;
-  const from = stack.indexOf(options.from);
-  const result = { action: 'cascade', from: options.from, parts: [], waiting: [], warnings: [], errors: [] };
-  git(project, ['fetch', '--quiet', 'origin', ...stack]);
-  // Where every part above stands now: its lease, and the old tip its own child moves off.
-  const tips = new Map(stack.map((b) => [b, git(project, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${b}`]).out || null]));
+  const { stack, startIndex } = options;
+  const result = { parts: [], waiting: [], warnings: [], errors: [] };
+  const refs = [...stack, ...(options.base ? [options.base] : [])];
+  if (!deps.tips) git(project, ['fetch', '--quiet', 'origin', ...refs]);
+  const tipOf = (b) => (deps.tips ? deps.tips[b] || null : git(project, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${b}`]).out || null);
+  // Where every part stands now: its lease, and the old tip its own child moves off.
+  const tips = new Map(stack.map((b) => [b, tipOf(b)]));
   const oldTip = new Map(tips);
-  oldTip.set(options.from, options.fromOldTip || null);
-  for (let i = from + 1; i < stack.length; i += 1) {
+  const startParent = startIndex === 0 ? options.base : stack[startIndex - 1];
+  if (!startParent) {
+    result.errors.push(`No base for ${stack[0]}: give --base.`);
+    return result;
+  }
+  if (options.startParentOldTip) oldTip.set(startParent, options.startParentOldTip);
+  for (let i = startIndex; i < stack.length; i += 1) {
     const branch = stack[i];
-    const parent = stack[i - 1];
+    const parent = i === 0 ? options.base : stack[i - 1];
     const added = worktree.add({ project, branch });
     if (!added.worktree || (added.errors && added.errors.length) || added.mainBroken) {
       if (added.mainBroken && added.worktree) worktree.remove({ project, branch });
-      result.parts.push({ branch, status: 'error', errors: added.mainBroken ? added.warnings || ['the main checkout has no complete node_modules'] : added.errors || ['no worktree'] });
+      result.parts.push({ branch, parent, status: 'error', oldTip: tips.get(branch) || null, errors: added.mainBroken ? added.warnings || ['the main checkout has no complete node_modules'] : added.errors || ['no worktree'] });
       result.waiting = stack.slice(i + 1);
       return result;
     }
     let landed;
     try {
       landed = landPart({
-        worktree: added.worktree, branch, parent, parentTipAtStart: oldTip.get(parent) || '', remoteTipAtStart: tips.get(branch) || '',
+        worktree: added.worktree, branch, parent,
+        // The bottom moving onto its base: land finds the fork point itself (merge-base).
+        parentTipAtStart: i === 0 ? options.startParentOldTip || '' : oldTip.get(parent) || '',
+        remoteTipAtStart: tips.get(branch) || '',
         checksDir: options.checksDir ? path.join(options.checksDir, branch) : '', push: options.push || 'yes', gate: options.gate || 'yes',
         autoResolve: options.autoResolve || 'yes',
       });
@@ -427,9 +537,9 @@ function cascade(options, deps = {}) {
     const keep = landed.status !== 'landed';
     const removed = keep ? null : worktree.remove({ project, branch });
     result.parts.push({
-      branch, parent, status: landed.status, commit: landed.commit || null, pushed: Boolean(landed.pushed), rebased: Boolean(landed.rebased),
-      autoResolved: landed.autoResolved || [], conflictFiles: landed.conflictFiles || [], gate: landed.gate || null,
-      worktree: keep || (removed && !removed.removed) ? added.worktree : null, errors: landed.errors || [],
+      branch, parent, status: landed.status, commit: landed.commit || null, oldTip: tips.get(branch) || null, pushed: Boolean(landed.pushed), rebased: Boolean(landed.rebased),
+      autoResolved: landed.autoResolved || [], conflictFiles: landed.conflictFiles || [], oldParentTip: landed.oldParentTip || null, gate: landed.gate || null,
+      worktree: keep || (removed && !removed.removed) ? added.worktree : null, warnings: [...(added.warnings || []), ...(landed.warnings || []), ...((removed && removed.warnings) || [])], errors: landed.errors || [],
     });
     if (keep) {
       result.waiting = stack.slice(i + 1);
@@ -439,6 +549,72 @@ function cascade(options, deps = {}) {
   return result;
 }
 
+// The stack a branch belongs to, bottom-first, read from GitHub: down through the open pull
+// requests its base is the head of, up through the open ones based on it. One branch named is
+// enough for /doh:restack.
+function discoverStack(project, branch, { findPr, childrenOf } = {}) {
+  const github = require('../../codeReview/scripts/github.cjs');
+  const pc = require('./pr-comments.cjs');
+  const find = findPr || ((b) => github.findOpenPr(project, b).pr);
+  const kids = childrenOf || ((b) => pc.openChildren(project, b));
+  const warnings = [];
+  const below = [];
+  const prs = {};
+  const pr = find(branch);
+  if (!pr) return { stack: [branch], base: null, prs, warnings: [`${branch} has no open pull request; give the whole stack with --stack and its base with --base.`] };
+  prs[branch] = { number: pr.number || null, url: pr.url || null };
+  let base = pr.base;
+  for (let guard = 0; base && guard < 20; guard += 1) {
+    const under = find(base);
+    if (!under || below.includes(base) || base === branch) break;
+    prs[base] = { number: under.number || null, url: under.url || null };
+    below.unshift(base);
+    base = under.base;
+  }
+  const above = pc.stackAbove(branch, kids, warnings);
+  for (const b of above) {
+    const p = find(b);
+    if (p) prs[b] = { number: p.number || null, url: p.url || null };
+  }
+  return { stack: [...below, branch, ...above], base, prs, warnings };
+}
+
+// The stack, its base and the pull requests, read once: an explicit --stack keeps its order, the
+// base and the pull request numbers come from GitHub (the conflict agent's brief names them).
+function resolveStack(project, options, deps) {
+  const found = (deps.discover || discoverStack)(project, options.stack[0], deps);
+  const stack = options.stack.length === 1 ? found.stack : options.stack;
+  const base = options.base || (found.stack[0] === stack[0] ? found.base || '' : '');
+  return { stack, base, prs: found.prs || {}, warnings: found.warnings || [] };
+}
+
+// What /doh:restack would move, moving nothing: the stack, its base, and every pair that does not
+// sit on its parent now (verify).
+function plan(options, deps = {}) {
+  const project = path.resolve(options.project);
+  const { stack, base, prs, warnings } = resolveStack(project, options, deps);
+  const pairs = [...(base ? [{ parent: base, child: stack[0], oldTip: null }] : []), ...stack.slice(1).map((child, i) => ({ parent: stack[i], child, oldTip: null }))];
+  const checked = (deps.verify || verify)({ project, pairs });
+  return { action: 'plan', stack, base, prs, ok: checked.ok, broken: checked.broken, warnings: [...warnings, ...checked.warnings], errors: checked.errors };
+}
+
+// /doh:restack: the whole stack, bottom-up. With --onto-base=yes (the default) the bottom moves
+// onto its base first; every part above moves onto the part below it once that one has landed.
+// --start resumes at a part (after a conflict agent landed the one below it: --parent-old-tip is
+// where that one stood before - the stack's own JSON names it as that part's oldTip).
+function stackAction(options, deps = {}) {
+  const project = path.resolve(options.project);
+  const { stack, base, prs, warnings } = resolveStack(project, options, deps);
+  const startIndex = options.start ? stack.indexOf(options.start) : options.ontoBase === 'no' ? 1 : 0;
+  if (startIndex < 0) return { action: 'stack', stack, base, prs, parts: [], waiting: [], warnings, errors: [`${options.start} is not a part of ${stack.join(' <- ')}.`] };
+  const result = climb({ ...options, project, stack, base, startIndex, startParentOldTip: options.parentOldTip || '' }, deps);
+  return { action: 'stack', stack, base, prs, ...result, parts: result.parts.map(compactPart), warnings: [...warnings, ...result.warnings] };
+}
+
+function compactLand(result) {
+  return { action: 'land', ...compactPart(result) };
+}
+
 function main() {
   let result;
   try {
@@ -446,7 +622,9 @@ function main() {
     result = args.action === 'verify' ? verify(args)
       : args.action === 'push' ? push(args)
         : args.action === 'cascade' ? cascade(args)
-          : land(args);
+          : args.action === 'stack' ? stackAction(args)
+            : args.action === 'plan' ? plan(args)
+            : args.summary === 'yes' ? compactLand(land(args)) : land(args);
   } catch (err) {
     result = { status: 'error', errors: [String((err && err.message) || err)], warnings: [] };
   }
@@ -454,6 +632,6 @@ function main() {
   process.exit(result.errors && result.errors.length ? 1 : 0);
 }
 
-module.exports = { parseArgs, parsePairs, land, verify, push, cascade, mergeJson3, autoResolve, pushWithRetry, absent };
+module.exports = { parseArgs, parsePairs, land, verify, push, cascade, climb, stackAction, plan, discoverStack, compactPart, landOptionsFromRun, pairsFromRun, mergeJson3, autoResolve, pushWithRetry, absent };
 
 if (require.main === module) main();

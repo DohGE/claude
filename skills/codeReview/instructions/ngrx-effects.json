@@ -8,7 +8,7 @@
       "text": "File lives in `<area>/data-access/+state/`; class `<PascalCaseArea>Effects` with `@Injectable()` **without** `providedIn: 'root'`; registered through `provideEffects([...])` on the route; `/* eslint-disable @typescript-eslint/member-ordering */` at the top is allowed."
     }
   ],
-  "itemCount": 59,
+  "itemCount": 60,
   "instructions": [
     {
       "id": "ngrx-effects",
@@ -28,7 +28,7 @@
         },
         {
           "id": "ngrx-effects#3",
-          "text": "Canonical HTTP effect: `ofType → switchMap → service call → map(success) / catchError(fail)`; `catchError` sits **inside** the flattening operator and returns `of(failAction)` — outside it kills the stream after the first error."
+          "text": "Canonical HTTP effect: `ofType → <flattening operator of ngrx-effects#7> → service call → map(success) / catchError(fail)`; `catchError` sits **inside** the flattening operator and returns `of(failAction)` — outside it kills the stream after the first error."
         },
         {
           "id": "ngrx-effects#4",
@@ -44,7 +44,7 @@
         },
         {
           "id": "ngrx-effects#7",
-          "text": "Flattening operator choice: `switchMap` is the default (cancel previous); `mergeMap` for parallel bulk operations; `concatMap` when order is critical; `exhaustMap` to ignore repeat triggers until completion. An operation on one entity of several that can run side by side - load or unload a tape, act on one row, one device, one id - never uses `switchMap`: a second trigger for ANOTHER entity cancels the first one in flight. Use `mergeMap` (or `concatMap` when the entities share one resource that must not run twice at once); `switchMap` stays for \"the latest request wins\" reads such as a search or the details of the selected item."
+          "text": "Flattening operator by what the request does: `switchMap` ONLY for a read whose older answer is worthless once a newer one is asked for (a search, a reload of a list); a command - anything that writes, starts or changes something (POST, PUT, PATCH, DELETE, a load, an unload, a label operation) - uses `mergeMap` when operations on different entities may run side by side, `concatMap` when their order matters, `exhaustMap` to ignore repeats until the first one completes. `switchMap` on a command cancels the in-flight request when the next action of its type arrives, and the first operation's success or failure never reaches the store or the user."
         },
         {
           "id": "ngrx-effects#8",
@@ -137,8 +137,8 @@
     {
       "id": "i18n",
       "name": "Translations",
-      "selectedItems": "11",
-      "checklistSize": 12,
+      "selectedItems": "11,13",
+      "checklistSize": 13,
       "items": [
         {
           "id": "i18n#11",
@@ -151,6 +151,11 @@
           "facts": [
             "i18n-missing-key"
           ]
+        },
+        {
+          "id": "i18n#13",
+          "text": "A value interpolated into text a user reads - a translate parameter (`{ slot, barcode }`), a template interpolation, a string concatenation, a copied or exported message - that can be `null` or `undefined` has an explicit fallback (`?? ''`, `?? '—'`) or a message variant without it: ngx-translate renders a missing parameter as the raw `{{slot}}` placeholder, and a template or a concatenation renders the word `null`.",
+          "severity": "medium"
         }
       ]
     },

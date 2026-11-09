@@ -2,7 +2,7 @@
   "kind": "feature-component-template",
   "pattern": "src/app/**/components-<area>/feature/<name>/<name>.component.html",
   "role": "Template of a feature or dialog component.",
-  "itemCount": 78,
+  "itemCount": 80,
   "instructions": [
     {
       "id": "component-template",
@@ -169,8 +169,8 @@
     {
       "id": "feature-component",
       "name": "Feature (smart) component",
-      "selectedItems": "6-7",
-      "checklistSize": 16,
+      "selectedItems": "6-7,17",
+      "checklistSize": 17,
       "items": [
         {
           "id": "feature-component#6",
@@ -181,14 +181,19 @@
           "id": "feature-component#7",
           "text": "An extensive, complex, or over-50-line template is extracted into `ui-*` children rather than left inline in the feature component; the feature keeps only the wiring markup that binds facade state to those children.",
           "severity": "low"
+        },
+        {
+          "id": "feature-component#17",
+          "text": "Data injected into a dialog component (`inject(MAT_DIALOG_DATA)`) is held in a `private readonly _dialogData` field; the component exposes to its template only the named readonly values the template needs (`readonly slots = this._dialogData.slots`), never the whole data object.",
+          "severity": "low"
         }
       ]
     },
     {
       "id": "i18n",
       "name": "Translations",
-      "selectedItems": "9,11",
-      "checklistSize": 12,
+      "selectedItems": "9,11,13",
+      "checklistSize": 13,
       "items": [
         {
           "id": "i18n#9",
@@ -211,6 +216,11 @@
           "facts": [
             "i18n-missing-key"
           ]
+        },
+        {
+          "id": "i18n#13",
+          "text": "A value interpolated into text a user reads - a translate parameter (`{ slot, barcode }`), a template interpolation, a string concatenation, a copied or exported message - that can be `null` or `undefined` has an explicit fallback (`?? ''`, `?? '—'`) or a message variant without it: ngx-translate renders a missing parameter as the raw `{{slot}}` placeholder, and a template or a concatenation renders the word `null`.",
+          "severity": "medium"
         }
       ]
     },

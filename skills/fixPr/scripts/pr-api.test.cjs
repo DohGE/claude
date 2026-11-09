@@ -5,6 +5,8 @@ const assert = require('node:assert');
 
 const api = require('./pr-api.cjs');
 
+api.readRetry.wait = () => {};
+
 const slug = { owner: 'acme', repo: 'app' };
 
 function ok(json) {
@@ -121,8 +123,22 @@ test('reviewThreads fetches the comments past a thread first page', () => {
   assert.strictEqual(thread.commentsTruncated, undefined);
 });
 
+test('a read that failed for a moment is asked again; a mutation and a 4xx are not', () => {
+  const send = sender(fail(0, 'fetch failed'), threadsPage([threadNode()]));
+  const { threads, error } = api.reviewThreads('/p', slug, 7, send);
+  assert.strictEqual(error, null);
+  assert.strictEqual(threads.length, 1);
+  assert.strictEqual(send.calls.length, 2);
+  const refused = sender(fail(401, 'token rejected'));
+  assert.match(api.graphql('/p', 'query{x}', {}, refused).error, /token rejected/);
+  assert.strictEqual(refused.calls.length, 1);
+  const mutation = sender(fail(502, 'bad gateway'));
+  assert.match(api.graphql('/p', 'mutation{x}', {}, mutation).error, /bad gateway/);
+  assert.strictEqual(mutation.calls.length, 1);
+});
+
 test('reviewThreads returns what it has and marks truncation when a page fails', () => {
-  const send = sender(threadsPage([threadNode()], true, 'CUR1'), fail(502, 'bad gateway'));
+  const send = sender(threadsPage([threadNode()], true, 'CUR1'), fail(502, 'bad gateway'), fail(502, 'bad gateway'), fail(502, 'bad gateway'));
   const { threads, error, truncated } = api.reviewThreads('/p', slug, 7, send);
   assert.strictEqual(threads.length, 1);
   assert.strictEqual(truncated, true);

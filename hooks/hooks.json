@@ -36,6 +36,14 @@
               "--event=subagent"
             ],
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/skills/fixPr/scripts/agent-stop.cjs"
+            ],
+            "timeout": 10
           }
         ]
       }

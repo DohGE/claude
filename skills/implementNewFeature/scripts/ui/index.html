@@ -216,6 +216,7 @@
           border:1px solid var(--border); border-radius:6px; background:var(--card); }
   .thumb img { display:block; width:100%; height:100%; object-fit:cover; }
   .thumbs { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
+  .att-note { align-self:center; font-size:12px; color:var(--muted, #888); }
   .thumbs:empty { display:none; }
   .thumbs .att { position:relative; }
   .thumbs .thumb { width:72px; height:54px; }
@@ -1915,10 +1916,31 @@ const msgHtml = (role, text, attachments, id, deletable) =>
 // into a tray above the field, kept with the draft so a redraw hands them back, and
 // uploaded only when the message goes out.
 const attachButton = key => `<button type="button" class="secondary attach-btn"
-    data-attach="${key}" aria-label="Attach images" title="Attach images">${CLIP_ICON}</button>
+    data-attach="${key}" aria-label="Attach images (Alt+V pastes a screenshot)" title="Attach images - Alt+V pastes a screenshot from the clipboard">${CLIP_ICON}</button>
   <input type="file" accept="image/*" multiple hidden data-attach-input="${key}">`;
 const attachTray = key => `<div class="thumbs" data-attach-tray="${key}"></div>`;
 const attachedOf = key => viewOf(activeTask).attach[key] || [];
+
+// The pictures on the clipboard as files (`screenshot-<time>-<n>.<ext>`), [] when it holds
+// none, null when the browser refused to read it.
+async function clipboardImages() {
+  if (!navigator.clipboard || !navigator.clipboard.read) return null;
+  let items;
+  try {
+    items = await navigator.clipboard.read();
+  } catch {
+    return null;
+  }
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+  const files = [];
+  for (const item of items) {
+    const type = item.types.find(t => t.startsWith('image/'));
+    if (!type) continue;
+    const ext = (type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/\+.*$/, '');
+    files.push(new File([await item.getType(type)], `screenshot-${stamp}-${files.length + 1}.${ext}`, { type }));
+  }
+  return files.filter(f => IMAGE_RE.test(f.name));
+}
 
 // Wires one picker and its tray. Returns what a send calls first: it uploads the tray
 // and resolves to the stored names - or to null when an upload failed, and then the
@@ -1943,6 +1965,32 @@ function wireAttach(key, onChange) {
     if (onChange) onChange();
   };
   btn.addEventListener('click', () => input.click());
+  // Alt+V in the conversation's field (or anywhere in its card): the screenshot on the
+  // clipboard goes into the tray, named by the time it was taken - no save to a file and
+  // no trip through the file picker. The browser asks once for clipboard access.
+  let box = btn.parentElement;
+  while (box && !box.contains(tray)) box = box.parentElement;
+  const note = text => {
+    const n = document.createElement('span');
+    n.className = 'att-note';
+    n.textContent = text;
+    tray.appendChild(n);
+    setTimeout(() => n.remove(), 4000);
+  };
+  // A panel redrawn inside a container that outlives it would collect one listener per draw.
+  const host = box || btn.parentElement;
+  host._altv = host._altv || {};
+  if (host._altv[key]) host.removeEventListener('keydown', host._altv[key]);
+  host.addEventListener('keydown', host._altv[key] = async e => {
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.code !== 'KeyV') return;
+    e.preventDefault();
+    if (btn.disabled) return note(`At most ${MAX_ATTACHMENTS} pictures per message.`);
+    const pasted = await clipboardImages();
+    if (pasted === null) return note('The browser did not allow reading the clipboard.');
+    if (pasted.length === 0) return note('No picture on the clipboard - copy a screenshot first.');
+    v.attach[key] = [...attachedOf(key), ...pasted].slice(0, MAX_ATTACHMENTS);
+    draw();
+  });
   input.addEventListener('change', () => {
     const images = [...input.files].filter(f => IMAGE_RE.test(f.name));
     v.attach[key] = [...attachedOf(key), ...images].slice(0, MAX_ATTACHMENTS);

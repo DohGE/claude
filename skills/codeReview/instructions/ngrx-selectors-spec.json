@@ -12,7 +12,7 @@
       "text": "Every feature area keeps the canonical layout: `data-access/+state/` (the view's `<name>.store.ts` signal store and, only for data several independent views share, an NgRx slice - actions, reducer, selectors, effects, facade - each with `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, plus `shared/mocks/` for the spec fixtures several specs share, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area."
     }
   ],
-  "itemCount": 53,
+  "itemCount": 54,
   "instructions": [
     {
       "id": "ngrx-selectors-unit-test",
@@ -73,8 +73,8 @@
     {
       "id": "unit-tests",
       "name": "Unit tests (common)",
-      "selectedItems": "1-2,4,6-13,15-16,22,24-29",
-      "checklistSize": 29,
+      "selectedItems": "1-2,4,6-13,15-16,22,24-30",
+      "checklistSize": 30,
       "items": [
         {
           "id": "unit-tests#1",
@@ -202,6 +202,11 @@
           "id": "unit-tests#29",
           "text": "One `it` verifies one behaviour: a test that triggers two independent actions or asserts two unrelated outcomes is split into two `it`s, each title naming its own behaviour - one failure then says which behaviour broke.",
           "severity": "low"
+        },
+        {
+          "id": "unit-tests#30",
+          "text": "A test of a path that must NOT act - an invalid form, a disabled control, a refused input - asserts that the action did not happen (`expect(submitSpy).not.toHaveBeenCalled()`, no dispatch, no request), not only the state that should prevent it: a form reported invalid proves nothing about whether submit still went out. A spy called with no arguments is asserted with `toHaveBeenCalled()`, never an empty `toHaveBeenCalledWith()`.",
+          "severity": "medium"
         }
       ]
     },

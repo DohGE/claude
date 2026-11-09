@@ -137,6 +137,86 @@ function refExists(project, ref) {
   return tryGit(project, ['rev-parse', '--verify', '--quiet', ref]) !== null;
 }
 
+// A branch the user has checked out is fixed on a branch of the run's own, made from origin and
+// pushed to origin/<branch> (`HEAD:refs/heads/<branch>`). On 2026-11-06 part-4 of a stack fell
+// out of the run because the user's terminal stood on it, and its comments waited for a second
+// run. Only the user's own unpushed commits still stop it: they would be left behind.
+const ownBranchPrefix = 'doh-fixpr/';
+const ownBranchFor = (branch) => `${ownBranchPrefix}${branch}`;
+
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// rmdir of a folder a process still has open (a shell or test runner started in it, Windows)
+// fails for a few seconds after that process is gone. Three folders of 2026-11-06 stayed for
+// want of a second try, and each one blocked the next run of its branch.
+function removeEmptyDir(dir, { delays = [500, 1000, 2000, 4000, 8000], wait = sleepMs, rmdir = fs.rmdirSync } = {}) {
+  for (const delay of [0, ...delays]) {
+    if (delay) wait(delay);
+    try {
+      rmdir(dir);
+      return true;
+    } catch {
+      // still held
+    }
+  }
+  return false;
+}
+
+function registeredWorktrees(project) {
+  const out = tryGit(project, ['worktree', 'list', '--porcelain']) || '';
+  return out.split(/\r?\n/).map((l) => l.match(/^worktree (.*)$/)).filter(Boolean).map((m) => path.resolve(m[1].trim()));
+}
+
+// Whether a folder in the way of a new worktree is litter of an earlier run: not a worktree git
+// knows, no `.git`, no link (a linked node_modules is the main checkout's), and every file in it
+// either ignored (build output, a copied .env) or identical to the branch's own. Such a folder
+// holds nothing a person wrote, so it goes; anything else is named and left alone.
+function leftoverVerdict(project, dir, refs, { limit = 20000 } = {}) {
+  const here = path.resolve(dir);
+  if (registeredWorktrees(project).some((w) => w.toLowerCase() === here.toLowerCase())) return { removable: false, reason: 'it is a worktree git still has registered' };
+  const files = [];
+  const walk = (at) => {
+    for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
+      const full = path.join(at, entry.name);
+      const st = fs.lstatSync(full);
+      if (st.isSymbolicLink()) throw Object.assign(new Error('link'), { verdict: `it holds a link, ${path.relative(here, full)} - remove that with rmdir, never recursively` });
+      if (entry.name === '.git') throw Object.assign(new Error('git'), { verdict: 'it holds a .git' });
+      if (st.isDirectory()) walk(full);
+      else files.push(path.relative(here, full).replace(/\\/g, '/'));
+      if (files.length > limit) throw Object.assign(new Error('many'), { verdict: `it holds more than ${limit} files` });
+    }
+  };
+  try {
+    walk(here);
+  } catch (err) {
+    return { removable: false, reason: err.verdict || `it cannot be read (${err.message})` };
+  }
+  if (files.length === 0) return { removable: true, reason: 'empty' };
+  const gitDir = tryGit(project, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!gitDir) return { removable: false, reason: 'the repository could not be read' };
+  const inTree = (args, input) => {
+    const res = require('node:child_process').spawnSync('git', ['--git-dir', gitDir, '--work-tree', here, ...args], { cwd: here, input, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    return res.status === 0 || (args[0] === 'check-ignore' && res.status === 1) ? String(res.stdout || '') : null;
+  };
+  // Ignore rules from the main checkout: the leftover may have lost its own .gitignore files.
+  const ignoredOut = require('node:child_process').spawnSync('git', ['-C', project, 'check-ignore', '--no-index', '--stdin'], { input: files.join('\n'), encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const ignored = new Set(String(ignoredOut.stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+  const own = files.filter((f) => !ignored.has(f));
+  if (own.length === 0) return { removable: true, reason: 'only ignored files' };
+  const hashes = (inTree(['hash-object', '--stdin-paths'], own.join('\n')) || '').split(/\r?\n/).map((l) => l.trim());
+  const blobsOf = refs.map((ref) => {
+    const map = new Map();
+    for (const line of (tryGit(project, ['ls-tree', '-r', ref]) || '').split(/\r?\n/)) {
+      const m = line.match(/^\d+ blob ([0-9a-f]+)\t(.+)$/);
+      if (m) map.set(m[2], m[1]);
+    }
+    return map;
+  });
+  const foreign = own.filter((f, i) => !hashes[i] || !blobsOf.some((map) => map.get(f) === hashes[i]));
+  if (foreign.length > 0) return { removable: false, reason: `it holds ${foreign.length} file(s) the branch does not have as they are, e.g. ${foreign.slice(0, 3).join(', ')}` };
+  return { removable: true, reason: `only ${own.length} file(s) of the branch itself and ignored files` };
+}
+
 // Where the branch stands against its remote, which decides whether a fix can
 // end in a plain `git push`:
 // - `remote-only`  - nothing local yet; the worktree is created from origin.
@@ -462,12 +542,33 @@ function add(options) {
   }
 
   const held = worktreeHolding(project, branch);
+  const { state, ahead, behind } = branchState(project, branch);
+  let own = null;
   if (held) {
-    result.errors.push(`Branch ${branch} is already checked out in ${held}. Switch that checkout to another branch and re-run; this skill never forces a second worktree onto one branch, because two working copies of one branch diverge silently.`);
-    return result;
+    // Two working copies of one branch diverge silently, so the run's copy is a branch of its own.
+    if (state === 'ahead' || state === 'diverged') {
+      result.errors.push(`Branch ${branch} is checked out in ${held} and holds ${ahead} commit(s) origin/${branch} does not have. Push them (or drop them) first: a fix made beside them would leave them behind.`);
+      return result;
+    }
+    if (state === 'in-sync' || state === 'behind') {
+      own = ownBranchFor(branch);
+      if (worktreeHolding(project, own)) {
+        result.errors.push(`${own} is checked out in ${worktreeHolding(project, own)}: another run of ${branch} is still going, or its worktree was left behind. Remove that worktree first.`);
+        return result;
+      }
+      if (refExists(project, `refs/heads/${own}`)) {
+        if (tryGit(project, ['merge-base', '--is-ancestor', own, `origin/${branch}`]) === null) {
+          result.errors.push(`${own} holds commits origin/${branch} does not have - an earlier run that could not push. Inspect it, then delete it (git branch -D ${own}).`);
+          return result;
+        }
+        tryGit(project, ['branch', '-D', own]);
+      }
+      result.heldBy = held;
+      result.localBranch = own;
+      result.warnings.push(`Branch ${branch} is checked out in ${held}; the fixes are made on ${own} (from origin/${branch}) and pushed to origin/${branch}. Your checkout's ${branch} then lags origin: git pull --rebase there once the run is done.`);
+    }
   }
 
-  const { state, ahead, behind } = branchState(project, branch);
   if (state === 'missing') {
     result.errors.push(`Branch ${branch} exists neither locally nor on origin.`);
     return result;
@@ -488,8 +589,19 @@ function add(options) {
   const worktree = path.resolve(options.worktree || worktreePathFor(project, branch));
   result.worktree = worktree;
   if (isDirectory(worktree)) {
-    result.errors.push(`${worktree} already exists. Remove it (git worktree remove) before starting a new run for this branch.`);
-    return result;
+    const refs = [`origin/${branch}`, `refs/heads/${branch}`, `refs/heads/${ownBranchFor(branch)}`].filter((r) => refExists(project, r));
+    const verdict = leftoverVerdict(project, worktree, refs);
+    if (!verdict.removable) {
+      result.errors.push(`${worktree} already exists and is kept: ${verdict.reason}. Inspect it, then remove it (git worktree remove, or by hand) before starting a new run for this branch.`);
+      return result;
+    }
+    try {
+      fs.rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    } catch (err) {
+      result.errors.push(`${worktree} is a leftover of an earlier run (${verdict.reason}) but could not be removed: ${err.message}. A process may still hold it - close it, or remove the folder by hand.`);
+      return result;
+    }
+    result.warnings.push(`Removed the leftover ${worktree} of an earlier run (${verdict.reason}).`);
   }
 
   try {
@@ -500,16 +612,18 @@ function add(options) {
   // `remote-only` has no local branch to check out, so one is created tracking
   // origin. Every other state already has the branch, and `worktree add <path>
   // <branch>` moves it into the new checkout.
-  const addArgs = state === 'remote-only'
-    ? ['worktree', 'add', worktree, '-b', branch, `origin/${branch}`]
-    : ['worktree', 'add', worktree, branch];
+  const addArgs = own
+    ? ['worktree', 'add', worktree, '-b', own, `origin/${branch}`]
+    : state === 'remote-only'
+      ? ['worktree', 'add', worktree, '-b', branch, `origin/${branch}`]
+      : ['worktree', 'add', worktree, branch];
   if (run(project, addArgs) === null) {
     result.errors.push(`git worktree add failed for ${branch} at ${worktree}.`);
     return result;
   }
   result.created = true;
 
-  if (state === 'behind') {
+  if (state === 'behind' && !own) {
     if (run(worktree, ['merge', '--ff-only', `origin/${branch}`]) === null) {
       result.errors.push(`${branch} is ${behind} commit(s) behind origin and could not be fast-forwarded.`);
       // Take the checkout back down. Nothing has been written into it yet - the
@@ -533,6 +647,17 @@ function add(options) {
 
   result.envFiles = copyEnvFiles(project, worktree);
   result.dohConfig = copyDohConfig(project, worktree);
+  // The brief names the rulebook or says there is none, so no agent spends its calls looking.
+  const rules = path.join(worktree, '.claude', 'doh', 'instructions');
+  result.rulebook = isDirectory(rules) ? rules : null;
+  // How the app is started for a look at a fix (`checks.json` "visual": command, url, backend,
+  // authFile) - the fix agent's visual check; null when the project describes none.
+  try {
+    const checks = JSON.parse(fs.readFileSync(path.join(worktree, '.claude', 'doh', 'checks.json'), 'utf8'));
+    result.visual = checks && checks.visual && typeof checks.visual.command === 'string' ? checks.visual : null;
+  } catch {
+    result.visual = null;
+  }
   if (options.bootstrap === false) {
     result.dependencies = { manager: null, error: null, skipped: true };
     return result;
@@ -604,8 +729,10 @@ function remove(options) {
     const left = entriesOf(worktree);
     if (left === null || left === 0) {
       tryGit(project, ['worktree', 'prune']);
-      try { fs.rmdirSync(worktree); } catch { /* gone already */ }
-      result.warnings.push(`git worktree remove reported "${gitError}", but the worktree folder is ${left === null ? 'gone' : 'empty'}; pruned it.`);
+      const gone = left === null || removeEmptyDir(worktree, options.rmdirRetry);
+      result.warnings.push(gone
+        ? `git worktree remove reported "${gitError}", but the worktree folder was ${left === null ? 'gone' : 'empty'}; pruned and removed it.`
+        : `git worktree remove reported "${gitError}"; the worktree is pruned, but its empty folder ${worktree} is still held by a process (a shell or test runner started in it). The next add of this branch removes it.`);
     } else {
       result.errors.push(`git worktree remove stopped at "${gitError}" with ${left} entries left in ${worktree}; nothing uncommitted was there (status was clean). A process may hold a file open - close it (editor, test watcher, terminal in that folder), then run remove again.`);
       return result;
@@ -616,6 +743,12 @@ function remove(options) {
     result.errors.push(`The main checkout's node_modules went from ${before} to ${after} entries while ${worktree} was removed. Run the install in ${project} before the next run.`);
   }
   result.removed = true;
+  // The run's own branch of a branch the user had checked out (add): gone once origin holds it.
+  const own = options.branch ? ownBranchFor(options.branch) : null;
+  if (own && refExists(project, `refs/heads/${own}`) && !worktreeHolding(project, own)) {
+    if (tryGit(project, ['merge-base', '--is-ancestor', own, `origin/${options.branch}`]) !== null) tryGit(project, ['branch', '-D', own]);
+    else result.warnings.push(`Kept ${own}: it holds commits origin/${options.branch} does not have (a push that did not go through).`);
+  }
   // The skill's own parent only ever holds its worktrees, so an empty one is
   // litter; rmdir fails harmlessly while another run still has one.
   removeOwnParent(project, worktree);
@@ -638,7 +771,7 @@ module.exports = {
   parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
   detectPackageManager, installDependencies, installFailure, copyEnvFiles, copyLocalFiles, isLocalConfig,
   linkDependencies, provideDependencies, copyDohConfig, keepReports, dependencyHealth,
-  add, remove, git, tryGit,
+  add, remove, git, tryGit, removeEmptyDir, leftoverVerdict, ownBranchFor,
 };
 
 if (require.main === module) main();

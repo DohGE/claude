@@ -8,13 +8,13 @@
       "text": "File lives in `<area>/data-access/+state/<area>.reducer.ts`; single export `<camelCaseArea>Reducer = createReducer(<initialState>, ...)`; the initial state, feature key and state interface live in `models/` and are only imported here."
     }
   ],
-  "itemCount": 47,
+  "itemCount": 48,
   "instructions": [
     {
       "id": "ngrx-reducer",
       "name": "NgRx reducer",
-      "selectedItems": "1-18",
-      "checklistSize": 18,
+      "selectedItems": "1-19",
+      "checklistSize": 19,
       "items": [
         {
           "id": "ngrx-reducer#1",
@@ -167,6 +167,11 @@
           "id": "ngrx-reducer#18",
           "text": "Allowed imports: `createReducer`/`on`, pure utils, models (types, mappers, initial state), the local actions file; forbidden: selectors, effects, facade, HTTP services, components.",
           "severity": "low"
+        },
+        {
+          "id": "ngrx-reducer#19",
+          "text": "A state field the change adds or writes is read outside the reducer and the specs - by a selector that a facade, component or effect uses; a field only written (a loading flag no template or effect reads) is dead state, removed together with its initial value, its reducer cases, its selector and their tests.",
+          "severity": "medium"
         }
       ]
     },
@@ -174,7 +179,7 @@
       "id": "i18n",
       "name": "Translations",
       "selectedItems": "11",
-      "checklistSize": 12,
+      "checklistSize": 13,
       "items": [
         {
           "id": "i18n#11",

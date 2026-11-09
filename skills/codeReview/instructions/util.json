@@ -8,7 +8,7 @@
       "text": "File is `shared/utils/<verb>-<subject>.util.ts` (singular `.util.ts`, never `.utils.ts`; thematic subfolders allowed, each with its own `tests/`); verbs describe the job: `form-`/`build-` (data → UI/payload structure), `generate-` (tables/IDs/structures), `map-` (shape A → shape B), `create-` (single element factory). When the file groups several functions, its name states the shared subject they all serve."
     }
   ],
-  "itemCount": 41,
+  "itemCount": 42,
   "instructions": [
     {
       "id": "utils",
@@ -115,8 +115,8 @@
     {
       "id": "i18n",
       "name": "Translations",
-      "selectedItems": "11",
-      "checklistSize": 12,
+      "selectedItems": "11,13",
+      "checklistSize": 13,
       "items": [
         {
           "id": "i18n#11",
@@ -129,6 +129,11 @@
           "facts": [
             "i18n-missing-key"
           ]
+        },
+        {
+          "id": "i18n#13",
+          "text": "A value interpolated into text a user reads - a translate parameter (`{ slot, barcode }`), a template interpolation, a string concatenation, a copied or exported message - that can be `null` or `undefined` has an explicit fallback (`?? ''`, `?? '—'`) or a message variant without it: ngx-translate renders a missing parameter as the raw `{{slot}}` placeholder, and a template or a concatenation renders the word `null`.",
+          "severity": "medium"
         }
       ]
     },

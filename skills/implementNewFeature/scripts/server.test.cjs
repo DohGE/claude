@@ -660,7 +660,7 @@ test('GET /api/mockoon serves the addressed task environment file', async t => {
   const app = createApp(dir);
   const base = await listen(app);
   t.after(() => app.server.close());
-  const env = JSON.stringify({ name: 'Feature mocks', port: 3000, hostname: 'localhost' }, null, 2);
+  const env = JSON.stringify({ name: 'Feature mocks', port: 3000, hostname: '' }, null, 2);
   fs.mkdirSync(path.join(dir, 'tasks', 't1'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'tasks', 't1', 'mockoon.json'), env, 'utf8');
   const res = await fetch(`${base}/api/mockoon?taskId=t1`);

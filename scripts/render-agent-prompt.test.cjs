@@ -230,3 +230,41 @@ test('the CLI exits 1 on a mistyped flag rather than rendering a partial prompt'
   assert.strictEqual(code, 1);
   assert.match(json.errors[0], /Unknown argument/);
 });
+
+// ---------- conditional blocks ----------
+
+test('a {{#if NAME=value}} block stays only when the value matches', () => {
+  const tpl = 'a\n{{#if LANDING=hold}}held {{ROOT}}\n{{/if}}{{#if LANDING=rebase}}rebased\n{{/if}}z';
+  const out = rap.render(tpl, { LANDING: 'hold', ROOT: '/r' });
+  assert.strictEqual(out.text, 'a\nheld /r\nz');
+  assert.deepStrictEqual(out.missing, []);
+  assert.deepStrictEqual(out.unused, []);
+});
+
+test('a condition takes alternatives and a negation', () => {
+  const tpl = '{{#if LANDING=rebase|keep-base}}moves{{/if}}|{{#if PUSH!=yes}}nopush{{/if}}';
+  assert.strictEqual(rap.render(tpl, { LANDING: 'keep-base', PUSH: 'no' }).text, 'moves|nopush');
+  assert.strictEqual(rap.render(tpl, { LANDING: 'hold', PUSH: 'yes' }).text, '|');
+});
+
+test('a placeholder inside a dropped block is neither missing nor substituted', () => {
+  const out = rap.render('{{#if LOCAL=yes}}{{FINDINGS}}{{/if}}x', { LOCAL: 'no' });
+  assert.strictEqual(out.text, 'x');
+  assert.deepStrictEqual(out.missing, []);
+});
+
+test('blocks nest, the inner one decided inside the kept outer one', () => {
+  const tpl = '{{#if A=1}}a{{#if B=2}}b{{/if}}c{{/if}}';
+  assert.strictEqual(rap.render(tpl, { A: '1', B: '2' }).text, 'abc');
+  assert.strictEqual(rap.render(tpl, { A: '1', B: '3' }).text, 'ac');
+  assert.strictEqual(rap.render(tpl, { A: '0', B: '2' }).text, '');
+});
+
+test('a condition on a name nobody set is reported missing, not silently false', () => {
+  const out = rap.render('{{#if LANDING=hold}}x{{/if}}', {});
+  assert.deepStrictEqual(out.missing, ['LANDING']);
+});
+
+test('an unclosed block is refused', () => {
+  assert.throws(() => rap.render('{{#if A=1}}x', { A: '1' }), /unclosed|\{\{\/if\}\}/i);
+});

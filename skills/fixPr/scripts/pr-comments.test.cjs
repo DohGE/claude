@@ -488,8 +488,8 @@ test('annotateStacks orders a stack bottom-first, holds every part above its bot
   const { targets: out, stacks, warnings } = pc.annotateStacks(targets, tips);
   assert.deepStrictEqual(out.map((x) => x.branch), ['other', 'part-1', 'part-2', 'part-3']);
   assert.deepStrictEqual(out.map((x) => x.landing), ['rebase', 'keep-base', 'hold', 'hold']);
-  assert.deepStrictEqual(out[2].stack, { parent: 'part-1', children: ['part-3'], parentTipAtStart: 'a1' });
-  assert.deepStrictEqual(out[1].stack, { parent: null, children: ['part-2'], parentTipAtStart: null });
+  assert.deepStrictEqual(out[2].stack, { parent: 'part-1', children: ['part-3'], parentTipAtStart: 'a1', allAbove: ['part-3'] });
+  assert.deepStrictEqual(out[1].stack, { parent: null, children: ['part-2'], parentTipAtStart: null, allAbove: ['part-2', 'part-3'] });
   assert.deepStrictEqual(out.map((x) => x.remoteTipAtStart), ['o1', 'a1', 'b2', 'c3']);
   assert.deepStrictEqual(stacks, [['part-1', 'part-2', 'part-3']]);
   assert.deepStrictEqual(warnings, []);
@@ -504,6 +504,31 @@ test('annotateStacks lands two parts on one parent after it, and breaks a cycle 
   assert.deepStrictEqual(cycle.targets.map((x) => [x.branch, x.landing]), [['x', 'keep-base'], ['y', 'hold']]);
   assert.strictEqual(cycle.warnings.length, 1);
   assert.match(cycle.warnings[0], /x.*y|y.*x/);
+});
+
+test('annotateStacks reads the stack from GitHub: a middle part named alone is held, the parts above it found', () => {
+  const t = (branch, base) => ({ branch, pr: { number: 1, title: 't', url: 'u', base } });
+  const gh = {
+    isPrHead: (b) => ['part-1', 'part-2', 'part-3', 'part-4', 'part-5'].includes(b),
+    childrenOf: (b) => ({ 'part-3': ['part-4'], 'part-4': ['part-5'] }[b] || []),
+  };
+  const { targets: [p4] } = pc.annotateStacks([t('part-4', 'part-3')], new Map([['part-3', 'c3'], ['part-4', 'd4']]), gh);
+  assert.strictEqual(p4.landing, 'hold');
+  assert.strictEqual(p4.stack.parent, 'part-3');
+  assert.strictEqual(p4.stack.parentTipAtStart, 'c3');
+  assert.strictEqual(p4.stack.parentOutsideRun, true);
+  assert.deepStrictEqual(p4.stack.above, ['part-5']);
+});
+
+test('annotateStacks keeps the base of a bottom whose child is not in the run - named but failed, or not named', () => {
+  const t = (branch, base) => ({ branch, pr: { number: 1, title: 't', url: 'u', base } });
+  const gh = { isPrHead: () => false, childrenOf: (b) => ({ 'part-1': ['part-2'], 'part-2': ['part-3'] }[b] || []) };
+  const alone = pc.annotateStacks([t('part-1', 'master')], new Map(), gh).targets[0];
+  assert.strictEqual(alone.landing, 'keep-base');
+  assert.deepStrictEqual(alone.stack.above, ['part-2', 'part-3']);
+  const two = pc.annotateStacks([t('part-2', 'part-1'), t('part-1', 'master')], new Map(), gh).targets;
+  assert.deepStrictEqual(two.map((x) => [x.branch, x.landing, x.stack.above || null]), [['part-1', 'keep-base', null], ['part-2', 'hold', ['part-3']]]);
+  assert.deepStrictEqual(two[0].stack.allAbove, ['part-2', 'part-3'], 'the bottom sees the part outside the run too');
 });
 
 test('remoteTips reads every branch tip from one ls-remote and skips what the remote lacks', () => {

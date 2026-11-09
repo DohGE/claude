@@ -51,7 +51,7 @@ function fixture(t, { kind = 'branch', outputFormat = 'md' } = {}) {
 }
 
 // The cross-file part's questions block (references/cross-file.md): a passing cross part has one.
-const answered = ['<!-- questions:', ...[1, 2, 3, 4, 5].map((n) => `[x] pytanie#${n} — OK (sprawdzone)`), '-->', ''].join('\n');
+const answered = ['<!-- questions:', ...[1, 2, 3, 4, 5, 6].map((n) => `[x] pytanie#${n} — OK (sprawdzone)`), '-->', ''].join('\n');
 
 const finding = (rule, lines = '4, 9') => [
   '## src/a.ts',
@@ -1008,7 +1008,7 @@ test('the cross-file part answers every question and every jscpd candidate in it
   f.target.duplicationCandidates = [{ path: 'src/a.ts', lines: '1-9', sources: ['src/c.ts:1-9'], kinds: ['exact'] }];
   const readPart = (k) => (k === 1 ? partA() : k === 2 ? partB : null);
   const block = (...lines) => ['<!-- questions:', ...lines, '-->', ''].join('\n');
-  const questions = [1, 2, 3, 4, 5].map((n) => `[x] pytanie#${n} — OK (sprawdzone)`);
+  const questions = [1, 2, 3, 4, 5, 6].map((n) => `[x] pytanie#${n} — OK (sprawdzone)`);
   const cross = (text) => check(f, 3, text, { readPart });
   has(cross(''), 'brak bloku "<!-- questions:"');
   has(cross(block(...questions)), 'brak w bloku questions: jscpd#1');
@@ -1020,7 +1020,7 @@ test('the cross-file part answers every question and every jscpd candidate in it
   assert.deepStrictEqual(cross(block(...questions, '[x] jscpd#1 — NARUSZENIE (part01)')), [], 'part01 reports a finding');
   has(cross(block(...questions, '[x] jscpd#1 — BRAMKA: nie')), 'werdykt w bloku questions');
   has(cross(block(...questions, '[ ] jscpd#1 — NIEZWERYFIKOWANE: nie wiem')), 'powód NIEZWERYFIKOWANE zaczyna się od');
-  has(cross(block(...questions, '[x] jscpd#1 — OK (x)', '[x] pytanie#6 — OK (x)')), 'adresy spoza');
+  has(cross(block(...questions, '[x] jscpd#1 — OK (x)', '[x] pytanie#7 — OK (x)')), 'adresy spoza');
   // A file part has no such block.
   has(check(f, 2, partB + block(...questions), { readPart }), 'należy do części przejścia międzyplikowego');
 });

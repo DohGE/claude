@@ -453,7 +453,7 @@ function renderRemoved(removed, root) {
 
 function renderBundle({
   file, kind, instructions, bound = { items: {}, info: [] }, exports = [], members = [], specs = null, candidates = [], factRoot = '',
-  partial = false, lineCount = null, partPath = null, batch = null, next = null, mechanical = null, fullPath = null, removed = [],
+  partial = false, lineCount = null, partPath = null, batch = null, next = null, mechanical = null, fullPath = null, removed = [], hints = [],
 }) {
   const out = [`# ${file.path}`, ''];
   out.push(kind
@@ -535,6 +535,9 @@ function renderBundle({
   }
   if (specs) out.push('## Spec', '', ...renderSpecs(specs, factRoot, file.path), '');
   if (removed.length > 0) out.push('## Usunięte deklaracje i ich użycia', '', 'Nazwy, których deklarację usunął diff tego pliku, i gdzie przeglądana rewizja ich jeszcze używa (całe słowo):', ...renderRemoved(removed, factRoot), '');
+  // pattern-checks.cjs: what a regular expression found on the added lines. Each is a candidate for
+  // the item it names - the reviewers of 2026-11-06 raised four such points on walked files.
+  if (hints.length > 0) out.push('## Wzorce wykryte skryptem', '', 'Na dodanych liniach skrypt znalazł wzorce, które mogą łamać wskazany punkt. Przy tym punkcie każdy potwierdzasz znaleziskiem albo odrzucasz po przeczytaniu kodu - nie pomijasz:', ...hints.map((h) => `- L${h.line} → ${h.item}: ${h.note}`), '');
   if (candidates.length > 0) out.push('## Kandydaci duplikacji (jscpd)', '', ...renderCandidates(candidates, false), '');
   if (bound.info.length > 0) {
     out.push('## Fakty spoza planu (bez wymogu)', '');
@@ -799,13 +802,13 @@ function renderNext({ nextFiles = [], crossBundlePath, crossPartPath, crossBrief
 }
 
 // FIXED IDENTIFIERS. The cross-file pass's brief, the replies its agent ends with, and the opener
-// of the block its part answers the five questions and every jscpd candidate in (check-part.cjs),
+// of the block its part answers the six questions and every jscpd candidate in (check-part.cjs),
 // with the addresses of that block's lines.
 const crossBriefName = 'cross-file.brief.md';
 const crossReplies = { done: 'CROSS DONE', stopped: 'CROSS STOPPED' };
 const questionsOpen = '<!-- questions:';
 const questionIds = { question: 'pytanie', candidate: 'jscpd' };
-const crossQuestions = 5;
+const crossQuestions = 6;
 // The walk's rules, for a walker whose agent definition does not carry them and for a
 // conversation that walks a target itself (SKILL.md Step 3).
 const walkRulesPath = `${skillDir}/references/walk.md`;
@@ -845,7 +848,7 @@ function renderCrossBrief({ target, crossBundlePath, crossPartPath, closingPartP
     ? `Read ${crossBundlePath} in ${crossPages.length} pages, one Read each, all in ONE message (${rangeReads(crossPages)}) - whole, it is past one Read's limit`
     : `Read ${crossBundlePath}`;
   out.push(`1. ${read}. The rules of the pass are in your system prompt, the \`doh:codereview-cross\` definition (\`<SKILL_DIR>\` in them is ${skillDir}); an agent started without them Reads ${skillDir}/references/cross-file.md and ${walkRulesPath} in the same message.`);
-  out.push(`2. Follow the reference: one round of lookups, an explicit verdict for each of its five questions and each jscpd candidate in the part's \`${questionsOpen}\` block, then the part ${crossPartPath} in one Write${closingPartPath ? `, and ${closingPartPath} when the target found nothing` : ''}.`);
+  out.push(`2. Follow the reference: one round of lookups, an explicit verdict for each of its six questions and each jscpd candidate in the part's \`${questionsOpen}\` block, then the part ${crossPartPath} in one Write${closingPartPath ? `, and ${closingPartPath} when the target found nothing` : ''}.`);
   out.push(`3. The assembly is not yours: once the part is written, reply with exactly one line, \`${crossReplies.done}\`, and nothing else.`);
   out.push(`4. If you cannot go on - the Write is still refused after two fixes, a file you need is missing - reply with the one line \`${crossReplies.stopped}: <reason>\`. Never write a part through the shell.`, '');
   out.push('The `target.*` keys the reference names, for this target (a key missing here is false):', '', '```json', JSON.stringify(target, null, 2), '```');

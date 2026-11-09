@@ -868,7 +868,7 @@ function repeatedFindings(target, digits, report, readPart, rules) {
   return problems;
 }
 
-// The cross-file part answers each of its five questions and each jscpd candidate on a line of
+// The cross-file part answers each of its six questions and each jscpd candidate on a line of
 // its own, in the `<!-- questions:` block (references/cross-file.md). Until 0.26 an empty part
 // passed: a pass that opened no candidate and never asked questions 3-5 looked exactly like one
 // that found nothing (measured on a 115-file run, 2026-10-27: four High duplications missed).

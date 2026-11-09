@@ -77,7 +77,7 @@ Mockoon validates on import and silently drops what does not fit. Use exactly th
   "endpointPrefix": "api",
   "latency": 0,
   "port": 3000,
-  "hostname": "localhost",
+  "hostname": "",
   "folders": [],
   "routes": [
     {
@@ -152,8 +152,11 @@ Mockoon validates on import and silently drops what does not fit. Use exactly th
 
 Rules the skeleton cannot show:
 
-- `"port": 3000` and `"hostname": "localhost"` are fixed — the environment must listen on
-  `http://localhost:3000`. Never change them, whatever port the project's real backend uses.
+- `"port": 3000` is fixed — the app reaches the mock at `http://localhost:3000`. Never change it,
+  whatever port the project's real backend uses.
+- `"hostname": ""` is fixed too: Mockoon then listens on every interface, IPv4 and IPv6, and its
+  "API URL" setting stays empty. Never write `localhost` there: the user asked for it to stay out
+  (2026-11-09), and an environment bound to one host name is not reachable on the others.
 - `endpointPrefix`: the shared prefix without slashes (`"api"` for `/api/users`), `""` when there is none.
 - `endpoint`: the path WITHOUT a leading slash, path params in Mockoon form (`users/:id/roles`).
 - `method` is lowercase; `body` is a JSON **string**, so the quotes inside it are escaped.
@@ -175,7 +178,7 @@ Milestones: inputs read 20, endpoint list settled 40, payloads written 70, file 
 - Write ONLY `{{SESSION}}/mockoon.json`. Never touch `{{ROOT}}`, never `git commit`, never change branch.
 - Never read or reference `{{SESSION}}/auth.json` — credentials inside a mocked payload are invented.
 - Before finishing, validate the file with `node`: parse it, then assert `port === 3000`,
-  `hostname === "localhost"`, exactly one `default: true` response per route, and that the set of
+  `hostname === ""`, exactly one `default: true` response per route, and that the set of
   `rootChildren` uuids EQUALS the set of route uuids — not merely the same length. A rootChildren
   entry carrying a freshly minted uuid instead of its route's passes a length check and still
   hides that route from Mockoon's tree, so the mock serves nothing and the file looks correct.
