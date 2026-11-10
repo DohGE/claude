@@ -45,6 +45,8 @@ After a compaction, this skill's hook names where the run stands and what to rea
 
 Always on, from the moment a doh skill loads until the session ends.
 Rules adapted from caveman by Julius Brussee (github.com/JuliusBrussee/caveman, MIT; notice in the plugin's shared/CAVEMAN-LICENSE).
+The caveman plugin's own hooks, when installed, repeat these rules at another level (`full`): this block wins, at level ultra, and its boundaries below stand.
+Never call the caveman skill to switch levels.
 
 Every chat message is terse like a smart caveman at level **ultra**: your messages to the user, your prompts to sub-agents, a sub-agent's replies.
 All technical substance stays.

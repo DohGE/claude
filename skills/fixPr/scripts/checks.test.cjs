@@ -70,6 +70,52 @@ test('the gate runs lint, typecheck, test and build, in that order', (t) => {
   assert.deepStrictEqual(run.calls.map((c) => c.options.step), ['lint', 'typecheck', 'test', 'build']);
 });
 
+function commitAll(root, message) {
+  const g = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (!fs.existsSync(path.join(root, '.git'))) {
+    g('init', '-q');
+    for (const [k, v] of [['user.email', 't@t.local'], ['user.name', 'T'], ['commit.gpgsign', 'false']]) g('config', k, v);
+  }
+  g('add', '-A');
+  g('commit', '-q', '-m', message);
+}
+
+test('a green gate is reused for the same commit tree, and run again once the tree or the worktree changes', (t) => {
+  const root = makeProject(t, { lint: 'eslint .', build: 'tsc -b' });
+  commitAll(root, 'one');
+  const run = fakeRunner();
+  const first = checks.runChecks({ root, outDir: outDirFor(t), run, cache: true });
+  assert.strictEqual(first.gate, 'green');
+  assert.strictEqual(run.calls.length, 2);
+  const second = checks.runChecks({ root, outDir: outDirFor(t), run, cache: true });
+  assert.deepStrictEqual([second.gate, run.calls.length, Boolean(second.cached)], ['green', 2, true]);
+  assert.match(second.warnings.join(' '), /--cache=no/);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'x\n');
+  const dirty = checks.runChecks({ root, outDir: outDirFor(t), run, cache: true });
+  assert.deepStrictEqual([run.calls.length, Boolean(dirty.cached)], [4, false], 'an uncommitted change is never covered by a cached verdict');
+  commitAll(root, 'two');
+  checks.runChecks({ root, outDir: outDirFor(t), run, cache: true });
+  assert.strictEqual(run.calls.length, 6, 'a new tree runs the gate');
+  checks.runChecks({ root, outDir: outDirFor(t), run, cache: false });
+  assert.strictEqual(run.calls.length, 8, 'cache off always runs');
+});
+
+test('a red gate and a partial pass are never reused', (t) => {
+  const root = makeProject(t, { lint: 'eslint .', build: 'tsc -b' });
+  commitAll(root, 'one');
+  const red = fakeRunner({ build: { exitCode: 1, output: 'error TS1' } });
+  checks.runChecks({ root, outDir: outDirFor(t), run: red, cache: true });
+  checks.runChecks({ root, outDir: outDirFor(t), run: red, cache: true });
+  assert.strictEqual(red.calls.length, 4);
+  const run = fakeRunner();
+  checks.runChecks({ root, outDir: outDirFor(t), run, cache: true, only: ['lint'] });
+  checks.runChecks({ root, outDir: outDirFor(t), run, cache: true, only: ['lint'] });
+  assert.strictEqual(run.calls.length, 2);
+  assert.strictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b']).cache, 'yes');
+  assert.strictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', '--cache=no']).cache, 'no');
+  assert.throws(() => checks.parseArgs(['--root=/a', '--out-dir=/b', '--cache=maybe']), /--cache/);
+});
+
 test('the labels are the fixed identifiers the commit message is built from', (t) => {
   const root = makeProject(t, { lint: 'eslint .', typecheck: 'tsc --noEmit', test: 'jest', build: 'vite build' });
   const result = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner() });

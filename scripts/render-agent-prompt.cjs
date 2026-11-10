@@ -33,8 +33,29 @@ const placeholder = /\{\{([A-Z][A-Z0-9_]*)\}\}/g;
 // `--set=NAME=value`: the FIRST `=` after the name ends it, so a value may hold
 // as many as it likes - a Windows path with a query-ish tail, a commit message,
 // a directive sentence.
+// `--vars=<file>`: a JSON object of NAME -> value, written by a script that already holds every
+// value (restack.cjs at a conflict). An orchestrator that copies 29 conflicting paths into
+// `--set=` flags by hand pays for each one in output tokens and can drop one; a `--set` given
+// beside the file wins over it.
+function readVars(file) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error(`Could not read --vars=${file}: ${(err && err.message) || err}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`--vars=${file} holds no JSON object of NAME: value.`);
+  const values = {};
+  for (const [name, value] of Object.entries(parsed)) {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error(`--vars name ${JSON.stringify(name)} is not UPPER_SNAKE; placeholders are written {{LIKE_THIS}}.`);
+    values[name] = value === null || value === undefined ? '' : String(value);
+  }
+  return values;
+}
+
 function parseArgs(argv) {
   const args = { template: '', out: '', values: {} };
+  let varsFile = '';
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=([\s\S]*)$/);
@@ -52,11 +73,13 @@ function parseArgs(argv) {
         throw new Error(`--set name ${JSON.stringify(name)} is not UPPER_SNAKE; placeholders are written {{LIKE_THIS}}.`);
       }
       args.values[name] = m[2].slice(at + 1);
-    } else unknown.push(arg);
+    } else if (m[1] === 'vars') varsFile = m[2];
+    else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --template, --out, --set).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --template, --out, --set, --vars).`);
   }
+  if (varsFile) args.values = { ...readVars(varsFile), ...args.values };
   if (!args.template) throw new Error('No template given (expected --template=<path>).');
   if (!args.out) throw new Error('No output path given (expected --out=<path>).');
   return args;

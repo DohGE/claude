@@ -28,6 +28,8 @@ branches. This is that script, shipped and documented.
 
 Always on, from the moment a doh skill loads until the session ends.
 Rules adapted from caveman by Julius Brussee (github.com/JuliusBrussee/caveman, MIT; notice in the plugin's shared/CAVEMAN-LICENSE).
+The caveman plugin's own hooks, when installed, repeat these rules at another level (`full`): this block wins, at level ultra, and its boundaries below stand.
+Never call the caveman skill to switch levels.
 
 Every chat message is terse like a smart caveman at level **ultra**: your messages to the user, your prompts to sub-agents, a sub-agent's replies.
 All technical substance stays.
@@ -98,8 +100,9 @@ Strip the flags first, wherever they sit:
 - `--base=<branch>` → the bottom's base; without it, the bottom's pull request names it.
 - `--no-onto-base` → `ONTO_BASE=no`: the bottom stays where it is; only the parts above it are
   put back on each other.
-- `--start=<part>` with `--parent-old-tip=<sha>` → resume a climb at that part (Step 3 hands you
-  both after a conflict).
+- `--resume` → the previous climb stopped at a part that has landed since (its conflict agent, or
+  the user, pushed it): Step 3 with `--resume=yes`, Step 2 skipped.
+- `--start=<part>` with `--parent-old-tip=<sha>` → start a climb at that part by hand.
 - `--dry-run` → Step 2 only.
 - `--no-push` → `PUSH=no`; `--no-gate` → `GATE=no` (say in the summary that nothing was built).
 
@@ -113,26 +116,31 @@ bottom-first, split on `;` or `,`. Nothing → stop and say, in Polish, that the
 
 Tell the user, in Polish, the stack bottom-first with its base (`master ← part-1 ← part-2 ← …`),
 the pull request number of each part (`prs`), which pairs already sit on each other (`ok`) and which
-do not (`broken`), and every warning. A stack of one branch with no pull request → stop: the user
+do not (`broken`), and every warning. A warning that commits are "already in" the base (a parent
+squash-merged under the bottom) is expected: the climb moves only the commits after them. A stack
+of one branch with no pull request → stop: the user
 gives the stack and `--base` by hand. **`--dry-run` stops here.**
 
 ## Step 3 — The climb
 
 Run (Bash, `run_in_background: true`):
 
-    node "<FIXPR>/scripts/restack.cjs" --action=stack --project="<PROJECT>" --stack="<stack>" [--base=<base>] --onto-base=<yes|no> --checks-dir="<PROJECT>/.claude/doh/restack-checks" --push=<yes|no> --gate=<yes|no> [--start=<part> --parent-old-tip=<sha>]
+    node "<FIXPR>/scripts/restack.cjs" --action=stack --project="<PROJECT>" --stack="<stack>" [--base=<base>] --onto-base=<yes|no> --checks-dir="<PROJECT>/.claude/doh/restack-checks" --push=<yes|no> --gate=<yes|no> --language=<language of this conversation> [--resume=yes | --start=<part> --parent-old-tip=<sha>]
 
 Each part gets a worktree (`worktree.cjs`: a branch the user has checked out is moved on
 `doh-fixpr/<branch>` and pushed to its pull request), is moved with `rebase --onto` - its own
-commits only - and is checked by the project's gate when the move changed the code under it.
+commits only - and is checked by the project's gate when the move changed the code under it (a
+gate already green on the same tree is reused). A bottom whose parent pull request was
+squash-merged into the base moves off that parent's last commit, never replaying it (`squashed`).
 Conflicts where both sides only appended (translation keys, enum members, exports) are merged by
 the script and proved by that gate. The JSON:
 
-- `stack`, `base`, `prs`;
+- `stack`, `base`, `prs`; `resumedAfter` with `--resume=yes`;
 - `parts[]`, one per part it reached, bottom-up: `branch`, `parent`, `status`, `commit` (new sha),
   `oldTip` (where it stood before), `rebased`, `pushed`, `gate` (verdict), `redSteps`,
-  `conflictFiles`, `oldParentTip`, `autoResolved`, `worktree` (kept only when it did not land),
-  `warnings`, `errors`;
+  `conflictFiles` (the first 10), `conflictCount`, `oldParentTip`, `autoResolved`, `squashed`
+  (`commits` of a squash-merged parent left out), `worktree` (kept only when it did not land),
+  `agentPrompt` / `agentPromptErrors` (a conflict only), `warnings`, `errors`;
 - `waiting[]` — the parts above a stop, untouched.
 
 Act on the LAST part:
@@ -145,14 +153,11 @@ Act on the LAST part:
 
 ## Step 4 — A conflict
 
-Render the conflict agent's brief (one call; never assemble it by hand), for the part that stopped:
+The climb has already rendered the conflict agent's brief: the stopped part's `agentPrompt`. Never
+render or assemble it yourself. `agentPrompt` null → stop and report its `agentPromptErrors`. Then
+spawn it (Agent tool, `subagent_type: "general-purpose"`, background):
 
-    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<FIXPR>/references/restack-agent.md" --out="<PROJECT>/.claude/doh/<branch with / as ->/<branch with / as ->-restack-agent-prompt.md" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=PR_NUMBER=<prs[branch].number> --set=PR_URL=<prs[branch].url> --set=PARENT=<parent> --set=OLD_TIP=<oldParentTip> --set=LEASE=<oldTip> --set=FILES=<conflictFiles joined by ", "> --set=CHECKS_DIR=<PROJECT>/.claude/doh/restack-checks/<branch> --set=SKILL_DIR=<FIXPR> --set=PUSH=<yes|no> --set=LANGUAGE=<language of this conversation> --set=PARENT_CHANGES=none
-
-`errors[]` from the renderer → stop and report it. Then spawn it (Agent tool,
-`subagent_type: "general-purpose"`, background):
-
-    Your complete instructions are in the file <prompt path>. Read it in full with the Read tool
+    Your complete instructions are in the file <agentPrompt>. Read it in full with the Read tool
     before doing anything else, then follow it exactly. It is already resolved: every path,
     branch and setting it names is final. You resolve the conflicts of moving branch <branch>
     (pull request #<number>) onto its landed parent <parent>, bring its gate green, push, and end
@@ -160,12 +165,10 @@ Render the conflict agent's brief (one call; never assemble it by hand), for the
 
 Wait for its notification; never predict it. It ends with one JSON object:
 
-- `{"type":"result", …}` → take its worktree down:
-
-      node "<FIXPR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"
-
-  then resume the climb above it - Step 3 with `--start=<the next part of stack>` and
-  `--parent-old-tip=<this part's oldTip>`, nothing else changed. The last part of the stack → Step 5.
+- `{"type":"result", …}` → Step 3 again with `--resume=yes` in place of `--start` and
+  `--parent-old-tip`, nothing else changed: it takes the landed part's worktree down and climbs on
+  above it from where that part stood before (`restack-state.json` in the checks folder). An answer
+  with `resumedAfter` and no `parts` (the stopped part was the top) → Step 5.
 - `{"type":"error", …}` whose report ends in a choice (A/B) → ask the user that question
   (AskUserQuestion, in Polish, the agent's options as the options), then send the answer to the
   same agent (SendMessage, to its id). It resumes from the rerere record of what it already
@@ -181,8 +184,9 @@ Wait for its notification; never predict it. It ends with one JSON object:
 Then one summary, and nothing else:
 - the stack, bottom-first, with its base;
 - one row per part: the pull request, `oldTip` → `commit` (short shas), how it moved (not at all,
-  rebased with no conflict, conflicts merged by the script - `autoResolved` - or by the conflict
-  agent, with its files), the gate verdict, whether it was pushed;
+  rebased with no conflict, off a squash-merged parent - `squashed.commits` left out - conflicts
+  merged by the script - `autoResolved` - or by the conflict agent, with its `resolvedFiles`), the
+  gate verdict (reused when its warning says so), whether it was pushed;
 - every part that did not land, with why, its worktree and what the user can do;
 - `waiting` parts, left where they were;
 - every branch moved on `doh-fixpr/<branch>` because the user had it checked out (a warning of its
@@ -196,6 +200,8 @@ Then stop. Do not offer to merge or to open a pull request.
 | Excuse | Reality |
 |---|---|
 | "One `git rebase --onto` per branch is quicker by hand" | It is what took 25 calls on 2026-11-06, and a hand-made force-push script is what the classifier refused. The script leases every push and gates every move. |
+| "I will render the brief again / copy the conflicting files into it" | The climb rendered it from its own JSON (`agentPrompt`). On 2026-11-10 copying 29 paths by hand cost output tokens and invited a dropped one. |
+| "I will take the worktree down and pass `--start` and the old tip myself" | `--resume=yes` does both from the state file, in one call, with no sha copied. |
 | "The conflict looks small, I will fix it" | The conflict agent resolves it in the worktree, with the gate after it. You never read the file. |
 | "part-3 failed, I will still move part-4 and part-5" | A part moves only onto a landed parent. The parts above a stop wait. |
 | "The user's checkout is on a part, I will switch it" | Never touch the user's checkout. `worktree.cjs` moves that part on `doh-fixpr/<branch>`. |

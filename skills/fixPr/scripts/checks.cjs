@@ -69,7 +69,7 @@ const watchFlags = [
 ];
 
 function parseArgs(argv) {
-  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '', changedSince: '', resultFile: '', slots: null };
+  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '', changedSince: '', resultFile: '', slots: null, cache: 'yes' };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -86,11 +86,13 @@ function parseArgs(argv) {
     else if (m[1] === 'changed-since') args.changedSince = m[2].trim();
     else if (m[1] === 'result-file') args.resultFile = m[2];
     else if (m[1] === 'slots' && /^\d+$/.test(m[2])) args.slots = Number(m[2]);
+    else if (m[1] === 'cache') args.cache = m[2].trim();
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms, --changed-since, --result-file, --slots).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms, --changed-since, --result-file, --slots, --cache).`);
   }
+  if (!['yes', 'no'].includes(args.cache)) throw new Error('--cache takes yes or no.');
   // One command line is one step's command. Without the step named, its log, its
   // label and its verdict would belong to no step at all.
   if (args.command !== null) {
@@ -721,7 +723,70 @@ function writeResultFile(file, result) {
   fs.renameSync(tmp, file);
 }
 
+// A green full gate is a fact about one commit tree, against one base tree: the same tree checked
+// again proves nothing new. On 2026-11-10 a restack conflict agent rebuilt part-2 for 3.5 minutes
+// on a tree byte for byte the one already pushed. The verdict is kept in the repository's common
+// git dir (shared by every worktree), keyed by HEAD's tree, the --changed-since tree (it picks the
+// lint targets) and the gate config's own text. Only a clean worktree is keyed: an uncommitted
+// change is code no tree names. Only `green` is kept - a red verdict is always run again.
+function gitOut(root, args) {
+  const res = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true });
+  return res.status === 0 ? String(res.stdout || '').trim() : null;
+}
+
+function gateCacheKey(root, options) {
+  if ((options.only || []).length > 0 || options.command || Array.isArray(options.changedFiles)) return null;
+  const tree = gitOut(root, ['rev-parse', 'HEAD^{tree}']);
+  const common = gitOut(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!tree || !common) return null;
+  const status = gitOut(root, ['status', '--porcelain']);
+  if (status === null || status !== '') return null;
+  const since = options.changedSince ? gitOut(root, ['rev-parse', `${options.changedSince}^{tree}`]) : '';
+  if (since === null) return null;
+  let config = '';
+  try {
+    // .claude/ is often ignored by git, so the gate config is no part of the tree: its text is.
+    config = fs.readFileSync(path.join(root, configFile), 'utf8');
+  } catch {
+    config = '';
+  }
+  const key = require('node:crypto').createHash('sha1').update(JSON.stringify({ tree, since, config })).digest('hex');
+  return { key, file: path.join(common, 'doh-gate-cache', `${key}.json`) };
+}
+
+function readGateCache(cache) {
+  try {
+    const hit = JSON.parse(fs.readFileSync(cache.file, 'utf8'));
+    return hit && hit.result && hit.result.gate === 'green' ? hit : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeGateCache(cache, result) {
+  try {
+    writeResultFile(cache.file, { savedAt: new Date().toISOString(), result });
+  } catch {
+    // A cache that cannot be written only costs the next run its shortcut.
+  }
+}
+
 function runChecks(options) {
+  const cache = options.cache ? gateCacheKey(path.resolve(options.root), options) : null;
+  const hit = cache ? readGateCache(cache) : null;
+  if (hit) {
+    return {
+      ...hit.result,
+      cached: { key: cache.key, savedAt: hit.savedAt },
+      warnings: [...(hit.result.warnings || []), `The gate was green on this same tree at ${hit.savedAt}; its verdict was reused (--cache=no runs it again).`],
+    };
+  }
+  const result = runChecksUncached(options);
+  if (cache && result.gate === 'green' && result.errors.length === 0) writeGateCache(cache, result);
+  return result;
+}
+
+function runChecksUncached(options) {
   const root = path.resolve(options.root);
   const outDir = path.resolve(options.outDir);
   const only = options.only || [];
@@ -1004,7 +1069,7 @@ function main() {
     // A result file left by the previous pass would read as this pass already done.
     if (args.resultFile) fs.rmSync(args.resultFile, { force: true });
     const envSlots = /^\d+$/.test(process.env.DOH_CHECKS_SLOTS || '') ? Number(process.env.DOH_CHECKS_SLOTS) : null;
-    result = runChecks({ ...args, slots: args.slots !== null ? args.slots : envSlots !== null ? envSlots : 'auto' });
+    result = runChecks({ ...args, cache: args.cache === 'yes', slots: args.slots !== null ? args.slots : envSlots !== null ? envSlots : 'auto' });
   } catch (err) {
     result = {
       root: null, packageManager: null, gate: 'skipped', steps: [],
