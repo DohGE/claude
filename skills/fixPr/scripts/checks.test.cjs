@@ -901,6 +901,41 @@ test('package.json "doh.checks" configures the gate when there is no checks.json
   assert.strictEqual(result.gateSource, 'package.json#doh.checks');
 });
 
+// `.claude/` is gitignored on most projects, so a worktree checked out before the config was
+// written - or by a caller that copies nothing - has no checks.json of its own.
+test('a worktree without a checks.json reads the one of the main checkout', (t) => {
+  const main = fs.realpathSync(tempDir(t, 'fpc-main-'));
+  const git = (...args) => execFileSync('git', ['-C', main, ...args], { encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.local');
+  git('config', 'user.name', 'T');
+  git('config', 'commit.gpgsign', 'false');
+  fs.writeFileSync(path.join(main, '.gitignore'), '.claude/\n');
+  fs.writeFileSync(path.join(main, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'x' } }));
+  git('add', '.');
+  git('commit', '-q', '-m', 'base');
+  const tree = path.join(fs.realpathSync(tempDir(t, 'fpc-trees-')), 'wt');
+  git('worktree', 'add', '-q', '-b', 'feat', tree);
+  t.after(() => { try { git('worktree', 'remove', '--force', tree); } catch { /* the temp dir goes anyway */ } });
+  configure(main, { steps: { test: { command: 'npx jest --ci' }, build: false } });
+
+  const gate = checks.gateConfigOf(tree, {});
+  assert.ok(gate && !gate.error, 'the main checkout\'s config is found');
+  // Compared as the file system spells them: a temp dir may come back in its 8.3 form.
+  const real = (p) => fs.realpathSync.native(p);
+  assert.strictEqual(real(gate.source), real(path.join(main, '.claude', 'doh', 'checks.json')));
+  const run = fakeRunner();
+  const result = checks.runChecks({ root: tree, outDir: outDirFor(t), run, changedFiles: [] });
+  assert.strictEqual(run.calls.length, 1);
+  assert.match(run.calls[0].command, /^npx jest --ci/, 'the gate runs the command of the main checkout');
+  assert.strictEqual(real(result.gateSource), real(path.join(main, '.claude', 'doh', 'checks.json')));
+  // The worktree's own copy still wins, and the main checkout itself is not asked twice.
+  configure(tree, { steps: { test: { command: 'npx vitest run' } } });
+  assert.strictEqual(real(checks.gateConfigOf(tree, {}).source), real(path.join(tree, '.claude', 'doh', 'checks.json')));
+  fs.rmSync(path.join(main, '.claude'), { recursive: true });
+  assert.strictEqual(checks.gateConfigOf(main, {}), null);
+});
+
 // cmd.exe refuses a line past 8,191 characters, and the 66 paths of one pull request reach it.
 test('expandFiles cuts a long file list into command lines under the limit and quotes what needs it', () => {
   const lines = checks.expandFiles('run {files} --flag', ['a.ts', 'b c.ts', 'd.ts', 'e.ts'], 26);

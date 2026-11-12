@@ -8,7 +8,7 @@
       "text": "Allowed injections: the view's signal store (the bridge to its state) or - for data several independent views share - the area facade; a layout facade; `FormBuilder`; `ActivatedRoute`/`Router` (rare); `DestroyRef`; a dialog ref inside dialog components; and - only when aggregating child forms - the shared forms-validity service with its components-reference token."
     }
   ],
-  "itemCount": 46,
+  "itemCount": 45,
   "instructions": [
     {
       "id": "ngrx-facade",
@@ -200,7 +200,7 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "1-2,9,21-22,24-25,27-28",
+      "selectedItems": "1-2,21-22,24-25,27-28",
       "checklistSize": 28,
       "items": [
         {
@@ -221,18 +221,6 @@
           "id": "best-practices#2",
           "text": "Type annotations earn their place: annotate where inference is absent or wrong — an empty literal (`const items: Item[] = []`, `signal<Item[]>([])`), a `null`/`undefined` seed, an object literal assembled field-by-field against a domain interface, and the parameters plus return type of every exported function, service method and util. Never annotate what the call already types (`inject()`, `input(<default>)`, `signal()`/`computed()`/`toSignal()`, `_fb.nonNullable.group(...)`, `createSelector(...)`, `as const`, any variable initialized from a typed call) — a redundant annotation is boilerplate under the code-quality instruction. A view-model object a component or mapper builds for the template with fields of its own (a row extended with a tooltip, a disabled reason, a label) is typed by a named interface in `models/`, never left as an inferred object literal nobody declared.",
           "severity": "low"
-        },
-        {
-          "id": "best-practices#9",
-          "text": "A writable signal is never exposed on a public surface: components, stores and services expose `signal.asReadonly()` or a `computed()`, keeping `.set()`/`.update()` with the owner.",
-          "severity": "low",
-          "probe": [
-            {
-              "pattern": "^[ \\t]*(?:(?:public|readonly|override)\\s+)*(?<at>[A-Za-z_$][\\w$]*)\\s*(?::[^=\\n]+)?=\\s*(?:signal|linkedSignal)\\s*[<(]",
-              "message": "zapisywalny sygnał w polu publicznym",
-              "flags": "m"
-            }
-          ]
         },
         {
           "id": "best-practices#21",

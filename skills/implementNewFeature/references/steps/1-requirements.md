@@ -171,8 +171,10 @@ doing, in this order:
 
      When this revision turned Mockups OFF, append: `The mockups toggle was turned OFF — remove the
      ## UI design section and the verify: visual checklist lines.`
-     **A cold agent is spawned fresh instead.** When the step's last log entry or chat line in
-     `/api/state` is more than 55 minutes old, the agent's prompt cache has expired, and a
+     **A cold agent is spawned fresh instead.** A sub-agent's prompt cache lives five minutes:
+     when the agent's last word is older than that, ask
+     `node "<SKILL_DIR>/scripts/agent-context.cjs" --agent=<its id>` ("Talking to a running
+     agent"). `respawn` true means its cache is gone and its context is large, so a
      SendMessage re-writes its whole context — measured: 440–512k tokens per revision of one
      refinement agent, six revisions in one run. Render the brief again and spawn a fresh
      refinement agent with that paragraph in the spawn prompt, plus: `You start fresh: spec.md,
@@ -186,7 +188,7 @@ doing, in this order:
          Requirements changed. Read <SESSION>/tasks/T/requirements-changes.md, then requirements.md
          and requirements-prev.md, and revise the screens as your brief's Revision mode says.
 
-     Then loop on its JSON from step 3's point 3. A cold mockup agent (the same 55 minutes), or one
+     Then loop on its JSON from step 3's point 3. A cold mockup agent (`agent-context.cjs` says `respawn`), or one
      SendMessage cannot reach, is spawned fresh with that paragraph in the prompt.
    - **Implementation** → step 4 from its point 1.
    - **Anything else** — a step this revision switched ON, mockups with no screens yet, and the

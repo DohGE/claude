@@ -18,7 +18,9 @@
    - `approve` → POST `{"taskId":"T","reviewSummary":null,"step":2,"status":"completed","activeStep":<the next step>}`; continue there.
      With `afterStop`, the agent first restores the plan it showed ("Stopping a step", point 3).
    - `feedback` → SendMessage the feedback to the agent; back to 3. The gate is off the screen
-     already, and the agent's next result puts the revised plan up in its place. A feedback that
-     comes more than 55 minutes after the agent's last result goes to a fresh agent instead, as
-     "Revising step 1" point 5 says for a cold one — with the feedback in place of the revision
-     paragraph.
+     already, and the agent's next result puts the revised plan up in its place. A feedback — or
+     an answer to a question — that comes more than five minutes after the agent's last word may
+     meet a cold agent: ask `agent-context.cjs --agent=<its id> --state-file="<SESSION>/tasks/T/state/step-2.md"`
+     ("Talking to a running agent"). `respawn` true → a fresh agent instead, as "Revising step 1"
+     point 5 says for a cold one — with the feedback (or the question and its answer) in place of
+     the revision paragraph, and the state file's path.

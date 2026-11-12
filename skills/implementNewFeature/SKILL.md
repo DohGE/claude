@@ -1,6 +1,6 @@
 ---
 name: implementNewFeature
-description: Use when the user wants a complete feature implemented end-to-end - runs a pipeline (Requirements, Implementation, Code Review, Validation & E2E, Final Code Review) with optional Feature Refinement, Mockups and Story Description steps and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, the requirements form stays editable until implementation starts (its settings - every sub-agent's model and effort, both reviews, the commit message - until the task finishes), and a finished task can be committed, pushed and opened as a pull request from the summary screen; a run whose sessions were closed is resumed in one command (`--resume`, or offered on a plain start), every unfinished task in a session of its own; the orchestrator coordinates sub-agents and keeps the main context clean
+description: Use when the user wants a complete feature implemented end-to-end - runs a pipeline (Requirements, Implementation, Code Review, Validation & E2E, Final Code Review) with optional Feature Refinement, Mockups and Story Description steps and an on-demand Mockoon mocks step, with a browser stepper UI; several features can run in parallel as tasks on their own branches and git worktrees, the requirements form stays editable until implementation starts (its settings - every sub-agent's model and effort, both reviews, the commit message - until the task finishes), a step that fails can be retried, skipped or the task finished there, and a finished task can be committed, pushed and opened as a pull request from the summary screen (a task split into parts as one pull request per part, each proven green on its own); a run whose sessions were closed is resumed in one command (`--resume`, or offered on a plain start), every unfinished task in a session of its own; the orchestrator coordinates sub-agents and keeps the main context clean
 argument-hint: "[--resume [<stamp>]] | [--attach <taskId> --port <n>]"
 hooks:
   PreToolUse:
@@ -51,6 +51,8 @@ Only fluff dies.
   The same term for the same thing every time.
 - Tool calls: fire directly.
   No preamble, plan or progress note before or between calls.
+- Read and search files with Read, Grep and Glob, never with `cat`, `sed`, `head`, `grep`, `find` or `ls` in a shell: a shell call costs seconds before it runs.
+  Send independent calls in one message, and shell commands that belong together in one call.
 - No decorative tables or emoji.
   No raw log dumps: quote the shortest decisive line.
 - Questions to the user: terse but complete - answerable without guessing.
@@ -93,10 +95,12 @@ Without that tool, re-read the file or re-run the command with narrower output.
   `{"taskId":"T","step":N,"currentOperation":"Waiting for you","reopenGate":true}`: the panel
   stops claiming work, and a plan, story or mockup gate the user's feedback took off the screen
   comes back, since no revised one is coming (see "A send takes its gate off the screen").
-- Spawn sub-agents with the Agent tool (`subagent_type: "general-purpose"`) in the BACKGROUND, on the model and effort step 1 asked for (see "Model and effort"); continue an existing one with SendMessage (its context is preserved) — unless it went cold ("Talking to a running agent").
+- Spawn sub-agents with the Agent tool in the BACKGROUND, on the model and effort step 1 asked for (see "Model and effort") — `subagent_type: "general-purpose"`, or `"doh:pipeline-worker"` where a step file names it and your Agent tool lists it; continue an existing one with SendMessage (its context is preserved) — unless it went cold ("Talking to a running agent").
 - The pipeline NEVER commits in the target project, with one exception: the summary screen's "Create pull request", which the user presses (`references/steps/final-summary.md`, always through `finish-pr.cjs`), and the part commits of a split task (`references/steps/4-implementation.md`, "Split task"). Each task works on its own branch; stage its changes at the very end.
 - Nothing the pipeline writes carries a tool's attribution: no "Generated with Claude Code" line, no `Co-Authored-By` trailer, no robot emoji footer — not in a commit, a pull request description or a comment.
 - Update the stepper before and after every phase so the browser always reflects reality.
+- Say little in the terminal, and never type out what a script can post ("What you say, and what
+  runs without you").
 
 ## The run is an event loop, not a walk
 
@@ -108,7 +112,7 @@ own, in parallel with the others (see "Validation runs in parallel"). You orches
 
 Hold this for T, and nothing more:
 
-    { id, branch, root, base, step, agentIds{refinement, mockup, story, impl, review, validation, finalReview, mockoon},
+    { id, branch, root, base, step, agentIds{refinement, mockup, story, impl, review, validation (the prepare or verify agent running), authors{<spec file>}, finalReview, regressionFix, mockoon},
       refinement, mockups, story, final, revisionCount, mockupRounds, agents, notes }
 
 Then loop until the user shuts the server down:
@@ -137,7 +141,8 @@ Then loop until the user shuts the server down:
      `<SESSION>/tasks/T/pr-request.json` exists, the user pressed "Create pull request" and the
      server went down before you ran it: run that flow first (`references/steps/final-summary.md`),
      printing what it reports instead of posting it.
-3. A sub-agent completion notification arrives → advance T's state machine, then back to 1.
+3. A sub-agent completion notification arrives → advance T's state machine, then back to 1. So
+   does the exit of a background script a step had you start: act on its lines as its file says.
 4. `{"kind":"summary","decision":"shutdown"}` → the server is going down: remove T's worktree when
    its pull request is open (`references/steps/final-summary.md`, point 8), then stop looping and
    end your turn. `{"kind":"summary","decision":"create_pr"}` → the pull request flow
@@ -155,7 +160,7 @@ request", "Generate Mockoon mocks") or the sidebar's "Shut down server".
 Each kind carries its own fields, and they are what you read — never guess a name: `answer` has
 `questionId` and `value` (the answer TEXT is `value`, not `text`); `decision` and `mockup` have
 `decision` plus a `text` on `feedback` (and a mockup `approve` sent while the agent reworked the
-round carries `duringRework: true`); `message` has `step` and `text`; `stop` has `step`;
+round carries `duringRework: true`; a `skip` carries `next`); `message` has `step` and `text`; `stop` has `step`;
 `delete` has `step`, the line's `id` and its `text`; `summary` has `decision`; `step1` carries the form as the server normalised it — `refinement`,
 `generateMockups`, `darkMockups`, `storyDescription` and `finalReview` are booleans, `codeReview` and
 `finalCodeReview` are lists of one to three runs, each `{"flags":[…]}`, `commitMessage` is text,
@@ -168,13 +173,6 @@ is at least one, and then the text may be empty (see "Talking to a running agent
 `afterStop: true` (see "Stopping a step"). Every
 one also carries `taskId`, always T's. Reading the wrong name yields `undefined`,
 and the run then forwards an empty answer to the agent instead of stopping.
-Two server caps bound what a form can carry: a request body over 25 MB is answered with
-`413 body over 25 MB`, which the page shows as a rejected send, and any single text field over its cap is stored
-cut, with a visible `[…ucięte…]` marker naming the cap it hit — 200 KB for a form field or a
-report, 8 KB for one line of a step's transcript, which is a message a human reads and
-not a document to paste. A pasted OpenAPI contract can reach that: when you see the
-marker in `requirements.md`, say so to the user instead of passing the half document on.
-
 POST `/api/state` takes only the fields listed in its contract, and a body carrying any other name
 is answered `400 unknown field(s) <name> - expected one of …` with NOTHING applied. Read that as a
 typo in the body you just sent, never as a broken server: a mistyped field used to come back 200
@@ -197,21 +195,13 @@ Each gate takes one answer, so what the user thinks of next is a `message` from 
 composer: SendMessage each to that step's agent as it arrives, in order, and never drop one. An
 `answer` or a `feedback` that still arrives for a gate already answered (a page that had not caught
 up) is the same kind of afterthought — pass it on, and never read it as a gate decision. Gate
-decisions (`approve`, `retry`, `finish`, `mockoon`, `shutdown`) arrive at most once per gate.
+decisions (`approve`, `retry`, `skip`, `finish`, `mockoon`, `shutdown`) arrive at most once per gate.
 
 **"Wait for T's `kind==X`" below never means blocking.** It means: stay in this loop with the waiter
 armed, keep serving whatever else arrives for T, and resume T's step when its `X` shows up.
 
 Other tasks run in sessions of their own, so several sit in steps 2-4, 6 and 8 at once, and one
 that fails stops none of the others.
-
-**Validation runs in parallel.** No task waits for another to finish step 5 or step 9: each one
-starts its own dev server on a free port of its own (`task-processes.cjs start`, which records the
-port before the process exists, so the cleanup always finds it), keeps its E2E suite and results in
-its own session folder, and drives its own tab in the user's Chrome. Nothing is requested from the
-server first. What they still share is the machine's memory, so every unit run goes through
-`checks.cjs`, whose Jest workers recycle themselves, and the full unit suite runs once per task
-(step 9, or step 5 when the final review is off).
 
 ## Spawning a sub-agent
 
@@ -221,14 +211,18 @@ that reads it. You never build the prompt yourself.
 The one call that does point 1 for any step, every placeholder filled from the server's own record
 of T — the models and effort directives of "Model and effort" included:
 
-    node "<SKILL_DIR>/scripts/task-info.cjs" --port=PORT --task=T --step=N --render --language=<LANGUAGE>
+    node "<SKILL_DIR>/scripts/task-info.cjs" --port=PORT --task=T --step=N --render [--phase=<phase> [--spec=<file>]] [--language=<LANGUAGE>]
 
-→ one JSON line: `out` (the brief), `model` (the Agent tool's `model`; `""` = leave it out),
-`errors` (not empty → do NOT spawn; fall back to point 1 below with the missing `--set`). Without
-`--render` it prints what a retry or a spawn needs to know: every agent's resolved model, effort and
-directive, the walker flags, and with `--step=N` the user's lines of that step's chat since its
-last failure (`step.userAfterFailure`). Render again for every spawn, a retry's included: a brief
-from an earlier attempt carries the settings of that attempt.
+→ one JSON line: `out` (the brief), `model` and `effort` (the Agent tool's parameters; `""` = leave
+that one out), `errors` (not empty → do NOT spawn; fall back to point 1 below with the missing
+`--set`), `skipped` (the steps the user went on without) and `split` (a split task's parts and its
+`commands`; the step files say when each runs). `--phase` picks the brief of a step that is more
+than one agent — step 5: `prepare`, `author` (with `--spec`), `verify`; step 9: `regression-fix` —
+and `--language` may be left out once the run has one (Setup, point 5). Without `--render` it
+prints what a retry or a spawn needs to know: every agent's resolved model, effort and directive,
+the walker flags, `skipped`, `split`, and with `--step=N` the user's lines of that step's chat
+since its last failure (`step.userAfterFailure`). Render again for every spawn, a retry's
+included: a brief from an earlier attempt carries the settings of that attempt.
 
 1. **Render by hand** (Bash tool), with every placeholder from the table below:
 
@@ -237,17 +231,17 @@ from an earlier attempt carries the settings of that attempt.
    Some briefs take values of their own on top, each written as `--set=NAME=value` (quote the whole
    argument when the value has spaces):
    - the review agent (steps 6 and 9): `--set=STEP=`, `--set=STEP_NAME=`, `--set=REVIEW_SECTION=`,
-     `--set=DEFAULT_RUNS=`, `--set=REPORT_FILE=`, `--set=WALKER_FLAGS=`, `--set=FIXER_MODEL=` and
-     `--set=FIXER_EFFORT=` — the step files list each value;
-   - the validation agent: `--set=RUNNER_MODEL=`, `--set=RUNNER_EFFORT=`, `--set=COMPLIANCE_MODEL=`
-     and `--set=COMPLIANCE_EFFORT=`;
+     `--set=DEFAULT_RUNS=`, `--set=REPORT_FILE=`, `--set=WALKER_FLAGS=`, `--set=FIXER_MODEL=`,
+     `--set=FIXER_EFFORT=`, `--set=FIXER_EFFORT_LEVEL=` and `--set=BASE=` — the step files list each;
+   - the validation and regression-fix agents: `--set=BASE=`, a spec author `--set=SPEC_FILE=` too;
    - the implementation agent: `--set=BASE=` (the branch step 4 started from).
    `<SESSION>` here is the task's own `{{SESSION}}` — the brief lands beside the artifacts of the
    task it belongs to, and the next round of the same agent replaces it. `EFFORT` is often empty:
    pass `--set=EFFORT=` and the paragraph disappears. `errors[]` non-empty → do NOT spawn: the
    message names the placeholder nobody filled, and the fix is the missing `--set`.
 
-2. **Spawn** with the Agent tool, `model` from `agents(T)` (omit it when empty), prompt:
+2. **Spawn** with the Agent tool, `model` and `effort` as rendered (omit an empty one, and
+   `effort` when your Agent tool has no such parameter), prompt:
 
        Your complete instructions are in the file <out>. Read it in full with the Read tool
        before doing anything else, then follow it exactly. It is already resolved: every path,
@@ -255,8 +249,9 @@ from an earlier attempt carries the settings of that attempt.
        end with the single JSON object it specifies.
 
    Whatever THIS spawn has to add — the failure report of a previous attempt, what the user wrote
-   to that step's transcript while it had no agent, a revision paragraph — goes in that prompt,
-   under its own heading, after the pointer. It never goes into the rendered file.
+   to that step's transcript while it had no agent, a revision paragraph, the state file of an
+   agent it takes over from — goes in that prompt, under its own heading, after the pointer. It
+   never goes into the rendered file.
 
 **Never paste an agent file into a prompt yourself.** Reading it in and writing it back out costs
 that file twice per spawn, six times per pipeline and again on every retry — tens of thousands of
@@ -272,7 +267,7 @@ that still holds a placeholder; a hand-made one hands `{{ROOT}}` to the agent as
 | `{{ROOT}}` | the task's working directory. Before step 4 it is `PROJECT`, which agents only read; step 4 fixes it to the task's own worktree — every task gets one, the only task of a run too |
 | `{{PORT}}`, `{{PROJECT}}`, `{{SKILL_DIR}}` | the values from Setup (points 3 and 1) |
 | `{{EFFORT}}` | the thinking directive for THIS step, from the table in "Model and effort" — often the empty string, which makes the paragraph disappear |
-| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation` — the conversation with the user only. Everything an agent CREATES is in English whatever it is: files and their names, `story.md`, specs, plans, mockups (screen copy, view and state names, file names, so the screenshots too), code, comments and tests; every agent brief says so. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on |
+| `{{LANGUAGE}}` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved. It decides every user-facing string an agent writes: questions, reports, summaries, `currentOperation` — the conversation with the user only. Everything an agent CREATES is in English whatever it is: files and their names, `story.md`, specs, plans, mockups (screen copy, view and state names, file names, so the screenshots too), code, comments and tests; every agent brief says so. Substitute it like any other placeholder; an agent that receives it unresolved has nothing to fall back on. It is recorded once for the run (Setup, point 5) and comes back from `/api/orchestrator` as `language`: a session that resumes or attaches has no conversation to read it from, and one that guessed wrote English to a user whose briefs were rendered in Polish — YOUR messages to the user are in it too |
 
 ## Model and effort
 
@@ -281,20 +276,22 @@ to think. Keep it as `agents(T)` and read it at every spawn.
 
     { model, effort,
       steps: { "2": {model, effort}, "3": …, "4": …, "5": …, "6": …, "7": …, "8": …, "9": … },
-      roles: { reviewWalker, reviewFixer, validationRunner, validationCompliance, finalWalker, finalFixer } }
+      roles: { reviewWalker, reviewFixer, validationAuthor, finalWalker, finalFixer } }
 
 Every field is `""` when the user left it on Inherit. No agent of the run has a model of its own:
 each one is an entry here, and an empty one falls back — a step's agent to the task-wide pair, a
 role to its step, then to the task-wide pair:
 
 - a step's agent: `model = agents.steps[N].model || agents.model`, same for `effort`;
-- a role, the helpers a step's agent spawns: `reviewWalker` and `reviewFixer` belong to step 6,
-  `finalWalker` and `finalFixer` to step 9, `validationRunner` and `validationCompliance` to step 5 —
+- a role: `reviewWalker` and `reviewFixer` belong to step 6, `finalWalker` and `finalFixer` to
+  step 9, `validationAuthor` to step 5 —
   `model = agents.roles[R].model || agents.steps[<its step>].model || agents.model`, same for
-  `effort`. The walkers are the window walkers `doh:codeReview` dispatches, the fixers the
-  parallel fix agents a review may hand files to, the runner and the compliance check the
-  validation agent's helpers. You never spawn them yourself: their values go into the brief of the
-  agent that does.
+  `effort`. The walkers are the window walkers `doh:codeReview` dispatches and the fixers the
+  parallel fix agents a review may hand files to: you never spawn those yourself, their values go
+  into the brief of the agent that does. Two roles ARE yours to spawn, and `task-info.cjs --render`
+  hands you their `model` and `effort` with the brief: `validationAuthor`, the one agent per spec
+  file of step 5's E2E suite (`--phase=author`), and `finalFixer`, the agent that repairs a red
+  final regression (`--step=9 --phase=regression-fix`).
 
 Step 1 has no entry: the form is step 1.
 
@@ -305,10 +302,14 @@ Step 1 has no entry: the form is step 1.
   and not "choose a cheap one".
   A role's model reaches its agent's brief as text: `--set=FIXER_MODEL=<value or empty>`, and for
   the walkers as part of `WALKER_FLAGS`.
-- **Effort has no parameter.** The Agent tool cannot set a sub-agent's reasoning effort — only an
-  agent definition file can, and this pipeline spawns general-purpose agents. So effort is
-  delivered as a directive inside the agent's own prompt — `{{EFFORT}}` for a step's agent, the
-  `*_EFFORT` placeholders for a role:
+- **Effort** goes two ways at once, because not every harness has the first:
+  - the Agent tool's `effort` parameter, when your Agent tool has one: pass the task's value as
+    is (`low`, `medium`, `high`, `max`), and omit the parameter when the value is empty. That is
+    the real setting. Without it `low` did nothing at all — its directive below is the empty
+    string — and on one run about two thirds of both agents' output tokens were thinking the user
+    had asked them to skip.
+  - a directive inside the agent's own prompt — `{{EFFORT}}` for a step's agent, the `*_EFFORT`
+    placeholders for a role — which is all a harness without the parameter has:
 
   | `effort` | the directive |
   |---|---|
@@ -318,10 +319,9 @@ Step 1 has no entry: the form is step 1.
   | `max` | `Effort: max — ultrathink: work every non-trivial decision through alternatives before you commit to one, and re-read your own output against the requirements before you report it.` |
 
   `think`, `think hard` and `ultrathink` are FIXED IDENTIFIERS — English verbatim, whatever
-  `{{LANGUAGE}}` is. The keyword is what raises the thinking budget; translated, it is just a word
-  in a sentence and the agent runs at the default effort while the UI says otherwise. Say so
-  plainly if the user asks: this is a prompt-level approximation of an effort setting, not a knob
-  the harness exposes.
+  `{{LANGUAGE}}` is. The keyword is what raises the thinking budget where the parameter is
+  missing; translated, it is just a word in a sentence. A role's bare level reaches the brief of
+  the agent that spawns it as `*_EFFORT_LEVEL`, for that agent's own Agent call.
 - **Walker flags.** `WALKER_FLAGS` is what the review agent adds to every `doh:codeReview` run for
   its window walkers: `--walker-model=<model>` when the walker role resolves to a model and
   `--walker-effort=<effort>` when it resolves to an effort, separated by a space — the empty
@@ -342,13 +342,28 @@ the pipeline moved, so do NOT touch `status`, `progress` or `activeStep` for it.
 - **That step's agent is alive** → SendMessage the text to it verbatim, then go back to polling.
   Do not post the line back as `chat`: the server recorded it the moment the browser sent it, and
   a copy would show it twice.
-- **A cold agent.** An agent idle for more than 55 minutes — the step's last `log` entry or `chat`
-  line in `/api/state` is older than that — has lost its prompt cache, and a SendMessage re-writes
-  its whole context: 440–512k tokens per message to one refinement agent, measured. For a
-  revision, a plan or mockup feedback, render the brief again and spawn a fresh agent with what
-  you would have sent in its prompt and its step's files as its memory (the step files say how).
-  An answer to a question the agent is waiting on still goes by SendMessage: only that agent holds
-  what the question was about.
+- **A cold agent.** A sub-agent's prompt cache lives FIVE minutes (yours an hour): an agent that
+  sat idle longer — at a question, at a gate, between two rounds of feedback — has lost it, and a
+  SendMessage re-writes its whole context, which every later turn of it then re-reads. Measured: an
+  answer that came 31 minutes after a validation agent's question rewrote 382k tokens, and the 50
+  turns after it read about 410k each — 2.7M input-equivalent tokens for work a fresh agent does
+  from a state file for 0.8M; a refinement agent cost 440–512k per message. A small context is the
+  other way round: resuming it is cheaper than a new agent that reads its brief and files again.
+  So before you forward ANYTHING to an agent whose last word is more than five minutes old — an
+  answer, a feedback, a revision, a message — ask:
+
+      node "<SKILL_DIR>/scripts/agent-context.cjs" --agent=<its id> [--state-file="<SESSION>/tasks/T/state/step-<N>.md"]
+
+  → one JSON line; act on `respawn`. `false` (warm, small, or it left no state file) →
+  SendMessage, as for a live agent. `true` → render the brief again and spawn a FRESH agent for
+  the step, its prompt carrying what you would have sent, under its own heading, and what the old
+  one knew: the state file when the step's agents write one (`state/step-2.md`,
+  `state/step-5-prepare.md`, `state/step-5-verify.md` — each written before every question, and it
+  holds the question; the heading is `## You take over from an agent that asked the user a
+  question`, with the file's path, the question and the answer), else the step's own files as its
+  memory (the step files say how — a mockup agent's rounds and chat history, a plan under
+  revision). Leave `--state-file` out for those. Keep the old agent's id only until the fresh one
+  is spawned.
 - **The step failed** → its agent is gone. Remember nothing: the server already put the line in
   that step's `chat` with a `time`, and your own memory of a long run is summarised away long
   before the user gets round to clicking retry. POST
@@ -427,14 +442,50 @@ the panel only notes that the agent was stopped. It reaches you as
 5. To abandon a stopped step, the user tells its agent to give up: it ends with its error JSON,
    and the failure protocol takes it from there.
 
+## Validation runs in parallel
+
+No task waits for another to finish step 5 or step 9: each one starts its own dev server on a
+free port of its own (`task-processes.cjs start`, which records the port before the process
+exists, so the cleanup always finds it), keeps its E2E suite and results in its own session
+folder, and drives its own tab in the user's Chrome. Nothing is requested from the server first.
+What they still share is the machine's memory, so every unit run goes through `checks.cjs`, whose
+Jest workers recycle themselves, and the full unit suite runs once per task (the regression after
+step 9, or step 5 when the final review is off).
+
+## What you say, and what runs without you
+
+- **The terminal.** What you say there is short and in the run's language (`{{LANGUAGE}}`): one
+  to three lines per event — what happened, what the user must do, where to look. The panel holds
+  every report, question and summary in full; repeating them in the terminal spends output
+  tokens, the dearest kind, on text the user already has. After a `WAIT_TIMEOUT` or a `WAITER_*`
+  line say nothing at all.
+- **Reports and the summary come from files.** Every agent writes its final JSON object to
+  `<SESSION>/tasks/T/results/step-<N>.json` before it ends with it. A failure report and the
+  final summary are posted FROM those files (`post-result.cjs fail`, `post-result.cjs summary`):
+  never type one out again yourself — it is the same text in and then out again, the out at five
+  times the price, and after a resumed session you do not have it at all.
+- **A long command that needs no judgement while it runs is a script, never an agent's work**:
+  the final regression (`regression.cjs`), a split task's part gate (`verify-parts.cjs`) and its
+  pull-request flow (`finish-split-pr.cjs`). Start it with Bash `run_in_background: true` and end
+  your turn with the waiter armed. An agent waiting for a suite re-reads its whole conversation
+  every few minutes; a background command costs nothing until its exit wakes you. Its lines are
+  a dozen at most, each a FIXED IDENTIFIER: read them, act as the step's file says, and spawn an
+  agent only for a red one, with the path it names.
+- **A split task's commands** are `split.commands` of `task-info.cjs`, spelled out with T's own
+  paths: `stageAll` before the review agent of step 6 or 9 is spawned, `fixups` as each of steps
+  6, 5 and 9 ends, `partGate` before a part is committed in step 4, `verifyParts` once the last
+  step's fix-ups are in. Run them as given. They used to live in step 4's file alone, and a
+  session that resumed a run at step 9 never read it.
+
 ## Server helpers (use exactly these shapes)
 
 - Update state:
   `curl -s -X POST http://127.0.0.1:PORT/api/state -H "content-type: application/json" -d "<json>"`
   Every body MUST carry `"taskId":"<id>"`; without it the server answers 400. Fields:
-  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","base":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"mockupArtifact":"<url>","chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...},"pr":{"status":"created|exists|failed","url":"...","urls":[...],"commit":"...","reason":"..."}}`
+  `{"taskId":"t1","step":N,"status":"waiting|in_progress|completed|failed|skipped","enabled":true|false,"progress":0-100,"currentOperation":"...","report":"...","logEntry":"...","activeStep":N,"branch":"...","root":"...","base":"...","question":{...}|null,"reviewSummary":{...}|null,"mockupReview":{...}|null,"reopenGate":true,"mockupArtifact":"<url>","chat":{"role":"agent|user","text":"..."},"mockupChat":{"role":"agent|user","text":"..."},"summary":{...},"pr":{"status":"created|exists|failed","url":"...","urls":[...],"commit":"...","reason":"..."},"language":"<LANGUAGE>"}`
   `pr` is the outcome of the "Create pull request" flow (`final-summary.md`); the summary screen
-  shows it in place of the button.
+  shows it in place of the button. `language` is the run's, set once in Setup. `skipped` is a
+  status the SERVER sets when the user skips a failed step: never post it yourself.
   Several bodies in ONE tool call — a step completed and the next one started, say — go through
   `node "<SKILL_DIR>/scripts/post-state.cjs" --port PORT '<json>' '<json>'`, in order, stopping at the
   first refusal (it prints `OK` or `ERROR <status> <message>` per body). Every curl is a turn that
@@ -471,6 +522,12 @@ the panel only notes that the agent was stopped. It reaches you as
   not at all, which is exactly why every sub-agent's `{{PORT}}` stays valid across a restart and
   the user's open tab keeps working. A launcher that fails here has something else on 9999: say
   so and stop, rather than moving the run to a port the agents already spawned know nothing about.
+- **Caps.** A request body over 25 MB is answered with `413 body over 25 MB`, which the page shows
+  as a rejected send, and any single text field over its cap is stored cut, with a visible
+  `[…ucięte…]` marker naming the cap it hit — 200 KB for a form field or a report, 8 KB for one line
+  of a step's transcript, which is a message a human reads and not a document to paste. A pasted
+  OpenAPI contract can reach that: when you see the marker in `requirements.md`, say so to the user
+  instead of passing the half document on.
 - **Encoding (MANDATORY, also for every sub-agent):** bodies contain non-ASCII text (e.g. Polish).
   Always run curl from a POSIX shell (Bash tool) where inline UTF-8 JSON is safe.
   Never pass non-ASCII JSON inline through PowerShell. The body does not arrive mangled - it does
@@ -506,10 +563,20 @@ never pays for the mockup protocol.
 
 ## Failure protocol (any step, any task)
 
-1. POST `{"taskId":"T","step":N,"status":"failed","report":"<report>","question":null,"logEntry":"Step failed"}` — clearing
-   the question matters: a step that failed while waiting for an answer would otherwise re-show that
-   stale question the moment a retry flips the status back to in_progress. The `Step failed` entry
-   is what `task-info.cjs` counts the user's later lines from.
+1. Post the failure with ONE call — the report is the agent's own, read from the result file it
+   wrote, never typed out again by you:
+
+       node "<SKILL_DIR>/scripts/post-result.cjs" fail --port=PORT --task=T --step=N
+
+   → `FAILURE_POSTED`. Add `--report="<one or two sentences>"` only when there is no such file —
+   the agent ended without a JSON, or the failure is a script's line and not an agent's (then the
+   line itself is the report). It POSTs
+   `{"taskId":"T","step":N,"status":"failed","report":"<report>","question":null,"logEntry":"Step failed"}`
+   — clearing the question matters: a step that failed while waiting for an answer would otherwise
+   re-show that stale question the moment a retry flips the status back to in_progress. The
+   `Step failed` entry is what `task-info.cjs` counts the user's later lines from.
+   Then tell the user in ONE line what failed and that the panel offers Retry, Skip and Finish:
+   the report is on screen, never repeat it in the terminal.
 2. Wait for T's `kind=="decision"`:
    - `retry` → the server has already put the step back `in_progress` and cleared its `report`
      (post neither); re-spawn that step's agent **fresh**: render its brief again
@@ -519,11 +586,27 @@ never pays for the mockup protocol.
      `step.userAfterFailure`), under `## What the user added after the failure`. Read them back
      from the server rather than from memory: on a long run yours has been summarised since. The
      re-spawn reads `agents(T)` again, so a model changed since the failure takes effect here.
-   - `finish` → write that task's final summary (`final-summary.md`) with
-     `finalStatus:"Failed at <step name>"` — the NAME (`Implementation`, `Validation & E2E`), never
-     the id. The stepper numbers the tiles it shows, in pipeline order, so with only refinement on
-     step 4 is the tile labelled 3 and with a story it is not even the next id: an id quoted at the
-     user points them at the wrong tile. Names never drift. `auth.json` stays: the work of a failed
+     Step 5 retries through `validation-next.cjs`: it goes on at the phase that failed.
+   - `skip` → the user goes on without this step. The server has already marked it `skipped` — it
+     keeps its report on screen — and the answer's `next` is the step the pipeline continues at
+     (`null` → the final summary). Post no status for the skipped step. First run what the step
+     owes whenever it ends, exactly as its file says under "when the step ends": stop what it left
+     running (`task-processes.cjs cleanup`), and for a split task its fix-ups call
+     (`split.commands.fixups` — after a review's `stageAll` only that call puts HEAD back on the
+     last part). No checkpoint: nothing was proven. Then start step `next` as its file says, as if
+     this one had completed. Every spawn from here on adds, under `## Steps the user skipped`,
+     the names `task-info.cjs` gives as `skipped` and `What they left is unfinished and
+     unapproved: read it as a draft, never as a decision.` (a FIXED IDENTIFIER, English
+     verbatim) — unapproved mockups are no baseline, a half-written plan is no plan.
+     The server refuses a `skip` it cannot
+     honour (Mockoon; the implementation of a split task), so one never reaches you.
+     What skipping costs is said once, in the final summary, which works the status out itself:
+     `Completed with skipped steps: <names>`.
+   - `finish` → that task's final summary (`final-summary.md`): its `finalStatus` comes out as
+     `Failed at <step name>` — the NAME (`Implementation`, `Validation & E2E`), never the id. The
+     stepper numbers the tiles it shows, in pipeline order, so with only refinement on step 4 is
+     the tile labelled 3 and with a story it is not even the next id: an id quoted at the user
+     points them at the wrong tile. Names never drift. `auth.json` stays: the work of a failed
      task can still get its pull request and a later review or retry may still need to log in; the
      server deletes it at shutdown.
 3. A failed task does not end the run: the other tasks go on in their own sessions.
@@ -592,8 +675,13 @@ never pays for the mockup protocol.
      (`node "<SKILL_DIR>/scripts/statusline-relay.cjs" <their command>`), the sidebar says so and
      names the script. Never edit the user's settings for it yourself, and never open their
      credentials to fill it in.
-5. A run starts with one task, `t1`, and this session is its orchestrator: `T = t1`. POST
-   `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1}` and enter the event loop.
+5. A run starts with one task, `t1`, and this session is its orchestrator: `T = t1`. When
+   `SendMessage` and `TaskStop` are deferred tools, load both NOW, in ONE call — `ToolSearch` with
+   `select:SendMessage,TaskStop`: loaded in the middle of a run, a tool re-wrote 62k tokens of this
+   conversation's cache; here it costs next to nothing. Then POST
+   `{"taskId":"t1","step":1,"status":"in_progress","activeStep":1,"language":"<LANGUAGE>"}` — the
+   language is the run's from here on, for every session that resumes or attaches — and enter the
+   event loop.
 
 ## Resume
 
@@ -608,7 +696,8 @@ A run whose sessions were closed — terminals shut, the machine restarted — k
    `{stamp, sessionDir, port, restarted, self, launched: [{taskId, launched, command, cwd, error?}], running: [{taskId, status}]}`.
 2. `error` → show it and stop your turn; `port 9999 is already in use` is another run's stepper,
    closed from its "Shut down server" button (Setup point 4).
-3. Tell the user, in one short message: the stepper is at `http://127.0.0.1:<port>/`; each
+3. Tell the user, in one short message, in the run's language (`language` of
+   `/api/orchestrator`, point 1 of "Attach"): the stepper is at `http://127.0.0.1:<port>/`; each
    `launched` task with `launched: false` comes with its `command` to run in a terminal opened in
    its `cwd`; `running` tasks already have a session and are left alone.
 4. `self` null → every task has a session: stop. Otherwise go on at "Attach" with `T` = `self`
@@ -625,8 +714,12 @@ agents. Do this instead of Setup:
 
 1. `T` = the task id, `PORT` = the port, `SKILL_DIR` as in Setup point 1. Read
    `curl -s "http://127.0.0.1:PORT/api/orchestrator?taskId=T"`: `SESSION` = its `sessionDir`,
-   `PROJECT` = its `projectDir`. The server and `models.json` are the run's: start or write
-   neither. No reply means the run is over — say so and stop.
+   `PROJECT` = its `projectDir`, `LANGUAGE` = its `language` when it is not empty — the language
+   the run was started in is the one you speak and render in, whatever this session's prompt was
+   written in (empty: a run from an older version — take the language of the task's transcripts,
+   and POST it as `language`). The server and `models.json` are the run's: start or write
+   neither. No reply means the run is over — say so and stop. Load `SendMessage` and `TaskStop`
+   now, in one `ToolSearch` call, when they are deferred (Setup, point 5).
 2. Take T over and drain what already waits for it, in the foreground:
    `node "<SKILL_DIR>/scripts/wait-answer.cjs" --port PORT --task T --minutes 0`.
    `ORCHESTRATOR_RUNNING <session>` → another session still runs T: tell the user and stop.
@@ -640,9 +733,18 @@ agents. Do this instead of Setup:
    - step 5 `waiting` while T's `activeStep` is 5 (a run from a version that queued validation) →
      step 5 from point 1.
    - a step `failed` → "Failure protocol" from point 2.
+   - a question on screen whose id starts with `backend`, `chrome` or `login` → it asks about the
+     machine as it was when an agent of the old session asked it, and that agent is gone (a run
+     resumed with its server down has had these dropped already). Clear it — POST
+     `{"taskId":"T","step":N,"question":null,"logEntry":"Question dropped: the agent that asked it ended with its session"}`
+     — drop a drained `answer` to it, and go on at the next line: the fresh agent checks again
+     and asks again if it still has to. A question about the FEATURE stays up: its answer goes to
+     a fresh agent, with the step's state file (`state/step-<N>.md`) when the old one left one.
    - a step after 1 `in_progress` with no question or gate on screen → its agent ended with the
      session that ran it: POST `{"taskId":"T","step":N,"currentOperation":"Resuming in a new session"}`
      and re-spawn it **fresh**, as a `retry` does, with "the session orchestrating T ended" in
-     place of the failure report.
+     place of the failure report. Step 5 asks `validation-next.cjs` first
+     (`references/steps/5-validation.md`, point 2) and goes on at the phase its files say; step 9
+     whose review left `results/step-9.json` goes on at the regression (its file, point 3).
    Act on every other drained `ANSWER` as usual. Whatever would go to an agent of the old session
    goes to a fresh one, as "Stopping a step" point 4 says. Then enter the event loop.

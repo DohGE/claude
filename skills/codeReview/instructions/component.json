@@ -5,7 +5,7 @@
   "notes": [
     "Inline `styles` are walked as CSS (component-styles gate), so component-styles and the style-related accessibility items apply to this TS file too."
   ],
-  "itemCount": 107,
+  "itemCount": 106,
   "instructions": [
     {
       "id": "component",
@@ -369,7 +369,7 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "3-4,9-10,12,15,21,23-28",
+      "selectedItems": "3-4,10,12,15,21,23-28",
       "checklistSize": 28,
       "items": [
         {
@@ -381,18 +381,6 @@
           "id": "best-practices#4",
           "text": "Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators or `@Input() set` accessors; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array.",
           "severity": "low"
-        },
-        {
-          "id": "best-practices#9",
-          "text": "A writable signal is never exposed on a public surface: components, stores and services expose `signal.asReadonly()` or a `computed()`, keeping `.set()`/`.update()` with the owner.",
-          "severity": "low",
-          "probe": [
-            {
-              "pattern": "^[ \\t]*(?:(?:public|readonly|override)\\s+)*(?<at>[A-Za-z_$][\\w$]*)\\s*(?::[^=\\n]+)?=\\s*(?:signal|linkedSignal)\\s*[<(]",
-              "message": "zapisywalny sygnał w polu publicznym",
-              "flags": "m"
-            }
-          ]
         },
         {
           "id": "best-practices#10",

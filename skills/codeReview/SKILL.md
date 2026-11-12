@@ -70,6 +70,8 @@ Only fluff dies.
   The same term for the same thing every time.
 - Tool calls: fire directly.
   No preamble, plan or progress note before or between calls.
+- Read and search files with Read, Grep and Glob, never with `cat`, `sed`, `head`, `grep`, `find` or `ls` in a shell: a shell call costs seconds before it runs.
+  Send independent calls in one message, and shell commands that belong together in one call.
 - No decorative tables or emoji.
   No raw log dumps: quote the shortest decisive line.
 - Questions to the user: terse but complete - answerable without guessing.

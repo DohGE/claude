@@ -185,7 +185,8 @@ function stepFilesFor(tasks, skill) {
     if (task.step1Submitted && [1, 2, 3, 8].includes(n)) files.add(stepFiles[1]);
     if (task.summary) files.add(stepFiles[7]);
     const last = lastStep(task);
-    if (task.summary || (last && (stepOf(task, last) || {}).status === 'completed')) files.add(summaryFile);
+    // A last step the user skipped after it failed leads to the summary just like a completed one.
+    if (task.summary || (last && ['completed', 'skipped'].includes((stepOf(task, last) || {}).status))) files.add(summaryFile);
   }
   const dir = `${path.dirname(skill.path)}/references/steps`;
   return [...files].map((name) => `${dir}/${name}`);

@@ -575,8 +575,24 @@ function skippedStep(spec, reason, outDir) {
 // touched, in seconds, instead of the whole repository.
 const configFile = path.join('.claude', 'doh', 'checks.json');
 
-function gateConfigOf(root, pkg) {
-  const file = path.join(root, configFile);
+// The checkout a linked worktree belongs to; null for the main checkout itself and outside git.
+// `.claude/` is gitignored on most projects, so a worktree has no checks.json unless somebody
+// copied one in - and a copy made when the worktree was created misses every later edit. On dpx
+// a task's worktree had none: the gate fell back to package.json and skipped lint and tests.
+function mainCheckoutOf(root) {
+  const res = spawnSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8', windowsHide: true });
+  const common = res.status === 0 ? String(res.stdout || '').trim() : '';
+  if (!common || path.basename(common) !== '.git') return null;
+  const main = path.dirname(common);
+  return path.relative(path.resolve(root), path.resolve(main)) === '' ? null : main;
+}
+
+function gateConfigOf(root, pkg, mainOf = mainCheckoutOf) {
+  let file = path.join(root, configFile);
+  if (!fs.existsSync(file) && !(pkg && pkg.dohChecks)) {
+    const main = mainOf(root);
+    if (main && fs.existsSync(path.join(main, configFile))) file = path.join(main, configFile);
+  }
   let config = null;
   let source = null;
   if (fs.existsSync(file)) {

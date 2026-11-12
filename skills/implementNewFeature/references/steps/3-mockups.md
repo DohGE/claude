@@ -7,9 +7,15 @@ The agent designs from what refinement settled when step 2 ran, and from the req
 alone when it did not — its brief tells the two apart by whether `spec.md` exists, so nothing
 about it reaches the prompt. It draws the dark theme too when the application has one, unless the
 form switched "Dark theme mockups" off (`Dark mockups: off` in requirements.md's `## Pipeline steps`).
-When the user's feedback adds, removes or rewords text on a screen, the agent brings the checklist
-(or `ui-design.md`) in line at approval, so validation never measures the screens against a
-requirement the user has since changed.
+At approval the agent brings what step 5 (Validation & E2E) measures by in line with what the
+user approved — every decision of the rounds, not only reworded text: it rewrites the checklist
+lines the design reshaped, marks the ones the design dropped as overruled (`checklist.cjs
+supersede`, confirmed by the approval itself, so they leave validation's count) and writes
+`validation/assumptions.md` in the task's folder, which the validation agents read before they
+plan the suite. Without it validation measures the screens against requirements the user has
+since changed: one task failed step 5 at 73% on 35 such lines with all 99 of its tests green.
+Its result names the overruled lines (`overruled`): say them to the user in one line when the
+step completes.
 Every screen wears the project's own styling: the app's global stylesheet compiled with the
 project's Sass (`scripts/project-styles.cjs`) and, when the project has a Storybook, its components
 as their stories render them (`scripts/storybook-snapshot.cjs`, from a build it makes in the
@@ -54,8 +60,11 @@ session when there is none) — the agent's brief says how.
        server already took the round off the screen, put the step at `Reworking the mockups…` and
        appended the line to the transcript — a `mockupChat` copy would show it twice. What the user
        adds while the agent reworks comes from the step's composer as `message`: SendMessage each
-       one as it comes, in order, and keep waiting for the round. A feedback more than 55 minutes
-       after the agent's last round goes to a fresh agent ("Revising step 1" point 5). Back to 3.
+       one as it comes, in order, and keep waiting for the round. A feedback that comes more than
+       five minutes after the agent's last round may meet a cold agent: ask
+       `agent-context.cjs --agent=<its id>` ("Talking to a running agent") — `respawn` true → a
+       fresh agent ("Revising step 1" point 5), whose memory is the step's own files: the rounds,
+       the manifest and the chat history. Back to 3.
      - `decision=="approve"` → SendMessage exactly (a FIXED IDENTIFIER — English verbatim):
        `APPROVED — record the approved design as your brief's Approval section says, then reply
        with the result JSON.` Back to 3.

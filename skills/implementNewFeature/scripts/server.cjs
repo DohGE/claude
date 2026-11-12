@@ -24,13 +24,16 @@ const STEP_NAMES = ['Requirements', 'Feature Refinement', 'Mockups', 'Implementa
 // disabled; the steps a switch on the form controls follow that switch from the step-1
 // answer on.
 const OPTIONAL_STEPS = [3, 8];
-const STATUSES = ['waiting', 'in_progress', 'completed', 'failed'];
+// `skipped` is a failed step the user chose to go on without (the failure gate's "Skip step"):
+// it keeps its report, and the pipeline continues at the step after it.
+const STATUSES = ['waiting', 'in_progress', 'completed', 'failed', 'skipped'];
 // One fixed port, so the stepper always lives at the same URL: the user can keep the
 // tab open across runs, and everything the browser remembers for that origin - the
 // agent settings, the E2E credentials - is still there on the next one.
 const DEFAULT_PORT = 9999;
 const REFINEMENT_STEP = 2;
 const MOCKUP_STEP = 3;
+const MOCKOON_STEP = 7;
 const STORY_STEP = 8;
 const REVIEW_STEP = 6;
 const FINAL_REVIEW_STEP = 9;
@@ -53,13 +56,17 @@ const MOCKUP_TYPES = {
   '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.woff2': 'font/woff2'
 };
 // Every sub-agent the pipeline spawns runs on a step, and a step's agent may spawn helpers
-// of its own: the review steps' window walkers and fixers, the validation step's test runner
-// and compliance checker. Each of them is its own setting, so no agent of the run is left on
-// a model nobody chose; an unset one falls back to its step, then to the task-wide pair.
+// of its own: the review steps' window walkers and fixers, and the validation step's spec
+// authors - one agent per spec file of the E2E suite, written side by side. Each of them is its
+// own setting, so no agent of the run is left on a model nobody chose; an unset one falls back to
+// its step, then to the task-wide pair.
 // Step 1 has no agent: the form IS step 1. FIXED IDENTIFIERS: the orchestrator reads these keys.
+// (Validation's test runner and compliance check were roles until 0.32: the suite is now run in a
+// context small enough to wait in, and the checklist is ticked by checklist.cjs from the run's own
+// report. A state file that still names them simply loses those two keys.)
 const AGENT_STEPS = [2, 3, 4, 5, 6, 7, 8, 9];
-const AGENT_ROLES = { reviewWalker: REVIEW_STEP, reviewFixer: REVIEW_STEP, validationRunner: 5,
-  validationCompliance: 5, finalWalker: FINAL_REVIEW_STEP, finalFixer: FINAL_REVIEW_STEP };
+const AGENT_ROLES = { reviewWalker: REVIEW_STEP, reviewFixer: REVIEW_STEP, validationAuthor: 5,
+  finalWalker: FINAL_REVIEW_STEP, finalFixer: FINAL_REVIEW_STEP };
 // What the Agent tool accepts as a model override, and the effort levels the
 // orchestrator knows how to turn into a thinking directive. Anything else is stored as
 // '' (inherit): a value the spawn cannot use would only fail halfway through the run.
@@ -132,7 +139,14 @@ const READERS = { [REFINEMENT_STEP]: [MOCKUP_STEP, STORY_STEP], [MOCKUP_STEP]: [
 // orchestrator, and what travels through it belongs to whoever reads it.
 const STATE_FIELDS = new Set(['taskId', 'step', 'status', 'enabled', 'progress',
   'currentOperation', 'report', 'chat', 'logEntry', 'activeStep', 'branch', 'root', 'base',
-  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate', 'mockupArtifact', 'pr']);
+  'question', 'reviewSummary', 'mockupReview', 'mockupChat', 'summary', 'reopenGate', 'mockupArtifact', 'pr',
+  'language']);
+// The questions an agent asks about the machine, not about the feature: the backend that does
+// not answer, the Chrome extension, a sign-in in the tab it opened. Their ids are FIXED
+// IDENTIFIERS of the validation briefs (`backend1`, `chrome2`, `login1`).
+const ENV_QUESTION = /^(backend|chrome|login)\d*$/i;
+// A ticket for /api/e2e-login: how long it lives. It is spent by its first use either way.
+const LOGIN_TICKET_MS = 2 * 60 * 1000;
 // What the "Create pull request" button leaves in the task's folder: an orchestrator that was not
 // listening when it was pressed finds it there.
 const PR_REQUEST_FILE = 'pr-request.json';
@@ -161,6 +175,32 @@ function taskState(id) {
     // miss it.
     step1Touched: {}
   };
+}
+
+// The step a task runs after `id`: the next one on its route that is switched on, or null when
+// `id` is the last - the final summary follows. Mockoon (7) is on no route: it runs on demand.
+function nextStepOf(task, id) {
+  const route = Array.isArray(task.route) ? task.route : ROUTE;
+  const at = route.indexOf(id);
+  if (at === -1) return null;
+  for (const next of route.slice(at + 1)) {
+    const step = (task.steps || []).find(s => s.id === next);
+    if (step && step.enabled !== false) return next;
+  }
+  return null;
+}
+
+// Why a failed step cannot be skipped, or null when it can. Every step of the route can, with one
+// exception: the implementation of a split task builds its parts one after another, each on its
+// own branch, so skipping it mid-way would leave the later parts unbuilt while every later step -
+// the fix-ups, the per-part gate, one pull request per part - counts on all of them.
+function unskippable(task, step) {
+  if (!step || step.status !== 'failed') return 'the step the pipeline is on has not failed';
+  if (step.id === MOCKOON_STEP) return 'Mockoon mocks run on demand - there is no step after them to go on to';
+  if (step.id === IMPLEMENTATION_STEP && task.step1 && String(task.step1.taskSplit || '').trim()) {
+    return 'a split task cannot skip Implementation: the parts not built yet would never exist';
+  }
+  return null;
 }
 
 // One transcript per step, appended to from three directions: the agent working on
@@ -639,6 +679,7 @@ function createApp(sessionDir, opts = {}) {
   });
   const stateFile = path.join(sessionDir, 'pipeline-state.json');
   let state;
+  let droppedQuestions = 0;
   try {
     state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     // A state file from before tasks existed cannot be migrated meaningfully —
@@ -678,6 +719,22 @@ function createApp(sessionDir, opts = {}) {
       // offers a model it picked would fail at that step's spawn; it inherits instead,
       // and the form shows it that way.
       if (t.step1 && typeof t.step1 === 'object') t.step1 = form(t.step1);
+      // A run resumed after its sessions were closed (`orphaned`): every agent is gone, and a
+      // question about the machine as it was then - "start the backend", "sign in in the tab I
+      // opened" - asks for something whose other half no longer exists. One such question came
+      // back on screen with its dev server dead, and the user confirmed a sign-in into nothing.
+      // The fresh agent checks again and asks again if it still has to. A question about the
+      // feature stays: its answer reaches the fresh agent with the step's transcript.
+      if (opts.orphaned && t.question && ENV_QUESTION.test(String(t.question.id || ''))) {
+        const step = t.steps.find(s => s.id === t.activeStep);
+        if (step && step.status === 'in_progress') {
+          pushLog(step, `Question ${brief(t.question.id, 40)} dropped on resume: the agent that asked it ended with its session`);
+          step.currentOperation = 'Resuming in a new session';
+        }
+        t.question = null;
+        t.questionSeq = (t.questionSeq || 0) + 1;
+        droppedQuestions++;
+      }
     }
   } catch (_e) {
     // Losing the state silently is the worst outcome: the run reappears at step 1
@@ -689,6 +746,9 @@ function createApp(sessionDir, opts = {}) {
     } catch (_e2) { /* best effort: a fresh start still beats refusing to run */ }
     state = initialState(starterSession);
   }
+  // The page polls the file's content, not this process's memory, through the next update only -
+  // a dropped question must not come back if the server dies again before one arrives.
+  if (droppedQuestions) persist();
 
   // Each task's orchestrator as this process has seen it: { session, listening, seen, gone }.
   // Not persisted - only a poll proves a session alive, and none has reached a server that
@@ -835,6 +895,13 @@ function createApp(sessionDir, opts = {}) {
         active.status = 'in_progress';
         active.report = null;
         say(active, 'Retrying the step…', 'Retry requested');
+      } else if (body.decision === 'skip' && active && !unskippable(task, active)) {
+        // The user goes on without this step. It keeps its report - what failed stays readable -
+        // and the answer tells the orchestrator where the pipeline continues, so it never has
+        // to work the route out itself.
+        active.status = 'skipped';
+        body.next = nextStepOf(task, active.id);
+        say(active, 'Skipped by the user', 'Skipped by the user');
       }
     } else if (body.kind === 'mockup') {
       const step = findStep(task, MOCKUP_STEP);
@@ -1004,10 +1071,53 @@ function createApp(sessionDir, opts = {}) {
       pushChat(step, body.mockupChat);
     }
     if (body.summary !== undefined) task.summary = body.summary;
+    // The language the user talks to the run in, named plainly (`Polish`). Run-wide and kept in
+    // the state: a session that resumes or attaches has no conversation to read it from, and one
+    // that guessed wrote English to a user whose briefs were rendered in Polish.
+    if (body.language !== undefined) state.language = brief(body.language, 40);
     // The pull request the summary screen's "Create pull request" asked for, as the task's
     // orchestrator reports it: { status: 'created' | 'exists' | 'failed', url?, reason?, commit? }.
     if (pr !== undefined) task.pr = pr;
     persist();
+  }
+
+  // Signing the validation agent's Chrome tab in. The agent must never see the password - it may
+  // not read auth.json, and whatever it types with a browser tool sits in its transcript - so it
+  // could not sign in at all: the user was asked to do it by hand, twice in one run, each time a
+  // wait until somebody came back to the keyboard. Now the PAGE fetches the credentials. The agent
+  // asks for a ticket (same-origin, like every other call) and runs a snippet in its tab that
+  // redeems it and fills the login form (chrome-login.cjs). A ticket is bound to the task's own
+  // dev server - a port its processes.json records - lives two minutes and is spent by its
+  // first use, whatever the outcome.
+  const loginTickets = new Map();   // ticket -> { taskId, origins, expires }
+  function loginOrigins(task, port) {
+    let recorded = [];
+    try {
+      recorded = JSON.parse(fs.readFileSync(path.join(taskDir(task.id), 'processes.json'), 'utf8'));
+    } catch { /* nothing started yet */ }
+    if (!Array.isArray(recorded) || !recorded.some(p => p && Number(p.port) === port)) return null;
+    return [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
+  }
+  function redeemLogin(req, res, url) {
+    const refuse = why => sendJson(res, 403, { error: why });
+    if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(req.headers.host || '')) return refuse('cross-origin request refused');
+    const key = url.searchParams.get('ticket') || '';
+    const ticket = loginTickets.get(key);
+    loginTickets.delete(key);
+    if (!ticket || ticket.expires < Date.now() || ticket.taskId !== url.searchParams.get('taskId')) {
+      return refuse('bad or expired ticket');
+    }
+    const origin = String(req.headers.origin || '').toLowerCase();
+    if (!ticket.origins.includes(origin)) return refuse('this ticket is for another origin');
+    let auth;
+    try {
+      auth = JSON.parse(fs.readFileSync(path.join(taskDir(ticket.taskId), 'auth.json'), 'utf8'));
+    } catch {
+      return sendJson(res, 404, { error: 'no credentials saved for this task' });
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
+      'access-control-allow-origin': origin, vary: 'Origin' });
+    return res.end(JSON.stringify({ login: auth.login, password: auth.password }));
   }
 
   const answers = new Map();   // taskId -> queued answers
@@ -1121,6 +1231,9 @@ function createApp(sessionDir, opts = {}) {
     // must not be able to call it. Whatever another site makes the browser send says so -
     // its Origin, or Sec-Fetch-Site - and a name rebound to 127.0.0.1 still arrives with its
     // own Host. The page itself may be reached from a link; it is only a page.
+    // One route answers another origin: a task's own dev server redeeming a login ticket. It
+    // checks its caller itself (redeemLogin).
+    if (req.method === 'GET' && url.pathname === '/api/e2e-login') return redeemLogin(req, res, url);
     if (!sameOrigin(req, url)) return sendJson(res, 403, { error: 'cross-origin request refused' });
     try {
       if (req.method === 'GET' && url.pathname === '/api/state') {
@@ -1239,6 +1352,12 @@ function createApp(sessionDir, opts = {}) {
           pushAnswer({ kind: 'summary', decision: 'create_pr', taskId: task.id });
           return sendJson(res, 200, { ok: true, tasks: [task.id] });
         }
+        // "Skip step" on a failure the pipeline may not go on from is refused here, with the
+        // reason, instead of reaching the orchestrator as a decision nothing was done about.
+        if (body.kind === 'decision' && body.decision === 'skip') {
+          const why = unskippable(task, findStep(task, task.activeStep));
+          if (why) return sendJson(res, 409, { error: why });
+        }
         const attached = attachmentsOf(task, body.attachments);
         if (body.kind === 'mockup' && !findStep(task, MOCKUP_STEP)) {
           return sendJson(res, 400, { error: `unknown step ${MOCKUP_STEP}` });
@@ -1324,7 +1443,7 @@ function createApp(sessionDir, opts = {}) {
         if (!task) return sendJson(res, 400, { error: 'unknown task' });
         const port = server.address().port;
         return sendJson(res, 200, { taskId: task.id, sessionDir: path.resolve(sessionDir), projectDir, port,
-          command: manualCommand(task.id, port), ...orchestratorView(task) });
+          command: manualCommand(task.id, port), language: state.language || '', ...orchestratorView(task) });
       }
       if (req.method === 'POST' && url.pathname === '/api/orchestrator/launch') {
         // The page's "Open" on a task whose orchestrator is gone, or never came up.
@@ -1457,8 +1576,9 @@ function createApp(sessionDir, opts = {}) {
           return sendJson(res, 400, { error: 'login and password are required' });
         }
         fs.mkdirSync(taskDir(task.id), { recursive: true });
-        // Write-only secret: no GET counterpart, so credentials never travel
-        // back over HTTP; agents read the file straight from disk.
+        // Write-only secret: the page that sent it can never read it back, and agents never
+        // read the file - checks.cjs does, for the tests. The one way out over HTTP is a
+        // single-use ticket for the task's own dev-server origin (/api/e2e-login).
         const authFile = path.join(taskDir(task.id), 'auth.json');
         const secret = JSON.stringify({ login, password });
         let previous = null;
@@ -1472,6 +1592,25 @@ function createApp(sessionDir, opts = {}) {
         task.authSaved = true;
         persist();
         return sendJson(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/e2e-login/ticket') {
+        // A ticket for the task's Chrome tab to fetch the E2E login with (see loginTickets).
+        const body = JSON.parse(await readBody(req, res) || '{}');
+        const task = findTask(body.taskId);
+        if (!task) return sendJson(res, 400, { error: 'unknown task' });
+        if (!fs.existsSync(path.join(taskDir(task.id), 'auth.json'))) {
+          return sendJson(res, 404, { error: 'no credentials saved for this task' });
+        }
+        const port = Number(body.port);
+        const origins = Number.isInteger(port) ? loginOrigins(task, port) : null;
+        if (!origins) {
+          return sendJson(res, 409, { error: `port ${brief(body.port, 20)} is not a process this task started (task-processes.cjs start)` });
+        }
+        const now = Date.now();
+        for (const [key, t] of loginTickets) if (t.expires < now) loginTickets.delete(key);
+        const ticket = crypto.randomBytes(24).toString('hex');
+        loginTickets.set(ticket, { taskId: task.id, origins, expires: now + LOGIN_TICKET_MS });
+        return sendJson(res, 200, { ticket, expiresInMs: LOGIN_TICKET_MS });
       }
       if (req.method === 'POST' && url.pathname === '/api/shutdown') {
         // Credentials must not outlive the pipeline: best-effort wipe on shutdown.
@@ -1699,5 +1838,5 @@ function main() {
   app.server.listen(port, '127.0.0.1');
 }
 
-module.exports = { createApp, initialState, taskState, MOCKUP_DIR, MOCKUP_TYPES, SCREENSHOT_DIR };
+module.exports = { createApp, initialState, taskState, nextStepOf, unskippable, MOCKUP_DIR, MOCKUP_TYPES, SCREENSHOT_DIR };
 if (require.main === module) main();

@@ -238,7 +238,36 @@ as your last `mockup` JSON left it, and record that round.
    (read how the project adds one — a project that edits only its source-language file and leaves
    the others to translators says "added to `en.json` only"). A checklist that still demands the
    opposite of what the user approved fails validation on a requirement nobody holds any more.
-4. Delete `{{SESSION}}/ui-design.md` if it exists: it recorded your design from a run without
+   **Everything the rounds decided changes the checklist — not only text.** A round that removes
+   a window, a counter, a column or a step, moves a field to another group, replaces one control
+   with another or changes what a state shows leaves lines that demand the opposite. No test can
+   ever tick them: one task failed validation at 73% on 35 such lines with every one of its 99
+   tests green. So, after the lines above, reconcile the WHOLE checklist with the approved design,
+   line by line, in one pass:
+   - List every decision the rounds made, as `<round>: <what changed>` — from
+     `{{SESSION}}/mockup-chat-history.md`, every `{{SESSION}}/feedback-round*.md`, the step's
+     transcript and the difference between your first round and the approved one.
+   - For each checklist line decide: it **holds** (the approved screens still do it); it is
+     **reworded** (the requirement stands in another form — a field that moved, a control that
+     was replaced: rewrite the requirement text in place, same id, same `verify:` tag); or it is
+     **overruled** (the approved design dropped what it asks for). Never delete a line — plan and
+     spec refer to the ids — and never edit a mark by hand: an overruled line is marked with
+     `node "{{SKILL_DIR}}/scripts/checklist.cjs" supersede --file="{{SESSION}}/checklist.md" --id=R<n>[,R<m>…] --source="<round N: what the user decided>"`,
+     and when the decision REPLACED the requirement instead of dropping it, a new line says what
+     holds now.
+   - The approval the user just gave IS the decision those lines contradict, so confirm the ones
+     you marked — `checklist.cjs confirm --file="{{SESSION}}/checklist.md" --ids=<them>` — and they
+     leave validation's count. Name every one of them in your result's summary: the user must be
+     able to see what their approval took out.
+4. `{{SESSION}}/validation/assumptions.md`, in ONE write — what step 5 (Validation & E2E) must
+   assume, so it measures the feature the user approved and not the one the checklist was first
+   written for. Step 5 reads it before it plans its suite. Three sections, FIXED IDENTIFIER
+   headings: `## Decisions` (the list above); `## Checklist` (every line you reworded, with its
+   old text; every line you marked overruled, with its source; every line you added);
+   `## What validation must assume` (whatever a tester would get wrong from the spec alone: a
+   state that exists only with certain data, a control that is disabled on purpose, a text that
+   differs between themes or viewports, an existing screen the design deliberately left as it is).
+5. Delete `{{SESSION}}/ui-design.md` if it exists: it recorded your design from a run without
    refinement, spec.md holds the design now, and two records drift apart.
 
 **No spec.md** — refinement did not run, so there is no spec, plan or checklist to patch, and you
@@ -252,6 +281,14 @@ create none of them:
    text the chat added, removed or reworded, verbatim, with where it appears and how the project
    stores it (the translation key, and which language files get it) — step 5 writes its checklist
    from this file, and a text change missing here is one it will test the old way.
+2. Write `{{SESSION}}/validation/assumptions.md` in ONE write — what step 5 (Validation & E2E)
+   must assume, so the checklist it writes measures the feature the user approved and not the
+   task description as it stood before the rounds. Two sections, FIXED IDENTIFIER headings:
+   `## Decisions` — every decision the rounds made, as `<round>: <what changed>`, the ones that
+   DROPPED something the task description asks for marked `overrules the description:`; and
+   `## What validation must assume` — whatever a tester would get wrong from the description
+   alone: a state that exists only with certain data, a control that is disabled on purpose, a
+   text that differs between themes or viewports, an existing screen the design left as it is.
 
 Then finish with the result JSON below.
 
@@ -292,7 +329,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 - Write ONLY inside `{{SESSION}}` (`generated-mockups/`, the `storybook-static/` and
   `storybook-snapshots/` the styling scripts fill, plus after approval spec/plan/checklist — or
-  `ui-design.md` when there is no spec.md).
+  `ui-design.md` when there is no spec.md — and `validation/assumptions.md` either way). The marks
+  of `checklist.md` (`[ ]`, `[x]`, `[~]`) are written by `checklist.cjs` alone; its requirement
+  text is yours to rewrite.
 - Each `.md` you write after the approval goes out in ONE write — the Write tool, or a single
   Bash heredoc if your harness refuses a `.md` write from a sub-agent. One write either way: a
   file assembled from several appends is one that ends half-written when anything goes wrong.
@@ -302,8 +341,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
-- After approval: `{"type":"result","summary":"<screens, key design decisions, what changed in spec/plan/checklist or that ui-design.md records them, ~8 sentences in {{LANGUAGE}}>","screens":[{"id","view","title","file"}]}`
-- Unrecoverable problem: `{"type":"error","report":"<what blocks the mockups, in {{LANGUAGE}}>"}`
+- After approval — written first, in ONE write, to `{{SESSION}}/results/step-3.json`, then sent as your message:
+  `{"type":"result","summary":"<screens, key design decisions, what changed in spec/plan/checklist or that ui-design.md records them, and every checklist line the approved design overruled (id and a few words each), ~8 sentences in {{LANGUAGE}}>","screens":[{"id","view","title","file"}],"overruled":["R44", …]}`
+- Unrecoverable problem — to the same file first: `{"type":"error","report":"<what blocks the mockups, in {{LANGUAGE}}>"}`
 
 Never paste mockup markup into your messages — the files on disk are the deliverable.
 

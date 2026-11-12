@@ -15,7 +15,7 @@
       "text": "Every feature area keeps the canonical layout: `data-access/+state/` (the view's `<name>.store.ts` signal store and, only for data several independent views share, an NgRx slice - actions, reducer, selectors, effects, facade - each with `tests/`), `data-access/services/` (HTTP only), `models/{consts,enums,interfaces,types}` with an `index.ts` barrel, `shared/{utils,guards,pipes,directives[,routes]}` each with `tests/`, plus `shared/mocks/` for the spec fixtures several specs share, `components-<area>/{feature,ui}/`, and for multi-step wizards a `shell/<area>-shell.routes.ts`. HTTP interceptors are app-level, never inside an area."
     }
   ],
-  "itemCount": 67,
+  "itemCount": 66,
   "instructions": [
     {
       "id": "directives",
@@ -211,7 +211,7 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "3-4,9,15,21,24-27",
+      "selectedItems": "3-4,15,21,24-27",
       "checklistSize": 28,
       "items": [
         {
@@ -223,18 +223,6 @@
           "id": "best-practices#4",
           "text": "Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators or `@Input() set` accessors; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array.",
           "severity": "low"
-        },
-        {
-          "id": "best-practices#9",
-          "text": "A writable signal is never exposed on a public surface: components, stores and services expose `signal.asReadonly()` or a `computed()`, keeping `.set()`/`.update()` with the owner.",
-          "severity": "low",
-          "probe": [
-            {
-              "pattern": "^[ \\t]*(?:(?:public|readonly|override)\\s+)*(?<at>[A-Za-z_$][\\w$]*)\\s*(?::[^=\\n]+)?=\\s*(?:signal|linkedSignal)\\s*[<(]",
-              "message": "zapisywalny sygnał w polu publicznym",
-              "flags": "m"
-            }
-          ]
         },
         {
           "id": "best-practices#15",

@@ -57,6 +57,7 @@
   .tabs-bar .dot.in_progress { background:var(--accent); }
   .tabs-bar .dot.completed { background:var(--completed); }
   .tabs-bar .dot.failed { background:var(--failed); }
+  .tabs-bar .dot.skipped { background:var(--warn); }
   /* The one thing that tells the user a background task has stopped and needs them. */
   .tabs-bar .pending { color:var(--accent-2); font-size:11px; line-height:1; flex:none;
           animation:pulse 1.6s ease-in-out infinite; }
@@ -81,6 +82,7 @@
           animation:pulse 1.6s ease-in-out infinite; }
   .step.completed .num { background:var(--completed); }
   .step.failed .num { background:var(--failed); color:#fff; }
+  .step.skipped .num { background:var(--warn); color:#07090f; }
   @keyframes pulse { 50% { opacity:.55; } }
   .step .name { display:block; font-size:12.5px; font-weight:600; }
   .step .badge { display:block; font-size:10.5px; margin-top:5px; text-transform:uppercase;
@@ -88,6 +90,7 @@
   .step.in_progress .badge { color:var(--accent); }
   .step.completed .badge { color:var(--completed); }
   .step.failed .badge { color:var(--failed); }
+  .step.skipped .badge { color:var(--warn); }
   /* A reached step is a place the user may go back to. Switching is local to the
      page: it reaches neither the orchestrator nor any agent. */
   .step.clickable { cursor:pointer; }
@@ -445,7 +448,7 @@ const FINAL_REVIEW_STEP = 9;
 // order of its tiles; this is the order of a new task's, and of the per-step overrides.
 const STEP_ORDER = [1, 2, 3, 8, 4, 6, 5, 9, 7];
 const BADGE = { waiting: 'Waiting', in_progress: 'In Progress',
-  completed: 'Completed', failed: 'Failed' };
+  completed: 'Completed', failed: 'Failed', skipped: 'Skipped' };
 const MOCKUP_VIEWPORTS = { Desktop: [1280, 800], Mobile: [390, 780] };
 // The server's IMAGE_TYPES: what it previews under /uploads and takes as an attachment.
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
@@ -462,8 +465,7 @@ const AGENT_STEPS = STEP_ORDER.slice(1);
 const AGENT_ROLES = [
   { key: 'reviewWalker', step: 6, label: 'window walkers' },
   { key: 'reviewFixer', step: 6, label: 'fix helpers' },
-  { key: 'validationRunner', step: 5, label: 'test runner' },
-  { key: 'validationCompliance', step: 5, label: 'compliance check' },
+  { key: 'validationAuthor', step: 5, label: 'E2E spec authors' },
   { key: 'finalWalker', step: 9, label: 'window walkers' },
   { key: 'finalFixer', step: 9, label: 'fix helpers' },
 ];
@@ -1368,7 +1370,8 @@ function renderActive(task, step) {
   // The summary is what following the pipeline means once it is written; a step
   // the user picked for themselves outranks it.
   if (task.summary && v.viewStep == null) return renderSummary(task);
-  if (step.status === 'failed') return renderFailed(step, live);
+  if (step.status === 'failed') return renderFailed(step, live, task);
+  if (step.status === 'skipped') return renderSkipped(step);
   // A question carries no step of its own — it belongs to whatever step is running.
   if (gateOf(task, step) === 'question') return renderQuestion(task, task.question, step);
   if (step.id === 1) return renderStep1(task);
@@ -2649,10 +2652,22 @@ function updateDynamic(task, step) {
     `<li><time>${esc(e.time.slice(11, 19))}</time>${esc(e.text)}</li>`).join('');
 }
 
-function renderFailed(step, live) {
+// A failed step the user went on without: what failed stays readable, nothing is left to decide.
+function renderSkipped(step) {
+  $('#panel').innerHTML = `
+    <h2>${esc(step.name)} — skipped</h2>
+    <p class="muted">This step failed and you chose to go on without it. Its report:</p>
+    <pre class="report">${esc(step.report || 'No report provided.')}</pre>
+    ${chatBlock(step, false)}`;
+}
+
+function renderFailed(step, live, task) {
   // Step 7 runs after the pipeline is already finished, so declining its retry drops
   // the user back on the summary instead of ending the run.
   const isMockoon = step.id === MOCKOON_STEP;
+  // The server's `unskippable`: a split task's implementation builds its parts one after
+  // another, so going on without it would leave the later parts unbuilt.
+  const splitImplementation = step.id === 4 && !!(task && task.step1 && String(task.step1.taskSplit || '').trim());
   // Nobody is waiting on this one any more, so Retry and Finish would send a
   // decision into an empty queue for a later gate to mistake for its own.
   if (!live) {
@@ -2669,10 +2684,20 @@ function renderFailed(step, live) {
     <h2>${esc(step.name)} — failed</h2>
     <pre class="report">${esc(step.report || 'No report provided.')}</pre>
     <button id="retry" class="danger">Retry step</button>
+    ${isMockoon || splitImplementation ? '' : '<button id="skip" class="secondary">Skip step and continue</button>'}
     <button id="${isMockoon ? 'backToSummary' : 'finish'}" class="secondary">${
       isMockoon ? 'Back to summary' : 'Finish'}</button>
+    ${isMockoon ? '' : `<p class="hint">${splitImplementation
+      ? 'A split task cannot skip Implementation: the parts not built yet would never exist.'
+      : 'Skip keeps this report and runs the next step without this one; Finish ends the pipeline here.'}</p>`}
     ${chatBlock(step, true)}`;
   wireChat(step);
+  // Going on without the failed step: the server marks it skipped as it records the decision,
+  // so the poll run right away shows the pipeline moving on.
+  if ($('#skip')) {
+    $('#skip').addEventListener('click', () =>
+      sendFrom('#panel', async () => !!(await sendAnswer({ kind: 'decision', decision: 'skip' })).ok));
+  }
   // The server puts the step back to work as it records the retry, so the poll run right
   // away draws it running - the failure is not left on screen until the new agent reports.
   $('#retry').addEventListener('click', () =>
