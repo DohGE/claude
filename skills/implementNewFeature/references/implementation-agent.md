@@ -45,7 +45,9 @@ Every call you make re-reads your whole context, so one agent that writes nine t
 code pays for all of it on every call of the last task — measured at ~200 000 tokens per call on
 one run. With more than three tasks in the plan, you are the coordinator: you write no application
 code yourself, and each task — or a small group of consecutive tasks that touch the same files, at
-most three — goes to a fresh helper (Agent tool, `general-purpose`, NOT in the background: the call
+most three — goes to a fresh helper (Agent tool; `subagent_type: "doh:pipeline-worker"` when your
+Agent tool lists it — the file and shell tools a task needs, at a third of a general-purpose
+agent's starting context, paid on every one of its calls — else `general-purpose`; NOT in the background: the call
 returns with the helper's reply, so you never end your turn while it works; no `model`: it runs on
 yours), one after another, never two at once (they would edit one tree).
 
@@ -188,8 +190,15 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
+Write the object to `{{SESSION}}/results/step-4.json` in ONE write first — or to the file your
+prompt names, when you build one part of a split task — then end with the same object as your
+message. The task's final summary is built from that file, whichever session is orchestrating by
+then: what you write there is what the user reads.
+
 - Success (all tasks done, all plan verifications pass):
-  `{"type":"result","filesChanged":["relative/path", …],"summary":"<5-8 sentences in {{LANGUAGE}}>","deviations":["<what and why>", …]}`
+  `{"type":"result","filesChanged":["relative/path", …],"summary":"<5-8 sentences in {{LANGUAGE}}>","features":["<one thing the user can now do, a few words, in {{LANGUAGE}}>", …],"deviations":["<what and why>", …]}`
+  `features` is the list on the summary screen: three to six entries a user would recognise,
+  never file names.
 - Failure (a task cannot be completed even with an alternative):
   `{"type":"error","report":"<task, what failed, the failure lines from its errorsPath, in {{LANGUAGE}}>"}`
 

@@ -45,6 +45,8 @@ After a compaction, this skill's hook names where the run stands and what to rea
 
 Always on, from the moment a doh skill loads until the session ends.
 Rules adapted from caveman by Julius Brussee (github.com/JuliusBrussee/caveman, MIT; notice in the plugin's shared/CAVEMAN-LICENSE).
+The caveman plugin's own hooks, when installed, repeat these rules at another level (`full`): this block wins, at level ultra, and its boundaries below stand.
+Never call the caveman skill to switch levels.
 
 Every chat message is terse like a smart caveman at level **ultra**: your messages to the user, your prompts to sub-agents, a sub-agent's replies.
 All technical substance stays.
@@ -68,6 +70,8 @@ Only fluff dies.
   The same term for the same thing every time.
 - Tool calls: fire directly.
   No preamble, plan or progress note before or between calls.
+- Read and search files with Read, Grep and Glob, never with `cat`, `sed`, `head`, `grep`, `find` or `ls` in a shell: a shell call costs seconds before it runs.
+  Send independent calls in one message, and shell commands that belong together in one call.
 - No decorative tables or emoji.
   No raw log dumps: quote the shortest decisive line.
 - Questions to the user: terse but complete - answerable without guessing.

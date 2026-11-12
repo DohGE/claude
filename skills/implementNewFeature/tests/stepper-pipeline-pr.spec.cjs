@@ -63,7 +63,7 @@ test('końcowa recenzja ma własny przełącznik i własne przebiegi, a formular
   // Every helper a step's agent spawns has its own row under that step.
   await page.locator('#agentOverrides summary').click();
   await page.selectOption('#agentModel-reviewWalker', 'sonnet');
-  await page.selectOption('#agentModel-validationRunner', 'sonnet');
+  await page.selectOption('#agentModel-validationAuthor', 'sonnet');
   await page.selectOption('#agentEffort-finalFixer', 'high');
   await page.click('#next');
   await page.click('#confirmOk');
@@ -71,7 +71,7 @@ test('końcowa recenzja ma własny przełącznik i własne przebiegi, a formular
   expect(answer).toMatchObject({ kind: 'step1', commitMessage: 'feat: hosts inventory', finalReview: true });
   expect(answer.finalCodeReview.length).toBe(2);
   expect(answer.agents.roles.reviewWalker.model).toBe('sonnet');
-  expect(answer.agents.roles.validationRunner.model).toBe('sonnet');
+  expect(answer.agents.roles.validationAuthor.model).toBe('sonnet');
   expect(answer.agents.roles.finalFixer.effort).toBe('high');
   expect(answer.agents.roles.reviewFixer).toEqual({ model: '', effort: '' });
 });

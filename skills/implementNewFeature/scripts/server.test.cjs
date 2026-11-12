@@ -1077,8 +1077,8 @@ test('krok 1 zapamiętuje model i effort agenta, globalnie i per krok', async t 
   // Kroki bez nadpisania dziedziczą — w stanie stoją jako puste, nie jako brak klucza.
   assert.deepStrictEqual(Object.keys(agents.steps), ['2', '3', '4', '5', '6', '7', '8', '9']);
   // Every helper a step's agent spawns has a setting of its own, unset here.
-  assert.deepStrictEqual(Object.keys(agents.roles), ['reviewWalker', 'reviewFixer', 'validationRunner',
-    'validationCompliance', 'finalWalker', 'finalFixer']);
+  assert.deepStrictEqual(Object.keys(agents.roles), ['reviewWalker', 'reviewFixer', 'validationAuthor',
+    'finalWalker', 'finalFixer']);
   assert.ok(Object.values(agents.roles).every(r => r.model === '' && r.effort === ''));
 });
 
@@ -2218,7 +2218,7 @@ test('serwer bez launchera podaje komendę do ręcznego wpisania, a GET /api/orc
   assert.deepStrictEqual(await (await post(base, '/api/orchestrator/launch', { taskId: 't1' })).json(),
     { launched: false, command, cwd: path.resolve('D:/proj'), error: 'this server opens no terminals' });
   assert.deepStrictEqual(await (await fetch(`${base}/api/orchestrator?taskId=t1`)).json(), { taskId: 't1',
-    sessionDir: path.resolve(dir), projectDir: path.resolve('D:/proj'), port, command,
+    sessionDir: path.resolve(dir), projectDir: path.resolve('D:/proj'), port, command, language: '',
     status: 'none', session: null, launchError: null });
   assert.equal((await fetch(`${base}/api/orchestrator?taskId=t7`)).status, 400);
 });
@@ -2272,11 +2272,13 @@ test('every helper of a step takes a model and effort of its own', async t => {
   const base = await listen(app);
   t.after(() => app.server.close());
   await step1(base, { agents: { model: 'opus', roles: { reviewWalker: { model: 'sonnet', effort: 'low' },
-    validationRunner: { model: 'haiku' }, finalFixer: { effort: 'high' }, bogus: { model: 'sonnet' } },
+    validationAuthor: { model: 'haiku' }, validationRunner: { model: 'sonnet' }, finalFixer: { effort: 'high' },
+    bogus: { model: 'sonnet' } },
     steps: { 9: { model: 'sonnet' } } } });
   const { agents } = (await task0(base)).step1;
   assert.deepStrictEqual(agents.roles.reviewWalker, { model: 'sonnet', effort: 'low' });
-  assert.deepStrictEqual(agents.roles.validationRunner, { model: 'haiku', effort: '' });
+  assert.deepStrictEqual(agents.roles.validationAuthor, { model: 'haiku', effort: '' });
+  assert.strictEqual(agents.roles.validationRunner, undefined, 'a role of an older version is dropped, not kept as a setting nothing reads');
   assert.deepStrictEqual(agents.roles.finalFixer, { model: '', effort: 'high' });
   assert.strictEqual(agents.roles.bogus, undefined, 'only the roles the pipeline spawns');
   assert.deepStrictEqual(agents.steps['9'], { model: 'sonnet', effort: '' });
@@ -2415,4 +2417,155 @@ test('po restarcie orkiestratory ze stanu liczą się za żywe; z orphaned (wzno
   assert.equal((await fetch(`${base}/api/answer?taskId=t1&session=new`)).status, 200);
   assert.equal((await getState(base)).tasks[0].orchestrator.session, 'new');
   assert.equal((await (await post(base, '/api/orchestrator/launch', { taskId: 't2' })).json()).launched, true);
+});
+
+test('a failed step can be skipped: it keeps its report and the answer names the step the pipeline goes on at', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  await step1(base, {});
+  const skip = () => post(base, '/api/answer', { taskId: 't1', kind: 'decision', decision: 'skip' });
+  const next = async () => (await (await fetch(`${base}/api/answer?taskId=t1`)).json()).answer;
+  await next();   // the form
+  await postState(base, { step: 5, status: 'in_progress', activeStep: 5 });
+  assert.equal((await skip()).status, 409, 'only a failed step is skipped');
+  await postState(base, { step: 5, status: 'failed', report: 'compliance 73%' });
+  assert.equal((await skip()).status, 200);
+  const task = await task0(base);
+  assert.equal(stepOf(task, 5).status, 'skipped');
+  assert.equal(stepOf(task, 5).report, 'compliance 73%', 'what failed stays readable');
+  assert.equal(stepOf(task, 5).log.at(-1).text, 'Skipped by the user');
+  assert.deepStrictEqual(await next(), { kind: 'decision', decision: 'skip', next: 9, taskId: 't1' });
+  // The last step of the route has nothing after it: the summary follows.
+  await postState(base, { step: 9, status: 'failed', activeStep: 9 });
+  assert.equal((await skip()).status, 200);
+  assert.strictEqual((await next()).next, null);
+  // A step the form switched off is passed over.
+  await step1(base, { finalReview: false });
+  await next();
+  await postState(base, { step: 6, status: 'failed', activeStep: 6 });
+  await skip();
+  assert.strictEqual((await next()).next, 5);
+  await postState(base, { step: 5, status: 'failed', activeStep: 5 });
+  await skip();
+  assert.strictEqual((await next()).next, null, 'the final review is off');
+});
+
+test('Mockoon mocks and the implementation of a split task are never skipped', async t => {
+  const app = createApp(tmpDir());
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const skip = () => post(base, '/api/answer', { taskId: 't1', kind: 'decision', decision: 'skip' });
+  await step1(base, { taskSplit: '1. API\n2. UI' });
+  await postState(base, { step: 4, status: 'failed', activeStep: 4 });
+  const split = await skip();
+  assert.equal(split.status, 409);
+  assert.match((await split.json()).error, /split task cannot skip Implementation/);
+  assert.equal(stepOf(await task0(base), 4).status, 'failed', 'nothing moved');
+  await postState(base, { step: 7, status: 'failed', activeStep: 7 });
+  assert.equal((await skip()).status, 409);
+  // An unsplit task may go on to the review with what was built.
+  const plain = createApp(tmpDir());
+  const basePlain = await listen(plain);
+  t.after(() => plain.server.close());
+  await step1(basePlain, {});
+  await postState(basePlain, { step: 4, status: 'failed', activeStep: 4 });
+  assert.equal((await post(basePlain, '/api/answer', { taskId: 't1', kind: 'decision', decision: 'skip' })).status, 200);
+  assert.equal(stepOf(await task0(basePlain), 4).status, 'skipped');
+});
+
+test('the E2E login leaves the server only on a single-use ticket, to the own dev-server origin of the task', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  t.after(() => app.server.close());
+  const port = app.server.address().port;
+  const ticket = async body => post(base, '/api/e2e-login/ticket', { taskId: 't1', ...body });
+  const redeem = (key, headers = {}) => new Promise((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port, method: 'GET', path: `/api/e2e-login?taskId=t1&ticket=${key}`, headers }, res => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', c => { text += c; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(text || '{}') }));
+    });
+    r.on('error', reject);
+    r.end();
+  });
+  assert.equal((await ticket({ port: 4317 })).status, 404, 'no credentials saved yet');
+  await post(base, '/api/auth', { taskId: 't1', login: 'qa', password: 's3cret' });
+  assert.equal((await ticket({ port: 4317 })).status, 409, 'not a port this task started');
+  fs.writeFileSync(path.join(dir, 'tasks', 't1', 'processes.json'), JSON.stringify([{ port: 4317, what: 'dev-server' }]));
+  const mint = async () => (await (await ticket({ port: 4317 })).json()).ticket;
+
+  const first = await mint();
+  assert.match(first, /^[0-9a-f]{48}$/);
+  const ok = await redeem(first, { origin: 'http://localhost:4317' });
+  assert.equal(ok.status, 200);
+  assert.deepStrictEqual(ok.body, { login: 'qa', password: 's3cret' });
+  assert.equal(ok.headers['access-control-allow-origin'], 'http://localhost:4317');
+  assert.equal(ok.headers['cache-control'], 'no-store');
+  assert.equal((await redeem(first, { origin: 'http://localhost:4317' })).status, 403, 'spent by its first use');
+
+  assert.equal((await redeem(await mint(), { origin: 'https://evil.example' })).status, 403, 'another origin');
+  assert.equal((await redeem(await mint())).status, 403, 'no Origin at all: not the page it was minted for');
+  assert.equal((await redeem(await mint(), { origin: 'http://127.0.0.1:4317' })).status, 200, 'either loopback name of that port');
+  const wasted = await mint();
+  await redeem(wasted, { origin: 'http://localhost:9' });
+  assert.equal((await redeem(wasted, { origin: 'http://localhost:4317' })).status, 403, 'a refused use spends the ticket too');
+  assert.equal((await redeem(await mint(), { origin: 'http://localhost:4317', host: `evil.example:${port}` })).status, 403);
+  // The ticket itself is minted same-origin only, like every other call.
+  const cross = await fetch(`${base}/api/e2e-login/ticket`, { method: 'POST',
+    headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+    body: JSON.stringify({ taskId: 't1', port: 4317 }) });
+  assert.equal(cross.status, 403);
+  // Nothing of it reaches the state the page polls.
+  assert.ok(!JSON.stringify(await getState(base)).includes('s3cret'));
+});
+
+test('a resumed run drops the questions about the machine its dead agents asked, and keeps the ones about the feature', async t => {
+  const seed = async question => {
+    const dir = tmpDir();
+    const app = createApp(dir, { starterSession: null });
+    const base = await listen(app);
+    await postState(base, { step: 5, status: 'in_progress', activeStep: 5, question });
+    await new Promise(r => app.server.close(r));
+    return dir;
+  };
+  const open = async (dir, opts) => {
+    const app = createApp(dir, { starterSession: null, ...opts });
+    const base = await listen(app);
+    t.after(() => app.server.close());
+    return task0(base);
+  };
+  const chrome = { id: 'chrome1', text: 'Sign in in the tab I opened', options: ['done'] };
+  const dropped = await seed(chrome);
+  let task = await open(dropped, { orphaned: true });
+  assert.strictEqual(task.question, null);
+  assert.match(stepOf(task, 5).log.at(-1).text, /Question chrome1 dropped on resume/);
+  assert.equal(stepOf(task, 5).currentOperation, 'Resuming in a new session');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dropped, 'pipeline-state.json'), 'utf8')).tasks[0].question, null,
+    'and it does not come back from the file');
+  // A restart with the sessions alive leaves the question to the agent that still waits on it.
+  task = await open(await seed(chrome), {});
+  assert.equal(task.question.id, 'chrome1');
+  // What the user answers about the feature is worth keeping for the fresh agent.
+  task = await open(await seed({ id: 'q3', text: 'Which endpoint lists the nodes?' }), { orphaned: true });
+  assert.equal(task.question.id, 'q3');
+  for (const id of ['backend2', 'login1']) {
+    assert.strictEqual((await open(await seed({ id, text: 'x' }), { orphaned: true })).question, null, id);
+  }
+});
+
+test('the language of the run is kept for the sessions that attach to it later', async t => {
+  const dir = tmpDir();
+  const app = createApp(dir);
+  const base = await listen(app);
+  assert.equal((await (await fetch(`${base}/api/orchestrator?taskId=t1`)).json()).language, '');
+  assert.equal((await postState(base, { language: 'Polish' })).status, 200);
+  assert.equal((await (await fetch(`${base}/api/orchestrator?taskId=t1`)).json()).language, 'Polish');
+  await new Promise(r => app.server.close(r));
+  const again = createApp(dir);
+  const baseAgain = await listen(again);
+  t.after(() => again.server.close());
+  assert.equal((await (await fetch(`${baseAgain}/api/orchestrator?taskId=t1`)).json()).language, 'Polish', 'a restart keeps it');
 });

@@ -18,7 +18,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { detectPackageManager, installDependencies, copyEnvFiles, copyLocalFiles } = require('../../fixPr/scripts/worktree.cjs');
+const { detectPackageManager, installDependencies, copyEnvFiles, copyLocalFiles, copyDohConfig } = require('../../fixPr/scripts/worktree.cjs');
 
 function parseArgs(argv) {
   const args = { project: process.cwd(), root: '' };
@@ -51,7 +51,7 @@ function bootstrap(options) {
   const project = path.resolve(options.project || process.cwd());
   const root = path.resolve(options.root);
   const result = {
-    project, root, installed: false, manager: null, envFiles: [], localFiles: [], warnings: [], errors: [],
+    project, root, installed: false, manager: null, envFiles: [], localFiles: [], dohConfig: [], warnings: [], errors: [],
   };
   if (!isDirectory(root)) {
     result.errors.push(`Not a directory: ${root}`);
@@ -69,6 +69,11 @@ function bootstrap(options) {
   result.envFiles = copyEnvFiles(project, root);
   // The gitignored `*.local.*` config next to them (fixPr/scripts/worktree.cjs copyLocalFiles).
   result.localFiles = (options.copyLocalFiles || copyLocalFiles)(project, root);
+  // The project's doh config - gate commands (`checks.json`), rulebook, local rules - lives in its
+  // gitignored `.claude/doh/`, so a worktree has none of it. Without the gate config checks.cjs
+  // falls back to package.json, and on a project whose scripts are not its gate (dpx: no `test`,
+  // no `lint`) the unit and lint steps came back `skipped` for a whole run (2026-11-12).
+  result.dohConfig = (options.copyDohConfig || copyDohConfig)(project, root);
   const deps = installDependencies(root);
   result.manager = deps.manager;
   result.installed = Boolean(deps.manager) && !deps.error;

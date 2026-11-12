@@ -22,6 +22,18 @@ function run(args) {
 
 // ---------- parseArgs ----------
 
+test('--vars reads the values from a JSON file, and a --set given beside it wins', (t) => {
+  const dir = tempDir(t, 'rap-vars-');
+  const vars = path.join(dir, 'vars.json');
+  fs.writeFileSync(vars, JSON.stringify({ ROOT: '/from/file', FILES: 'a.ts, b.ts', COUNT: 3 }));
+  const args = rap.parseArgs(['--template=/t.md', '--out=/o.md', '--set=ROOT=/from/flag', `--vars=${vars}`]);
+  assert.deepStrictEqual(args.values, { ROOT: '/from/flag', FILES: 'a.ts, b.ts', COUNT: '3' });
+  fs.writeFileSync(vars, JSON.stringify({ lower: 'x' }));
+  assert.throws(() => rap.parseArgs(['--template=/t.md', '--out=/o.md', `--vars=${vars}`]), /UPPER_SNAKE/);
+  fs.writeFileSync(vars, '[1]');
+  assert.throws(() => rap.parseArgs(['--template=/t.md', '--out=/o.md', `--vars=${vars}`]), /JSON object/);
+});
+
 test('parseArgs reads the template, the output and every --set pair', () => {
   const args = rap.parseArgs([
     '--template=/tmp/a.md', '--out=/tmp/b.md', '--set=ROOT=/x/y', '--set=EFFORT=',
@@ -161,9 +173,11 @@ test('rendering twice over the same path replaces the prompt, leaving no .tmp be
 // hand-kept table fills a placeholder the skill forgot to pass, so the template renders
 // green in the test and the renderer REFUSES it mid-pipeline, where the failure costs a
 // spawned step. Reading the documented list is what makes this test the contract.
+// A `--vars="<briefVars>"` call adds the names restack.cjs writes into that file.
 function documentedSets(skill) {
   const md = fs.readFileSync(path.join(__dirname, '..', 'skills', skill, 'SKILL.md'), 'utf8');
-  return [...new Set([...md.matchAll(/--set=([A-Z][A-Z0-9_]*)=/g)].map((m) => m[1]))];
+  const fromVars = /--vars="<briefVars>"/.test(md) ? Object.keys(require('../skills/fixPr/scripts/restack.cjs').briefVarsOf()) : [];
+  return [...new Set([...[...md.matchAll(/--set=([A-Z][A-Z0-9_]*)=/g)].map((m) => m[1]), ...fromVars])];
 }
 
 test('every shipped agent template renders with the placeholders its skill documents', (t) => {

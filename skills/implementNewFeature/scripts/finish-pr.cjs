@@ -56,6 +56,20 @@ const gitIn = (root) => (args) => {
 const listOf = (text) => String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
 const firstLine = (text) => (listOf(text)[0] || '').slice(0, 300);
 
+// Every branch pushed, in order, stopping at the first refusal. A rewritten branch - an amended
+// commit, a split task's parts after their fix-ups - goes with a lease, never a bare force.
+function pushBranches(git, branches, rewritten, say) {
+  for (const branch of branches) {
+    const push = git(rewritten ? ['push', '--force-with-lease', '-u', 'origin', branch] : ['push', '-u', 'origin', branch]);
+    if (push.status !== 0) {
+      say(`PUSH_FAILED ${branch} ${firstLine(push.out.split('\n').filter((l) => /error|rejected|fatal|denied/i.test(l)).join('\n') || push.out)}`);
+      return false;
+    }
+    say(`PUSHED ${branch}`);
+  }
+  return true;
+}
+
 function finishPr(options, seams = {}) {
   const git = seams.git || gitIn(options.root);
   const lines = [];
@@ -98,14 +112,7 @@ function finishPr(options, seams = {}) {
     say(`COMMITTED ${after.slice(0, 12)}`);
   }
 
-  for (const branch of options.push) {
-    const push = git(options.amend ? ['push', '--force-with-lease', '-u', 'origin', branch] : ['push', '-u', 'origin', branch]);
-    if (push.status !== 0) {
-      say(`PUSH_FAILED ${branch} ${firstLine(push.out.split('\n').filter((l) => /error|rejected|fatal|denied/i.test(l)).join('\n') || push.out)}`);
-      return { lines, ok: false };
-    }
-    say(`PUSHED ${branch}`);
-  }
+  if (!pushBranches(git, options.push, options.amend, say)) return { lines, ok: false };
 
   if (!options.pr) return { lines, ok: true };
   const pr = (seams.createPr || createPr)({ root: options.root, head: options.branch, base: options.base,
@@ -125,4 +132,4 @@ if (require.main === module) {
   process.exitCode = result.ok ? 0 : 1;
 }
 
-module.exports = { parseArgs, finishPr };
+module.exports = { parseArgs, finishPr, pushBranches, gitIn, firstLine };

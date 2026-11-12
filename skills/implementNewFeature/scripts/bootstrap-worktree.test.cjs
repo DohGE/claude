@@ -58,6 +58,28 @@ test('every .env of the project reaches the worktree, at its own relative path',
   assert.ok(!fs.existsSync(path.join(root, '.claude')), 'and neither is the run\u0027s own session dir');
 });
 
+test('the project\'s gitignored doh config reaches the worktree: gate config, rulebook and local rules', (t) => {
+  const project = tempDir(t, 'bw-proj-');
+  const root = tempDir(t, 'bw-tree-');
+  // The task's worktree is a checkout: `.claude/` is ignored there, so it starts without the
+  // gate config, and checks.cjs then reads package.json - on dpx that skipped the unit suite.
+  spawnSync('git', ['-C', root, 'init', '-q'], { encoding: 'utf8' });
+  writeFile(root, '.gitignore', '.claude/\n');
+  writeFile(project, path.join('.claude', 'doh', 'checks.json'), '{"steps":{"test":{"command":"npx jest"}}}\n');
+  writeFile(project, path.join('.claude', 'doh', 'instructions', 'kind.json'), '{}\n');
+  writeFile(project, path.join('.claude', 'doh', 'local', 'naming.md'), '# rule\n');
+  // A run's own session folder is never config.
+  writeFile(project, path.join('.claude', 'doh', '20260101-000000', 'pipeline-state.json'), '{}\n');
+
+  const result = bw.bootstrap({ project, root });
+  assert.deepStrictEqual(result.errors, []);
+  assert.deepStrictEqual(result.dohConfig.sort(),
+    ['.claude/doh/checks.json', '.claude/doh/instructions/kind.json', '.claude/doh/local/naming.md']);
+  assert.strictEqual(fs.readFileSync(path.join(root, '.claude', 'doh', 'checks.json'), 'utf8'),
+    '{"steps":{"test":{"command":"npx jest"}}}\n');
+  assert.ok(!fs.existsSync(path.join(root, '.claude', 'doh', '20260101-000000')), 'a session folder stays where it is');
+});
+
 test('a package.json with no lockfile is a warning, not a silent skip', (t) => {
   const project = tempDir(t, 'bw-proj-');
   const root = tempDir(t, 'bw-tree-');

@@ -25,7 +25,7 @@
 //   node restack.cjs --action=plan --project=<dir> --stack="<part>"|"<bottom>;…" [--base=<branch>]
 //   node restack.cjs --action=stack --project=<dir> --stack="<bottom>;<part>;..."|"<any part>"
 //        [--base=<branch>] [--start=<part>] [--parent-old-tip=<sha>] [--onto-base=yes|no]
-//        [--checks-dir=<dir>] [--push=yes|no] [--gate=yes|no]
+//        [--checks-dir=<dir>] [--push=yes|no] [--gate=yes|no] [--language=<name>] [--resume=yes|no]
 // land and verify also take --run=<fixpr-run-*.json> (pr-comments.cjs): a part's worktree,
 // parent, tips and checks folder come from there. --summary=yes prints the compact form.
 // --pending-steps=build: gate steps the fixing agent left to the landing (a held part's build).
@@ -42,6 +42,7 @@ function parseArgs(argv) {
   const args = {
     action: 'land', push: 'yes', gate: 'yes', autoResolve: 'yes', parentTipAtStart: '', remoteTipAtStart: '', checksDir: '', pairs: [],
     lease: '', stack: [], from: '', fromOldTip: '', run: '', summary: 'no', pendingSteps: [], start: '', parentOldTip: '', base: '', ontoBase: 'yes',
+    resume: 'no', language: 'English',
   };
   const unknown = [];
   for (const arg of argv) {
@@ -71,12 +72,15 @@ function parseArgs(argv) {
     else if (m[1] === 'parent-old-tip') args.parentOldTip = value;
     else if (m[1] === 'base') args.base = value;
     else if (m[1] === 'onto-base') args.ontoBase = value;
+    else if (m[1] === 'resume') args.resume = value;
+    else if (m[1] === 'language') args.language = value;
     else unknown.push(arg);
   }
   // This script rewrites and pushes a branch: a mistyped flag stops it.
-  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base).`);
+  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base, --resume, --language).`);
   if (!['land', 'verify', 'push', 'cascade', 'stack', 'plan'].includes(args.action)) throw new Error(`Unknown --action=${args.action} (expected land|verify|push|cascade|stack|plan).`);
-  if (![args.push, args.gate, args.autoResolve, args.summary, args.ontoBase].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate, --auto-resolve, --summary and --onto-base take yes or no.');
+  if (![args.push, args.gate, args.autoResolve, args.summary, args.ontoBase, args.resume].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate, --auto-resolve, --summary, --onto-base and --resume take yes or no.');
+  if (args.resume === 'yes' && (args.start || args.parentOldTip)) throw new Error('--resume=yes reads where the climb stopped from its state file: give it without --start and --parent-old-tip.');
   if (args.run) fillFromRun(args);
   if (args.action === 'land' && (!args.worktree || !args.branch || !args.parent)) throw new Error('land needs --worktree, --branch and --parent (or --run and --branch).');
   if (args.action === 'verify' && (!args.project || args.pairs.length === 0)) throw new Error('verify needs --project and --pairs (or --run).');
@@ -309,6 +313,57 @@ const gateSummary = (gate) => ({
   errors: gate.errors || [],
 });
 
+// The bottom of a stack whose parent pull request was squash-merged into the base still carries
+// that parent's commits, and nothing in the base's history names them: the merge-base is the base
+// as it stood before. `rebase --onto <base> <merge-base>` then replays the parent's commits on top
+// of their own squash, and every file both touched conflicts - on 2026-11-10 DPXN-11967-part-2
+// stopped at 29 conflicting files, and a conflict agent spent 5 minutes finding that the squash of
+// part-1 held exactly part-1's last commit. Where the part's own commits begin, newest match wins:
+//   merged-pr - the head of a pull request merged into the base (GitHub), when it is on the part;
+//   patch-id  - a commit whose whole change since the fork point is one first-parent commit of the
+//               base since then (`git patch-id --stable`: line numbers do not count, so another
+//               pull request landed before the squash does not hide it).
+const squashScanLimit = 300;
+
+function patchIdOf(dir, diffArgs) {
+  const diff = spawnSync('git', ['-C', dir, ...diffArgs], { encoding: 'utf8', windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+  if (diff.status !== 0 || !diff.stdout) return new Map();
+  const ids = spawnSync('git', ['-C', dir, 'patch-id', '--stable'], { input: diff.stdout, encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  const out = new Map();
+  for (const line of String(ids.stdout || '').split(/\r?\n/)) {
+    const [id, sha] = line.trim().split(/\s+/);
+    if (id && sha && !out.has(id)) out.set(id, sha);
+  }
+  return out;
+}
+
+const diffFlags = ['--no-color', '--no-ext-diff', '--no-renames', '--full-index'];
+
+function squashedBoundary(dir, upstream, head, forkPoint, mergedHeads = []) {
+  const own = git(dir, ['rev-list', '--first-parent', `--max-count=${squashScanLimit}`, `${forkPoint}..${head}`]).out.split(/\r?\n/).filter(Boolean);
+  if (own.length === 0) return null;
+  const at = (i, via, into = null) => ({ boundary: own[i], commits: own.length - i, via, into });
+  const heads = new Set((mergedHeads || []).map((s) => String(s).toLowerCase()));
+  const byHead = own.findIndex((sha) => heads.has(sha.toLowerCase()));
+  if (byHead !== -1) return at(byHead, 'merged-pr');
+  const landed = patchIdOf(dir, ['log', '-p', '--first-parent', '--diff-merges=first-parent', `--max-count=${squashScanLimit}`, ...diffFlags, `${forkPoint}..${upstream}`]);
+  if (landed.size === 0) return null;
+  for (let i = 0; i < own.length; i += 1) {
+    const [id] = [...patchIdOf(dir, ['diff', ...diffFlags, forkPoint, own[i]]).keys()];
+    if (id && landed.has(id)) return at(i, 'patch-id', landed.get(id));
+  }
+  return null;
+}
+
+// The values of restack-agent.md a landing knows (`briefVars`, for render-agent-prompt.cjs --vars).
+// render-agent-prompt.test.cjs reads these names as part of fixPr's documented contract.
+function briefVarsOf({ tree = '', branch = '', parent = '', oldTip = '', lease = '', files = [], checksDir = '', push = 'yes' } = {}) {
+  return {
+    ROOT: tree, BRANCH: branch, PARENT: parent, OLD_TIP: oldTip, LEASE: lease || '', FILES: files.join(', '),
+    CHECKS_DIR: checksDir ? path.resolve(checksDir) : '', SKILL_DIR: path.join(__dirname, '..'), PUSH: push === 'no' ? 'no' : 'yes',
+  };
+}
+
 function land(options, { runGate = defaultGate } = {}) {
   const tree = path.resolve(options.worktree);
   const { branch, parent } = options;
@@ -338,8 +393,19 @@ function land(options, { runGate = defaultGate } = {}) {
   const before = git(tree, ['rev-parse', 'HEAD']).out;
 
   if (!git(tree, ['merge-base', '--is-ancestor', upstream, 'HEAD']).ok) {
-    const forkPoint = options.parentTipAtStart || git(tree, ['merge-base', '--fork-point', upstream, 'HEAD']).out || git(tree, ['merge-base', upstream, 'HEAD']).out;
+    let forkPoint = options.parentTipAtStart || git(tree, ['merge-base', '--fork-point', upstream, 'HEAD']).out || git(tree, ['merge-base', upstream, 'HEAD']).out;
     if (!forkPoint) return fail(`No old tip of ${parent} to move ${branch} off: give --parent-tip-at-start.`);
+    // An old tip the caller named is where the part's own commits begin; one guessed from the
+    // merge-base may sit under a parent that was squash-merged since.
+    if (!options.parentTipAtStart || (options.mergedHeads || []).length > 0) {
+      const squashed = squashedBoundary(tree, upstream, 'HEAD', forkPoint, options.mergedHeads);
+      if (squashed) {
+        forkPoint = squashed.boundary;
+        result.squashed = squashed;
+        const into = squashed.into ? ` as ${squashed.into.slice(0, 9)}` : '';
+        result.warnings.push(`${squashed.commits} commit(s) up to ${squashed.boundary.slice(0, 9)} are already in ${parent}${into} (${squashed.via}, a squash merge): only the commits after it moved.`);
+      }
+    }
     result.oldParentTip = forkPoint;
     // rerere: a conflict resolved once (by hand, or by the conflict agent of an earlier run) is
     // resolved the same way the next time this part moves.
@@ -365,6 +431,20 @@ function land(options, { runGate = defaultGate } = {}) {
       if (inRebase(tree)) {
         git(tree, ['rebase', '--abort']);
         result.status = 'conflict';
+        // What the conflict agent's brief needs and this landing knows, for render-agent-prompt.cjs
+        // --vars: the orchestrator adds only the pull request, its language and the parent's changes.
+        if (options.checksDir) {
+          const varsFile = path.join(path.resolve(options.checksDir), 'restack-agent-vars.json');
+          try {
+            fs.mkdirSync(path.dirname(varsFile), { recursive: true });
+            fs.writeFileSync(varsFile, `${JSON.stringify(briefVarsOf({
+              tree, branch, parent, oldTip: forkPoint, lease, files: result.conflictFiles, checksDir: options.checksDir, push: options.push,
+            }), null, 1)}\n`, 'utf8');
+            result.briefVars = varsFile;
+          } catch (err) {
+            result.warnings.push(`Could not write ${varsFile}: ${(err && err.message) || err}`);
+          }
+        }
         return result;
       }
     }
@@ -444,8 +524,15 @@ function verify(options) {
       result.ok.push(name);
       continue;
     }
-    const from = oldTip || git(project, ['merge-base', `origin/${parent}`, `origin/${child}`]).out || `<old ${parent} tip>`;
-    result.broken.push({ parent, child, command: `git rebase --onto origin/${parent} ${from} ${child}` });
+    let from = oldTip || git(project, ['merge-base', `origin/${parent}`, `origin/${child}`]).out || '';
+    if (!oldTip && from) {
+      const squashed = squashedBoundary(project, `origin/${parent}`, `origin/${child}`, from, options.mergedHeads);
+      if (squashed) {
+        from = squashed.boundary;
+        result.warnings.push(`${squashed.commits} commit(s) of ${child} up to ${from.slice(0, 9)} are already in ${parent} (${squashed.via}, a squash merge): the move replays only the commits after it.`);
+      }
+    }
+    result.broken.push({ parent, child, command: `git rebase --onto origin/${parent} ${from || `<old ${parent} tip>`} ${child}` });
   }
   return result;
 }
@@ -484,6 +571,7 @@ function compactPart(p) {
     redSteps: gate ? (gate.steps || []).filter((s) => s.status === 'failed').map((s) => ({ label: s.label, errorsPath: s.errorsPath || null })) : [],
     conflictFiles: p.conflictFiles || [], oldParentTip: p.oldParentTip || null,
     autoResolved: (p.autoResolved || []).map((r) => r.file || r), worktree: p.worktree || null,
+    ...(p.squashed ? { squashed: p.squashed } : {}), ...(p.briefVars ? { briefVars: p.briefVars } : {}),
     warnings: p.warnings || [], errors: p.errors || [],
   };
 }
@@ -530,6 +618,8 @@ function climb(options, deps = {}) {
         remoteTipAtStart: tips.get(branch) || '',
         checksDir: options.checksDir ? path.join(options.checksDir, branch) : '', push: options.push || 'yes', gate: options.gate || 'yes',
         autoResolve: options.autoResolve || 'yes',
+        // Only the bottom moves onto the base the merged pull requests went into.
+        mergedHeads: i === 0 ? options.mergedHeads || [] : [],
       });
     } catch (err) {
       landed = { status: 'error', errors: [String((err && err.message) || err)] };
@@ -539,6 +629,7 @@ function climb(options, deps = {}) {
     result.parts.push({
       branch, parent, status: landed.status, commit: landed.commit || null, oldTip: tips.get(branch) || null, pushed: Boolean(landed.pushed), rebased: Boolean(landed.rebased),
       autoResolved: landed.autoResolved || [], conflictFiles: landed.conflictFiles || [], oldParentTip: landed.oldParentTip || null, gate: landed.gate || null,
+      squashed: landed.squashed || null,
       worktree: keep || (removed && !removed.removed) ? added.worktree : null, warnings: [...(added.warnings || []), ...(landed.warnings || []), ...((removed && removed.warnings) || [])], errors: landed.errors || [],
     });
     if (keep) {
@@ -552,16 +643,17 @@ function climb(options, deps = {}) {
 // The stack a branch belongs to, bottom-first, read from GitHub: down through the open pull
 // requests its base is the head of, up through the open ones based on it. One branch named is
 // enough for /doh:restack.
-function discoverStack(project, branch, { findPr, childrenOf } = {}) {
+function discoverStack(project, branch, { findPr, childrenOf, mergedInto } = {}) {
   const github = require('../../codeReview/scripts/github.cjs');
   const pc = require('./pr-comments.cjs');
   const find = findPr || ((b) => github.findOpenPr(project, b).pr);
   const kids = childrenOf || ((b) => pc.openChildren(project, b));
+  const merged = mergedInto || ((b) => github.mergedPrHeads(project, b).heads);
   const warnings = [];
   const below = [];
   const prs = {};
   const pr = find(branch);
-  if (!pr) return { stack: [branch], base: null, prs, warnings: [`${branch} has no open pull request; give the whole stack with --stack and its base with --base.`] };
+  if (!pr) return { stack: [branch], base: null, prs, mergedHeads: [], warnings: [`${branch} has no open pull request; give the whole stack with --stack and its base with --base.`] };
   prs[branch] = { number: pr.number || null, url: pr.url || null };
   let base = pr.base;
   for (let guard = 0; base && guard < 20; guard += 1) {
@@ -576,7 +668,9 @@ function discoverStack(project, branch, { findPr, childrenOf } = {}) {
     const p = find(b);
     if (p) prs[b] = { number: p.number || null, url: p.url || null };
   }
-  return { stack: [...below, branch, ...above], base, prs, warnings };
+  // The pull requests merged into the base: one squash-merged under the bottom shows here.
+  const mergedHeads = base ? merged(base) || [] : [];
+  return { stack: [...below, branch, ...above], base, prs, mergedHeads, warnings };
 }
 
 // The stack, its base and the pull requests, read once: an explicit --stack keeps its order, the
@@ -585,16 +679,18 @@ function resolveStack(project, options, deps) {
   const found = (deps.discover || discoverStack)(project, options.stack[0], deps);
   const stack = options.stack.length === 1 ? found.stack : options.stack;
   const base = options.base || (found.stack[0] === stack[0] ? found.base || '' : '');
-  return { stack, base, prs: found.prs || {}, warnings: found.warnings || [] };
+  // Heads merged into another branch than the base the stack moves onto say nothing about it.
+  const mergedHeads = base && base === found.base ? found.mergedHeads || [] : [];
+  return { stack, base, prs: found.prs || {}, mergedHeads, warnings: found.warnings || [] };
 }
 
 // What /doh:restack would move, moving nothing: the stack, its base, and every pair that does not
 // sit on its parent now (verify).
 function plan(options, deps = {}) {
   const project = path.resolve(options.project);
-  const { stack, base, prs, warnings } = resolveStack(project, options, deps);
+  const { stack, base, prs, mergedHeads, warnings } = resolveStack(project, options, deps);
   const pairs = [...(base ? [{ parent: base, child: stack[0], oldTip: null }] : []), ...stack.slice(1).map((child, i) => ({ parent: stack[i], child, oldTip: null }))];
-  const checked = (deps.verify || verify)({ project, pairs });
+  const checked = (deps.verify || verify)({ project, pairs, mergedHeads });
   return { action: 'plan', stack, base, prs, ok: checked.ok, broken: checked.broken, warnings: [...warnings, ...checked.warnings], errors: checked.errors };
 }
 
@@ -602,13 +698,91 @@ function plan(options, deps = {}) {
 // onto its base first; every part above moves onto the part below it once that one has landed.
 // --start resumes at a part (after a conflict agent landed the one below it: --parent-old-tip is
 // where that one stood before - the stack's own JSON names it as that part's oldTip).
+//
+// At a conflict the climb renders the conflict agent's brief itself (`agentPrompt`): on 2026-11-10
+// the orchestrator copied 29 conflicting paths and twelve values into `--set=` flags by hand. The
+// list the orchestrator reads is capped (`conflictCount` keeps the number); the brief has it all.
+// Every run leaves `restack-state.json` in the checks folder - the part it stopped at and where
+// every part stood before - so `--resume=yes` takes the stopped part's worktree down and climbs on
+// above it in one call, with no sha copied out of an earlier answer.
+const agentTemplate = path.join(__dirname, '..', 'references', 'restack-agent.md');
+const conflictListCap = 10;
+
+function renderConflictBrief(project, part, { prs, checksDir, push, language }) {
+  const rap = require('../../../scripts/render-agent-prompt.cjs');
+  const slug = part.branch.replace(/[\\/]/g, '-');
+  const pr = prs[part.branch] || {};
+  const values = {
+    ROOT: part.worktree || '', BRANCH: part.branch, PR_NUMBER: pr.number ? String(pr.number) : 'none', PR_URL: pr.url || 'none',
+    PARENT: part.parent || '', OLD_TIP: part.oldParentTip || '', LEASE: part.oldTip || '', FILES: (part.conflictFiles || []).join(', '),
+    CHECKS_DIR: path.join(checksDir, part.branch), SKILL_DIR: path.join(__dirname, '..'), PUSH: push || 'yes', LANGUAGE: language || 'English',
+    PARENT_CHANGES: 'none',
+  };
+  const rendered = rap.renderFile({ template: agentTemplate, out: path.join(project, '.claude', 'doh', slug, `${slug}-restack-agent-prompt.md`), values });
+  return { agentPrompt: rendered.errors.length ? null : rendered.out, agentPromptErrors: rendered.errors };
+}
+
+function readState(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeState(file, state) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(state, null, 1)}\n`, 'utf8');
+}
+
 function stackAction(options, deps = {}) {
   const project = path.resolve(options.project);
-  const { stack, base, prs, warnings } = resolveStack(project, options, deps);
-  const startIndex = options.start ? stack.indexOf(options.start) : options.ontoBase === 'no' ? 1 : 0;
-  if (startIndex < 0) return { action: 'stack', stack, base, prs, parts: [], waiting: [], warnings, errors: [`${options.start} is not a part of ${stack.join(' <- ')}.`] };
-  const result = climb({ ...options, project, stack, base, startIndex, startParentOldTip: options.parentOldTip || '' }, deps);
-  return { action: 'stack', stack, base, prs, ...result, parts: result.parts.map(compactPart), warnings: [...warnings, ...result.warnings] };
+  const checksDir = options.checksDir ? path.resolve(options.checksDir) : path.join(project, '.claude', 'doh', 'restack-checks');
+  const stateFile = path.join(checksDir, 'restack-state.json');
+  const { stack, base, prs, mergedHeads, warnings } = resolveStack(project, options, deps);
+  const head = { action: 'stack', stack, base, prs };
+  const stop = (message) => ({ ...head, parts: [], waiting: [], warnings, errors: [message] });
+  let startIndex;
+  let startParentOldTip = options.parentOldTip || '';
+  let resumedAfter = null;
+  if (options.resume === 'yes') {
+    const state = readState(stateFile);
+    if (!state || !state.stopped) return stop(`Nothing to resume: ${stateFile} names no part where a climb stopped.`);
+    const at = stack.indexOf(state.stopped);
+    if (at < 0) return stop(`${state.stopped}, where the last climb stopped, is not a part of ${stack.join(' <- ')}.`);
+    const parent = at === 0 ? base : stack[at - 1];
+    if (!deps.tips) git(project, ['fetch', '--quiet', 'origin', parent, state.stopped]);
+    const sits = deps.sits || ((p, c) => git(project, ['merge-base', '--is-ancestor', `origin/${p}`, `origin/${c}`]).ok);
+    if (!sits(parent, state.stopped)) return stop(`${state.stopped} does not sit on ${parent} yet: land it first (the conflict agent's push), then resume.`);
+    const removed = (deps.worktree || require('./worktree.cjs')).remove({ project, branch: state.stopped });
+    warnings.push(...((removed && removed.warnings) || []));
+    if (removed && removed.removed === false) warnings.push(`The worktree of ${state.stopped} was not taken down: ${((removed.errors || [])[0]) || 'see worktree.cjs'}.`);
+    resumedAfter = state.stopped;
+    startIndex = at + 1;
+    startParentOldTip = (state.oldTips || {})[state.stopped] || '';
+    if (startIndex >= stack.length) {
+      writeState(stateFile, { ...state, stopped: null, at: new Date().toISOString() });
+      return { ...head, resumedAfter, parts: [], waiting: [], warnings, errors: [] };
+    }
+  } else {
+    startIndex = options.start ? stack.indexOf(options.start) : options.ontoBase === 'no' ? 1 : 0;
+    if (startIndex < 0) return stop(`${options.start} is not a part of ${stack.join(' <- ')}.`);
+  }
+  const result = climb({ ...options, project, stack, base, startIndex, startParentOldTip, checksDir, mergedHeads }, deps);
+  const parts = result.parts.map(compactPart);
+  const last = parts[parts.length - 1];
+  if (last && last.status === 'conflict') Object.assign(last, renderConflictBrief(project, last, { prs, checksDir, push: options.push, language: options.language }));
+  for (const p of parts) {
+    p.conflictCount = p.conflictFiles.length;
+    p.conflictFiles = p.conflictFiles.slice(0, conflictListCap);
+  }
+  const previous = readState(stateFile);
+  writeState(stateFile, {
+    stack, base, stopped: last && last.status !== 'landed' ? last.branch : null,
+    oldTips: { ...((previous && previous.oldTips) || {}), ...Object.fromEntries(result.parts.map((p) => [p.branch, p.oldTip])) },
+    at: new Date().toISOString(),
+  });
+  return { ...head, ...(resumedAfter ? { resumedAfter } : {}), ...result, parts, warnings: [...warnings, ...result.warnings] };
 }
 
 function compactLand(result) {
@@ -632,6 +806,6 @@ function main() {
   process.exit(result.errors && result.errors.length ? 1 : 0);
 }
 
-module.exports = { parseArgs, parsePairs, land, verify, push, cascade, climb, stackAction, plan, discoverStack, compactPart, landOptionsFromRun, pairsFromRun, mergeJson3, autoResolve, pushWithRetry, absent };
+module.exports = { parseArgs, parsePairs, land, verify, push, cascade, climb, stackAction, plan, discoverStack, compactPart, landOptionsFromRun, pairsFromRun, mergeJson3, autoResolve, pushWithRetry, squashedBoundary, briefVarsOf, absent };
 
 if (require.main === module) main();

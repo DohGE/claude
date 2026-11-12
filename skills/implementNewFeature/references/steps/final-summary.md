@@ -4,13 +4,35 @@
    `<SESSION>/tasks/T/auth.json` if it still exists. After a `finish` it STAYS: the work of a failed
    task can still get its pull request, and a review or retry asked for afterwards may still have
    to log in. The server deletes every task's copy when it shuts down.
-2. Collect from step results only (no file contents): changes, features, tests (E2E suite + the project's unit suite), API mocks, mockup comparison, UX findings, review results of both reviews, and step 4's deviations when it reported any — they belong at the end of `changes`, prefixed so a reader sees at once that the run departed from the plan.
-3. POST `{"taskId":"T","summary":{"finalStatus":"...","changes":[...],"features":[...],"tests":"...","apiMocks":"...","mockupComparison":"...","uxReview":"...","codeReview":"..."}}` (`tests` = the validation agent's `testsSummary` and `unitSummary`; `apiMocks` = its `apiMockSummary`; `mockupComparison` = its `mockupSummary` - every renamed field is listed here, so a missing line reads as "no source" and the section lands empty even when the step did the work; `uxReview` = its `uxSummary`; `codeReview` = the `reviewSummary` of step 6, then that of step 9 when it ran, each naming every finding it rejected and on what ground). `finalStatus` is `Completed` on success — a FIXED IDENTIFIER — and `Failed at <step name>` after a `finish`. Put the task's branch and `ROOT` at the top of `changes` so the user can find the work. A step that runs after the summary (a review the user asked for later) POSTs the summary again with its result folded in: the screen must never say a step did not run when it did.
+2. A split task whose last step did not prove its parts (it was skipped, or the task was finished
+   early): run `split.commands.fixups` (`task-info.cjs`), so nothing stays staged outside its
+   part. The parts themselves are proven before the pull requests (below), not here.
+3. Build and post the summary with ONE call — never compose it yourself:
+
+       node "<SKILL_DIR>/scripts/post-result.cjs" summary --port=PORT --task=T
+
+   It reads what every step left in `<SESSION>/tasks/T/results/` — the implementation's summary,
+   features and deviations (`step-4.json`, or one `step-4-part-<n>.json` per part), validation's
+   `testsSummary` / `unitSummary` / `mockupSummary` / `uxSummary` / `apiMockSummary`
+   (`step-5.json`), both reviews' `reviewSummary` (`step-6.json`, `step-9.json`), the regression's
+   lines and the parts' gate — and the task's own record: its branch and working directory at the
+   top of `changes`, the deviations at the end of it, marked, so a reader sees at once that the
+   run departed from the plan. A step that left no result says why in its section (switched off,
+   skipped after it failed, did not run): no section reads as if the work was done. It works out
+   `finalStatus` itself, from the steps: `Completed` on success — a FIXED IDENTIFIER —
+   `Completed with skipped steps: <step names>` when the user went on without a failed step, and
+   `Failed at <step name>` after a `finish`. The NAME, never the id. It prints `SUMMARY_POSTED`,
+   then `finalStatus: …`, `branch: …`, `root: …` (`POST_FAILED <reason>` → say so and post it again
+   once the reason is gone).
+   A step that runs after the summary (a review the user asked for later) ends by posting the
+   summary again the same way, with its result folded in: the screen must never say a step did
+   not run when it did.
 4. Stage that task's changes: `git -C "<ROOT>" add -A` (already done by the review agents; verify
    with `git -C "<ROOT>" status --short`). Worktrees have their own index, so tasks never stage into each other.
-5. Print T's summary in the terminal (user's language): its branch, working directory and final
-   status, then the details. Every other task's orchestrator prints its own.
-6. Tell the user how the work leaves the run: the summary screen's **Create pull request** button —
+5. Tell the user, in the terminal, in their language and in THREE lines at most: the final status,
+   the branch and working directory, and that the details are on the summary screen. The screen
+   holds every section; repeating them here only spends tokens on text the user already has.
+6. Add how the work leaves the run, once: the summary screen's **Create pull request** button —
    there for a failed task too — commits T's staged changes with the step-1 commit message, pushes
    the branch and opens a pull request into the branch it was started from, while the server keeps
    running for the other tasks; the link appears on the summary. **Shut down server** sits in the
@@ -49,18 +71,20 @@ on T's summary. The server wrote `<SESSION>/tasks/T/pr-request.json` — `branch
 `commitMessage`, `finalStatus`, `taskSplit`, `splitBranch` — and shows "Creating the pull request"
 until you POST the outcome. It stays up; nothing here stops it. Never run `git commit`, `git push`
 or a hook yourself in this flow, and never run a refused step a second time to "see the error":
-`finish-pr.cjs` saves every output, and a second commit is what once dropped a task's staged work.
+the scripts save every output, and a second commit is what once dropped a task's staged work.
 
 1. Read `pr-request.json` (it is T's own record, not the user's secret). `ROOT` = its `root`;
    `BASE` = its `base`, else the main branch step 4 would pick; the message = its `commitMessage`,
    else `<branch>`.
 2. Write the pull request's description in ENGLISH, at most five sentences, to
    `<SESSION>/tasks/T/pr-body.md`: what the feature does and the main changes, taken from the
-   step results you kept (the summary's features and changes) — never from reading the diff. When
-   `finalStatus` starts with `Failed`, the first sentence says where the pipeline stopped and what
-   is therefore unproven. No attribution of any kind: no "Generated with Claude Code", no
-   `Co-Authored-By`, no robot emoji (`create-pr.cjs` strips them anyway).
-3. One call does the rest, each part only after the one before it succeeded:
+   summary on screen (`GET /api/state` → T's `summary.features` and `summary.changes`, read with a
+   one-line filter — never the whole state, never the diff). When `finalStatus` starts with
+   `Failed`, the first sentence says where the pipeline stopped and what is therefore unproven;
+   when it names skipped steps, the first sentence names them and what nobody proved because of
+   it. No attribution of any kind: no "Generated with Claude Code", no `Co-Authored-By`, no robot
+   emoji (`create-pr.cjs` strips them anyway).
+3. An unsplit task — one call does the rest, each part only after the one before it succeeded:
 
        node "<SKILL_DIR>/scripts/finish-pr.cjs" --root="<ROOT>" --task-dir="<SESSION>/tasks/T" --branch=<branch> --base=<BASE> "--message=<the message>" --body-file="<SESSION>/tasks/T/pr-body.md"
 
@@ -73,24 +97,41 @@ or a hook yourself in this flow, and never run a refused step a second time to "
      was committed. Read the first lines of `errorsPath`, POST
      `{"taskId":"T","pr":{"status":"failed","reason":"pre-commit: <the first decisive line>"}}`, and
      tell the user: a fix here is new code no review has seen, so it is their call — they write it
-     in the summary's terms ("fix the lint and try again") and you hand it to a fresh review agent
-     of step 9, or they fix it themselves and press "Try again".
+     in the summary's terms ("fix the lint and try again") and you hand it to a regression-fix
+     agent of step 9 (`task-info.cjs --step=9 --render --phase=regression-fix`, the red line in its
+     prompt), or they fix it themselves and press "Try again".
    - `COMMIT_REFUSED <log>` then `CHANGES_KEPT`, `CHANGES_RESTORED` or `CHANGES_LOST <snapshot>` →
      POST `pr` `failed` with the log's decisive line; with `CHANGES_LOST`, tell the user plainly
      that `git -C "<ROOT>" stash apply --index <snapshot>` brings the staged work back.
    - `PUSH_FAILED <branch> <reason>` (no credentials, a protected branch) → POST `pr` `failed`; the
      commit stands, and "Try again" pushes it (`NOTHING_TO_COMMIT` then `PUSHED`).
    - `PR_FAILED <reason>` → POST `pr` `failed`; the commit and the push stand.
-4. A split task (`taskSplit` not empty; its parts and `N` as in step 4, "Split task", `<branch>` =
-   `splitBranch`): first `split-fixups.cjs` without `--stage-all` (step 4, "Split task"), so whatever
-   is still staged lands in its own part; then
-   `node "<SKILL_DIR>/scripts/finish-pr.cjs" --root="<ROOT>" --task-dir="<SESSION>/tasks/T" --branch=<branch>-part-<N> --amend --no-pr --push=<branch>-part-1,…,<branch>-part-<N>`
-   — what `FIXUPS_KEPT` left is amended into the last part, and every part branch is pushed. Then
-   one description per part (what THAT part does, `pr-body-<n>.md`) and one pull request per part,
-   in order — part 1 into `BASE`, part `n` into `<branch>-part-<n-1>` — so each one shows only its
-   own part's diff:
-   `node "<SKILL_DIR>/scripts/create-pr.cjs" --root="<ROOT>" --head=<branch>-part-<n> --base=<its base> "--title=<the message's first line> (part n/N)" --body-file="<SESSION>/tasks/T/pr-body-<n>.md"`.
-   POST `pr` `created` with every URL in `urls`.
+4. A split task (`taskSplit` not empty; `N` = `task-info.cjs` → `split.parts`, `<branch>` =
+   `splitBranch`) opens one pull request per part — part 1 into `BASE`, part `n` into
+   `<branch>-part-<n-1>`, so each one shows only its own part's diff — and EVERY part must pass
+   the project's lint, typecheck, unit tests and build on its own first: each is a pull request
+   CI runs by itself. Write one description per part (what THAT part does) to
+   `<SESSION>/tasks/T/pr-body-<n>.md`; a part without one gets `pr-body.md`. Then ONE call, Bash
+   `run_in_background: true` (a part not verified since it last moved is built now, and a build
+   takes minutes):
+
+       node "<SKILL_DIR>/scripts/finish-split-pr.cjs" --root="<ROOT>" --project="<PROJECT>" --task-dir="<SESSION>/tasks/T" --branch=<branch> --base=<BASE> --parts=<N> "--message=<the message>"
+
+   It folds what is still staged into its part (`split-fixups.cjs`'s line; after `FIXUPS_KEPT` the
+   rest is amended into the last part through the pre-commit gate), verifies every part
+   (`verify-parts.cjs`: `PART <n> GREEN | RED <step>=<errorsPath> | BLOCKED <reason>`, then
+   `PARTS_GREEN | PARTS_RED <n,…> | PARTS_BLOCKED <reason>`), pushes every part branch with a lease
+   (`PUSHED <branch>`) and opens the pull requests in order (`PR_CREATED` / `PR_EXISTS <url>` per
+   part), stopping at the first failure:
+   - every part has its pull request → POST `pr` `created` with every URL in `urls`.
+   - `PARTS_RED <n,…>` → nothing was pushed. POST
+     `{"taskId":"T","pr":{"status":"failed","reason":"part <n> does not pass <step> on its own: <the first decisive line of its errorsPath>"}}`
+     and tell the user which part and which step: their call, as for a red pre-commit — a
+     regression-fix agent (the `PART <n> RED …` line in its prompt; then press "Try again"), or
+     their own fix.
+   - `PARTS_BLOCKED`, `PRECOMMIT_FAILED`, `COMMIT_REFUSED`, `PUSH_FAILED`, `PR_FAILED` → POST `pr`
+     `failed` with that line, as in point 3; pull requests already opened stay, and "Try again"
+     finds them (`PR_EXISTS`).
 5. Delete `pr-request.json`, and print in the terminal: the commit, the pull request URL(s) or
    the failure. The worktree stays while the server runs (point 8).
 

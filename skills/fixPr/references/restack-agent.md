@@ -40,6 +40,16 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
 
 1. `git -C "{{ROOT}}" fetch origin {{PARENT}}`, then `git -C "{{ROOT}}" rev-parse HEAD` → keep it as
    `<before>`.
+   Then rule out a squash merge, before any conflict is yours. List the commits you are about to
+   replay: `git -C "{{ROOT}}" log --oneline --first-parent {{OLD_TIP}}..HEAD`. Look for commits
+   that belong to another pull request: one already merged into `{{PARENT}}` as a single squash
+   commit. `git -C "{{ROOT}}" log --oneline --first-parent {{OLD_TIP}}..origin/{{PARENT}}` names
+   it, usually `<title> (#<number>)`. Then check the newest such commit `<last>`:
+   `git -C "{{ROOT}}" diff --quiet <last> <squash>` (an exact match), or the same files and
+   changes in `git -C "{{ROOT}}" diff --stat {{OLD_TIP}} <last>` and
+   `git -C "{{ROOT}}" show --stat <squash>`. If it holds, replay only what comes after it: use
+   `<last>` in place of `{{OLD_TIP}}` in point 2, and name it in your summary. On 2026-11-10 this
+   turned 29 "conflicting" files into a rebase with no conflict at all.
 2. `git -C "{{ROOT}}" -c rerere.enabled=true rebase --onto origin/{{PARENT}} {{OLD_TIP}}`.
 3. At every stop, `git -C "{{ROOT}}" diff --name-only --diff-filter=U` lists the files. For each one,
    Read it and resolve every conflict block:
@@ -61,7 +71,10 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
    resolved them again). Then `git -C "{{ROOT}}" rebase --abort` and end with the `error` JSON,
    naming the file and the two changes, with a choice the user can answer in one word (A: keep the
    parent's change and adapt this branch's use; B: …).
-4. Run the gate in the background (Bash, `run_in_background: true`):
+4. `git -C "{{ROOT}}" diff --quiet {{LEASE}} HEAD` exits 0 → the moved tree is the one already
+   pushed, byte for byte: the gate is `skipped` (it proves nothing new), point 5. Otherwise run the
+   gate in the background (Bash, `run_in_background: true`; a green verdict on the same tree is
+   reused by checks.cjs itself):
 
        node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{PARENT}}" --result-file="{{CHECKS_DIR}}/gate-restack-<n>.json"
 

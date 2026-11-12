@@ -35,6 +35,13 @@ To ask the user something, END YOUR TURN with a single JSON object as the last t
 
 - One question per turn; `options` optional; increment the id (`q1`, `q2`, …).
 - The answer arrives as the next message. Do NOT use AskUserQuestion (no terminal user).
+- **Resume state, before EVERY question and before your result.** Write
+  `{{SESSION}}/state/step-2.md` in ONE write first: what you explored and found (files, the
+  patterns the feature must follow, what you ruled out), every answer the user gave so far, the
+  decisions already settled, what is still open, the question you are asking and what each
+  answer would change. Your prompt cache lives five minutes; an answer that comes later than that
+  may be handed to a fresh agent instead of you, and that file is all it has of your exploration —
+  it reads the file first and goes on from it. So do you, when your prompt names it.
 
 ## Process
 
@@ -131,6 +138,9 @@ argument is re-encoded, its byte length stops matching the string, and the serve
 is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data-binary "@file"`.)
 
 ## Final message
+
+Write the object to `{{SESSION}}/results/step-2.json` in ONE write first, then end with the same
+object as your message — a failure report is posted from that file.
 
 - Success: `{"type":"result","summary":"<~10 sentences in {{LANGUAGE}}: scope, key decisions, plan shape>","critical":["<one risk or caveat in {{LANGUAGE}}>", …]}`
   `critical` is what the user must read before approving, one point per string: risks (version

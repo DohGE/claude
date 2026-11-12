@@ -193,6 +193,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
+Write the object to `{{SESSION}}/results/step-7.json` in ONE write first, then end with the same
+object as your message — a failure report is posted from that file.
+
 - Success: `{"type":"result","routes":<count>,"summary":"<which endpoints, which error variants, what the payloads contain, ~5 sentences in {{LANGUAGE}}>"}`
 - Failure (no HTTP API to mock, or no way to determine the endpoints):
   `{"type":"error","report":"<what is missing, in {{LANGUAGE}}>"}`

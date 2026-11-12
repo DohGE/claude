@@ -3943,23 +3943,6 @@
    }
   },
   {
-   "id": "v325",
-   "files": [
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"
-   ],
-   "instructions": [
-    "best-practices"
-   ],
-   "items": [
-    "best-practices#9"
-   ],
-   "severity": null,
-   "text": "a writable signal published on the public surface (`selectedTab`, `isLocked`, `formSnapshot`) — expose `asReadonly()`/`computed()`.",
-   "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "88-90, 135, 141, 143, 148"
-   }
-  },
-  {
    "id": "v326",
    "files": [
     "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts"

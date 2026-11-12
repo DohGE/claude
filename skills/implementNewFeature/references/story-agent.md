@@ -112,6 +112,9 @@ is unavoidable: write the JSON to a temp file as UTF-8 without BOM, then `--data
 
 ## Final message
 
+Write the object to `{{SESSION}}/results/step-8.json` in ONE write first, then end with the same
+object as your message — a failure report is posted from that file.
+
 - Success: `{"type":"result","criteria":<count>,"summary":"<which sources you used, what the story covers, ~3 sentences in {{LANGUAGE}}>"}`
 - Failure (the sources are unreadable, or they say too little to state a single checkable outcome):
   `{"type":"error","report":"<what is missing, in {{LANGUAGE}}>"}`

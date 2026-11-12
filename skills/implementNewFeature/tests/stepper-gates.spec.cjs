@@ -222,3 +222,30 @@ test('"Open session" otwiera terminal przez serwer, a róg czeka na nową sesję
   await poll;
   await expect(chipOf(page, 'Orchestrator').locator('b')).toHaveText('working');
 });
+
+test('a failed step offers Skip: the step turns Skipped and the orchestrator is told where to go on', async ({ page }) => {
+  await postState({ step: 5, status: 'failed', activeStep: 5, report: 'compliance 73%' });
+  await page.goto(base);
+  await page.waitForSelector('#skip');
+  await expect(page.locator('#retry')).toHaveCount(1);
+  await expect(page.locator('#finish')).toHaveCount(1);
+  await page.click('#skip');
+  expect(await takeAnswer()).toMatchObject({ kind: 'decision', decision: 'skip', next: 9 });
+  await expect(page.locator('.step[data-step="5"] .badge')).toHaveText('Skipped');
+  // What failed stays readable, with nothing left to decide.
+  await expect(page.locator('#panel h2')).toHaveText(/skipped/);
+  await expect(page.locator('#panel .report')).toHaveText('compliance 73%');
+  await expect(page.locator('#skip')).toHaveCount(0);
+  await expect(page.locator('#retry')).toHaveCount(0);
+});
+
+test('a split task hides Skip on a failed Implementation and says why', async ({ page }) => {
+  await fetch(`${base}/api/answer`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ taskId: 't1', kind: 'step1', taskDescription: 'x', branch: 'b', taskSplit: '1. API\n2. UI' }) });
+  await takeAnswer();
+  await postState({ step: 4, status: 'failed', activeStep: 4, report: 'part 2 broke' });
+  await page.goto(base);
+  await page.waitForSelector('#retry');
+  await expect(page.locator('#skip')).toHaveCount(0);
+  await expect(page.locator('#panel .hint')).toContainText('split task cannot skip Implementation');
+});

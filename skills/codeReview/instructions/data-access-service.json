@@ -16,7 +16,7 @@
     "By the http-service gate only a service that executes requests is an HTTP layer: a service here that performs no request is an architecture finding (architecture#1, #12), never a set of http-service findings.",
     "A pure HTTP wrapper gets no spec (http-service#14), so test-coverage binds only a service that does more than wrap requests."
   ],
-  "itemCount": 53,
+  "itemCount": 52,
   "instructions": [
     {
       "id": "http-service",
@@ -211,7 +211,7 @@
       "preamble": [
         "This instruction OWNS the framework-level API rules: typing, the signals API, DI, standalone declarables, host bindings, lazy routes, the forms pattern and RxJS usage. File placement and template rules belong to the component and component-template instructions; rendering cost and change detection to the performance instruction; WCAG 2.2 level AA — which new or changed UI must satisfy — to the accessibility instruction, which owns every accessibility finding. A violation is reported ONCE, under the most specific instruction covering it."
       ],
-      "selectedItems": "1-2,4,9,17,21-22,24-25,27-28",
+      "selectedItems": "1-2,4,17,21-22,24-25,27-28",
       "checklistSize": 28,
       "items": [
         {
@@ -237,18 +237,6 @@
           "id": "best-practices#4",
           "text": "Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API — never `@Input()`/`@Output()` decorators or `@Input() set` accessors; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array.",
           "severity": "low"
-        },
-        {
-          "id": "best-practices#9",
-          "text": "A writable signal is never exposed on a public surface: components, stores and services expose `signal.asReadonly()` or a `computed()`, keeping `.set()`/`.update()` with the owner.",
-          "severity": "low",
-          "probe": [
-            {
-              "pattern": "^[ \\t]*(?:(?:public|readonly|override)\\s+)*(?<at>[A-Za-z_$][\\w$]*)\\s*(?::[^=\\n]+)?=\\s*(?:signal|linkedSignal)\\s*[<(]",
-              "message": "zapisywalny sygnał w polu publicznym",
-              "flags": "m"
-            }
-          ]
         },
         {
           "id": "best-practices#17",

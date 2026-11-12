@@ -26,6 +26,8 @@ repository and removed afterwards, so the tree the user is standing in keeps wha
 
 Always on, from the moment a doh skill loads until the session ends.
 Rules adapted from caveman by Julius Brussee (github.com/JuliusBrussee/caveman, MIT; notice in the plugin's shared/CAVEMAN-LICENSE).
+The caveman plugin's own hooks, when installed, repeat these rules at another level (`full`): this block wins, at level ultra, and its boundaries below stand.
+Never call the caveman skill to switch levels.
 
 Every chat message is terse like a smart caveman at level **ultra**: your messages to the user, your prompts to sub-agents, a sub-agent's replies.
 All technical substance stays.
@@ -49,6 +51,8 @@ Only fluff dies.
   The same term for the same thing every time.
 - Tool calls: fire directly.
   No preamble, plan or progress note before or between calls.
+- Read and search files with Read, Grep and Glob, never with `cat`, `sed`, `head`, `grep`, `find` or `ls` in a shell: a shell call costs seconds before it runs.
+  Send independent calls in one message, and shell commands that belong together in one call.
 - No decorative tables or emoji.
   No raw log dumps: quote the shortest decisive line.
 - Questions to the user: terse but complete - answerable without guessing.
@@ -350,10 +354,11 @@ through it: its branch has to sit on the landed parent too. Act on its JSON `sta
 - `landed` → the part's commit is `commit` and its push `pushed`: go on with point 1 below, with
   those two instead of the agent's.
 - `conflict` → render the conflict agent's brief next to the fix agent's (`<promptPath>` with
-  `-restack` before `.md`), with `OLD_TIP` = the JSON's `oldParentTip` and `FILES` = its
-  `conflictFiles` joined by `, `:
+  `-restack` before `.md`). The landing wrote everything it knows - worktree, branch, parent, old
+  tip, lease, the conflicting files, checks folder, push - to `briefVars`; never copy those into
+  `--set=` flags yourself:
 
-      node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/restack-agent.md" --out="<restack prompt path>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=PARENT=<stack.parent> --set=OLD_TIP=<oldParentTip> --set=LEASE=<remoteTipAtStart> --set=FILES=<files> --set=CHECKS_DIR=<checksDir>/restack --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=LANGUAGE=<language> --set=PARENT_CHANGES=<the parent's stackImpact, one "symbol: change (usedIn)" per item joined by "; ", or none>
+      node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/restack-agent.md" --out="<restack prompt path>" --vars="<briefVars>" --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=LANGUAGE=<language> --set=PARENT_CHANGES=<the parent's stackImpact, one "symbol: change (usedIn)" per item joined by "; ", or none>
 
   and spawn it like a fix agent (Step 4b, pointing at that file). Its `result` → point 1 with its
   `commit` and `pushed`, and its `resolvedFiles` in the summary; its `error` → like an agent's error.

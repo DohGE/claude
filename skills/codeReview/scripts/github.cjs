@@ -324,6 +324,18 @@ function findOpenPr(project, branch, send = request, findToken = tokenWithSource
   return out(match ? prOf(match) : null, null);
 }
 
+// The head commits of the pull requests lately merged into `base`, newest first. A squash merge
+// leaves none of them in `base`'s history, so a stack part built on one of them still carries its
+// commits; the head that is on the part is where the part's own commits begin (restack.cjs).
+function mergedPrHeads(project, base, send = request) {
+  const slug = repoSlug(project);
+  if (!slug || !base) return { heads: [], error: null };
+  const res = send(project, { path: `/repos/${slug.owner}/${slug.repo}/pulls?state=closed&base=${encodeURIComponent(base)}&sort=updated&direction=desc&per_page=50` });
+  if (!res.ok) return { heads: [], error: res.error };
+  const heads = Array.isArray(res.json) ? res.json.filter((pr) => pr.merged_at && pr.head && pr.head.sha).map((pr) => pr.head.sha) : [];
+  return { heads, error: null };
+}
+
 function prOf(pr) {
   return {
     number: pr.number,
@@ -385,7 +397,7 @@ async function serve() {
 
 module.exports = {
   repoSlug, token, tokenWithSource, credentialToken, netrcToken, ghConfigToken,
-  request, findOpenPr, pullRequestDiff, postReview, errorOf,
+  request, findOpenPr, mergedPrHeads, pullRequestDiff, postReview, errorOf,
 };
 
 if (require.main === module && process.argv[2] === '--serve') serve();

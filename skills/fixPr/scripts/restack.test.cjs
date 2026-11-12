@@ -299,7 +299,9 @@ test('a run file gives land its part and verify its pairs', (t) => {
   assert.strictEqual(restack.parseArgs(['--action=verify', `--run=${file}`]).pairs.length, 3);
 });
 
-test('stack moves the bottom onto its base, then every part onto the one below, and resumes above a conflict', () => {
+test('stack moves the bottom onto its base, then every part onto the one below, and resumes above a conflict', (t) => {
+  // The brief and the state file of a stop are written under the project: never this repository.
+  const project = fs.realpathSync(tempDir(t, 'fpc-stack-'));
   const calls = [];
   const deps = {
     tips: { base: 'm0', p1: 't1', p2: 't2', p3: 't3' },
@@ -310,7 +312,7 @@ test('stack moves the bottom onto its base, then every part onto the one below, 
       return o.branch === 'p2' ? { status: 'conflict', conflictFiles: ['a.ts'], oldParentTip: 't1' } : { status: 'landed', commit: `n-${o.branch}`, pushed: true, rebased: true };
     },
   };
-  const first = restack.stackAction({ project: process.cwd(), stack: ['p2'], push: 'yes', gate: 'yes', ontoBase: 'yes' }, deps);
+  const first = restack.stackAction({ project, stack: ['p2'], push: 'yes', gate: 'yes', ontoBase: 'yes' }, deps);
   assert.deepStrictEqual(first.stack, ['p1', 'p2', 'p3']);
   assert.deepStrictEqual(calls, [['p1', 'base', '', 't1'], ['p2', 'p1', 't1', 't2']]);
   assert.deepStrictEqual(first.parts.map((p) => [p.branch, p.status, p.oldTip]), [['p1', 'landed', 't1'], ['p2', 'conflict', 't2']]);
@@ -318,7 +320,7 @@ test('stack moves the bottom onto its base, then every part onto the one below, 
   assert.deepStrictEqual(first.waiting, ['p3']);
   calls.length = 0;
   deps.land = (o) => { calls.push([o.branch, o.parent, o.parentTipAtStart]); return { status: 'landed', commit: 'x', pushed: true, rebased: true }; };
-  const resumed = restack.stackAction({ project: process.cwd(), stack: ['p1', 'p2', 'p3'], base: 'base', start: 'p3', parentOldTip: 't2', push: 'yes', gate: 'yes', ontoBase: 'yes' }, deps);
+  const resumed = restack.stackAction({ project, stack: ['p1', 'p2', 'p3'], base: 'base', start: 'p3', parentOldTip: 't2', push: 'yes', gate: 'yes', ontoBase: 'yes' }, deps);
   assert.deepStrictEqual(calls, [['p3', 'p2', 't2']]);
   assert.deepStrictEqual(resumed.parts.map((p) => p.status), ['landed']);
   assert.ok(Object.keys(resumed.parts[0]).every((k) => !['steps'].includes(k)), 'compact parts');
@@ -326,8 +328,145 @@ test('stack moves the bottom onto its base, then every part onto the one below, 
 
 test('discoverStack walks down the bases and up the open pull requests', () => {
   const prs = { p1: { base: 'master' }, p2: { base: 'p1' }, p3: { base: 'p2' } };
-  const found = restack.discoverStack('/p', 'p2', { findPr: (b) => prs[b] || null, childrenOf: (b) => ({ p2: ['p3'] }[b] || []) });
-  assert.deepStrictEqual([found.stack, found.base], [['p1', 'p2', 'p3'], 'master']);
+  const found = restack.discoverStack('/p', 'p2', {
+    findPr: (b) => prs[b] || null, childrenOf: (b) => ({ p2: ['p3'] }[b] || []), mergedInto: (b) => (b === 'master' ? ['h0'] : []),
+  });
+  assert.deepStrictEqual([found.stack, found.base, found.mergedHeads], [['p1', 'p2', 'p3'], 'master', ['h0']]);
+});
+
+// origin, main <- part-1 (two commits on one file) <- part-2; part-1 is then squash-merged into
+// main after another pull request landed there, and GitHub retargets part-2 onto main. The bottom
+// of the stack still carries part-1's own commits (2026-11-10: 29 conflicts on DPXN-11967-part-2).
+function squashStack(t) {
+  const base = fs.realpathSync(tempDir(t, 'fpc-squash-'));
+  const origin = path.join(base, 'origin.git');
+  const work = path.join(base, 'work');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  execFileSync('git', ['clone', '-q', origin, work], { stdio: 'ignore' });
+  for (const [k, v] of [['user.email', 't@t.local'], ['user.name', 'T'], ['commit.gpgsign', 'false']]) git(work, 'config', k, v);
+  commit(work, 'base.txt', 'base\n', 'base');
+  git(work, 'push', '-q', 'origin', 'main');
+  git(work, 'switch', '-q', '-c', 'part-1');
+  commit(work, 'one.txt', 'one\n', 'part 1');
+  const a2 = commit(work, 'one.txt', 'one, reviewed\n', 'part 1 CR');
+  git(work, 'push', '-q', 'origin', 'part-1');
+  git(work, 'switch', '-q', '-c', 'part-2');
+  const b1 = commit(work, 'two.txt', 'two\n', 'part 2');
+  git(work, 'push', '-q', 'origin', 'part-2');
+  git(work, 'switch', '-q', 'main');
+  commit(work, 'other.txt', 'other\n', 'another pull request');
+  git(work, 'merge', '--squash', '-q', 'part-1');
+  git(work, 'commit', '-q', '-m', 'part 1 (#1)');
+  git(work, 'push', '-q', 'origin', 'main');
+  const tree = path.join(base, 'tree-part-2');
+  git(work, 'worktree', 'add', '-q', tree, 'part-2');
+  return { work, tree, tips: { a2, b1 } };
+}
+
+test('land moves a part off a parent squash-merged into its base: its own commits only, no conflict', (t) => {
+  const s = squashStack(t);
+  const result = restack.land({ worktree: s.tree, branch: 'part-2', parent: 'main', remoteTipAtStart: s.tips.b1, gate: 'no', push: 'yes' });
+  assert.strictEqual(result.status, 'landed', JSON.stringify(result));
+  assert.deepStrictEqual(result.conflictFiles, []);
+  assert.deepStrictEqual(result.squashed, { boundary: s.tips.a2, commits: 2, via: 'patch-id', into: git(s.work, 'rev-parse', 'main') });
+  assert.strictEqual(result.oldParentTip, s.tips.a2);
+  assert.match(result.warnings.join(' '), /2 commit\(s\) .* already in main/);
+  git(s.work, 'fetch', '-q', 'origin');
+  assert.strictEqual(git(s.work, 'rev-list', '--count', 'origin/main..origin/part-2'), '1');
+  assert.strictEqual(git(s.work, 'show', 'origin/part-2:one.txt'), 'one, reviewed');
+});
+
+test('land takes the merged pull request\'s head when the squash was changed on its way in', (t) => {
+  const s = squashStack(t);
+  fs.writeFileSync(path.join(s.work, 'one.txt'), 'one, reviewed at merge\n');
+  git(s.work, 'commit', '-q', '-a', '--amend', '--no-edit');
+  git(s.work, 'push', '-q', '--force', 'origin', 'main');
+  const result = restack.land({
+    worktree: s.tree, branch: 'part-2', parent: 'main', remoteTipAtStart: s.tips.b1, gate: 'no', push: 'no',
+    mergedHeads: ['0123456789012345678901234567890123456789', s.tips.a2],
+  });
+  assert.strictEqual(result.status, 'landed', JSON.stringify(result));
+  assert.deepStrictEqual([result.squashed.boundary, result.squashed.via, result.squashed.commits], [s.tips.a2, 'merged-pr', 2]);
+  assert.strictEqual(git(s.tree, 'show', 'HEAD:one.txt'), 'one, reviewed at merge');
+});
+
+test('verify sends a bottom off its squash-merged parent from that parent\'s last commit', (t) => {
+  const s = squashStack(t);
+  const result = restack.verify({ project: s.work, pairs: [{ parent: 'main', child: 'part-2', oldTip: null }] });
+  assert.strictEqual(result.broken.length, 1);
+  assert.strictEqual(result.broken[0].command, `git rebase --onto origin/main ${s.tips.a2} part-2`);
+  assert.match(result.warnings.join(' '), /2 commit\(s\) of part-2 .*already in main/);
+});
+
+test('stack renders the conflict agent\'s brief itself and keeps the output short', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-brief-'));
+  const files = Array.from({ length: 14 }, (_, i) => `src/f${i}.ts`);
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2' },
+    discover: () => ({ stack: ['p1', 'p2'], base: 'base', prs: { p1: { number: 11, url: 'u11' } }, warnings: [] }),
+    worktree: { add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }), remove: () => ({ removed: true, warnings: [] }) },
+    land: () => ({ status: 'conflict', conflictFiles: files, oldParentTip: 'm-old' }),
+  };
+  const out = restack.stackAction({ project: dir, stack: ['p1', 'p2'], push: 'yes', gate: 'yes', ontoBase: 'yes', checksDir: path.join(dir, 'checks'), language: 'Polish' }, deps);
+  const part = out.parts[0];
+  assert.strictEqual(part.status, 'conflict');
+  assert.strictEqual(part.conflictCount, 14);
+  assert.strictEqual(part.conflictFiles.length, 10, 'the list the orchestrator reads is capped');
+  assert.deepStrictEqual(part.agentPromptErrors, []);
+  const brief = fs.readFileSync(part.agentPrompt, 'utf8');
+  for (const piece of ['`p1`', '#11', 'u11', '/w/p1', 'm-old', 't1', 'src/f13.ts', 'Polish', path.join(dir, 'checks', 'p1')]) assert.ok(brief.includes(piece), piece);
+  assert.ok(!/\{\{[A-Z_]+\}\}/.test(brief), 'no placeholder left');
+  assert.strictEqual(part.agentPrompt, path.join(dir, '.claude', 'doh', 'p1', 'p1-restack-agent-prompt.md'));
+});
+
+test('--resume=yes takes the stopped part\'s worktree down and climbs on above it from its old tip', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-resume-'));
+  const removed = [];
+  const calls = [];
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2', p3: 't3' },
+    discover: () => ({ stack: ['p1', 'p2', 'p3'], base: 'base', prs: {}, warnings: [] }),
+    worktree: { add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }), remove: ({ branch }) => { removed.push(branch); return { removed: true, warnings: [] }; } },
+    land: (o) => {
+      calls.push([o.branch, o.parentTipAtStart]);
+      return o.branch === 'p2' && calls.length === 2 ? { status: 'conflict', conflictFiles: ['a.ts'], oldParentTip: 't1' } : { status: 'landed', commit: `n-${o.branch}`, pushed: true, rebased: true };
+    },
+    sits: () => true,
+  };
+  const options = { project: dir, stack: ['p1', 'p2', 'p3'], push: 'yes', gate: 'yes', ontoBase: 'yes', checksDir: path.join(dir, 'checks') };
+  const first = restack.stackAction(options, deps);
+  assert.deepStrictEqual(first.waiting, ['p3']);
+  removed.length = 0;
+  calls.length = 0;
+  const resumed = restack.stackAction({ ...options, resume: 'yes' }, deps);
+  assert.deepStrictEqual(removed, ['p2', 'p3'], 'the stopped part\'s worktree, then the landed one\'s');
+  assert.deepStrictEqual(calls, [['p3', 't2']]);
+  assert.strictEqual(resumed.resumedAfter, 'p2');
+  assert.deepStrictEqual(resumed.parts.map((p) => p.status), ['landed']);
+  const again = restack.stackAction({ ...options, resume: 'yes' }, deps);
+  assert.match(again.errors.join(' '), /nothing to resume/i);
+});
+
+test('--resume=yes refuses while the stopped part does not sit on its parent', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-resume-'));
+  const checksDir = path.join(dir, 'checks');
+  fs.mkdirSync(checksDir, { recursive: true });
+  fs.writeFileSync(path.join(checksDir, 'restack-state.json'), JSON.stringify({ stack: ['p1', 'p2'], base: 'base', stopped: 'p1', oldTips: { p1: 't1' } }));
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2' },
+    discover: () => ({ stack: ['p1', 'p2'], base: 'base', prs: {}, warnings: [] }),
+    worktree: { add: () => { throw new Error('no climb expected'); }, remove: () => { throw new Error('no removal expected'); } },
+    sits: () => false,
+  };
+  const out = restack.stackAction({ project: dir, stack: ['p1', 'p2'], push: 'yes', gate: 'yes', ontoBase: 'yes', checksDir, resume: 'yes' }, deps);
+  assert.match(out.errors.join(' '), /p1 does not sit on base/);
+});
+
+test('parseArgs takes --resume and --language for the stack action only', () => {
+  const args = restack.parseArgs(['--action=stack', '--project=/p', '--stack=a;b', '--resume=yes', '--language=Polish']);
+  assert.deepStrictEqual([args.resume, args.language], ['yes', 'Polish']);
+  assert.throws(() => restack.parseArgs(['--action=stack', '--project=/p', '--stack=a;b', '--resume=yes', '--start=b']), /--resume/);
+  assert.throws(() => restack.parseArgs(['--action=stack', '--project=/p', '--stack=a;b', '--resume=maybe']), /yes or no/);
 });
 
 test('plan names the stack, its base and every pair that is off, moving nothing', () => {
