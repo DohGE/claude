@@ -188,6 +188,8 @@ For each file:
    recursive shell grep of the working tree is refused. `target.revision` is the reviewed commit.
    The searches one file needs do not depend on one another: issue them all as parallel calls in ONE message, because every message is one more request that carries the whole conversation again.
    Collect them first: after the file's Reads, list every rule that asks "does it exist elsewhere" and every symbol to follow, then send all their Greps and Globs at once; a window of 52 messages spent most of them on one search each (2026-11-05).
+   **One round of lookups per file, two at most.** The first round holds every search the file's rules need; a second round only follows what a hit of the first named (a symbol, a file). A message with one Grep is a round of its own: in a 250-file run 62% of the lookup messages held one call, and they were 56% of all tokens read (2026-11-12).
+   A Glob's pattern is read from the searched folder only when it opens with `**/` or holds no `/`: put the folders in `path` (`path: <snapshotDir>/src/app`, `pattern: "**/x.ts"`). The hook rewrites the other forms, but an empty result is never proof that a file is missing until a Grep or a `**/` Glob agrees.
    The Grep tool is ripgrep: no lookaround (`(?!`, `(?=`) and no backreference - a rejected pattern searched nothing; split it into plain alternatives.
    Never `cd` and never list a folder through Bash (`ls`, `find`): a compound shell command can stop
    at a permission prompt while the walk waits. The Glob tool lists one - e.g. which parts are on
@@ -464,22 +466,8 @@ For each file:
    number, a block covering exactly the plan's items, every verdict's form and evidence, the answer
    to every line the bundle points at, a finding behind every `NARUSZENIE`, and cited lines that
    exist in `contentPath`.
-   A part that fails is NOT written: the refusal lists the problems, each quoting its draft lines
-   (`[szkic L<n>: "…"]`), and the text waits in `<stem>.part<NN>.draft.md` in `target.workDir`.
-   Read that draft once - with the next batch's Reads, or after the last batch before the cross-file
-   pass; the harness refuses an Edit of a file this conversation has not read - and fix exactly
-   those lines with Edit. The hook checks every Edit again and writes the part once it passes
-   (`check-part: <part> zapisana ze szkicu.`); only when no such note came back, run the `--promote`
-   command the refusal prints. A part refused only because an earlier part of the window is missing
-   (`najpierw brakujące wcześniejsze części`) needs nothing: its draft lands by itself once the
-   earlier part does - fix the earlier one. Only a refusal naming no draft means writing the part again.
-   A box that contradicts its word, or a NIEZWERYFIKOWANE that lost its colon, the hook puts right
-   itself (`check-part: <part> zapisana po poprawce formy`).
-   A part can pass with a note, `check-part: <part> zapisana, z uwagą:`, naming two findings with
-   the same lines - under items the bundle marks `ta sama wada` (point 3), or under two instructions.
-   One defect: merge them with ONE Edit of that part - one finding whose `**Reguła:**` names every
-   address, the most specific first, each item keeping its `NARUSZENIE` line. Two defects that only
-   share lines: leave the part as it is.
+   A part that fails is NOT written: the refusal lists its problems and keeps the text in a draft.
+   What to do then is in `references/refused-part.md` in this skill's directory: Read it with the draft, once, the first time a part of yours is refused.
    Never answer a refusal by ticking an item you did not check: an item you cannot verify is
    `[ ] … — NIEZWERYFIKOWANE: <reason>`, which the check accepts whenever the reason is one of the
    three of point 2, it cites the lines the bundle points at, and no `FAKT` settles the item.
@@ -657,7 +645,9 @@ After the last file of the target, the cross-file pass: `references/cross-file.m
   renderer looks each one up in the rulebook, prints the item's own words, and flags an address the
   rulebook does not hold. Only a finding no checklist item covers (the cross-file pass, the universal
   points 3–5, a `CLAUDE.md` rule) writes prose instead: `<source> → <rule in a few words>`, e.g.
-  `CLAUDE.md → brak console.log`.
+  `CLAUDE.md → brak console.log`. `<source>` is one of four FIXED IDENTIFIERS - `Spójność`
+  (point 3 and the cross-file questions), `Regresja` (point 4), `Czytelność` (point 5), `CLAUDE.md` -
+  since the page groups findings by it.
 - `PR Problem`, `PR Expected` and `PR Locations` are written ONLY when `target.htmlReportPath` is not
   null. An `--only-md` run has no HTML page and so no way to post a comment, and its findings carry
   the four fields above and nothing more.

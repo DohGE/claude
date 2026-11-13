@@ -126,7 +126,7 @@ test('a window carrying verdicts from an earlier part of the stack starts after 
   assert.strictEqual(most, 2, 'three lanes, but b/window01 waits for a/window02');
 });
 
-test('the lanes start the costliest ready window first, of whichever target', async () => {
+test('the lanes start the ready window with the most ahead of it first, of whichever target', async () => {
   const args = {
     lanes: 1,
     targets: [
@@ -137,13 +137,52 @@ test('the lanes start the costliest ready window first, of whichever target', as
   };
   const { calls } = await runWorkflow(args, (prompt) => (prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));
   const windows = calls.map((c) => c.prompt).filter((p) => p.includes('/window')).map((p) => p.slice('Read '.length, -' and follow it.'.length));
-  assert.deepStrictEqual(windows, ['b/window01.md', 'a/window02.md', 'a/window01.md', 'b/window02.md', 'c/window01.md'],
-    'b/window02 is the costliest but waits for a/window01; without costs a window counts as 0 and keeps its order');
+  assert.deepStrictEqual(windows, ['a/window01.md', 'b/window02.md', 'b/window01.md', 'a/window02.md', 'c/window01.md'],
+    'a/window01 is the cheapest but the costliest window waits for it; without costs a window counts as 0 and keeps its order');
+});
+
+test('the windows of the target with the longer cross-file pass go first, so the pass runs beside the other windows', async () => {
+  const args = {
+    lanes: 1,
+    targets: [
+      { dir: 'a', windows: [['1-2', '', '']], costs: [50], cross: { cost: 10 } },
+      { dir: 'b', windows: [['1-2', '', '']], costs: [20], cross: { cost: 100 } },
+    ],
+  };
+  const { calls } = await runWorkflow(args, (prompt) => (prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));
+  assert.deepStrictEqual(calls.map((c) => c.prompt.slice('Read '.length, -' and follow it.'.length)), ['b/window01.md', 'b/cross-file.brief.md', 'a/window01.md', 'a/cross-file.brief.md']);
+  assert.ok(!('cost' in calls[1].options), 'a cost is no spawn option');
+});
+
+test('the first batch of a window rides in the message that reads its brief; a walker started again reads the brief alone', async () => {
+  const first = ['w/01-a.ts.bundle.md (Read: offset 1, limit 10; offset 11)', 'w/01-a.ts'];
+  const args = { dir: 'w', lanes: 1, windows: [['1-2', '', '']], firsts: [first], cross: {} };
+  const { result, calls } = await runWorkflow(args, (prompt) => (prompt.includes('cross-file') ? 'CROSS DONE' : prompt.includes('first batch') ? 'WINDOW STOPPED 1: refused' : 'WINDOW DONE 1-2'));
+  assert.deepStrictEqual(calls.map((c) => c.prompt), [
+    `Read w/window01.md and follow it. In the same message Read its first batch too:\n- ${first[0]}\n- ${first[1]}`,
+    'Read w/window01.md and follow it.',
+    'Read w/cross-file.brief.md and follow it.',
+  ]);
+  assert.deepStrictEqual([result.walked, result.windows, result.failed], [1, [], []]);
+});
+
+test('the run hands back the command that assembles it and, of its windows, only the ones that are not done', async () => {
+  const args = { lanes: 2, next: 'node check-part.cjs --assemble-all', targets: [{ dir: 'a', windows: [['1-2', '', ''], ['3-4', '', '']], cross: {} }] };
+  const { result } = await runWorkflow(args, (prompt) => (prompt.includes('window02') ? 'WINDOW STOPPED 3: refused' : 'WINDOW DONE 1-2'));
+  assert.deepStrictEqual(result, {
+    targets: [{ dir: 'a', walked: 1, windows: [{ window: 2, files: '3-4', reply: 'WINDOW STOPPED 3: refused' }], failed: [2], cross: null }],
+    next: 'node check-part.cjs --assemble-all',
+  });
+  const plain = await runWorkflow({ dir: 'w', lanes: 1, windows: [['1-2', '', '']], cross: {} }, (prompt) => (prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE 1-2'));
+  assert.deepStrictEqual(plain.result, { walked: 1, windows: [], failed: [], cross: 'CROSS DONE' }, 'no command given, none handed back');
 });
 
 test('a target with a gaps step closes its open items before its cross-file pass', async () => {
   const args = { lanes: 1, targets: [{ dir: 'a', windows: [['1-2', '', '']], cross: {}, gaps: { model: 'sonnet', effort: 'medium' } }] };
-  const { result, calls } = await runWorkflow(args, (prompt) => (prompt.includes('gaps') ? 'GAPS DONE' : prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE x'));
+  const none = await runWorkflow(args, (prompt) => (prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE 1-2'));
+  assert.ok(!none.calls.some((c) => c.prompt.includes('gaps')), 'no window left an item open: no agent');
+  assert.strictEqual(none.result.targets[0].gaps, null);
+  const { result, calls } = await runWorkflow(args, (prompt) => (prompt.includes('gaps') ? 'GAPS DONE' : prompt.includes('cross-file') ? 'CROSS DONE' : 'WINDOW DONE 1-2 GAPS'));
   assert.deepStrictEqual(calls.map((c) => c.prompt), ['Read a/window01.md and follow it.', `Read a/${bundle.gapsBriefName} and follow it.`, `Read a/${bundle.crossBriefName} and follow it.`]);
   assert.deepStrictEqual([calls[1].options.agentType, calls[1].options.model, calls[1].options.effort], ['doh:codereview-walker', 'sonnet', 'medium']);
   assert.deepStrictEqual([result.targets[0].gaps, result.targets[0].cross], ['GAPS DONE', 'CROSS DONE']);

@@ -455,6 +455,7 @@ function parseLocalMarkdown(text, fallbackId) {
   const fields = frontMatterFields(fm[1]);
   const preamble = [];
   const items = [];
+  const sections = [];
   let paragraph = [];
   let section = null;
   let subsection = null;
@@ -482,6 +483,7 @@ function parseLocalMarkdown(text, fallbackId) {
     if (section && bullet) {
       flush();
       items.push(`[${subsection || section}] ${bullet[1].trim()}`);
+      sections.push(subsection || section);
       continue;
     }
     if (/^\|/.test(line)) {
@@ -520,6 +522,21 @@ function parseLocalMarkdown(text, fallbackId) {
   };
   perItem('item-severity', 'severity', (v) => v);
   perItem('same-as', 'sameAs', (v) => v.split(',').map((address) => address.trim()).filter(Boolean));
+  // `item-subject` (`<n>: <regex>`) and `section-subject` (`<heading>: <regex>`, every item under that
+  // `##`/`###` heading): what a kind file says in an item's `subject` - a file none of them matches
+  // has nothing the item can bite on, and the script closes it. A 90-item wording rule was 2,429 of
+  // a run's 12,727 verdicts, every one `brak wystąpień`, and one finding (2026-11-12).
+  perItem('item-subject', 'subject', (v) => v);
+  for (const entry of [].concat(fields['section-subject'] || [])) {
+    const m = String(entry).match(/^(.+?):\s+(\S.*)$/);
+    const heading = m ? m[1].trim().toLowerCase() : null;
+    const hits = heading ? sections.map((s, i) => (String(s).toLowerCase() === heading ? i : -1)).filter((i) => i >= 0) : [];
+    if (hits.length === 0) {
+      problems.push(`section-subject ${JSON.stringify(entry)} ${m ? 'names no heading of this rule\'s checklist' : 'is not "<heading>: <regex>"'} - ignored.`);
+      continue;
+    }
+    for (const i of hits) if (!extras[i].subject) extras[i].subject = m[2].trim();
+  }
   return {
     entry: {
       id,

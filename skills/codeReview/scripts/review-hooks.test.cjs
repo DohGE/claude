@@ -504,6 +504,45 @@ test('search: while a branch review runs, a Grep or Glob of the working tree goe
   assert.strictEqual(search('Grep', { pattern: 'a', path: 'src' }), null);
 });
 
+test('search: a pattern that opens with a folder is read from the searched folder, not from the session\'s directory', (t) => {
+  const helpers = require('./test-helpers.cjs');
+  const f = fixture(t);
+  const project = helpers.initRepo(t, 'review-hooks-glob-');
+  helpers.commitFile(project, 'src/app/a/a.ts', 'export const a = 1;\n', 'a');
+  const snapshot = path.join(project, '.claude', 'doh', 'codeReview', 's', '04-05-1');
+  fs.mkdirSync(path.join(snapshot, 'src', 'app', 'a'), { recursive: true });
+  fs.writeFileSync(path.join(snapshot, 'src', 'app', 'a', 'a.ts'), 'export const a = 0;\n');
+  f.context.project = project;
+  Object.assign(f.target, { snapshotDir: slash(snapshot), revision: 'abc1234def5678' });
+  fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
+  read(f, f.target.files[0].bundlePath);
+  const sent = (tool, input) => {
+    const out = hooks.onSearch({ session_id: 's1', tool_name: tool, tool_input: input, cwd: project }, f.env);
+    return out && out.hookSpecificOutput.updatedInput;
+  };
+  const root = slash(snapshot);
+  // In the snapshot: the folders a Glob's pattern opens with move into `path`.
+  assert.deepStrictEqual(sent('Glob', { pattern: 'src/app/a/*.ts', path: root }), { pattern: '*.ts', path: `${root}/src/app/a` });
+  assert.deepStrictEqual(sent('Glob', { pattern: 'src/app/**/*.ts', path: root }), { pattern: '**/*.ts', path: `${root}/src/app` });
+  assert.deepStrictEqual(sent('Glob', { pattern: 'src/app/a/a.ts', path: root }), { pattern: 'a.ts', path: `${root}/src/app/a` }, 'a whole file path');
+  assert.deepStrictEqual(sent('Glob', { pattern: '*/app/*/a.ts', path: root }), { pattern: '**/*/app/*/a.ts', path: root }, 'no folder to move: any depth');
+  assert.deepStrictEqual(sent('Glob', { pattern: 'app/*/a.ts', path: `${root}/src` }), { pattern: '**/*/a.ts', path: `${root}/src/app` });
+  // What the tool finds as it is stays as it is.
+  assert.strictEqual(sent('Glob', { pattern: '**/a.ts', path: root }), null);
+  assert.strictEqual(sent('Glob', { pattern: '*.ts', path: `${root}/src/app/a` }), null);
+  // A folder the revision lacks: the Glob finds nothing there, rightly.
+  assert.strictEqual(sent('Glob', { pattern: 'src/none/*.ts', path: root }), null);
+  // Sent from the working tree to the snapshot, the pattern is rewritten on the way.
+  assert.deepStrictEqual(sent('Glob', { pattern: 'src/app/a/*.ts' }), { pattern: '*.ts', path: `${root}/src/app/a` });
+  assert.deepStrictEqual(sent('Glob', { pattern: 'a/*.ts', path: 'src/app' }), { pattern: '*.ts', path: `${root}/src/app/a` });
+  // A Grep's `glob` filter is read the same way: any depth under the searched folder.
+  assert.deepStrictEqual(sent('Grep', { pattern: 'a', path: root, glob: 'src/app/a/*.ts' }), { pattern: 'a', path: root, glob: '**/src/app/a/*.ts' });
+  assert.deepStrictEqual(sent('Grep', { pattern: 'a', path: root, glob: '!src/app/**' }), { pattern: 'a', path: root, glob: '!**/src/app/**' });
+  assert.deepStrictEqual(sent('Grep', { pattern: 'a', path: 'src', glob: '{app,lib}/a/*.ts' }), { pattern: 'a', path: `${root}/src`, glob: '**/{app,lib}/a/*.ts' });
+  assert.strictEqual(sent('Grep', { pattern: 'a', path: root, glob: '*.ts' }), null);
+  assert.strictEqual(sent('Grep', { pattern: 'a', path: root, glob: '!**/*.spec.ts' }), null);
+});
+
 test('draft: a part written whole lets the drafts waiting behind it land', (t) => {
   const f = fixture(t);
   fs.writeFileSync(f.draft(2), partB);

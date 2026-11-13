@@ -71,8 +71,17 @@ const walkerEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Windows walked at once (`--parallel=<n>`): each walker writes parts of its own files only.
 // Every window of a run gets a lane up to the maximum: with four lanes a 174-file run of 45
 // windows kept every lane busy for its whole 64 minutes (243 walker-minutes, 2026-11-02).
+// Six by default; up to eight for a caller who asks: of a 250-file run's 276 walker-minutes the
+// tools took 12%, the rest was the model (2026-11-12), so the lanes are the run's clock.
 const defaultParallel = 6;
-const maxParallel = 6;
+const maxParallel = 8;
+// What walks a window when neither its kind nor the caller says: the lighter model at medium
+// effort. A window that inherited the session's model and effort ran on whatever the session
+// happened to be set to - a review started from a session on the largest model at maximum effort
+// would have walked every file that way.
+const defaultWalker = { model: 'sonnet', effort: 'medium' };
+// `--walker-model=inherit` / `--walker-effort=inherit`: the session's own, as before 0.33.
+const inheritSetting = 'inherit';
 // The most files a target walked in the main conversation may have to make its cross-file pass there.
 const crossInlineMax = 4;
 // Where a branch target's reviewed revision is kept for the run's searches (`snapshotDir`): next
@@ -127,8 +136,8 @@ function parseArgs(argv) {
   if (Number.isNaN(args.parallel) || args.parallel < 0 || args.parallel > maxParallel) {
     throw new Error(`Unknown --parallel value (expected 1-${maxParallel} windows walked at once)`);
   }
-  if (args.walkerEffort && !walkerEfforts.includes(args.walkerEffort)) {
-    throw new Error(`Unknown --walker-effort=${args.walkerEffort} (expected ${walkerEfforts.join('|')})`);
+  if (args.walkerEffort && args.walkerEffort !== inheritSetting && !walkerEfforts.includes(args.walkerEffort)) {
+    throw new Error(`Unknown --walker-effort=${args.walkerEffort} (expected ${walkerEfforts.join('|')}|${inheritSetting})`);
   }
   if (!['auto', 'staged', 'branches', 'folder'].includes(args.mode)) {
     throw new Error(`Unknown --mode=${args.mode} (expected auto|staged|branches|folder)`);
@@ -380,6 +389,30 @@ function detectBaseBranch(project, branchRef, branchName, findPr = github.findOp
   if (fork) return { ref: fork, source: 'fork', ...rest };
   const candidate = detectCandidateBase(project, branchRef, branchName);
   return { ref: candidate, source: candidate ? 'candidate' : null, ...rest };
+}
+
+// A part of a stack - a branch whose base is another branch, not a trunk - holds its base's
+// commits, or it was cut before the base was amended or rebased: its diff then starts at their
+// common ancestor and brings the base's own changes along, under commits of the same titles.
+// A seven-part run walked 33 files twice that way - an eighth of its work - and the second report
+// repeated the first's findings; nothing said so (2026-11-12). A trunk moves on under its
+// branches all the time, and a base that only gained commits brings nothing along: neither is
+// such a case. Answers `{ mergeBase, twins, files }` - the titles the two sides share and the
+// files the base changes since the common ancestor - or null.
+const twinSubjectLimit = 200;
+function offBaseOf(project, baseRef, branchRef) {
+  if (baseCandidates(project).includes(String(baseRef).replace(/^origin\//, ''))) return null;
+  const base = tryGit(project, ['rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`]);
+  const mergeBase = tryGit(project, ['merge-base', baseRef, branchRef]);
+  if (!base || !mergeBase || mergeBase === base) return null;
+  const subjects = (range) => (tryGit(project, ['log', '--no-merges', `--max-count=${twinSubjectLimit}`, '--format=%s', range]) || '')
+    .split('\n').map((line) => line.trim()).filter(Boolean);
+  const ofBase = new Set(subjects(`${mergeBase}..${baseRef}`));
+  const twins = [...new Set(subjects(`${mergeBase}..${branchRef}`).filter((subject) => ofBase.has(subject)))];
+  if (twins.length === 0) return null;
+  const files = new Set((tryGit(project, ['-c', 'core.quotepath=false', 'diff', '--name-only', '--no-renames', mergeBase, baseRef]) || '')
+    .split('\n').map((p) => p.trim()).filter(Boolean));
+  return { mergeBase, twins, files };
 }
 
 // `tryGit` answers null when the command failed, and `Number(null)` is 0: a
@@ -1090,10 +1123,16 @@ function buildContext(options) {
   // Decided before the early error returns below, so the reported format is
   // never a default the caller did not ask for.
   const wantsHtml = options.output !== 'md';
+  // '' is inherit: no `model` on the dispatch, no directive in the prompt.
+  const settingOf = (given, fallback) => (given === inheritSetting ? '' : given || fallback);
   const result = {
     outputFormat: wantsHtml ? 'html' : 'md',
-    // '' is inherit: no `model` on the dispatch, no directive in the prompt.
-    walker: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
+    // What a window's walker is spawned with, unless its kind names its own (planWindows).
+    walker: { model: settingOf(options.walkerModel, defaultWalker.model), effort: settingOf(options.walkerEffort, defaultWalker.effort) },
+    // What the cross-file agent is spawned with: the caller's setting, else the session's own -
+    // the pass reads the whole target at once, and of a seven-target run's 12 critical findings
+    // 11 were its (2026-11-12).
+    cross: { model: settingOf(options.walkerModel, ''), effort: settingOf(options.walkerEffort, '') },
     // The root every file `path` is relative to - where the part check finds a file an OK names.
     project,
     instructionsCatalog: [],
@@ -1407,6 +1446,12 @@ function buildContext(options) {
     const range = `${baseRef}...${branchRef}`;
     const raw = parseRawDiff(tryGit(project, [...quiet, 'diff', '--raw', range]) || '');
     const { kept, skipped } = partition(raw);
+    const off = offBaseOf(project, baseRef, branchRef);
+    const again = off ? kept.filter((f) => off.files.has(f.path)).length : 0;
+    if (again > 0) {
+      const titles = `${off.twins.slice(0, 3).map((s) => `"${s}"`).join(', ')}${off.twins.length > 3 ? `, (+${off.twins.length - 3} more)` : ''}`;
+      result.warnings.push(`[${branchName}] The branch does not stand on its base ${baseRef}: the base was amended or rebased after the branch was cut, and the branch still carries its own version of ${off.twins.length} commit(s) of it (${titles}). Its diff starts at their common ancestor (${off.mergeBase.slice(0, 9)}) and covers ${again} file(s) the base changes itself, out of ${kept.length} - the base's own work, reviewed here again. Restack the branch first (/doh:restack ${branchName}) to review only what it adds.`);
+    }
     // The commit the review reads: a walker's search names it instead of a branch name, which
     // another run, a rebase or a later push moves (stackOf compares targets by it as well).
     const revision = tryGit(project, ['rev-parse', '--verify', '--quiet', `${branchRef}^{commit}`]);
@@ -1605,6 +1650,10 @@ function buildContext(options) {
     const blobs = pendingSnapshots.get(target);
     const { readContent, reviewed: reviewedTexts } = textsOf(target);
     pendingLedgers.set(target, formatImportLedger(target.files, readContent).text);
+    // Past one Read's limit the cross-file pass reads it in pages: a 123-file target's 258 KB
+    // ledger was refused whole, and the pass read 40 lines of it (2026-11-12).
+    const ledgerPages = reviewBundle.pagesOf(pendingLedgers.get(target));
+    if (ledgerPages) target.importLedgerPages = ledgerPages;
     // The repository facts (repo-facts.cjs) about the reviewed files, from the revision the
     // review reads. A failure costs the bundles their facts, never the review.
     let universe = { files: reviewedTexts, factRoot: '', partial: false };
@@ -1773,6 +1822,13 @@ function buildContext(options) {
         partial: partialHere,
         // An answer states what the whole repository holds: from part of it, the reviewer searches.
         answers: partialHere ? {} : collected.answers.get(f.path) || {},
+        // A modified file's changed lines, with the margin a data file is read with - none when the
+        // change covers half of the file or more.
+        changedText: (() => {
+          if (f.status === 'A' || f.status === 'D' || !f.changedLines || typeof text !== 'string') return null;
+          const ranges = reviewBundle.readRangesOf(f.changedLines, reviewBundle.lineCountOf(text));
+          return ranges ? reviewBundle.textOfRanges(text, ranges) : null;
+        })(),
       });
       // A data file read in ranges owes answers only to the lines it reads.
       const bound = f.readRanges ? reviewBundle.narrowBinding(fullBound, f.readRanges) : fullBound;
@@ -1790,6 +1846,7 @@ function buildContext(options) {
           bound,
           exports: collected.exportsByFile.get(f.path) || [],
           members: collected.membersByFile.get(f.path) || [],
+          folder: universe.files && typeof universe.files.keys === 'function' ? reviewBundle.folderListing(f.path, universe.files.keys()) : [],
           specs: collected.specsByFile.get(f.path) || null,
           candidates: (target.duplicationCandidates || []).filter((c) => c.path === f.path),
           factRoot: universe.factRoot,
@@ -1958,15 +2015,17 @@ function buildContext(options) {
         })),
       })]);
       // What the window's walker is spawned with: its kinds' walker setting (a window holds one,
-      // planWindows), else the run's --walker-model / --walker-effort; nothing is "inherit".
+      // planWindows), else the run's - --walker-model / --walker-effort, or the walkers' default.
       const own = walkerOf(window[0][0]);
-      const model = (own && own.model) || options.walkerModel || '';
-      const effort = (own && own.effort) || options.walkerEffort || '';
+      const model = (own && own.model) || result.walker.model;
+      const effort = (own && own.effort) || result.walker.effort;
       // The part of the window's last file: once it is on disk the window is done, which is what
       // the dispatcher waits for without ending its turn (SKILL.md Step 3, Windows).
       return {
         files: windowSpans[k],
         brief,
+        // The Reads of its first batch: they ride in the message that reads the brief.
+        first: reviewBundle.readsOf(window[0].map((number) => byNumber.get(number).file)),
         lastPart: reviewBundle.partPathOf(target.reportPath, windowSpans[k][1], n),
         ...(model ? { model } : {}),
         ...(effort ? { effort } : {}),
@@ -2054,6 +2113,7 @@ function buildContext(options) {
       walked,
       candidates: target.duplicationCandidates || null,
       importLedger: target.importLedger,
+      importLedgerPages: target.importLedgerPages || null,
     });
     pendingWork.get(target).push([target.crossBundlePath, crossText]);
     const crossPages = reviewBundle.crossPagesOf(crossText);
@@ -2403,17 +2463,23 @@ function runWorkflow(result, options) {
     }
     return [...keys];
   };
+  const cross = result.cross || { model: '', effort: '' };
+  const assembleAll = result.commands && result.commands.assembleAll;
   const args = {
     lanes,
+    // Handed back with the run's result: by then what Step 1 printed is an hour old, and a
+    // conversation whose context was compressed since has no command to run (2026-11-12).
+    ...(assembleAll ? { next: assembleAll } : {}),
     targets: windowed.map((target) => ({
       dir: target.workDir,
       windows: target.windows.map((w) => {
         const after = afterOf(target, w);
         return [`${w.files[0]}-${w.files[1]}`, w.model || '', w.effort || '', ...(after.length ? [after] : [])];
       }),
-      // The lanes start the costliest window first (review-windows.js).
+      // A window's place in the queue: what its walk writes, and what waits for it (review-windows.js).
       costs: target.windows.map((w) => w.cost || 0),
-      cross: { model: options.walkerModel || '', effort: options.walkerEffort || '' },
+      firsts: target.windows.map((w) => w.first || []),
+      cross: { model: cross.model || '', effort: cross.effort || '', cost: reviewBundle.crossOutput(target.files.length) },
       // Light work - read a named file, settle an item - on the light model.
       ...(target.gapsBriefPath ? { gaps: { model: 'sonnet', effort: 'medium' } } : {}),
     })),
@@ -2486,6 +2552,7 @@ function writeContext(context) {
     // so it went to a file and cost a round trip to read back.
     outputFormat: context.outputFormat,
     walker: context.walker || { model: '', effort: '' },
+    cross: context.cross || { model: '', effort: '' },
     rulebookNotesPath: context.rulebookNotesPath,
     claudeMd: context.claudeMd,
     workflow: context.workflow || null,

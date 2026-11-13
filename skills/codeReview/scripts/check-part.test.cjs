@@ -1256,3 +1256,74 @@ test('a part gets the verdicts the read hook carried from an earlier part of the
   assert.ok(filled.fixes.some((fix) => fix.includes('z poprzedniej części stosu')));
   assert.deepStrictEqual(check(f, 2, filled.text), []);
 });
+
+test('the summary names a warning every target shares once, with its targets', () => {
+  const { foldWarnings } = require('./check-part.cjs');
+  assert.deepStrictEqual(
+    foldWarnings(['[a] same text.', 'run-wide.', '[b] same text.', '[a] 6 blocks.', '[b] 7 blocks.']),
+    ['[a, b] same text.', 'run-wide.', '[a] 6 blocks.', '[b] 7 blocks.'],
+  );
+});
+
+test('an OK that points at another instruction\'s finding of the part becomes a NARUSZENIE of that finding', () => {
+  const { foldDeferrals } = require('./check-part.cjs');
+  const part = [
+    '## src/a.ts',
+    '',
+    '🔴 **High**',
+    '- **Linia:** 4-9',
+    '- **Problem:** Powtórzony fragment.',
+    '- **Reguła:** code-quality#1',
+    '- **Expected Result:** Wydzielić.',
+    '',
+    '<!-- checklist: src/a.ts',
+    '[x] architecture#9 — OK (L2-7; powtórzony fragment zgłoszony pod code-quality#1)',
+    '[x] code-quality#3 — OK (L4; patrz code-quality#1)',
+    '[x] general#2 — OK (L5; to samo co accessibility#29)',
+    '[x] code-quality#1 powtórzony fragment — NARUSZENIE (4-9)',
+    '-->',
+  ].join('\n');
+  const { text, fixes } = foldDeferrals(part);
+  const lines = text.split('\n');
+  assert.strictEqual(lines[5], '- **Reguła:** code-quality#1, architecture#9', 'the address joins the finding it points at');
+  assert.strictEqual(lines[9], '[x] architecture#9 ta sama wada co code-quality#1 — NARUSZENIE (4-9)');
+  assert.strictEqual(lines[10], '[x] code-quality#3 — OK (L4; patrz code-quality#1)', 'another item of the same instruction is another requirement: left to the check');
+  assert.strictEqual(lines[11], '[x] general#2 — OK (L5; to samo co accessibility#29)', 'no finding of the part names it: left to the check');
+  assert.deepStrictEqual(fixes, ['architecture#9: OK odsyłające do code-quality#1 zamienione na NARUSZENIE, adres dopisany do pola Reguła tego znaleziska']);
+  assert.deepStrictEqual(foldDeferrals('no block').fixes, []);
+});
+
+test('a finding a later target repeats on an identical file names the earlier report', (t) => {
+  const { markRepeats } = require('./check-part.cjs');
+  const rb = require('./review-bundle.cjs');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'repeats-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const finding = (lines, rule) => `## src/a.ts\n\n⚪ **Low**\n- **Linia:** ${lines}\n- **Problem:** Zła nazwa.\n- **Reguła:** ${rule}\n- **Expected Result:** Zmienić.\n`;
+  const target = (name, content, part) => {
+    fs.mkdirSync(path.join(dir, name), { recursive: true });
+    const contentPath = path.join(dir, name, 'a.ts');
+    fs.writeFileSync(contentPath, content);
+    const reportPath = path.join(dir, name, 'raport.md');
+    fs.writeFileSync(rb.partPathOf(reportPath, 1, 1), part);
+    return { branch: name, reportPath, files: [{ path: 'src/a.ts', contentPath }] };
+  };
+  const context = { targets: [
+    target('p1', 'const a = 1;\n', finding('1', 'general#2')),
+    target('p2', 'const a = 1;\n', finding('1', 'general#2') + finding('1', 'code-quality#3')),
+    target('p3', 'const a = 2;\n', finding('1', 'general#2')),
+  ] };
+  assert.strictEqual(markRepeats(context), 1);
+  const p2 = fs.readFileSync(rb.partPathOf(context.targets[1].reportPath, 1, 1), 'utf8');
+  assert.ok(p2.includes('- **Problem:** Zła nazwa. To samo znalezisko jest w raporcie p1 (ten sam plik, linie i reguła): poprawka jedna.'));
+  assert.strictEqual(p2.split('To samo znalezisko').length, 2, 'another rule on the same lines is another finding');
+  assert.ok(!fs.readFileSync(rb.partPathOf(context.targets[2].reportPath, 1, 1), 'utf8').includes('To samo'), 'the file changed since: not the same finding');
+  assert.strictEqual(markRepeats(context), 0, 'marked once');
+});
+
+test('a finding no item covers names one of the fixed sources, whatever words the agent chose', () => {
+  const { normalizeRuleSources } = require('./check-part.cjs');
+  const text = ['- **Reguła:** Punkt 4 (regresje) → spec nie kompiluje się', '- **Reguła:** Uniwersalne → spójność', '- **Reguła:** Regresja → x', '- **Reguła:** general#2', '- **Reguła:** Inne → y'].join('\n');
+  const out = normalizeRuleSources(text);
+  assert.deepStrictEqual(out.text.split('\n'), ['- **Reguła:** Regresja → spec nie kompiluje się', '- **Reguła:** Spójność → spójność', '- **Reguła:** Regresja → x', '- **Reguła:** general#2', '- **Reguła:** Inne → y']);
+  assert.strictEqual(out.fixes.length, 2);
+});

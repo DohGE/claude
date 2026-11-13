@@ -2217,20 +2217,6 @@
    }
   },
   {
-   "id": "v179",
-   "files": [
-    "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts"
-   ],
-   "instructions": [
-    "architecture"
-   ],
-   "items": [
-    "architecture#4"
-   ],
-   "severity": null,
-   "text": "injected directly by the feature component (components reach state only through their view's signal store or a facade)."
-  },
-  {
    "id": "v181",
    "files": [
     "src/app/user-panel/data-access/services/user-panel-ui-state.service.ts"
@@ -3972,13 +3958,12 @@
    ],
    "items": [
     "feature-component#3",
-    "architecture#5",
-    "feature-component#2"
+    "architecture#5"
    ],
    "severity": null,
-   "text": "store injected + `store.dispatch`, actions/selectors imported, HTTP service injected and called, plus the hand-rolled `UserPanelUiStateService` injected — components may talk only to their view's signal store or a facade.",
+   "text": "store injected + `store.dispatch`, actions/selectors imported, HTTP service injected and called — components talk to their view's signal store or a facade, and never to the NgRx `Store` or an HTTP service.",
    "lines": {
-    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "5, 69, 160, 200, 211"
+    "src/app/user-panel/components-user-panel/feature/feature-user-panel/feature-user-panel.component.ts": "38, 63, 160, 200, 211"
    }
   },
   {
@@ -4270,7 +4255,6 @@
     "feature-component"
    ],
    "items": [
-    "feature-component#9",
     "feature-component#10",
     "feature-component#11"
    ],
