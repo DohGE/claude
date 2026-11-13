@@ -269,7 +269,9 @@ Apply only the winning rule; never report a violation of the overridden rule.
   renderer looks each one up in the rulebook, prints the item's own words, and flags an address the
   rulebook does not hold. Only a finding no checklist item covers (the cross-file pass, the universal
   points 3–5, a `CLAUDE.md` rule) writes prose instead: `<source> → <rule in a few words>`, e.g.
-  `CLAUDE.md → brak console.log`.
+  `CLAUDE.md → brak console.log`. `<source>` is one of four FIXED IDENTIFIERS - `Spójność`
+  (point 3 and the cross-file questions), `Regresja` (point 4), `Czytelność` (point 5), `CLAUDE.md` -
+  since the page groups findings by it.
 - `PR Problem`, `PR Expected` and `PR Locations` are written ONLY when `target.htmlReportPath` is not
   null. An `--only-md` run has no HTML page and so no way to post a comment, and its findings carry
   the four fields above and nothing more.

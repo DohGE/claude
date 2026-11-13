@@ -74,7 +74,7 @@ When the user says "normal mode" or "stop caveman", your own chat returns to nor
 
 With the headroom proxy, a tool result may arrive compressed.
 A compressed result carries a marker with `hash=<hash>`, for example `Retrieve more: hash=<hash>`, and its wording or numbers may differ from the original.
-When you need the exact original - to quote it, count from it, match it or edit from it - call `headroom_retrieve` with that hash instead of guessing.
+When you need the exact original - to quote it, count from it, match it or edit from it - call the headroom retrieve tool with that hash instead of guessing: `mcp__headroom__headroom_retrieve` (loaded by name through tool search when it is deferred); a bare `headroom_retrieve` in the tool list is not callable.
 Without that tool, re-read the file or re-run the command with narrower output.
 <!-- lean-mode:end -->
 

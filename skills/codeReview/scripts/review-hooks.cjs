@@ -518,6 +518,48 @@ function deny(text) {
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: text } };
 }
 
+function allow(text, updatedInput) {
+  return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: text, updatedInput } };
+}
+
+// A Glob's pattern - and a Grep's `glob` - that holds a `/` without opening with `**/` is read
+// from the session's working directory, not from `path`: searched in any other folder it matches
+// nothing. Every search this hook sends to a snapshot, and every one a walker points there itself,
+// is such a search: all 45 Globs of that shape came back empty in a 250-file run, 15 were never
+// asked again another way, and one verdict cited the empty result (2026-11-12).
+const reGlobMagic = /[*?[\]{}]/;
+const anchoredGlob = (pattern) => typeof pattern === 'string' && pattern.includes('/') && !pattern.startsWith('**/');
+
+// A Glob in `dir`: the folders its pattern opens with move into `path` - the search walks only
+// them - and what is left matches at any depth below. Null when the pattern works as it is, and
+// when the revision has no such folder: there the Glob rightly finds nothing.
+function unanchoredGlob(dir, pattern) {
+  if (!anchoredGlob(pattern)) return null;
+  const segments = pattern.split('/').filter((s) => s !== '' && s !== '.');
+  let k = 0;
+  while (k < segments.length - 1 && !reGlobMagic.test(segments[k]) && segments[k] !== '..') k++;
+  const base = path.join(dir, ...segments.slice(0, k));
+  if (k > 0) {
+    try {
+      if (!fs.statSync(base).isDirectory()) return null;
+    } catch {
+      return null;
+    }
+  }
+  const rest = segments.slice(k).join('/');
+  return { path: base.replace(/\\/g, '/'), pattern: anchoredGlob(rest) ? `**/${rest}` : rest };
+}
+
+// What a search's input changes to in `dir`, or null: a Grep keeps its `path` and its filter
+// matches at any depth below it.
+function unanchoredSearch(tool, args, dir) {
+  if (tool === 'Glob') return unanchoredGlob(dir, args.pattern);
+  const glob = typeof args.glob === 'string' ? args.glob : '';
+  const negated = glob.startsWith('!');
+  const body = negated ? glob.slice(1) : glob;
+  return anchoredGlob(body) ? { glob: `${negated ? '!' : ''}**/${body}` } : null;
+}
+
 // A Grep or Glob of the project while this session reviews a branch: the working tree is whatever
 // is checked out - in a stacked review, the stack's last part - and not the revision under review.
 // Of a 188-file run's lookups, 19 read the working tree or a branch name (2026-10-30). The search
@@ -535,13 +577,21 @@ function onSearch(input, env = process.env) {
   // A staged or folder review reads the working tree itself (its snapshotDir is the project).
   const live = (context.targets || []).filter((t) => t && t.workDir && t.snapshotDir && !samePath(t.snapshotDir, project) && fs.existsSync(t.workDir));
   if (live.length === 0) return null;
-  const tied = state.agents[input.agent_id ? String(input.agent_id) : ''];
-  const target = live.find((t) => tied && samePath(t.workDir, tied)) || (live.length === 1 ? live[0] : null);
-  if (!target) return null;
   const args = (input && input.tool_input) || {};
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : project;
   const asked = typeof args.path === 'string' && args.path.trim() ? path.resolve(cwd, args.path) : path.resolve(cwd);
-  if (!inside(asked, project) || inside(asked, path.join(project, '.claude')) || inside(asked, target.snapshotDir)) return null;
+  if (!inside(asked, project)) return null;
+  // The run's own folders - a snapshot, a work folder - are searched where they are; only the
+  // pattern is read from the searched folder.
+  const inPlace = () => {
+    const fixed = unanchoredSearch(tool, args, asked);
+    return fixed ? allow(`codeReview: wzorzec ${tool} liczony od przeszukiwanego folderu, nie od katalogu sesji`, { ...args, ...fixed }) : null;
+  };
+  if (inside(asked, path.join(project, '.claude'))) return inPlace();
+  const tied = state.agents[input.agent_id ? String(input.agent_id) : ''];
+  const target = live.find((t) => tied && samePath(t.workDir, tied)) || (live.length === 1 ? live[0] : null);
+  if (!target) return null;
+  if (inside(asked, target.snapshotDir)) return inPlace();
   const rel = path.relative(project, asked).replace(/\\/g, '/');
   const mapped = path.join(target.snapshotDir, rel);
   const revision = target.revision ? target.revision.slice(0, 9) : target.branch;
@@ -549,14 +599,10 @@ function onSearch(input, env = process.env) {
     if (!tracked(project, rel)) return null;
     return deny(`codeReview: ${rel || '.'} nie istnieje w recenzowanej rewizji (${revision}) - drzewo robocze ma inną. Szukaj w target.snapshotDir (${target.snapshotDir.replace(/\\/g, '/')}): ścieżka po nim to ścieżka w repozytorium.`);
   }
-  return {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'allow',
-      permissionDecisionReason: `codeReview: ${tool} w recenzowanej rewizji (${revision}): ${rel || '.'} w snapshotDir, nie w drzewie roboczym`,
-      updatedInput: { ...args, path: mapped.replace(/\\/g, '/') },
-    },
-  };
+  return allow(
+    `codeReview: ${tool} w recenzowanej rewizji (${revision}): ${rel || '.'} w snapshotDir, nie w drzewie roboczym`,
+    { ...args, path: mapped.replace(/\\/g, '/'), ...(unanchoredSearch(tool, args, mapped) || {}) },
+  );
 }
 
 const handlers = { read: onRead, draft: onDraft, compact: onCompact, subagent: onSubagent, search: onSearch };

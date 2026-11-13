@@ -646,3 +646,27 @@ test('the bundle lists the patterns a script found, each with the item to confir
   assert.ok(text.includes('- L2 → component-template#2: `rows()` is read 2 times'));
   assert.ok(!rb.renderBundle({ file, kind: null, instructions }).includes('Wzorce wykryte'), 'no section without a hint');
 });
+
+test('an import ledger past one Read is named with its pages in the cross bundle', () => {
+  const b = require('./review-bundle.cjs');
+  const text = b.renderCrossBundle({ instructions: new Map(), walked: new Map(), importLedger: 'w/raport.imports.txt', importLedgerPages: [[1, 900], [901, null]] });
+  assert.ok(text.includes('- księga importów: w/raport.imports.txt (Read: offset 1, limit 900; offset 901)'), text.slice(0, 400));
+});
+
+test('a bundle lists its file\'s folder: the files, and each subfolder with its own', () => {
+  const b = require('./review-bundle.cjs');
+  const paths = ['src/a/x.component.ts', 'src/a/x.component.html', 'src/a/tests/x.component.spec.ts', 'src/a/ui/y/y.ts', 'src/b/z.ts'];
+  assert.deepStrictEqual(b.folderListing('src/a/x.component.ts', paths), ['- x.component.html', '- x.component.ts', '- tests/: x.component.spec.ts', '- ui/']);
+  assert.deepStrictEqual(b.folderListing('top.ts', ['top.ts']), ['- top.ts']);
+});
+
+test('a modified file closes too the items whose subject only its untouched lines hold', () => {
+  const b = require('./review-bundle.cjs');
+  const instructions = new Map([['a11y', { id: 'a11y', extras: new Map([[1, { subject: ['<img'] }], [2, { subject: ['<button'] }], [3, { subject: ['<p'] }]]) }]]);
+  const plan = [{ id: 'a11y', numbers: [1, 2, 3] }];
+  const text = '<img src="a" alt="a">\n<p>one</p>\n<button>go</button>\n';
+  const bound = b.bindFile({ plan, instructions, filePath: 'x.html', text, changedText: '<p>one</p>' });
+  assert.deepStrictEqual([bound.closed, bound.closedUntouched], [['a11y#1', 'a11y#2'], ['a11y#1', 'a11y#2']]);
+  const whole = b.bindFile({ plan, instructions, filePath: 'x.html', text: '<p>one</p>\n' });
+  assert.deepStrictEqual([whole.closed, whole.closedUntouched], [['a11y#1', 'a11y#2'], undefined], 'an added file: absent from the file');
+});

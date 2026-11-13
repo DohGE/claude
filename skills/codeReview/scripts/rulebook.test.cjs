@@ -506,3 +506,9 @@ test('the shipped rulebook loads without a warning, and its subjects close what 
   assert.strictEqual(rulebook.matchKind(rules, 'src/app/x/tests/__snapshots__/x.component.spec.ts.snap').kind.name, 'jest-snapshot');
   assert.strictEqual(rules.kinds.find((k) => k.name === 'i18n-source').readChanged, true);
 });
+
+test('a local rule names the subject of an item or of a whole heading, which closes the items a file has nothing of', () => {
+  const parsed = rulebook.parseLocalMarkdown(localRule('name: n\nid: w\nsection-subject:\n  - Labels: label|title\n  - Nowhere: x\nitem-subject:\n  - 2: chart'), 'w');
+  assert.deepStrictEqual(parsed.entry.items.map((i) => i.subject), ['label|title', 'chart'], 'an item\'s own subject wins over its heading\'s');
+  assert.deepStrictEqual(parsed.problems, ['section-subject "Nowhere: x" names no heading of this rule\'s checklist - ignored.']);
+});

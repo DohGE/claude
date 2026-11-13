@@ -2164,7 +2164,11 @@ function fillPart(context, target, partPath, text, facts) {
         lines[gate.lineNo - 1] = withNumbers(lines[gate.lineNo - 1], id, [...gate.numbers, ...numbers]);
         continue;
       }
-      closedLines.push(`${indent}[x] ${id}#${rulebook.formatItemSpec(numbers).replace(/,/g, ',#')} — OK (${bundle.closedEvidence})`);
+      const untouched = new Set((facts && facts.files[file.path] && facts.files[file.path].closedUntouched) || []);
+      const kinds = [numbers.filter((k) => !untouched.has(`${id}#${k}`)), numbers.filter((k) => untouched.has(`${id}#${k}`))];
+      kinds.forEach((group, j) => {
+        if (group.length) closedLines.push(`${indent}[x] ${id}#${rulebook.formatItemSpec(group).replace(/,/g, ',#')} — OK (${j ? bundle.closedUntouchedEvidence : bundle.closedEvidence})`);
+      });
     }
     fixes.push(`${compact(closed)}: dopisane pozycje zamknięte przez skrypt (przedmiotu brak w pliku)`);
   }
@@ -2196,6 +2200,141 @@ function fillPart(context, target, partPath, text, facts) {
   return { text: lines.join('\n'), fixes };
 }
 
+// An OK whose evidence names an item of ANOTHER instruction that a finding of the same part
+// reports is the same defect seen by a second rule: the line becomes `NARUSZENIE` on that
+// finding's lines and the address joins its `**Reguła:**` field - what the check's refusal asks
+// for anyway. 31 of 44 refused part Writes of a 250-file run were that, each a rewrite of the
+// whole part (2026-11-12). Two items of one instruction are two requirements: left to the check.
+function foldDeferrals(text) {
+  const lines = String(text).split('\n');
+  const findings = [];
+  let current = null;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (render.reSeverity.test(t)) {
+      current = { linia: null, regula: null };
+      findings.push(current);
+    } else if (current && /^- \*\*Linia:\*\*/.test(t)) current.linia = t.replace(/^- \*\*Linia:\*\*\s*/, '').trim();
+    else if (current && /^- \*\*Reguła:\*\*/.test(t)) current.regula = i;
+    else if (t.startsWith('<!--') || /^##\s/.test(t)) current = null;
+  }
+  const owner = new Map();
+  for (const finding of findings) {
+    if (finding.regula === null || !finding.linia) continue;
+    for (const address of lines[finding.regula].match(new RegExp(reAddress.source, 'gi')) || []) {
+      if (!owner.has(address.toLowerCase())) owner.set(address.toLowerCase(), finding);
+    }
+  }
+  const fixes = [];
+  let inBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (render.reChecklistOpen.test(lines[i].trim())) { inBlock = true; continue; }
+    if (inBlock && lines[i].includes('-->')) inBlock = false;
+    if (!inBlock) continue;
+    const m = lines[i].match(/^(\s*)\[(?:x|X)\]\s+([a-z0-9][a-z0-9-]*#\d+)\s*[—–-]\s*OK\s*\((.*)\)\s*$/i);
+    if (!m) continue;
+    const [, indent, address, evidence] = m;
+    const id = address.split('#')[0].toLowerCase();
+    const other = (evidence.match(new RegExp(reAddress.source, 'gi')) || []).find((a) => a.split('#')[0].toLowerCase() !== id && owner.has(a.toLowerCase()));
+    if (!other) continue;
+    const finding = owner.get(other.toLowerCase());
+    if (!new RegExp(`(^|[^\\w-])${address.replace(/[-#]/g, '\\$&')}(?![\\d])`, 'i').test(lines[finding.regula])) {
+      lines[finding.regula] = `${lines[finding.regula].replace(/\s+$/, '')}, ${address}`;
+    }
+    lines[i] = `${indent}[x] ${address} ta sama wada co ${other} — NARUSZENIE (${finding.linia})`;
+    fixes.push(`${address}: OK odsyłające do ${other} zamienione na NARUSZENIE, adres dopisany do pola Reguła tego znaleziska`);
+  }
+  return { text: lines.join('\n'), fixes };
+}
+
+// FIXED IDENTIFIERS: the sources a finding no checklist item covers names in its `**Reguła:**`
+// (`<source> → <rule in a few words>`) - the universal points 3-5 and the project's CLAUDE.md. The
+// page groups findings by it: one run's cross-file passes wrote `Regresja`, `Punkt 4`,
+// `Punkt 4 (regresje)`, `Uniwersalne` and `Spójność stosu` for two kinds of defect (2026-11-12).
+const ruleSources = [
+  ['Spójność', /^(?:punkt\s*3\b|spójn|konsekwen|uniwersaln)/i],
+  ['Regresja', /^(?:punkt\s*4\b|regres)/i],
+  ['Czytelność', /^(?:punkt\s*5\b|czyteln)/i],
+  ['CLAUDE.md', /^claude\.md/i],
+];
+function normalizeRuleSources(text) {
+  const fixes = [];
+  const lines = String(text).split('\n').map((line) => {
+    const m = line.match(/^(\s*- \*\*Reguła:\*\*\s*)([^→\n]+?)(\s*→\s*.*)$/);
+    if (!m || reAddress.test(m[2])) return line;
+    const source = m[2].trim();
+    const hit = ruleSources.find(([, re]) => re.test(source));
+    if (!hit || hit[0] === source) return line;
+    fixes.push(`Reguła "${source}" zapisana jako stałe źródło "${hit[0]}"`);
+    return `${m[1]}${hit[0]}${m[3]}`;
+  });
+  return { text: lines.join('\n'), fixes };
+}
+
+// The findings of a part: per finding its `**Linia:**` value, its addresses, and the index of its
+// `**Problem:**` line.
+function partFindings(lines) {
+  const out = [];
+  let current = null;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (render.reSeverity.test(t)) {
+      current = { linia: '', addresses: [], problem: -1 };
+      out.push(current);
+    } else if (current && /^- \*\*Linia:\*\*/.test(t)) current.linia = t.replace(/^- \*\*Linia:\*\*\s*/, '').trim();
+    else if (current && /^- \*\*Reguła:\*\*/.test(t)) current.addresses = (t.match(new RegExp(reAddress.source, 'gi')) || []).map((a) => a.toLowerCase());
+    else if (current && /^- \*\*Problem:\*\*/.test(t)) current.problem = i;
+    else if (t.startsWith('<!--') || /^##\s/.test(t)) current = null;
+  }
+  return out;
+}
+
+// One run's targets that review the same file with the same content - parts of a stack, one cut
+// before its base was amended - report its defects twice: 25 of a seven-target run's 168 findings
+// repeated a finding of an earlier target (2026-11-12). A later target's finding on the same lines
+// under the same address of an identical file says so in its Problem, naming the earlier report,
+// so that it is fixed once. Runs before the targets are assembled; returns the count.
+const repeatNote = 'To samo znalezisko jest w raporcie';
+function markRepeats(context) {
+  const seen = new Map();
+  let marked = 0;
+  const read = (file) => {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  for (const target of context.targets || []) {
+    const files = target.files || [];
+    for (let k = 1; k <= files.length; k++) {
+      const file = files[k - 1];
+      const content = file && file.contentPath ? read(file.contentPath) : null;
+      const partPath = bundle.partPathOf(target.reportPath, k, files.length);
+      const text = content === null ? null : read(partPath);
+      if (text === null) continue;
+      const eol = text.includes('\r\n') ? '\r\n' : '\n';
+      const lines = text.split(/\r?\n/);
+      let changed = false;
+      for (const finding of partFindings(lines)) {
+        if (!finding.linia || finding.addresses.length === 0) continue;
+        const key = `${file.path}\0${content}\0${finding.linia}\0${finding.addresses[0]}`;
+        const earlier = seen.get(key);
+        if (!earlier) {
+          seen.set(key, target.branch || path.basename(target.reportPath));
+          continue;
+        }
+        if (finding.problem < 0 || lines[finding.problem].includes(repeatNote)) continue;
+        lines[finding.problem] = `${lines[finding.problem].replace(/\s+$/, '')} ${repeatNote} ${earlier} (ten sam plik, linie i reguła): poprawka jedna.`;
+        changed = true;
+        marked++;
+      }
+      if (changed) fs.writeFileSync(partPath, lines.join(eol));
+    }
+  }
+  return marked;
+}
+
 // Resolves to what the hook prints and its exit code; any throw on the way means exit 0.
 // A string refuses the call (exit 2); `{ context }` lets it through with a note for the model,
 // and `{ context, updatedInput }` lets it through as the normalised Write (normalizePart).
@@ -2215,8 +2354,10 @@ function hookResult(input) {
   if (tool === 'Write') {
     ({ text, fixes } = normalizePart(String(args.content === undefined || args.content === null ? '' : args.content)));
     const filled = fillPart(found.context, found.target, file, text, readFacts(found.target));
-    text = filled.text;
-    fixes = [...fixes, ...filled.fixes];
+    const folded = foldDeferrals(filled.text);
+    const sourced = normalizeRuleSources(folded.text);
+    text = sourced.text;
+    fixes = [...fixes, ...filled.fixes, ...folded.fixes, ...sourced.fixes];
   } else {
     // An Edit is checked as the file it would leave behind.
     const current = fs.readFileSync(file, 'utf8');
@@ -2255,7 +2396,7 @@ function hookResult(input) {
     ].join('\n');
   }
   return formatProblems(
-    `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview references/walk.md, Step 3 point 4):`,
+    `Część ${path.basename(file)} NIE została zapisana: nie przeszła kontroli formatu (codeReview references/walk.md, Step 3 point 4; co teraz: ${bundle.skillDir}/references/refused-part.md):`,
     withDraftLines(problems, text),
     draftNotes(found.contextPath, draft, false),
   );
@@ -2712,6 +2853,10 @@ function assembleAll(contextPath) {
     return 1;
   }
   const results = [];
+  let repeats = 0;
+  try {
+    repeats = markRepeats(context);
+  } catch {}
   for (const target of context.targets || []) {
     const run = spawnSync(process.execPath, [__filename, `--context=${contextPath}`, `--report=${target.reportPath}`, '--assemble'], { encoding: 'utf8' });
     const result = { target, status: run.status === null ? 1 : run.status, stdout: run.stdout || '', stderr: run.stderr || '' };
@@ -2724,7 +2869,7 @@ function assembleAll(contextPath) {
     process.stderr.write(`Nie złożono: ${failed.map((result) => result.target.branch || result.target.reportPath).join(', ')} - popraw części, które wskazano wyżej, i uruchom to polecenie jeszcze raz (złożone cele pomija).\n`);
     return 1;
   }
-  process.stdout.write(`${runSummary(context, results)}\n`);
+  process.stdout.write(`${runSummary(context, results, repeats)}\n`);
   return 0;
 }
 
@@ -2732,8 +2877,9 @@ const baseSources = { pr: (target) => `PR #${target.prNumber}`, fork: () => 'ga�
 
 // The Step 5 summary, in Polish, from what each assembly printed - never from the report: a
 // report without --with-checklist keeps no coverage marker.
-function runSummary(context, results) {
+function runSummary(context, results, repeats = 0) {
   const out = [summaryStart];
+  if (repeats > 0) out.push(`Powtórzone znaleziska: ${repeats} znalezisk(o) późniejszego celu powtarza znalezisko wcześniejszego (ten sam plik, linie i reguła) - ich Problem wskazuje raport, w którym zgłoszono je pierwszy raz.`);
   for (const { target, stdout, stderr } of results) {
     const already = /jest już złożony/.test(stdout);
     const report = target.htmlReportPath && fs.existsSync(target.htmlReportPath) ? target.htmlReportPath : target.reportPath;
@@ -2754,14 +2900,27 @@ function runSummary(context, results) {
     }
     if (target.resume) out.push(`- wznowiony przebieg z ${target.resume.from}; przejęte pliki: ${(target.resume.doneFiles || []).length}.`);
   }
-  const warnings = context.runWarnings || [];
+  const warnings = foldWarnings(context.runWarnings || []);
   if (warnings.length) out.push('Ostrzeżenia kontekstu (Step 1):', ...warnings.map((warning) => `- ${warning}`));
   out.push(summaryEnd);
   return out.join('\n');
 }
 
+// A warning every target of a run gets word for word is one line naming them all: a seven-target
+// run printed the same sentence seven times (2026-11-12).
+function foldWarnings(warnings) {
+  const groups = new Map();
+  for (const warning of warnings) {
+    const m = String(warning).match(/^\[([^\]]+)\] ([\s\S]*)$/);
+    const key = m ? m[2] : `\0${warning}`;
+    if (!groups.has(key)) groups.set(key, { text: m ? m[2] : String(warning), names: [] });
+    if (m) groups.get(key).names.push(m[1]);
+  }
+  return [...groups.values()].map((g) => (g.names.length > 0 ? `[${g.names.join(', ')}] ${g.text}` : g.text));
+}
+
 module.exports = {
-  renderArgsOf, withDraftLines, findingBlocks, foldFindings, assembleAll, runSummary, summaryStart, summaryEnd,
+  foldWarnings, foldDeferrals, markRepeats, normalizeRuleSources, ruleSources, renderArgsOf, withDraftLines, findingBlocks, foldFindings, assembleAll, runSummary, summaryStart, summaryEnd,
   checkPart, checkAssembly, findContextFor, hookResult, normalizePart, fillPart, checkQuestions, windowOf, scanPart, planItems, compact,
   rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellOtherRevision, shellWalkerOnly, beyondHint, pathFinder, gapsOf, gapsReplies, shellWrites, expandWord,
   promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName, noSpecConflicts,

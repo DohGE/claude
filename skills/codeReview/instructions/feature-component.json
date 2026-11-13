@@ -10,14 +10,14 @@
   ],
   "notes": [
     "Inline `styles` are walked as CSS (component-styles gate), so component-styles and the style-related accessibility items apply to this TS file too.",
-    "Routed and dialog feature components share this kind: feature-component#15 binds dialogs, feature-component#9 and #11-14 bind routed features."
+    "Routed and dialog feature components share this kind: feature-component#15 binds dialogs, feature-component#11-14 bind routed features."
   ],
-  "itemCount": 136,
+  "itemCount": 135,
   "instructions": [
     {
       "id": "feature-component",
       "name": "Feature (smart) component",
-      "selectedItems": "1-17",
+      "selectedItems": "1-8,10-17",
       "checklistSize": 17,
       "items": [
         {
@@ -27,12 +27,12 @@
         },
         {
           "id": "feature-component#2",
-          "text": "Allowed injections: the view's signal store (the bridge to its state) or - for data several independent views share - the area facade; a layout facade; `FormBuilder`; `ActivatedRoute`/`Router` (rare); `DestroyRef`; a dialog ref inside dialog components; and - only when aggregating child forms - the shared forms-validity service with its components-reference token.",
+          "text": "Allowed injections: the view's signal store (the bridge to its state) or - for data several independent views share - the area facade; a layout facade; `FormBuilder`; `ActivatedRoute`/`Router`; `DestroyRef`; a dialog ref inside dialog components; the shared forms-validity service with its components-reference token when aggregating child forms; and any other service the view needs - except an HTTP service (a class that injects `HttpClient`), whose requests belong to signal-store methods and effects.",
           "severity": "low"
         },
         {
           "id": "feature-component#3",
-          "text": "Forbidden injections: the NgRx `Store`, HTTP/data services, repositories; no imports from `*.actions`/`*.selectors`; no `store.dispatch`.",
+          "text": "Forbidden injections: the NgRx `Store`, HTTP services (a class that injects `HttpClient`), repositories; no imports from `*.actions`/`*.selectors`; no `store.dispatch`.",
           "severity": "low",
           "sameAs": [
             "architecture#5"
@@ -61,11 +61,6 @@
         {
           "id": "feature-component#8",
           "text": "Public handlers are thin proxies to store or facade methods (no logic, no branching beyond trivial argument shaping).",
-          "severity": "low"
-        },
-        {
-          "id": "feature-component#9",
-          "text": "Route and query parameters arrive as signal `input()`s bound by `withComponentInputBinding()`; `ActivatedRoute` is injected only for what the binding cannot express (reacting to a sibling route, reading a parent route's snapshot).",
           "severity": "low"
         },
         {
@@ -356,7 +351,7 @@
         },
         {
           "id": "architecture#4",
-          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
+          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade - other services may be injected beside it, an HTTP service never; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
           "severity": "low",
           "facts": [
             "component-injects-data-access"
@@ -364,7 +359,7 @@
         },
         {
           "id": "architecture#5",
-          "text": "Components never inject the NgRx `Store`, never import actions or selectors, and never call HTTP services directly - they talk to their view's signal store or a facade (the shared aggregate-form-validity service is the only other service a feature component may inject).",
+          "text": "Components never inject the NgRx `Store`, never import actions or selectors, and never call HTTP services directly - they talk to their view's signal store or a facade; any other service that is no HTTP service may be injected beside it.",
           "severity": "low",
           "sameAs": [
             "feature-component#3"

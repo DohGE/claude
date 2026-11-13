@@ -5,7 +5,7 @@
   "describedBy": [
     {
       "id": "feature-component#2",
-      "text": "Allowed injections: the view's signal store (the bridge to its state) or - for data several independent views share - the area facade; a layout facade; `FormBuilder`; `ActivatedRoute`/`Router` (rare); `DestroyRef`; a dialog ref inside dialog components; and - only when aggregating child forms - the shared forms-validity service with its components-reference token."
+      "text": "Allowed injections: the view's signal store (the bridge to its state) or - for data several independent views share - the area facade; a layout facade; `FormBuilder`; `ActivatedRoute`/`Router`; `DestroyRef`; a dialog ref inside dialog components; the shared forms-validity service with its components-reference token when aggregating child forms; and any other service the view needs - except an HTTP service (a class that injects `HttpClient`), whose requests belong to signal-store methods and effects."
     }
   ],
   "itemCount": 45,
@@ -110,7 +110,7 @@
         },
         {
           "id": "architecture#4",
-          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
+          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade - other services may be injected beside it, an HTTP service never; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
           "severity": "low",
           "facts": [
             "component-injects-data-access"
