@@ -10,6 +10,7 @@ Project root: `{{PROJECT}}` | Skill dir: `{{SKILL_DIR}}` | Push: `{{PUSH}}`
 Dependencies installed: `{{INSTALLED}}` | User language: `{{LANGUAGE}}` | Landing: `{{LANDING}}`
 Project rulebook: `{{RULEBOOK}}` | Open pull requests stacked above this one: `{{ABOVE}}`
 Visual check (the app's start, from `checks.json` "visual"): `{{VISUAL}}`
+Gate priority (`--priority`, lower goes first in the machine's slot queue): `{{PRIORITY}}`
 
 `{{ROOT}}` is a dedicated `git worktree` holding ONLY this branch. Read, write, install, test, stage
 and commit exclusively inside it. `{{PROJECT}}` is named so you can recognise the repository — never
@@ -19,7 +20,8 @@ sits outside `{{ROOT}}`, so writing it can never end up in your commit.
 Never `cd` anywhere - not into `{{ROOT}}` either. Every command takes `git -C "{{ROOT}}"` or an
 absolute path; a tool that needs a working directory runs in a subshell, `(cd "{{ROOT}}" && …)`.
 A shell left standing in `{{ROOT}}` holds the folder open on Windows, and the orchestrator's
-`worktree remove` then leaves it behind - three such folders blocked the next runs of 2026-11-06.
+`worktree remove` then leaves it behind - four of five folders on 2026-11-16. A hook refuses a
+`cd` into the worktree that outlives its command.
 
 ## Mission
 
@@ -42,25 +44,27 @@ the run of 2026-11-03. So:
 - Never call `ToolSearch`. Every tool this brief needs is already loaded: Bash (with
   `run_in_background`), Read, Edit, Write, Grep, Glob and Agent. Loading one more rewrites the whole
   cached prompt (173-226k tokens per load), and `Monitor` is the one agents loaded - never use it.
-- Anything that can run past four minutes - the gate, the self-review - runs in the background, and you
-  wait for the file it writes at its end, in slices:
+- Anything that can run past three minutes - the gate, the self-review, workers - runs in the
+  background, and you wait for the file it writes at its end, in slices:
 
       node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty
 
-  It waits under four minutes and prints `PART_READY <file>` or `PART_PENDING <file>` (FIXED
-  IDENTIFIERS). `PART_PENDING` → run it again. Never end your turn while background work runs.
+  Give that Bash call `timeout: 175000`: without it the call is cut at two minutes, and past three
+  the harness moves it to the background - twenty waits of 2026-11-16 ended that way. It waits under
+  three minutes and prints `PART_READY <file>` or `PART_PENDING <file>` (FIXED IDENTIFIERS).
+  `PART_PENDING` → run it again. Never end your turn while background work runs.
   Waiting on two things at once - the self-review and the first gate pass (step 4) - give both:
   `--path="<a>" --path="<b>" --nonempty` returns as soon as either is ready, and you act on that
-  one while the other still runs. On 2026-11-05 agents spent up to 27 minutes in nine
-  back-to-back waits on the review alone, with the gate not yet started.
-- No other call of yours blocks for four minutes either: no `sleep`, no foreground build.
+  one while the other still runs.
+- No other call of yours blocks for three minutes either: no `sleep`, no foreground build.
 
 ## The worktree's tools - three things that cost a run its time
 
 - **Edit only what you Read.** The Edit and Write tools refuse a file this conversation has not
   read with the Read tool; a `cat`, `sed -n` or `grep` in Bash does not count. Read the file (or
-  the range you change) with Read before the first Edit of it. About twenty refused edits went
-  to that on 2026-11-05.
+  the range you change) with Read before the first Edit of it. Search with Grep and Glob: a hook
+  refuses a shell read of the worktree (`cat`, `sed`, `grep -r`, `ls`, `find`) - one recursive
+  shell grep of 2026-11-16 hung two minutes over the linked `node_modules`.
 - **Tests run through the gate.** Never call `jest` with a list of spec files: past ~8 000
   characters Windows refuses the command line ("The command line is too long"). Run
   `checks.cjs --only=test` (step 5); for one spec while you work, give jest that ONE path.
@@ -73,6 +77,18 @@ the run of 2026-11-03. So:
 
 ## Step 1 — Read the work
 
+{{#if RESTORE!=none}}
+**First, before anything else: files the stack's split left out.** This part (or a part below it)
+imports files only a later part of the stack adds, so its gate cannot be green as it stands
+(stack-preflight.cjs found it from git alone). Bring them back verbatim, exactly as:
+
+{{RESTORE}}
+
+They belong to your commit. Change nothing in them beyond what an item asks; every other part of the
+stack restores the same files the same way, so the landing sees identical additions. Name them in
+the report under `## Naprawione checki` as "zastane: pliki z wyższej części stosu".
+
+{{/if}}
 `{{COMMENTS}}` is a JSON file holding three lists. Read it with the Read tool; never paste it back
 into a message.
 
@@ -91,9 +107,13 @@ into a message.
   `path`, `lines` (numbered as the reviewed revision had them), `severity`, `rule`, `problem`,
   `expected`, the English `prProblem`/`prExpected`/`prLocations` when the report had them, and the
   `report` it comes from. Each one is a request like a review thread: the user chose it, so it is
-  work, never `answered`. Find its code by `path` and by what `problem` describes - the branch may
-  have moved since the review - and make the code what `expected` says. `rejected` holds for a
-  finding on the same three grounds as for a comment.
+  work. Find its code by `path` and by what `problem` describes - the branch may have moved since
+  the review - and make the code what `expected` says. `rejected` holds for a finding on the same
+  three grounds as for a comment.
+  A finding marked `stale` sits on lines changed since its review (the collector compared the
+  report's revision with the branch). Check it against the code as it stands: when the code already
+  does what `expected` says, or the code it names is gone, it is `answered` with that ground - the
+  only case a finding is ever `answered`. 5 of 30 findings of 2026-11-16 were such.
 {{/if}}
 {{#if TASK=yes}}
 
@@ -163,6 +183,26 @@ that refines an earlier one is part of it.
 Fix the code as you go, one item at a time, editing only what the comment is about. Do not refactor
 anything nobody asked about, and do not "improve" neighbouring code while you are in the file — every
 line you change beyond the comments is a line the reviewer has to review again.
+{{#if WORKERS=yes}}
+
+### Many items: workers first
+
+This part has many items, and a single conversation that fixes them all grows past 300k tokens and
+holds every landing above it (part-1 of 2026-11-16: 30 findings, 48.5 min). Before you fix anything:
+
+    node "{{SKILL_DIR}}/scripts/split-work.cjs" --comments="{{COMMENTS}}" --out-dir="{{CHECKS_DIR}}/work" --vars="{{CHECKS_DIR}}/brief-vars.json"
+
+- `split: false` → fix every item yourself, as above.
+- `split: true` → spawn one worker per entry of `groups`, all in ONE message, in the background:
+  `Agent(subagent_type: "doh:pipeline-worker", description: "fix group <k> {{BRANCH}}", run_in_background: true, prompt: "Read <prompt> and follow it.")`
+  (`general-purpose` when your Agent tool does not list that type). Each worker fixes the items of
+  its folders and nothing else. While they work, give the `lead` items - the ones that belong to no
+  file - their verdicts yourself. Then wait for every group's `result` file with `wait-part.cjs`
+  (one `--path` per result, `--nonempty`) and Read each one: its `verdicts` become yours (step 3
+  checks every `fixed` one as it checks your own), make every `needs` change yourself, and take its
+  `renamed` into step 3 point 3 and its `uiUnverified` into yours. A group whose result never comes
+  (a worker that stopped, or ended without writing it) leaves its items to you: fix them yourself.
+{{/if}}
 
 {{#if RULEBOOK=none}}
 The project ships no rulebook of its own (the worktree was checked when it was made): there are no
@@ -210,12 +250,13 @@ Once every item has its verdict and its fix, check the work before anything else
    anything - a file or folder, a symbol, a class member, an input/output, a selector, an action, a
    translation key, a CSS class, a `data-test` value, a route path - run, once they are written:
 
-       node "{{SKILL_DIR}}/scripts/symbol-uses.cjs" --root="{{ROOT}}" --names="<old name>,<old name>,…"
+       node "{{SKILL_DIR}}/scripts/symbol-uses.cjs" --root="{{ROOT}}" --names="<old name>,<old name>,…" --out="{{CHECKS_DIR}}/uses.json"
 
    It greps the worktree for every old name - whole words, dotted translation-key paths and the
    key's leaf inside `en.json` - and skips the other locale files (an old key path there is the
-   translation team's, no leftover). Its JSON lists each use as `path:line`. Fix every leftover and
-   run it again until `uses` is empty. This is the codeReview rulebook's `general#14`; no sub-agent.
+   translation team's, no leftover). Its JSON lists `counts` per name and the first uses of each as
+   `path:line`; `truncated: true` means more of them sit in `--out`. Fix every leftover and run it
+   again until `uses` is empty. This is the codeReview rulebook's `general#14`; no sub-agent.
 {{#if ABOVE!=none}}
 4. **The pull requests above this one still build on it.** `{{ABOVE}}` are stacked on this
    branch and land on it after you. Before the commit, run the same script against them, once for
@@ -228,8 +269,8 @@ Once every item has its verdict and its fix, check the work before anything else
    fix removed a state flag part-2..4 still read, and three conflict agents and a question to the
    user followed. Where the comment allows it, take the fix that leaves the used name in place
    (keep it next to the new one, narrow the change). Where it does not, make the fix anyway and
-   list every such name in `stackImpact` (Final message): the orchestrator hands it to the agents
-   of those parts, so they adapt before they land instead of after.
+   list every such name in `stackImpact` (Final message): the orchestrator gives it to the agent
+   that lands each of those parts on yours, which adapts their uses there.
 {{/if}}
 
 5. **What the screen shows is checked by a person.** A fix that changed a stylesheet or a template
@@ -247,11 +288,18 @@ bundles run to 70-300 kB, and in this conversation every one of your later respo
 again. Its context script stages the worktree (`git add .`) and reviews the staged diff - your fixes,
 nothing else of the branch.
 
-1. Spawn it in the background: `Agent(subagent_type: "general-purpose", description: "self-review
-   {{BRANCH}}", run_in_background: true, prompt: <the text below, verbatim>)`:
+1. Write your decisions first, with the Write tool, to `{{REPORT}}.decisions.md`: one line per item
+   you verdicted `fixed` (`- <path>:<lines> — <rule, or the comment in a few words> — zastosowano:
+   <what the code does now>`), one per `rejected` or `answered` item with its ground. The review
+   reads it and raises nothing that would undo one of them: 6 of the 21 self-review findings of
+   2026-11-16 asked to take back a fix the user had picked.
+2. Spawn the review in the background: `Agent(subagent_type: "general-purpose", description: "self-review
+   {{BRANCH}}", model: "opus", effort: "low", run_in_background: true, prompt: <the text below, verbatim>)`
+   (an Agent tool without `effort` takes the call without it):
 
        Run the Skill tool with skill `doh:codeReview` and args
-       `staged --project={{ROOT}} --only-md --light`, and follow the skill to its terminal summary.
+       `staged --project={{ROOT}} --only-md --light --walker-model=sonnet --decisions={{REPORT}}.decisions.md --inline-under=800`,
+       and follow the skill to its terminal summary.
        Change no file outside {{ROOT}}/.claude/doh/ but the one named below, and never call
        ToolSearch. When the report is written, write its absolute path, alone, into
        {{REPORT}}.review.txt with one Bash command
@@ -259,8 +307,8 @@ nothing else of the branch.
        When the skill cannot finish, write FAILED <reason> into that file instead and end with
        REVIEW FAILED <reason>.
 
-2. Right after it, start gate pass 1 in the background (step 5 says how) - unless `{{INSTALLED}}`
-   is `no`. The review takes ten to twenty minutes and the gate needs no review to start: a red
+3. Right after it, start gate pass 1 in the background (step 5 says how, `--tests=near`) - unless
+   `{{INSTALLED}}` is `no`. The review takes minutes and the gate needs no review to start: a red
    step found now is repaired while the review still runs. Then wait for whichever lands first:
    `wait-part.cjs --path="{{REPORT}}.review.txt" --path="{{CHECKS_DIR}}/gate-1.json" --nonempty`.
    A ready gate → act on it (step 5) and wait again for the review. A ready review → Read
@@ -272,11 +320,12 @@ Then read the report and apply its findings, one by one, under the same rules as
 - **fix** a finding when its fix leaves the current behaviour as it is - a rename, a type, a
   duplicated block folded, a missing spec case, a misplaced file, an unused import. The review only
   reports what the change touched, and every finding is meant as a behaviour-neutral refactor;
-- **leave** a finding only on one of three grounds: its fix would change what working code does or
-  how it looks; it is about code your run did not write; or it contradicts a reviewer's comment you
-  fixed (the reviewer wins) - and then the ground names that comment (author and url). Nothing else
-  is a ground: "it would break the other translations" left a rule i18n#1 finding in place on
-  2026-11-03, and the user took those files back by hand.
+- **leave** a finding only on one of four grounds: its fix would change what working code does or
+  how it looks; it is about code your run did not write; it contradicts a reviewer's comment you
+  fixed (the reviewer wins) - the ground then names that comment (author and url); or it undoes a
+  line of `{{REPORT}}.decisions.md` - the ground names that line. Nothing else is a ground: "it
+  would break the other translations" left a rule i18n#1 finding in place on 2026-11-03, and the
+  user took those files back by hand.
 - **fix** a rule i18n#1 finding (a locale file other than the base language changed) always: take
   the file back to what the branch had, `git -C "{{ROOT}}" checkout HEAD -- <file>`, and check the
   base-language file still holds what your fix needs.
@@ -306,21 +355,26 @@ files the pull request changes against `origin/{{BASE}}`, and refuses (an `error
 cannot resolve. Then run pass `<n>` (1, 2, 3) in the background - Bash with `run_in_background: true`:
 
 {{#if LANDING=hold}}
-    node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{BASE}}" --only=lint,typecheck,test --result-file="{{CHECKS_DIR}}/gate-<n>.json"
+    node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{BASE}}" --only=lint,typecheck,test --priority={{PRIORITY}} [--tests=near] --result-file="{{CHECKS_DIR}}/gate-<n>.json"
 
 This part is held: the orchestrator moves it onto `{{BASE}}` once that one has landed and builds
 it there, on the code that is pushed (`restack.cjs --pending-steps=build`). A build of yours here
 would be thrown away with the move - up to four full builds per part on 2026-11-06. So your gate
-is lint, typecheck and the tests, and its answer is `partial`: a `partial` pass in which every step
-`passed` (or was `skipped`) is your green gate. `build` is not yours to run, and a red build at the
-landing is reported back to the user, not to you.
+is lint, typecheck and the tests, and its answer is `partial`: a `partial` last pass in which every
+step `passed` (or was `skipped` for a reason other than a red typecheck) is your green gate.
+`build` is not yours to run, and a red build at the landing is the landing agent's.
 {{/if}}
 {{#if LANDING!=hold}}
-    node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{BASE}}" --result-file="{{CHECKS_DIR}}/gate-<n>.json"
+    node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{BASE}}" --priority={{PRIORITY}} [--tests=near] --result-file="{{CHECKS_DIR}}/gate-<n>.json"
 {{/if}}
 {{/if}}
 
-and wait for `{{CHECKS_DIR}}/gate-<n>.json` with `wait-part.cjs --nonempty` (see Waiting); then Read
+`--tests=near` goes on every pass but the LAST: it runs the specs next to what changed (the changed
+specs, the specs named after a changed file, the specs importing one) instead of every test a shared
+mock reaches - part-4's related tests took 494 s on a green tree (2026-11-16). Such a pass answers
+`partial`. The LAST pass leaves `--tests` out and runs every related test.
+
+Wait for `{{CHECKS_DIR}}/gate-<n>.json` with `wait-part.cjs --nonempty` (see Waiting); then Read
 that file. It holds ONE JSON object: `gate` (`green` / `red` / `partial` / `skipped`), `gateSource` and
 a `steps[]` entry per command with `step`, `label`, `command`, `status`, `reason`, `logPath`,
 `errorsPath` and `truncated`. Never assemble these commands yourself — the script is where the
@@ -330,7 +384,9 @@ is how a watcher gets left running.
 A project with `.claude/doh/checks.json` (or package.json `doh.checks`; `gateSource` names it) brings
 its own commands for the four steps, run on the files the pull request changes since
 `origin/{{BASE}}` - a step none of whose files changed is `skipped` with that reason. A step can wait
-for a free slot first: gate steps of every run on the machine share a few of them.
+for a free slot first: gate steps of every run on the machine share a few of them, the lowest
+`--priority` first. A red typecheck skips the tests and the build (`reason`: "typecheck is red") -
+they compile the same code: repair the typecheck, and the next pass runs them.
 
 A step's `status` is its command's exit code, decided by the script. It is never yours to decide by
 reading output: a `passed` step has nothing for you to read, and no output ever turns it into a failure.
@@ -339,12 +395,13 @@ reading output: a `passed` step has nothing for you to read, and no output ever 
   reason and go to step 6. **A skipped gate is not a red one.**
 - `gate: "green"` — go to step 6.
 {{#if LANDING!=hold}}
-- `gate: "partial"` — this was a `--only` pass, so nothing failed among the commands it RAN and the
-  rest were not looked at. It is not a green gate and it is not a licence to commit: run the full
+- `gate: "partial"` — a `--only` or `--tests=near` pass: nothing failed among the commands it RAN,
+  and the rest were not looked at. It is not a green gate and not a licence to commit: run the full
   gate and act on that answer.
 {{/if}}
 {{#if LANDING=hold}}
-- `gate: "partial"` with every step `passed` or `skipped` — your green gate (see above): go to step 6.
+- `gate: "partial"` of the LAST pass (no `--tests=near`) with every step `passed` or `skipped` — your
+  green gate (see above): go to step 6. A `partial` of a `--tests=near` pass → run the last pass.
 {{/if}}
 - `gate: "red"` — for each `failed` step, read its `errorsPath` with the Read tool and repair the CAUSE.
   That file is the failure lines alone, cut out of the output by the script: the failing tests, the
@@ -353,8 +410,9 @@ reading output: a `passed` step has nothing for you to read, and no output ever 
   for that one test name or error code with a small `-C`; that is the only way into it. Never paste
   either file back into a message. Then run the gate again.
 
-**Budget: three gate passes.** Still red after the third → do NOT commit, do NOT push, leave the
-worktree exactly as it is so the user can inspect it, write the report, and end with the `error` JSON.
+**Budget: three gate passes, the last of them without `--tests=near`.** Still red after the third → do
+NOT commit, do NOT push, leave the worktree exactly as it is so the user can inspect it, write the
+report, and end with the `error` JSON.
 
 To re-run one command after a fix, add `--only=lint` (or `typecheck`, `test`, `build`) to the same
 command, in the background with a result file of its own, to run just that one and leave the other
@@ -363,7 +421,8 @@ must be a full run{{#if LANDING=hold}} (for this held part: lint, typecheck and 
 
 `checksFixed` is the list of `label`s of the steps that were `failed` in your FIRST pass and `passed`
 in your LAST. A step that only went red in pass two because a fix of yours broke it is NOT in that
-list — cleaning up after yourself is not a repair the commit message gets to claim.
+list — cleaning up after yourself is not a repair the commit message gets to claim. A step `skipped`
+in the first pass because the typecheck was red counts as failed there when it passes in the last.
 
 ### What repairing means
 
@@ -395,41 +454,11 @@ proved by looking at it. Run this step, after the gate is green and before step 
 change touched a template or a stylesheet (`.html`, `.scss`, `.css`), or the logic behind what a
 user sees (a disabled state, a tooltip or disabled reason, what is shown or hidden, a dialog's
 content), or when a comment came with a screenshot or a recording. Skip it, and say so, when
-nothing of that kind changed.
+nothing of that kind changed - or when the template change only renames a `data-test` value or a
+class nothing styles: no user sees that (`visualChecks` item `skipped`, reason "attribute-only").
 
-The app is started as `{{VISUAL}}` says: `command` (its `{port}` filled), `url` (the app's address,
-`{port}` filled; hash routes go after it), `backend` (the URLs it calls) and `authFile` (the
-project-relative login file, `{"login","password"}`; never read it yourself, never print it).
-
-1. Toolchain (once): `npm --prefix "{{SKILL_DIR}}/../implementNewFeature" install` and
-   `node "{{SKILL_DIR}}/../implementNewFeature/node_modules/@playwright/test/cli.js" install chromium`.
-2. Preflight: `node "{{SKILL_DIR}}/../implementNewFeature/scripts/e2e-preflight.cjs" --root="{{ROOT}}" --project="{{PROJECT}}" --port=<a free port, 4300-4399> --url=<each backend URL> --fix`
-   (`--fix` copies the local config the worktree lacks, `proxy.*.local.js` above all).
-   `PREFLIGHT_FAILED` with an unreachable backend → the check cannot run: skip it with that reason
-   (every changed template stays in `uiUnverified`), never mock the backend for it.
-3. Start the app in the background through the process record, and wait in slices:
-   `node "{{SKILL_DIR}}/../implementNewFeature/scripts/task-processes.cjs" start --task-dir="{{CHECKS_DIR}}/visual" --root="{{ROOT}}" --port=<port> --command="<command>"`, then
-   `node "{{SKILL_DIR}}/../implementNewFeature/scripts/task-processes.cjs" wait --task-dir="{{CHECKS_DIR}}/visual" --port=<port>`
-   until `READY` (`PENDING` → again; `EXITED` → the app did not start: skip with the log's last lines).
-4. Write ONE spec, `{{CHECKS_DIR}}/visual/e2e/fix.spec.cjs` (`const { test, expect } = require('@playwright/test')`):
-   one `test` per item you check (named by the item, `thread:<id>`), each signing in with
-   `process.env.E2E_LOGIN` / `E2E_PASSWORD` when there is a login, opening the route under
-   `process.env.E2E_BASE_URL`, doing what the comment describes (open the row menu, hover the
-   button), asserting what the fix promises (`toBeDisabled()`, `toHaveAttribute('aria-label', …)`,
-   the tooltip's text, `toBeVisible()`, a computed style through `evaluate`) and saving
-   `page.screenshot({ path: '{{CHECKS_DIR}}/visual/shots/<item>.png' })`.
-5. Run it through the gate script (its exit code is the verdict):
-   `node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}/visual" --only=e2e --env=NODE_PATH="{{SKILL_DIR}}/../implementNewFeature/node_modules" --env=E2E_TEST_DIR="{{CHECKS_DIR}}/visual/e2e" --env=E2E_BASE_URL="<url>" --command="node \"{{SKILL_DIR}}/../implementNewFeature/node_modules/@playwright/test/cli.js\" test --config \"{{SKILL_DIR}}/../implementNewFeature/playwright.config.cjs\"" --result-file="{{CHECKS_DIR}}/visual/visual-<n>.json" [--auth-file="{{PROJECT}}/<authFile>"]`
-   in the background, waiting for its result file. Then Read every screenshot of an item whose
-   comment had media, beside that media: the fix shows what the reviewer asked for, or it does not.
-6. A failed assertion, or a screenshot that does not show the fix, is a red step: repair the code
-   and run steps 5-6 again - at most two more runs. Still red → no commit, the `error` JSON, like a
-   red gate. A test that fails for the app's sake (a page that never loads, a login refused) is no
-   verdict on the fix: say so and keep the item in `uiUnverified`.
-7. Always, last: `node "{{SKILL_DIR}}/../implementNewFeature/scripts/task-processes.cjs" cleanup --task-dir="{{CHECKS_DIR}}/visual"`.
-
-Every item checked goes into `visualChecks` (Final message); `uiUnverified` keeps only what this
-step could not look at, each with the reason. Never add the spec or the screenshots to the commit.
+When it runs: Read `{{VISUAL_BRIEF}}` and follow it - how the app is started, the one spec, the
+screenshots and the cleanup.
 {{/if}}
 {{/if}}
 ## Step 6 — Report, commit, rebase, push
@@ -500,60 +529,9 @@ step could not look at, each with the reason. Never add the spec or the screensh
    skipped — → that is a legitimate outcome, not a failure: skip the commit and the push, report
    `committed: false`, and say why in `summary`. If the tree is nonetheless dirty, name the files in
    `summary` and leave them; you revert nothing.
-4. Land the commit as `{{LANDING}}` says:
-{{#if LANDING=hold}}
-   - `hold` — `{{BASE}}` is another open pull request's branch: do NOT rebase and do NOT
-     push. The orchestrator moves your commit onto `{{BASE}}` once that one has landed, runs the gate
-     and pushes (restack.cjs). Report `held: true`, `rebased: false`, `pushed: false`, and skip point 5.
-     A rebase of yours here is what left part-2 on a part-1 that part-1's own rebase had rewritten.
-{{/if}}
-{{#if LANDING=keep-base}}
-   - `keep-base` — other open pull requests are built on this branch, and a rebase here rewrites
-     every one of them. `git -C "{{ROOT}}" fetch origin {{BASE}}`, then
-     `git -C "{{ROOT}}" merge-tree --write-tree --quiet origin/{{BASE}} HEAD`: exit 0 → it still merges
-     cleanly, so no rebase (`rebased: false`, "keeps its base: stacked pull requests build on it" in
-     `summary`); exit 1 → it no longer merges: rebase it exactly as `rebase` says below; any other exit
-     → no rebase, and say so in `summary`.
-{{/if}}
-{{#if LANDING=rebase|keep-base}}
-   - `rebase`{{#if LANDING=keep-base}} (reached from `keep-base` only when it no longer merges){{/if}} — rebase the commit onto the current base, so the pull request lands on what `{{BASE}}`
-     holds now:
-     - `git -C "{{ROOT}}" rev-parse origin/{{BRANCH}}` → keep it as `<remote-sha>` (where the remote
-       branch stood when you started);
-     - `git -C "{{ROOT}}" fetch origin {{BASE}}`;
-     - `git -C "{{ROOT}}" merge-base --is-ancestor origin/{{BASE}} HEAD` exits 0 → the branch already
-       holds the whole base: nothing to rebase, `rebased: false`, go to point 5;
-     - otherwise `git -C "{{ROOT}}" rebase origin/{{BASE}}`. A conflict → `git -C "{{ROOT}}" rebase
-       --abort`, which puts your commit back exactly as it was: `rebased: false`, the conflicting files
-       and the reason in `summary`, and go to point 5 with the commit un-rebased. Never resolve a
-       rebase conflict yourself - it is a merge of other people's work, not a review comment.
-     - A rebase that went through brought the base's newer commits under your change: run the full
-       gate (step 5) once more. Red now → the base and your change do not fit together: `git -C
-       "{{ROOT}}" reset --hard ORIG_HEAD` (back to your commit before the rebase - the only reset you
-       ever run), `rebased: false`, the red command in `summary`, and go on un-rebased. Green →
-       `rebased: true`.
-{{/if}}
-{{#if PUSH=no}}
-   With `{{PUSH}}` `no`, rebase all the same: the user pushes the branch as it is.
-5. No push: `{{PUSH}}` is `no`. Report `pushed: false`.
-{{/if}}
-{{#if PUSH=yes}}
-{{#if LANDING!=hold}}
-5. Push through the script that retries what fails for a
-   moment (GitHub's `fatal error in commit_refs_rules`, a 5xx, a dropped connection) and never a
-   rejection. It pushes `HEAD` to `origin/{{BRANCH}}`, whatever the local branch is called (a branch
-   the user has checked out is worked here on `doh-fixpr/{{BRANCH}}`):
-   - Not rebased: `node "{{SKILL_DIR}}/scripts/restack.cjs" --action=push --worktree="{{ROOT}}" --branch={{BRANCH}}` - plain push.
-   - Rebased: the branch's history was rewritten on purpose, so the push replaces it, guarded by
-     the remote state you saw: the same command with `--lease=<remote-sha>` (a
-     `--force-with-lease={{BRANCH}}:<remote-sha>` push). Never a bare `--force`, never a lease
-     without `<remote-sha>`.
-   Its JSON says `pushed`, `attempts` and, for a refusal, `rejected: true`. A rejected push means
-   the branch moved on the remote WHILE you were working: do not fight it - no second rebase, no
-   other force. Report `pushed: false` with the rejection text in `summary` and leave the commit
-   sitting on the local branch for the user.
-{{/if}}
-{{/if}}
+4. Land the commit (`{{LANDING}}`): Read `{{LAND_BRIEF}}` and follow it - it says whether and how this
+   branch is rebased and pushed{{#if LANDING=hold}} (held: neither){{/if}}.
+5. (The push is part of point 4's file.)
 6. Write the report with the Write tool to `{{REPORT}}.txt` (the harness refuses a sub-agent a `.md`
    file), then move it into place with Bash: `mv -f "{{REPORT}}.txt" "{{REPORT}}"`. Never a heredoc:
    its quoting and backslashes broke a report of 2026-11-03. One write: a report
@@ -564,23 +542,25 @@ step could not look at, each with the reason. Never add the spec or the screensh
        - Commit: <sha + message | nie powstał: reason>
        - Rebase na {{BASE}}: <done | not needed | kept (keep-base) | held for the orchestrator | abandoned: reason>
        - Push: <done | done, force-with-lease after rebase | skipped (--no-push) | failed: reason>
-7. Write the JSON object of your final message (below), byte for byte the same, to
-   `{{REPORT}}.result.json` with the Write tool. The orchestrator checks it item by item against
-   `{{COMMENTS}}` (verify-fix.cjs): an item with no verdict there is reported to the user as a
-   comment this run left unhandled.
+7. Write the full result object (below, "The result file") with the Write tool to
+   `{{REPORT}}.result.json`. The orchestrator's scripts read everything from it - the threads to
+   close, every verdict against `{{COMMENTS}}` (verify-fix.cjs: an item with no verdict there is
+   reported to the user as a comment this run left unhandled), the summary it prints.
 
 ## Rules
 
 - Everything happens inside `{{ROOT}}`. Never touch `{{PROJECT}}`, never touch another worktree.
-- Never `git checkout` another branch, never `stash` or `cherry-pick`. The one rebase is step 6
-  point 4, onto `origin/{{BASE}}`, and with `{{LANDING}}` `hold` there is none; the one `reset --hard` is
-  its `ORIG_HEAD` undo; the one other reset is step 4's `reset --quiet` of the index; the one
-  `checkout` is step 4's of a locale file.
-- Never `ToolSearch`, never `Monitor`, never a call that blocks past four minutes (Waiting).
+- Never `git checkout` another branch, never `stash` or `cherry-pick`. The one rebase is the land
+  file's, onto `origin/{{BASE}}`, and with `{{LANDING}}` `hold` there is none; the one `reset --hard`
+  is its `ORIG_HEAD` undo; the one other reset is step 4's `reset --quiet` of the index; the
+  `checkout`s are step 4's of a locale file and step 1's restore of the files the split left out.
+- Never `ToolSearch`, never `Monitor`, never a call that blocks past three minutes (Waiting).
 - Never resolve a thread on GitHub yourself and never post a comment there — the orchestrator closes
   exactly the threads you report as fixed, once the push has landed.
 - Never remove the worktree; the orchestrator does that after it has read your result.
-- Never write inside `{{CHECKS_DIR}}` yourself, except step 6's `commit.log` and step 5b's `visual/e2e/` spec. `checks.cjs` owns those files; you read a pass's `gate-<n>.json` and a failed step's `errorsPath`.
+- Never write inside `{{CHECKS_DIR}}` yourself, except step 6's `commit.log`, step 5b's `visual/e2e/`
+  spec and fixtures, and the workers' `work/` files split-work.cjs makes. `checks.cjs` owns the
+  rest; you read a pass's `gate-<n>.json` and a failed step's `errorsPath`.
 - `fixedThreadIds` carries the `id` of every `threads[]` entry you verdicted `fixed`, and nothing
   else. A rejected thread, an answered one, a `conversation[]` comment (which has no thread at all)
   and anything you fixed without committing must NOT be in that list: each id in it becomes a public
@@ -597,29 +577,44 @@ step could not look at, each with the reason. Never add the spec or the screensh
   repo-relative paths - keys renamed in `en.json` for a thread on an effects file. A thread is closed
   only when the commit changes its own file or one of these: four threads of 2026-11-03 stayed open
   for want of it. Leave a thread fixed in its own file out of the map.
-
+{{#if LOCAL=yes}}
+- `lessons` is `[]`: every finding of this run comes from the review's own rules, and a lesson made
+  of one only duplicates that rule (31 such lessons were offered and refused on 2026-11-16).
+{{/if}}
+{{#if LOCAL!=yes}}
 - `lessons` keeps what a fixed comment teaches the next review: for each comment verdicted `fixed`
   whose point another file of this project could break the same way (a convention, a pattern to
   avoid), one `{"rule":"<one or two sentences, English, imperative, general>","files":"spec|ts|html|scss|i18n|any","example":"<wrong → right, short>","source":"PR #{{PR_NUMBER}}"}`.
   Not for a request about this one place only (a label's wording, one condition). The orchestrator
   offers them to the user for the project's review rules (`.claude/doh/local/pr-lessons-*.md`).
+{{/if}}
 - `visualChecks` (step 5b) holds each item you looked at:
-  `{"item":"<verdict item>","route":"<url path>","assertions":["<what was asserted>"],"screenshot":"<png path>","result":"passed|failed|skipped","reason":"<for skipped>"}`; `[]` when the step did not run.
+  `{"item":"<verdict item>","route":"<url path>","assertions":["<what was asserted>"],"screenshot":"<png path>","result":"passed|failed|skipped","reason":"<for skipped>","mocked":<bool>}`; `[]` when the step did not run.
 - `stackImpact` lists every name your commit removed, renamed or changed the signature of that a
   pull request stacked above still uses (step 3, point 4), each
   `{"symbol":"<old name>","change":"removed|renamed to <new>|signature: <what>","usedIn":["<branch>:<path>:<line>",…]}`;
   `[]` when there is none or nothing is stacked above.
 
+## The result file
+
+`{{REPORT}}.result.json` holds, for a run that ended (including one that legitimately committed nothing):
+
+    {"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"stackImpact":[{"symbol":"<name>","change":"<change>","usedIn":["<branch>:<path>:<line>",…]},…],"lessons":[{"rule":"<rule>","files":"<group>","example":"<example>","source":"PR #{{PR_NUMBER}}"},…],"visualChecks":[{"item":"<item>","route":"<route>","assertions":["<a>"],"screenshot":"<path>","result":"passed|failed|skipped","reason":"<reason>","mocked":<bool>},…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}
+
+and for a gate still red after three passes, or any failure that left the work unfinished:
+
+    {"type":"error","report":"<in {{LANGUAGE}}: which commands are still red and why, what is in the worktree now, what you already fixed>","fixed":<N>,"fixedThreadIds":[],"verdicts":[…as above, for the items you got to…],"checksFixed":[],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}]}
+
+`fixedThreadIds` and `checksFixed` are empty on the error path, always: nothing was committed or
+pushed, so nothing may be claimed as addressed or repaired.
+
 ## Final message
 
-Your final message IS the JSON object below - alone. No heading, no summary, no text before or
-after it: the report file and the object's `summary` hold everything else, and the orchestrator
-reads this message whole. A final message with prose in it is sent back to you once (the
-plugin's SubagentStop hook), and so is a turn ended while your background work still runs.
+Your final message is the SHORT object below - alone. No heading, no summary, no text before or
+after it: the result file holds everything else, and the orchestrator reads this message whole
+(a 6-8 kB object per agent sat in its conversation for the rest of the run on 2026-11-16). A final
+message with prose in it is sent back to you once (the plugin's SubagentStop hook), and so is a
+turn ended while your background work still runs.
 
-- Success (including a run that legitimately committed nothing):
-  `{"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"stackImpact":[{"symbol":"<name>","change":"<change>","usedIn":["<branch>:<path>:<line>",…]},…],"lessons":[{"rule":"<rule>","files":"<group>","example":"<example>","source":"PR #{{PR_NUMBER}}"},…],"visualChecks":[{"item":"<item>","route":"<route>","assertions":["<a>"],"screenshot":"<path>","result":"passed|failed|skipped","reason":"<reason>"},…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}`
-- Gate still red after three passes, or any failure that left the work unfinished:
-  `{"type":"error","report":"<in {{LANGUAGE}}: which commands are still red and why, what is in the worktree now, what you already fixed>","fixed":<N>,"fixedThreadIds":[],"verdicts":[…as above, for the items you got to…],"checksFixed":[],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}]}`
-  `fixedThreadIds` and `checksFixed` are empty on this path, always: nothing was committed or pushed,
-  so nothing may be claimed as addressed or repaired.
+- `{"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<message|null>","counts":{"fixed":<N>,"rejected":<N>,"answered":<N>},"stackImpact":<the number of its items>,"resultPath":"{{REPORT}}.result.json"}`
+- `{"type":"error","report":"<one line in {{LANGUAGE}}: what is still red>","resultPath":"{{REPORT}}.result.json"}`

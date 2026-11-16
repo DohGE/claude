@@ -114,17 +114,37 @@ function resolveBlocks(template, values, used, missing) {
   return text;
 }
 
+// An absolute path of this machine with a `.` or `..` segment - `{{SKILL_DIR}}/../codeReview/…` -
+// written the way it resolves, with forward slashes: an agent rebuilt one such path wrong and ran a
+// script that was not there (2026-11-16). A URL (`scheme://`) and a relative path stay as written.
+const absolutePath = /(^|[\s"'`(=])((?:[A-Za-z]:)?[\\/](?![\\/])[^\s"'`<>|*?()]*)/g;
+
+function collapsePath(p) {
+  const drive = (p.match(/^[A-Za-z]:/) || [''])[0];
+  const out = [];
+  for (const seg of p.slice(drive.length).split(/[\\/]/)) {
+    if (seg === '.') continue;
+    if (seg === '..' && out.length > 1) out.pop();
+    else out.push(seg);
+  }
+  return drive + out.join('/');
+}
+
+function collapsePaths(text) {
+  return text.replace(absolutePath, (whole, lead, p) => (/(^|[\\/])\.{1,2}([\\/]|$)/.test(p) ? lead + collapsePath(p) : whole));
+}
+
 function render(template, values) {
   const used = new Set();
   const missing = new Set();
-  const text = resolveBlocks(template, values, used, missing).replace(placeholder, (full, name) => {
+  const text = collapsePaths(resolveBlocks(template, values, used, missing).replace(placeholder, (full, name) => {
     if (Object.prototype.hasOwnProperty.call(values, name)) {
       used.add(name);
       return values[name];
     }
     missing.add(name);
     return full;
-  });
+  }));
   const unused = Object.keys(values).filter((name) => !used.has(name)).sort();
   return { text, missing: [...missing].sort(), unused };
 }

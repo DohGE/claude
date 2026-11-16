@@ -134,6 +134,63 @@ test('a red gate after the move takes the part back to its held commit', (t) => 
   assert.strictEqual(result.pushed, false);
 });
 
+// 2026-11-16: the orchestrator wrote each conflict agent's PARENT_CHANGES by hand, up to 2.3k
+// characters gathered from four parts below - and part-5 needed what part-1 and part-3 changed.
+test('a run file gives a part the changes of every landed part below it that it still uses', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-impact-'));
+  const report = (name, stackImpact) => {
+    const file = path.join(dir, `${name}.md`);
+    fs.writeFileSync(`${file}.result.json`, JSON.stringify({ type: 'result', stackImpact }));
+    return file;
+  };
+  const run = {
+    targets: [
+      { branch: 'p1', reportPath: report('p1', [{ symbol: 'a', change: 'removed', usedIn: ['p3:x.ts:1', 'p2:y.ts:2'] }]), stack: { parent: null } },
+      { branch: 'p2', reportPath: report('p2', [{ symbol: 'b', change: 'renamed to c', usedIn: ['p3:z.ts:3'] }]), stack: { parent: 'p1' } },
+      { branch: 'p3', reportPath: path.join(dir, 'p3.md'), stack: { parent: 'p2' } },
+    ],
+  };
+  assert.strictEqual(restack.parentChangesOf(run, 'p3'), 'a: removed (x.ts:1); b: renamed to c (z.ts:3)');
+  assert.strictEqual(restack.parentChangesOf(run, 'p2'), 'a: removed (y.ts:2)');
+  assert.strictEqual(restack.parentChangesOf(run, 'p1'), 'none');
+});
+
+test('a conflict brief carries the mode, the changes below and the parent\'s landed diff of the conflicting files', (t) => {
+  const s = stack(t);
+  fs.writeFileSync(path.join(s.tree, 'shared.txt'), 'one\nTWO from part 2\nthree\n');
+  git(s.tree, 'commit', '-q', '-am', 'part 2 edits shared');
+  git(s.work, 'switch', '-q', 'part-1');
+  fs.writeFileSync(path.join(s.work, 'shared.txt'), 'one\nTWO from part 1\nthree\n');
+  git(s.work, 'commit', '-q', '-am', 'part 1 edits shared');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  const checksDir = path.join(s.tree, '..', 'checks-conflict');
+  const result = land(s, { checksDir, parentChanges: 'x: removed (two.txt:1)' });
+  assert.strictEqual(result.status, 'conflict');
+  const vars = JSON.parse(fs.readFileSync(result.briefVars, 'utf8'));
+  assert.strictEqual(vars.MODE, 'conflict');
+  assert.strictEqual(vars.PARENT_CHANGES, 'x: removed (two.txt:1)');
+  assert.match(fs.readFileSync(vars.PARENT_DIFF, 'utf8'), /\+TWO from part 1/);
+});
+
+// A rename below that breaks this part without a textual conflict used to end the landing as an
+// error for the user; it is the conflict agent's work, in its adapting mode.
+test('a red gate after a clean move writes the brief of an adapting agent', (t) => {
+  const s = stack(t);
+  git(s.work, 'switch', '-q', 'part-1');
+  commit(s.work, 'one.txt', 'part one, fixed\n', 'CR 1');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  const result = restack.land(
+    { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'yes', checksDir: path.join(s.tree, '..', 'checks-adapt'), parentChanges: 'none' },
+    { runGate: () => ({ gate: 'red', steps: [{ label: 'typecheck', status: 'failed', errorsPath: '/x/typecheck.errors.log' }] }) },
+  );
+  assert.strictEqual(result.status, 'gate-red');
+  assert.strictEqual(result.mode, 'adapt');
+  const vars = JSON.parse(fs.readFileSync(result.briefVars, 'utf8'));
+  assert.deepStrictEqual([vars.MODE, vars.FILES, vars.OLD_TIP], ['adapt', 'none', s.tips.a1]);
+  assert.match(fs.readFileSync(vars.PARENT_DIFF, 'utf8'), /part one, fixed/);
+  assert.strictEqual(restack.compactPart(result).mode, 'adapt');
+});
+
 test('mergeJson3 keeps what both sides added, in place, and refuses a key both changed', () => {
   const { mergeJson3, absent } = restack;
   const base = { actions: { load: 'Load', unload: 'Unload' } };
@@ -287,7 +344,7 @@ test('a run file gives land its part and verify its pairs', (t) => {
       { branch: 'p2', worktree: '/w/p2', remoteTipAtStart: 'b', checksDir: '/c/p2', stack: { parent: 'p1', children: [], parentTipAtStart: 'a', above: ['p3', 'p4'] } },
     ],
   };
-  assert.deepStrictEqual(restack.landOptionsFromRun(run, 'p2'), { worktree: '/w/p2', branch: 'p2', parent: 'p1', parentTipAtStart: 'a', remoteTipAtStart: 'b', checksDir: path.join('/c/p2', 'restack') });
+  assert.deepStrictEqual(restack.landOptionsFromRun(run, 'p2'), { worktree: '/w/p2', branch: 'p2', parent: 'p1', parentTipAtStart: 'a', remoteTipAtStart: 'b', checksDir: path.join('/c/p2', 'restack'), parentChanges: 'none' });
   assert.deepStrictEqual(restack.pairsFromRun(run), [
     { parent: 'p1', child: 'p2', oldTip: 'a' }, { parent: 'p2', child: 'p3', oldTip: 'b' }, { parent: 'p3', child: 'p4', oldTip: null },
   ]);
@@ -417,6 +474,21 @@ test('stack renders the conflict agent\'s brief itself and keeps the output shor
   for (const piece of ['`p1`', '#11', 'u11', '/w/p1', 'm-old', 't1', 'src/f13.ts', 'Polish', path.join(dir, 'checks', 'p1')]) assert.ok(brief.includes(piece), piece);
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(brief), 'no placeholder left');
   assert.strictEqual(part.agentPrompt, path.join(dir, '.claude', 'doh', 'p1', 'p1-restack-agent-prompt.md'));
+});
+
+test('stack renders the adapting agent\'s brief for a part whose gate is red after a clean move', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-brief-adapt-'));
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2' },
+    discover: () => ({ stack: ['p1', 'p2'], base: 'base', prs: { p1: { number: 11, url: 'u11' } }, warnings: [] }),
+    worktree: { add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }), remove: () => ({ removed: true, warnings: [] }) },
+    land: () => ({ status: 'gate-red', mode: 'adapt', oldParentTip: 'm-old', gate: { gate: 'red', steps: [{ label: 'typecheck', status: 'failed', errorsPath: '/e' }] } }),
+  };
+  const out = restack.stackAction({ project: dir, stack: ['p1', 'p2'], push: 'yes', gate: 'yes', ontoBase: 'yes', checksDir: path.join(dir, 'checks'), language: 'Polish' }, deps);
+  const part = out.parts[0];
+  assert.strictEqual(part.status, 'gate-red');
+  assert.deepStrictEqual(part.agentPromptErrors, []);
+  assert.ok(fs.readFileSync(part.agentPrompt, 'utf8').includes('Mode: `adapt`'));
 });
 
 test('--resume=yes takes the stopped part\'s worktree down and climbs on above it from its old tip', (t) => {

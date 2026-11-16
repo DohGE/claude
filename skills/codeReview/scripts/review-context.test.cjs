@@ -15,7 +15,7 @@ const { tempDir, run, commitFile, initRepo } = require('./test-helpers.cjs');
 test('parseArgs defaults and parsing', () => {
   assert.deepStrictEqual(
     rc.parseArgs(['--mode=staged', '--project=/tmp/x']),
-    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true, walkerModel: '', walkerEffort: '', parallel: 0 },
+    { mode: 'staged', branches: '', path: '', project: '/tmp/x', output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true, walkerModel: '', walkerEffort: '', parallel: 0, decisions: '', inlineUnder: 0 },
   );
   // The walkers' model and effort ride in the context, so a dispatch after a compaction keeps them.
   assert.deepStrictEqual(
@@ -745,6 +745,48 @@ test('light files share a batch: their bundles name the batch and the part, the 
   const alone = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 13), batch: false });
   assert.deepStrictEqual(alone.targets[0].batches, []);
   assert.ok(fs.readFileSync(alone.targets[0].files[0].bundlePath, 'utf8').includes('## Dalej'), 'without batching every bundle points on');
+});
+
+// fixPr's self-review: 6 of its 21 findings of 2026-11-16 asked to undo what the user had picked.
+test('the author\'s decisions reach every window and the cross-file pass', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
+  for (let n = 1; n <= 8; n++) commitFile(dir, `src/f${n}.ts`, body(n), `f${n}`);
+  const skillDir = makeSkillDir(t, [FACT_KIND]);
+  const decisions = path.join(dir, 'decisions.md');
+  fs.writeFileSync(decisions, '- src/f1.ts:1 — kept as the user picked\n');
+  const ctx = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 12), decisions });
+  assert.deepStrictEqual(ctx.errors, []);
+  const t0 = ctx.targets[0];
+  const settingsOf = (file) => {
+    const text = fs.readFileSync(file, 'utf8');
+    return JSON.parse(text.slice(text.indexOf('```json') + 7, text.lastIndexOf('```')));
+  };
+  const expected = decisions.replace(/\\/g, '/');
+  assert.strictEqual(ctx.decisionsPath, expected);
+  assert.ok(t0.windows.length > 0);
+  for (const w of t0.windows) assert.strictEqual(settingsOf(w.brief).decisionsPath, expected);
+  assert.strictEqual(settingsOf(t0.crossBriefPath).decisionsPath, expected);
+  assert.strictEqual(rc.parseArgs(['--decisions=d.md', '--inline-under=800']).decisions, 'd.md');
+  assert.strictEqual(rc.parseArgs(['--inline-under=800']).inlineUnder, 800);
+  assert.throws(() => rc.parseArgs(['--decisions=']), /--decisions/);
+  const missing = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 17, 13), decisions: path.join(dir, 'nope.md') });
+  assert.ok(missing.warnings.some((w) => w.includes('nope.md')), 'a decisions file that is not there is named, and the review goes on');
+});
+
+// A self-review of a few small files makes its cross-file pass itself: a fresh agent for it re-read
+// 74k tokens on average, five times in one fixPr run (2026-11-16).
+test('--inline-under keeps the cross-file pass in the conversation for a small change past four files', (t) => {
+  const dir = makeRepo(t);
+  for (let n = 1; n <= 6; n++) commitFile(dir, `src/s${n}.ts`, `export const s${n} = ${n};\n`, `s${n}`);
+  const skillDir = makeSkillDir(t, [TS_KIND]);
+  const plain = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 18, 0) });
+  assert.strictEqual(plain.targets[0].windows.length, 0);
+  assert.strictEqual(plain.targets[0].crossInline, undefined, 'six files are past the four of a plain run');
+  const small = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 18, 1), inlineUnder: 800 });
+  assert.strictEqual(small.targets[0].crossInline, true);
+  const tooFew = rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 18, 2), inlineUnder: 3 });
+  assert.strictEqual(tooFew.targets[0].crossInline, undefined, 'a change past the line limit keeps its own pass');
 });
 
 test('a target too long for one conversation gets windows: a brief each, and a stop in the last bundle of each', (t) => {
@@ -2384,6 +2426,11 @@ test('a stack of branches: each part knows the lines its later parts change, nex
   assert.match(p1.revision, /^[0-9a-f]{40}$/);
   assert.strictEqual(p1.stackTip, 'part-2');
   assert.strictEqual(p2.stackTip, undefined, 'the tip has nothing after it');
+  // A walker asks the tip's commit whether a later part still uses what this part's finding would
+  // call unused: 3 of 30 part-1 findings of 2026-11-16 were rejected for want of it.
+  assert.strictEqual(p1.stackTipRevision, p2.revision);
+  assert.deepStrictEqual(rc.briefSettingsOf(p1, {}).stackTip, { branch: 'part-2', revision: p2.revision });
+  assert.strictEqual(rc.briefSettingsOf(p2, {}).stackTip, undefined);
   assert.strictEqual(p1.stackPath, p1.reportPath.replace(/\.md$/, '.stack.json').replace(/\\/g, '/'));
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(p1.stackPath, 'utf8')), { tip: 'part-2', later: ['part-2'], files: { 'src/a.ts': [[5, 5]] } });
   // The window walkers search the reviewed commit, which their brief names.

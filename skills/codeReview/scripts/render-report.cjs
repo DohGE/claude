@@ -1077,6 +1077,8 @@ function buildPayload(report, reportName) {
   return {
     title: report.title,
     datetime: report.datetime,
+    // The revision the review read: fixPr --local tells by it whether a finding's lines changed since.
+    revision: report.revision || null,
     skipped: report.skipped,
     emptyState: report.emptyState,
     reportName,
@@ -2685,6 +2687,8 @@ function main(argv) {
   // A --light page carries no code: no snippet under a finding, no full view of a file.
   if (!args.light) attachSnippets(report, projectRoot, source);
   report.changed = changedFiles(projectRoot, source);
+  const reviewedRef = source.mode === 'branch' ? resolveRef(path.resolve(projectRoot), source.branch) : '';
+  report.revision = reviewedRef ? String(gitText(path.resolve(projectRoot), ['rev-parse', reviewedRef]) || '').trim() || null : null;
   const pullRequest = report.emptyState ? { pr: null, warning: null } : detectPullRequest(projectRoot, args.branch);
   report.pr = pullRequest.pr;
   report.prWarning = pullRequest.warning || '';

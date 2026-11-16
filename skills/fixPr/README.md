@@ -257,7 +257,7 @@ cause. It is the same discipline the skill applies to comment bodies.
    - `hold` - a part whose base is another branch of the run: committed only. The orchestrator lands
      it once its parent has, with `scripts/restack.cjs`.
 
-The fixing agent waits for long work in slices of under four minutes (`wait-part.cjs`) and never
+The fixing agent waits for long work in slices of under three minutes (`wait-part.cjs`) and never
 loads a tool: its prompt cache lives five minutes, and the run of 2026-11-03 paid 1.3M cache-write
 tokens - 27% of all - for `ToolSearch select:Monitor` and for waits that outlived it.
 
@@ -444,7 +444,21 @@ rule itself: editing its own settings is refused as self-modification.
 | `references/restack-agent.md` | the brief of the agent that resolves a conflict `restack.cjs` stopped at |
 | `scripts/score-fix.cjs` | the quality meter's scorer: verdicts, checks on the result, landing, scope, gate |
 | `test-key/` | the meter's fixture (`fixture/`, built by `make-fixture.cjs`), its key (`key.json`) and the reference fix (`solution/`) |
-| `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled and only the `{{#if …}}` blocks of this agent kept (its landing, push, inputs), so the orchestrator hands the agent a path instead of carrying the brief twice |
+| `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled and only the `{{#if …}}` blocks of this agent kept (its landing, push, inputs), so the orchestrator hands the agent a path instead of carrying the brief twice; an absolute path with `..` in it is written the way it resolves |
+| `scripts/stack-preflight.cjs` | before the agents: every part of a stack that imports a file only a later part adds (`leaks`), and what each part restores verbatim first (`restore`), from git alone |
+| `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file |
+| `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`) |
+| `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files and the stack check |
+| `scripts/split-work.cjs` | a fix agent's many items cut into groups of whole folders for `doh:pipeline-worker` agents (`references/fix-worker-agent.md`) |
+| `scripts/bash-guard.cjs` | PreToolUse hook: a shell read of a fix worktree, or a `cd` into one that outlives its command, is refused with the tool to use |
+
+What changed in 0.35.0, measured on the five-part DPXN-12003 run of 2026-11-16 (94 min, 141M cache read):
+the gate stops after a red typecheck and runs only the specs near the change until its last pass
+(`--tests=near`), gives the bottom of a stack the first free slot (`--priority`) and lint none; the
+waits end before the harness's 180 s; the stack's split is found before the agents start; the
+landing agent gets every change of the parts below (`PARENT_CHANGES`) and the parent's diff, and
+adapts a part whose gate is red after a clean move (`mode: adapt`); the self-review runs on Opus at
+low effort with Sonnet walkers and the run's decisions, and the orchestrator works through scripts.
 
 `pr-api.cjs` and `pr-comments.cjs` require `../../codeReview/scripts/github.cjs` and
 `../../codeReview/scripts/review-context.cjs` — the token discovery, the pull request lookup, the HTTP

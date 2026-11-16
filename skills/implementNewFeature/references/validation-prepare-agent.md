@@ -427,9 +427,9 @@ one message, shell commands that belong together in one call.
 
 ## Long-running commands
 
-A command that can take more than four minutes — the dev server's first build, an install — runs in
+A command that can take more than three minutes — the dev server's first build, an install — runs in
 the background (Bash `run_in_background: true`, its output redirected to a file), and you wait for
-that file in slices of under four minutes:
+that file in slices of under three minutes:
 `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` → `PART_READY`
 or `PART_PENDING` (run it again). Never one tool call that blocks longer, and never `sleep N`: past
 five idle minutes your prompt cache expires, and the next call pays for this whole conversation

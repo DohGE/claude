@@ -29,6 +29,8 @@ const { detectPackageManager } = require('./worktree.cjs');
 
 const maxLogBytes = 256 * 1024;
 const minute = 60 * 1000;
+// The place in the slot queue (`--priority`, lower goes first) of a gate nobody ranked.
+const defaultPriority = 9;
 
 // The gate, in order. `label` is a FIXED IDENTIFIER: it is written verbatim into
 // a git commit message by an agent whose report is in the user's language, and a
@@ -69,7 +71,7 @@ const watchFlags = [
 ];
 
 function parseArgs(argv) {
-  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '', changedSince: '', resultFile: '', slots: null, cache: 'yes' };
+  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '', changedSince: '', resultFile: '', slots: null, cache: 'yes', keepGoing: false, tests: 'related', priority: defaultPriority };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -87,12 +89,16 @@ function parseArgs(argv) {
     else if (m[1] === 'result-file') args.resultFile = m[2];
     else if (m[1] === 'slots' && /^\d+$/.test(m[2])) args.slots = Number(m[2]);
     else if (m[1] === 'cache') args.cache = m[2].trim();
+    else if (m[1] === 'keep-going' && ['yes', 'no'].includes(m[2].trim())) args.keepGoing = m[2].trim() === 'yes';
+    else if (m[1] === 'tests') args.tests = m[2].trim();
+    else if (m[1] === 'priority' && /^\d+$/.test(m[2].trim())) args.priority = Number(m[2].trim());
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms, --changed-since, --result-file, --slots, --cache).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms, --changed-since, --result-file, --slots, --cache, --keep-going, --tests, --priority).`);
   }
   if (!['yes', 'no'].includes(args.cache)) throw new Error('--cache takes yes or no.');
+  if (!['related', 'near'].includes(args.tests)) throw new Error('--tests takes related or near.');
   // One command line is one step's command. Without the step named, its log, its
   // label and its verdict would belong to no step at all.
   if (args.command !== null) {
@@ -619,6 +625,7 @@ function gateConfigOf(root, pkg, mainOf = mainCheckoutOf) {
     if (value === false) continue;
     for (const spec of Array.isArray(value) ? value : [value]) {
       if (!spec || typeof spec.command !== 'string' || !spec.command.trim()) problems.push(`step "${name}" needs a "command" string (or false)`);
+      else if (spec.slot !== undefined && typeof spec.slot !== 'boolean') problems.push(`step "${name}": "slot" takes true or false`);
       else if (spec.files !== undefined) {
         try {
           new RegExp(spec.files);
@@ -690,9 +697,47 @@ const pidAlive = (pid) => {
   }
 };
 
-function acquireSlot(count, { dir = defaultSlotsDir(), sleep = sleepSync, alive = pidAlive, now = Date.now, label = '', staleMs = 3 * 60 * minute } = {}) {
+// The queue in front of the slots: a waiter holds a ticket named by its priority (lower goes
+// first), the time it came and its pid, and takes a freed slot only when no live ticket sorts
+// ahead of it - first come, first served within one priority. On 2026-11-16 the gates of the
+// parts above the bottom of a stack took the slots while the bottom part, which every landing
+// waits for, queued behind them.
+const ticketName = (priority, at, pid) => `p${String(priority).padStart(2, '0')}-${String(at).padStart(13, '0')}-${pid}`;
+const ticketPid = (name) => Number((String(name).match(/-(\d+)$/) || [])[1]);
+
+function acquireSlot(count, { dir = defaultSlotsDir(), sleep = sleepSync, alive = pidAlive, now = Date.now, label = '', staleMs = 3 * 60 * minute, priority = defaultPriority } = {}) {
   if (!count) return { release: () => {}, waitedMs: 0, slot: null };
   fs.mkdirSync(dir, { recursive: true });
+  const queue = path.join(dir, 'queue');
+  fs.mkdirSync(queue, { recursive: true });
+  const mine = ticketName(priority, now(), process.pid);
+  fs.writeFileSync(path.join(queue, mine), '');
+  const leave = () => fs.rmSync(path.join(queue, mine), { force: true });
+  const ahead = () => {
+    let names = [];
+    try {
+      names = fs.readdirSync(queue);
+    } catch {
+      return 0;
+    }
+    let count = 0;
+    for (const name of names) {
+      if (name === mine) continue;
+      const pid = ticketPid(name);
+      let old = false;
+      try {
+        old = now() - fs.statSync(path.join(queue, name)).mtimeMs > staleMs;
+      } catch {
+        continue;
+      }
+      if (old || (pid !== process.pid && !alive(pid))) {
+        fs.rmSync(path.join(queue, name), { force: true });
+        continue;
+      }
+      if (name < mine) count += 1;
+    }
+    return count;
+  };
   const started = now();
   const stale = (slot) => {
     try {
@@ -707,27 +752,97 @@ function acquireSlot(count, { dir = defaultSlotsDir(), sleep = sleepSync, alive 
       }
     }
   };
-  for (;;) {
+  const free = () => {
+    let n = 0;
     for (let i = 0; i < count; i += 1) {
       const slot = path.join(dir, `slot-${i}`);
-      let taken = false;
-      for (let attempt = 0; attempt < 2 && !taken; attempt += 1) {
-        try {
-          fs.mkdirSync(slot);
-          taken = true;
-        } catch (err) {
-          if (err.code !== 'EEXIST') throw err;
-          // A stale slot is taken over at once: one more try at the same name.
-          if (!stale(slot)) break;
-          fs.rmSync(slot, { recursive: true, force: true });
+      if (!fs.existsSync(slot) || stale(slot)) n += 1;
+    }
+    return n;
+  };
+  try {
+    for (;;) {
+      // Taken only when fewer live tickets sort ahead of this one than there are free slots.
+      if (ahead() < free()) {
+        for (let i = 0; i < count; i += 1) {
+          const slot = path.join(dir, `slot-${i}`);
+          let taken = false;
+          for (let attempt = 0; attempt < 2 && !taken; attempt += 1) {
+            try {
+              fs.mkdirSync(slot);
+              taken = true;
+            } catch (err) {
+              if (err.code !== 'EEXIST') throw err;
+              // A stale slot is taken over at once: one more try at the same name.
+              if (!stale(slot)) break;
+              fs.rmSync(slot, { recursive: true, force: true });
+            }
+          }
+          if (!taken) continue;
+          fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ pid: process.pid, at: now(), label }));
+          return { release: () => fs.rmSync(slot, { recursive: true, force: true }), waitedMs: now() - started, slot: i };
         }
       }
-      if (!taken) continue;
-      fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ pid: process.pid, at: now(), label }));
-      return { release: () => fs.rmSync(slot, { recursive: true, force: true }), waitedMs: now() - started, slot: i };
+      sleep(2000);
     }
-    sleep(2000);
+  } finally {
+    leave();
   }
+}
+
+// The specs a pass in the middle of a fix runs (`--tests=near`): the changed specs, the specs named
+// after a changed file in its folder (or its tests/ folder), and the specs that import a changed
+// file directly. The final pass runs every related test; this one is for the loop of a fix.
+const specPattern = /\.(spec|test)\.[cm]?[jt]sx?$/;
+const sourcePattern = /\.[cm]?[jt]sx?$/;
+const testFolders = ['', 'tests', '__tests__', 'test', 'spec'];
+
+function nearSpecsOf(root, changed) {
+  const posix = (p) => String(p).replace(/\\/g, '/');
+  const listed = spawnSync('git', ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const specs = String(listed.stdout || '').split(/\r?\n/).map(posix).filter((f) => specPattern.test(f));
+  const near = new Set();
+  const sources = [];
+  for (const file of changed.map(posix)) {
+    if (specPattern.test(file)) {
+      if (fs.existsSync(path.join(root, file))) near.add(file);
+      continue;
+    }
+    if (!sourcePattern.test(file)) continue;
+    const dir = path.posix.dirname(file);
+    const stem = path.posix.basename(file).replace(sourcePattern, '');
+    sources.push({ file, dir, stem, bare: file.replace(sourcePattern, '') });
+    const folders = testFolders.map((f) => (f ? path.posix.join(dir, f) : dir));
+    for (const spec of specs) {
+      if (folders.includes(path.posix.dirname(spec)) && path.posix.basename(spec).startsWith(`${stem}.`)) near.add(spec);
+    }
+  }
+  if (sources.length > 0) {
+    const patterns = [...new Set(sources.map((s) => s.stem))].flatMap((stem) => ['-e', `/${stem}'`, '-e', `/${stem}"`]);
+    const grep = spawnSync('git', ['-C', root, 'grep', '-l', '-F', '--untracked', ...patterns, '--', ':(glob)**/*.spec.*', ':(glob)**/*.test.*'], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    const hits = String(grep.stdout || '').split(/\r?\n/).map(posix).filter((f) => specPattern.test(f));
+    const importPattern = /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
+    for (const spec of hits) {
+      let text = '';
+      try {
+        text = fs.readFileSync(path.join(root, spec), 'utf8');
+      } catch {
+        continue;
+      }
+      for (const m of text.matchAll(importPattern)) {
+        const specifier = m[1];
+        const last = specifier.split('/').pop().replace(sourcePattern, '');
+        const source = sources.find((s) => s.stem === last);
+        if (!source) continue;
+        // A relative import names its file; an alias (`@app/...`) is taken on its name alone.
+        if (!specifier.startsWith('.') || path.posix.normalize(path.posix.join(path.posix.dirname(spec), specifier)).replace(sourcePattern, '') === source.bare) {
+          near.add(spec);
+          break;
+        }
+      }
+    }
+  }
+  return [...near].sort();
 }
 
 // Written to a temporary name and renamed into place: an agent waiting for the file in slices
@@ -751,7 +866,7 @@ function gitOut(root, args) {
 }
 
 function gateCacheKey(root, options) {
-  if ((options.only || []).length > 0 || options.command || Array.isArray(options.changedFiles)) return null;
+  if ((options.only || []).length > 0 || options.command || Array.isArray(options.changedFiles) || options.tests === 'near' || options.keepGoing) return null;
   const tree = gitOut(root, ['rev-parse', 'HEAD^{tree}']);
   const common = gitOut(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (!tree || !common) return null;
@@ -892,13 +1007,24 @@ function runChecksUncached(options) {
 
   // --env sets a variable for the command without a shell of its own (cmd.exe knows no VAR=x cmd).
   const env = { ...process.env, ...(options.env || {}), ...auth, CI: '1', FORCE_COLOR: '0' };
+  const slotOptions = {
+    ...(options.slotsDir ? { dir: options.slotsDir } : {}),
+    ...(options.slotSleep ? { sleep: options.slotSleep } : {}),
+    priority: Number.isInteger(options.priority) ? options.priority : defaultPriority,
+  };
   for (const spec of commandStep ? [commandStep] : gateSteps) {
     if (only.length > 0 && !only.includes(spec.step)) {
       result.steps.push(skippedStep(spec, `not selected by --only=${only.join(',')}`, outDir));
       continue;
     }
+    // The tests and the build compile the code the typecheck just refused: they would fail on the
+    // same errors, slowly, while holding a slot (943 s of jest after a 43 s red typecheck, 2026-11-16).
+    if (!options.keepGoing && ['test', 'build'].includes(spec.step) && result.steps.some((s) => s.step === 'typecheck' && s.status === 'failed')) {
+      result.steps.push(skippedStep(spec, 'typecheck is red: the tests and the build compile the same code - repair the typecheck and run the gate again (--keep-going=yes runs every step)', outDir));
+      continue;
+    }
     if (gate) {
-      runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, timeoutMs: options.timeoutMs, result });
+      runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, slotOptions, tests: options.tests, timeoutMs: options.timeoutMs, result });
       continue;
     }
     const name = command ? null : spec.scripts.find((candidate) => typeof scripts[candidate] === 'string');
@@ -912,8 +1038,9 @@ function runChecksUncached(options) {
       jestMajor: spec.step === 'test' ? jestMajorOf(root) : 0 });
     const timeoutMs = options.timeoutMs || spec.timeoutMs;
     // The gate steps share the machine's slots; e2e and the pre-commit hook keep the coordination
-    // implementNewFeature gives them (an E2E run holds its own slot for up to half an hour).
-    const slot = acquireSlot(commandStep ? 0 : slotCount, { label: `${root} ${spec.step}` });
+    // implementNewFeature gives them (an E2E run holds its own slot for up to half an hour). Lint
+    // takes none: a few seconds of it waited minutes behind long test runs.
+    const slot = acquireSlot(commandStep || spec.step === 'lint' ? 0 : slotCount, { ...slotOptions, label: `${root} ${spec.step}` });
     const startedAt = Date.now();
     let outcome;
     try {
@@ -937,6 +1064,8 @@ function runChecksUncached(options) {
   // next to this one, saying so. The brief asks for a full last pass; this is what makes
   // that ask checkable instead of a promise.
   else if (!commandStep && only.length > 0 && gateSteps.some((spec) => !only.includes(spec.step))) result.gate = 'partial';
+  // A --tests=near pass ran the specs next to the change, not every test the change reaches.
+  else if (!commandStep && options.tests === 'near' && result.steps.some((s) => s.step === 'test' && s.status === 'passed')) result.gate = 'partial';
   else if (result.steps.some((s) => s.status === 'passed')) result.gate = 'green';
   else result.gate = 'skipped';
   return result;
@@ -944,7 +1073,7 @@ function runChecksUncached(options) {
 
 // One gate step of a checks.json: each of its commands whose `files` the change touches, `{files}`
 // filled in, in one slot; the step fails with the first command that does.
-function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, timeoutMs, result }) {
+function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, slotOptions = {}, tests = 'related', timeoutMs, result }) {
   const configured = gate.steps[spec.step];
   if (configured === undefined) {
     result.steps.push(skippedStep(spec, `not configured in ${gate.source}`, outDir));
@@ -954,14 +1083,19 @@ function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, script
     result.steps.push(skippedStep(spec, `turned off in ${gate.source}`, outDir));
     return;
   }
+  const entries = Array.isArray(configured) ? configured : [configured];
+  // Lint takes a slot only when its entry asks for one; any other step unless every entry says no.
+  const slotted = spec.step === 'lint' ? entries.some((e) => e.slot === true) : !entries.every((e) => e.slot === false);
+  const near = spec.step === 'test' && tests === 'near' && changed !== null;
+  const files = near ? nearSpecsOf(root, changed) : changed;
   const lines = [];
   const reasons = [];
-  for (const entry of Array.isArray(configured) ? configured : [configured]) {
+  for (const entry of entries) {
     const pattern = entry.files === undefined ? null : new RegExp(entry.files);
-    const picked = changed === null ? null : changed.filter((f) => !pattern || pattern.test(f));
+    const picked = files === null ? null : files.filter((f) => !pattern || pattern.test(f));
     const needsFiles = entry.command.includes('{files}');
     if (picked !== null && picked.length === 0 && (pattern || needsFiles)) {
-      reasons.push(pattern ? `no changed file matches ${entry.files}` : 'no file changed');
+      reasons.push(near ? 'no spec near the changed files (--tests=near)' : pattern ? `no changed file matches ${entry.files}` : 'no file changed');
       continue;
     }
     if (needsFiles && picked === null) {
@@ -972,11 +1106,11 @@ function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, script
     for (const text of texts) lines.push({ text, timeoutMs: entry.timeoutMs });
   }
   if (lines.length === 0) {
-    result.steps.push(skippedStep(spec, reasons.join('; '), outDir));
+    result.steps.push(skippedStep(spec, [...new Set(reasons)].join('; '), outDir));
     return;
   }
   const jestMajor = spec.step === 'test' ? jestMajorOf(root) : 0;
-  const slot = acquireSlot(slotCount, { label: `${root} ${spec.step}` });
+  const slot = acquireSlot(slotted ? slotCount : 0, { ...slotOptions, label: `${root} ${spec.step}` });
   const startedAt = Date.now();
   const outputs = [];
   const displays = [];
@@ -1106,6 +1240,7 @@ function main() {
 module.exports = {
   parseArgs, defaultRun, truncateLog, extractErrors, extraArgsFor, runChecks, exitCodeFor, gateSteps, reapTree,
   precommitCommandFor, jestMajorOf, gateConfigOf, changedFilesOf, expandFiles, acquireSlot, writeResultFile,
+  nearSpecsOf, ticketName,
 };
 
 if (require.main === module) main();

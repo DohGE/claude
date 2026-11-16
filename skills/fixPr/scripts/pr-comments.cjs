@@ -12,6 +12,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const github = require('../../codeReview/scripts/github.cjs');
 const {
@@ -83,7 +84,8 @@ function findingsOfReport(file) {
     const m = text.match(/<script id="report-data"[^>]*>([\s\S]*?)<\/script>/);
     if (!m) return [];
     const data = JSON.parse(m[1].replace(/<\\\/script/gi, '</script'));
-    return (data.files || []).flatMap((f) => (f.findings || []).map((finding) => ({ ...finding, file: finding.file || f.path })));
+    const revision = typeof data.revision === 'string' && /^[0-9a-f]{7,40}$/i.test(data.revision) ? data.revision : null;
+    return (data.files || []).flatMap((f) => (f.findings || []).map((finding) => ({ ...finding, file: finding.file || f.path, revision })));
   }
   const report = require('../../codeReview/scripts/render-report.cjs').parseReport(text);
   return report.files.flatMap((f) => f.findings.map((finding) => ({ ...finding, file: f.path })));
@@ -116,10 +118,44 @@ function localFindings(project, branch, ids, skillDir) {
         ...(f.prExpected ? { prExpected: f.prExpected } : {}),
         ...(f.prLocations ? { prLocations: f.prLocations } : {}),
         report: file.replace(/\\/g, '/'),
+        ...(f.revision ? { revision: f.revision } : {}),
       });
     }
   }
-  return ids.filter((id) => found.has(id)).map((id) => found.get(id));
+  const picked = ids.filter((id) => found.has(id)).map((id) => found.get(id));
+  for (const finding of picked) {
+    const stale = staleReason(project, branch, finding);
+    if (stale) finding.stale = stale;
+  }
+  return picked;
+}
+
+// Whether the code under a finding changed after its review: the report's revision against the
+// branch as it is now (origin's when there is one), the finding's lines ±2 against the old side
+// of every hunk. null when the report names no revision or git cannot tell.
+function staleReason(project, branch, finding) {
+  if (!finding.revision || !finding.path) return null;
+  const gitOut = (args) => {
+    const res = spawnSync('git', ['-C', project, ...args], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    return res.status === 0 ? String(res.stdout || '') : null;
+  };
+  const tip = [`origin/${branch}`, branch].find((ref) => gitOut(['rev-parse', '--verify', '--quiet', ref]) !== null);
+  if (!tip || gitOut(['cat-file', '-e', finding.revision]) === null) return null;
+  if (gitOut(['cat-file', '-e', `${tip}:${finding.path}`]) === null) return `changed since the review: ${finding.path} is no longer on ${branch}`;
+  const diff = gitOut(['diff', '--unified=0', finding.revision, tip, '--', finding.path]);
+  if (diff === null || !diff.trim()) return null;
+  const ranges = String(finding.lines || '').split(',').map((part) => part.trim().replace(/^L/i, '')).flatMap((part) => {
+    const m = part.match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    return m ? [[Number(m[1]), Number(m[2] || m[1])]] : [];
+  });
+  const hunks = [...diff.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/gm)].map((m) => {
+    const start = Number(m[1]);
+    const count = m[2] === undefined ? 1 : Number(m[2]);
+    return [start, count === 0 ? start + 1 : start + count - 1];
+  });
+  const touched = hunks.filter(([from, to]) => ranges.some(([a, b]) => a - 2 <= to && b + 2 >= from));
+  if (ranges.length === 0) return hunks.length > 0 ? `changed since the review: ${finding.path} changed, and the finding names no line` : null;
+  return touched.length > 0 ? `changed since the review: lines ${touched.map(([a, b]) => (a === b ? a : `${a}-${b}`)).join(', ')} of the reviewed ${finding.path} differ now` : null;
 }
 
 // A recorded review in place of the GitHub API - the fixPr meter (test-key/README.md) runs the
@@ -326,6 +362,10 @@ function collectLocal(branch, pr, commitMessage, ctx) {
   if (findings.length === 0) {
     result.warnings.push(`${branch}: none of the --local ids is in a codeReview report of this branch; this run will only bring its checks green.`);
   }
+  const stale = findings.filter((f) => f.stale);
+  if (stale.length > 0) {
+    result.warnings.push(`${branch}: ${stale.length} of the --local findings sit on code changed since their review (${stale.map((f) => f.id).join(', ')}) - the agent checks each still applies before it changes anything.`);
+  }
   const { commentsPath, reportPath, promptPath, checksDir } = artifactPaths(branch, reportsDir, stamp);
   const payload = {
     branch,
@@ -353,6 +393,7 @@ function collectLocal(branch, pr, commitMessage, ctx) {
     local: true,
     counts: {
       findings: findings.length,
+      ...(stale.length > 0 ? { stale: stale.length } : {}),
       openThreads: 0,
       resolvedThreads: 0,
       outdatedThreads: 0,

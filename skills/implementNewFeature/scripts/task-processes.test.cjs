@@ -90,6 +90,12 @@ test('wait answers READY, PENDING after its slice, or EXITED with the log tail',
     ['EXITED 4317', 'compiling', 'Error: Cannot find module x']);
 });
 
+// The harness moves a foreground command to the background after 180 s (2026-11-16).
+test('a wait slice ends before the harness moves the call to the background', () => {
+  const { WAIT_SLICE_MS } = require('./task-processes.cjs');
+  assert.ok(WAIT_SLICE_MS < 180 * 1000, `WAIT_SLICE_MS ${WAIT_SLICE_MS}`);
+});
+
 test('kill stops only a listener started from the task\'s own worktree', () => {
   const stopped = [];
   const lines = kill({ root: 'C:\\w\\DPXN-1-t2', port: 4317 }, {

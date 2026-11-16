@@ -89,9 +89,9 @@ script, never straight through the shell:
   without its cause, Grep `logPath` for that one test name or error code with a small `-C`.
 - The script writes `{{SESSION}}/checks/` itself. That does not lift the rule below: you never
   write into `{{SESSION}}`.
-- A run that can take more than four minutes — the whole suite, a build — goes in the background
+- A run that can take more than three minutes — the whole suite, a build — goes in the background
   (Bash `run_in_background: true`, its JSON redirected to a file under `{{SESSION}}/checks/`), and
-  you wait for that file in slices of under four minutes:
+  you wait for that file in slices of under three minutes:
   `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` →
   `PART_READY` or `PART_PENDING` (run it again). Never one tool call that blocks longer, and never
   `sleep N`: past five idle minutes your prompt cache expires, and the next call pays for this whole

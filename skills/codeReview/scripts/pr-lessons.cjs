@@ -60,15 +60,21 @@ function parseArgs(argv) {
 const localDir = (project) => path.join(project, '.claude', 'doh', 'local');
 const fileOf = (project, group) => path.join(localDir(project), `pr-lessons-${group}.md`);
 const norm = (text) => String(text || '').toLowerCase().replace(/`[^`]*`/g, (m) => m.toLowerCase()).replace(/[^a-z0-9`#._-]+/g, ' ').trim();
-const wordSet = (text) => new Set(norm(text).split(' ').filter((w) => w.length > 2));
+// Words that carry no rule: two wordings of one rule shared "the", "with" and "never" more than
+// they shared its subject (2026-11-16, a data-test rule offered twice).
+const stopWords = new Set(['the', 'and', 'with', 'never', 'not', 'its', 'it', 'that', 'this', 'for', 'from', 'into', 'instead', 'than', 'only', 'one', 'each', 'every', 'are', 'was', 'were', 'has', 'have', 'kept', 'keep', 'use', 'uses', 'used']);
+const stem = (w) => (w.length > 3 && /[^s]s$/.test(w) ? w.slice(0, -1) : w);
+const wordSet = (text) => new Set(norm(text).split(' ').filter((w) => w.length > 2 && !stopWords.has(w)).map(stem));
 
+// Half the words of the shorter wording, and nearly half of the longer one: "reuse an existing
+// mapper for a key" and "reuse an existing key" share half of the short one and are two rules.
 function similar(a, b) {
   const x = wordSet(a);
   const y = wordSet(b);
   if (!x.size || !y.size) return false;
   let shared = 0;
   for (const w of x) if (y.has(w)) shared += 1;
-  return shared / Math.min(x.size, y.size) >= 0.6;
+  return shared / Math.min(x.size, y.size) >= 0.5 && shared / Math.max(x.size, y.size) >= 0.45;
 }
 
 // The checklist bullets every local rule file of the project already holds.

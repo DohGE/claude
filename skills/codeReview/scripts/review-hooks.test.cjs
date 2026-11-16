@@ -407,11 +407,14 @@ test('registration: the plugin runs every codeReview hook, SKILL.md none of them
   ]);
   assert.deepStrictEqual(config.hooks.Stop, [{ hooks: [shared('stop', 10)] }]);
   assert.ok(require('../../../scripts/compact-hook.cjs').parts.some((file) => file === path.join(__dirname, 'review-hooks.cjs')));
-  assert.deepStrictEqual(config.hooks.PreToolUse, [
+  // Another skill's hooks (fixPr's bash-guard.cjs) sit beside these and are that skill's to test.
+  const codeReviewOnly = (groups) => groups.filter((group) => group.hooks.some((h) => h.args.some((a) => a.includes('/skills/codeReview/'))));
+  assert.deepStrictEqual(codeReviewOnly(config.hooks.PreToolUse), [
     { matcher: 'Write|Edit|Bash', ...run('check-part.cjs', [], 30) },
     { matcher: 'Read', ...run('review-hooks.cjs', ['--event=read'], 30) },
     { matcher: 'Grep|Glob', ...run('review-hooks.cjs', ['--event=search'], 10) },
   ]);
+  assert.ok(config.hooks.PreToolUse.some((group) => group.matcher === 'Bash' && group.hooks.some((h) => h.args.some((a) => a.endsWith('/skills/fixPr/scripts/bash-guard.cjs')))), 'fixPr guards the shell of its worktrees');
   assert.deepStrictEqual(config.hooks.PostToolUse, [{ matcher: 'Write|Edit', ...run('review-hooks.cjs', ['--event=draft'], 30) }]);
   // A sub-agent starts and ends with a conversation of its own: what was shown is forgotten both times.
   const forgets = run('review-hooks.cjs', ['--event=subagent'], 10).hooks[0];

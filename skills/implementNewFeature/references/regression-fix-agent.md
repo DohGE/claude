@@ -64,7 +64,7 @@ everything that changed since validation proved the feature.
   three runs in a row before you call it stable (`--grep`, three calls).
 - Pre-commit: `git -C "{{ROOT}}" add -A`, then `checks.cjs … --only=precommit`.
 - A part: nothing to run — the orchestrator verifies every part again after you.
-- A command that can take more than four minutes runs in the background (Bash
+- A command that can take more than three minutes runs in the background (Bash
   `run_in_background: true`, output redirected to a file), and you wait for that file in slices:
   `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` →
   `PART_READY` or `PART_PENDING` (again). Never `sleep`: past five idle minutes your prompt cache

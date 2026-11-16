@@ -39,9 +39,12 @@ test('--nonempty waits past the empty file a shell redirect creates', async () =
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('a slice never outlasts the prompt cache, and the path is required', () => {
+// The harness moves a foreground command to the background after 180 s: a wait of 230 s left about
+// twenty waiters running in the background of one run (2026-11-16), each answered by a new wait.
+test('a slice ends before the harness moves it to the background, and the path is required', () => {
   assert.strictEqual(parseArgs(['--path=a.md', '--seconds=9999']).seconds, maxSeconds);
-  assert.ok(maxSeconds < 300);
+  assert.ok(maxSeconds < 180, `maxSeconds ${maxSeconds}`);
+  assert.ok(parseArgs(['--path=a.md']).seconds <= 170, 'the default slice');
   assert.throws(() => parseArgs([]), /required/);
   assert.throws(() => parseArgs(['--part=a.md']), /Unknown argument/);
 });

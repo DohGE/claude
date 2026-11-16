@@ -1,7 +1,7 @@
 ---
 name: codeReview
 description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist; --light skips the rules of severity low and leaves Low findings and code snippets out) with severity, real line numbers, violated rule and expected result
-argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--since-last] [--learn-from-prs=<n>] [--walker-model=<model|inherit>] [--walker-effort=<low|medium|high|xhigh|max|inherit>] [--parallel=<n>] [--project=<path>]"
+argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--since-last] [--learn-from-prs=<n>] [--walker-model=<model|inherit>] [--walker-effort=<low|medium|high|xhigh|max|inherit>] [--parallel=<n>] [--decisions=<file>] [--inline-under=<lines>] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -124,7 +124,7 @@ With windows you do not walk the files yourself. Take the first way this session
 2. **The Agent tool.** Read the target's `windows` from the context file (the summary counts them) and dispatch them in order, up to `target.parallel` at once — one message with that many calls: `Agent(subagent_type: "doh:codereview-walker", description: "window <k>/<n>", model: <window.model>, effort: <window.effort>, prompt: "Read <window.brief> and follow it.")`, leaving out `model` and `effort` when the window has none.
    An Agent tool without an `effort` parameter gets one more prompt line instead: `medium` → `Effort: medium — think before each non-trivial decision.`, `high` → `Effort: high — think hard before each non-trivial decision.`, `xhigh` and `max` → the max line of `references/effort-lines.md` in this skill's directory, read only then (the effort keywords are FIXED IDENTIFIERS, English verbatim); `low` adds nothing.
    A walker's reply is the one line `WINDOW DONE <first>-<last>` (with ` GAPS` at its end when it left an item open for an outside file) or `WINDOW STOPPED <file>: <reason>` (FIXED IDENTIFIERS).
-   Walkers run in the background, so do NOT end your turn to wait for them: run (Bash tool) `node "<SKILL_DIR>/scripts/wait-part.cjs" --path="<lastPart>"`, the option repeated for every window still running; it waits under four minutes and prints one line per path, `PART_READY <path>` or `PART_PENDING <path>` (FIXED IDENTIFIERS), as soon as one of them is on disk.
+   Walkers run in the background, so do NOT end your turn to wait for them: run (Bash tool) `node "<SKILL_DIR>/scripts/wait-part.cjs" --path="<lastPart>"`, the option repeated for every window still running; it waits under three minutes and prints one line per path, `PART_READY <path>` or `PART_PENDING <path>` (FIXED IDENTIFIERS), as soon as one of them is on disk.
    A `PART_READY` window is done: dispatch the next window in its place, in the same turn, and wait again; its `WINDOW DONE` line, when it arrives later, needs nothing.
    Every path `PART_PENDING` → run the same command again, up to six times in a row; after that end your turn and act on the walkers' replies when they arrive.
    A turn ended while a walker runs is paid twice: whoever spawned this session is woken for nothing, and this conversation's context is re-read in full once its cache has expired.
@@ -164,6 +164,8 @@ After a compaction, the hook names what of them to read again.
    - `--walker-effort=<low|medium|high|xhigh|max>` → pass it through to the context script (`walker.effort`, `cross.effort`): the `effort` every walker is spawned with (Step 3, Windows).
      Without it a window walks at `medium` and the cross-file agent inherits this session's; `inherit` makes the walkers inherit it too.
    - `--parallel=<n>` → pass it through to the context script (`workflow.args.lanes`, `target.parallel`): how many windows are walked at once over all targets, 1-8 (default 6, and 8 for a run of 40 windows or more; never more than the run has windows).
+   - `--decisions=<file>` → pass it through to the context script (`decisionsPath`, and `target.decisionsPath` in every window's and the cross-file pass's brief): what the author of the change decided on purpose - fixPr's self-review lists the findings and comments its run applied or rejected. A finding that would undo one is not raised (`references/walk.md`, Step 3). A conversation that walks a target itself Reads the file once, with its first batch.
+   - `--inline-under=<lines>` → pass it through to the context script: a change of fewer changed lines whose walk fits one conversation makes its cross-file pass in that conversation (`crossInline`) past the four files of a plain run, while the walk leaves room for it. fixPr's self-review passes 800.
    - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read
      and — in staged mode — staged, where the reports land, and which `CLAUDE.md` and
      `.claude/doh/instructions/` bind. A caller whose work lives somewhere other than the current
@@ -202,7 +204,7 @@ After a compaction, the hook names what of them to read again.
      INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
      instead, which is how you review a folder of another repository.
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--light] [--walker-model=<model>] [--walker-effort=<effort>] [--parallel=<n>]`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--light] [--walker-model=<model>] [--walker-effort=<effort>] [--parallel=<n>] [--decisions=<file>] [--inline-under=<lines>]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
 5. Parse the JSON from stdout — the part of the context the review uses:
@@ -216,7 +218,7 @@ After a compaction, the hook names what of them to read again.
      every target and the run's summary), and per target `files` and `windows`
      (counts), `parallel`, `start` (a target walked here), `crossInline`, `snapshotDir`, `revision`, `commands.assemble` (only in a context without `commands.assembleAll`),
      `reportPath`, `htmlReportPath`, `workDir`, `crossBundlePath`, `crossBriefPath`, `gapsBriefPath`, `baseBranch`,
-     `baseSource`, `prNumber`, `stackTip` (a stacked target's last later part), `resume`, `skipped` (a count) — are in this summary: do not Read the file, whose
+     `baseSource`, `prNumber`, `stackTip` (a stacked target's last later part) and `stackTipRevision` (its commit: before calling a symbol unused, a target walked here asks it, `references/walk.md` Step 3), `decisionsPath` (top level, with `--decisions`), `resume`, `skipped` (a count) — are in this summary: do not Read the file, whose
      60–75 kB would stay in your context until the first compaction. Read it (Read tool, never
      `cat`) only for a key the summary lacks (`instructionsCatalog`, `checklistPlans`, a target's list of
      `files` or of `windows`).

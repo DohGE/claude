@@ -20,6 +20,19 @@ function run(args) {
   }
 }
 
+// ---------- paths ----------
+
+// 2026-11-16: an agent rebuilt `{{SKILL_DIR}}/../codeReview/…` as `skills/fixPr/codeReview/…` and
+// ran a script that did not exist. A brief names every path the way it resolves.
+test('a rendered absolute path holds no .. segment, and nothing else is touched', () => {
+  const template = 'node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" and {{POSIX}}/../b/./c.cjs, see https://gh/a/../b and ../rel/x';
+  const { text } = rap.render(template, { SKILL_DIR: 'C:\\k\\skills\\fixPr', POSIX: '/k/skills/fixPr' });
+  assert.ok(text.includes('node "C:/k/skills/codeReview/scripts/wait-part.cjs"'), text);
+  assert.ok(text.includes('/k/skills/b/c.cjs,'), text);
+  assert.ok(text.includes('https://gh/a/../b'), 'a URL is no path of this machine');
+  assert.ok(text.includes(' ../rel/x'), 'a relative path stays as written');
+});
+
 // ---------- parseArgs ----------
 
 test('--vars reads the values from a JSON file, and a --set given beside it wins', (t) => {
@@ -177,7 +190,11 @@ test('rendering twice over the same path replaces the prompt, leaving no .tmp be
 function documentedSets(skill) {
   const md = fs.readFileSync(path.join(__dirname, '..', 'skills', skill, 'SKILL.md'), 'utf8');
   const fromVars = /--vars="<briefVars>"/.test(md) ? Object.keys(require('../skills/fixPr/scripts/restack.cjs').briefVarsOf()) : [];
-  return [...new Set([...[...md.matchAll(/--set=([A-Z][A-Z0-9_]*)=/g)].map((m) => m[1]), ...fromVars])];
+  // fixPr renders its fix agent's brief and the workers' through scripts, which name what they fill.
+  const fromScripts = /fixpr-launch\.cjs/.test(md)
+    ? [...require('../skills/fixPr/scripts/fixpr-launch.cjs').briefNames, ...require('../skills/fixPr/scripts/split-work.cjs').workerNames]
+    : [];
+  return [...new Set([...[...md.matchAll(/--set=([A-Z][A-Z0-9_]*)=/g)].map((m) => m[1]), ...fromVars, ...fromScripts])];
 }
 
 test('every shipped agent template renders with the placeholders its skill documents', (t) => {
