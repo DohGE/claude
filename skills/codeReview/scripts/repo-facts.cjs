@@ -741,6 +741,41 @@ function exportedMembers(scan, mod) {
       offset += line.length + 1;
     }
   }
+  return [...out, ...storeMembers(src, scan, exported)];
+}
+
+// The public members of every exported `signalStore()`: the keys of an inline `withState` object,
+// of the object `withComputed` and `withMethods` return, and of `withProps` - a `_` key is the
+// store's own. A store's bundle had no `## Użycia składowych` (it is no class), and the walker of a
+// 312-line store spent 22 searches finding its consumers by hand (2026-11-12).
+function storeMembers(src, scan, exported) {
+  const out = [];
+  for (const m of src.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*signalStore\s*\(/g)) {
+    if (!exported.has(m[1])) continue;
+    const open = m.index + m[0].length - 1;
+    const close = matchBracket(src, open);
+    if (close < 0) continue;
+    const seen = new Set();
+    for (const feature of src.slice(open + 1, close).matchAll(/\bwith(State|Computed|Methods|Props)\s*(?:<[^>]*>)?\s*\(/g)) {
+      const at = open + 1 + feature.index + feature[0].length - 1;
+      const end = matchBracket(src, at);
+      if (end < 0) continue;
+      // The object literal the feature holds or returns: its first `{` after `=> (` or `return`, or the argument itself.
+      const body = src.slice(at + 1, end);
+      const lead = body.match(/^\s*\{|=>\s*\(\s*\{|return\s*\{/);
+      if (!lead) continue;
+      const objOpen = at + 1 + lead.index + lead[0].length - 1;
+      const objClose = matchBracket(src, objOpen);
+      if (objClose < 0) continue;
+      for (const part of splitTopLevel(src.slice(objOpen + 1, objClose), [','])) {
+        const key = part.text.match(/^\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*(?::|\(|$)/);
+        if (!key || key[1].startsWith('_') || seen.has(key[1])) continue;
+        seen.add(key[1]);
+        const offset = objOpen + 1 + part.at + part.text.indexOf(key[1]);
+        out.push({ cls: m[1], name: key[1], line: lineAt(scan.starts, offset), framework: false });
+      }
+    }
+  }
   return out;
 }
 
@@ -2034,12 +2069,21 @@ function injectedTypes(scan) {
   return out;
 }
 
-// Components, directives and pipes reach state and data through the area's facade: one that
-// injects the `Store` or a class of a `data-access/` folder that is no facade has skipped a
-// layer. The fact stands on the injecting file and on each class it injects.
+// Components, directives and pipes reach state through the view's signal store or a facade, and
+// requests are made by signal-store methods and effects: one that injects the NgRx `Store` or an
+// HTTP service - a class whose file imports `HttpClient` - has skipped a layer. Any other service
+// is free to inject (architecture#4): of a 250-file run, every bundle of a view's signal store
+// carried this fact for the component that injects it, the way the rulebook prescribes
+// (2026-11-12). A facade or a store reaching `HttpClient` itself is its own item's finding.
+// The fact stands on the injecting file and on each HTTP service it injects.
 function injectionFacts(index, add, cross) {
   const users = new Map();
   const found = [];
+  const makesRequests = (file) => {
+    if (/\.(?:facade|store)\.[cm]?[jt]s$/.test(file)) return false;
+    const mod = index.modules.get(file);
+    return !!mod && mod.imports.some((e) => e.spec === '@angular/common/http' && e.names.some((s) => s.imported === 'HttpClient'));
+  };
   for (const p of index.sourceScripts) {
     const scan = index.scans.get(p);
     if (!/@(?:Component|Directive|Pipe)\s*\(/.test(scan.bare || scan.code)) continue;
@@ -2055,7 +2099,7 @@ function injectionFacts(index, add, cross) {
       }
       if (!edge.target) continue;
       for (const origin of index.originsOf(edge.target, imported)) {
-        if (!/(?:^|\/)data-access\//.test(origin.path) || /\.facade\.[cm]?[jt]s$/.test(origin.path)) continue;
+        if (!makesRequests(origin.path)) continue;
         direct.push({ ...injected, label: `${origin.name} (${short(origin.path, index.root)})` });
         const key = `${origin.path}\0${origin.name}`;
         if (!users.has(key)) users.set(key, { origin, by: [] });
@@ -2064,16 +2108,16 @@ function injectionFacts(index, add, cross) {
     }
     if (direct.length === 0) continue;
     add(p, 'component-injects-data-access', direct.map((d) => d.line),
-      `wstrzykuje warstwę danych z pominięciem fasady: ${list(direct.map((d) => `${d.label} L${d.line}`), 6)} - komponent, dyrektywa i pipe sięgają do stanu i danych przez fasadę obszaru.`);
+      `wstrzykuje Store albo serwis HTTP: ${list(direct.map((d) => `${d.label} L${d.line}`), 6)} - komponent, dyrektywa i pipe sięgają do stanu przez signal store widoku albo fasadę, a żądania wykonują metody signal store'a i efekty; każdy inny serwis wolno wstrzyknąć.`);
     found.push(...direct.map((d) => `${short(p, index.root)}:${d.line} ${d.label.replace(/ \(.*$/, '')}`));
   }
   for (const { origin, by } of users.values()) {
     const exported = index.modules.get(origin.path).exports.find((e) => e.name === origin.name);
     const line = exported ? exported.line : 1;
     add(origin.path, 'component-injects-data-access', [line],
-      `${origin.name} (L${line}) jest wstrzykiwana bezpośrednio przez ${list(by.map((b) => `${short(b.path, index.root)}:${b.line}`), 6)} - komponent, dyrektywa i pipe sięgają do niej z pominięciem fasady.`);
+      `${origin.name} (L${line}), serwis HTTP, jest wstrzykiwana bezpośrednio przez ${list(by.map((b) => `${short(b.path, index.root)}:${b.line}`), 6)} - żądania wykonują tylko metody signal store'a i efekty.`);
   }
-  if (found.length > 0) cross(`Komponenty, dyrektywy i pipe wstrzykujące Store lub klasę data-access z pominięciem fasady: ${list(found, 12)}`);
+  if (found.length > 0) cross(`Komponenty, dyrektywy i pipe wstrzykujące Store lub serwis HTTP: ${list(found, 12)}`);
 }
 
 // `provideState('x', reducer)` registers the slice under a string of its own, while the

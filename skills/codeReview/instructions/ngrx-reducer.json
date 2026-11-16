@@ -213,7 +213,7 @@
         },
         {
           "id": "architecture#4",
-          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
+          "text": "Layering is strict: components touch state only through their view's signal store or, for data several views share, a facade - other services may be injected beside it, an HTTP service never; derived values are computed in the store (`withComputed` in a signal store, selectors in an NgRx slice); signal-store methods and effects orchestrate side effects and are the only consumers of HTTP services; HTTP services only perform requests.",
           "severity": "low",
           "facts": [
             "component-injects-data-access"

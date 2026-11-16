@@ -242,25 +242,29 @@ test('an API interface that mixes camelCase and snake_case fields is a fact on i
   assert.ok(result.cross.some((line) => /^Interfejsy API z mieszanymi stylami nazw pól: .*UserDto/.test(line)));
 });
 
-test('a component, directive or pipe injecting the Store or a data-access class is a fact on it and on the class', () => {
+test('a component, directive or pipe injecting the Store or an HTTP service is a fact on it and on the service', () => {
   const result = collect({
-    'src/app/a/data-access/services/a.service.ts': 'export class AService {}\n',
+    'src/app/a/data-access/services/a.service.ts': "import { HttpClient } from '@angular/common/http';\nexport class AService {\n  constructor(private readonly http: HttpClient) {}\n}\n",
+    'src/app/a/data-access/services/a-layout.service.ts': 'export class ALayoutService {}\n',
     'src/app/a/data-access/+state/a.facade.ts': 'export class AFacade {}\n',
-    'src/app/a/components-a/feature/a/a.component.ts': "import { Component, inject } from '@angular/core';\nimport { Store } from '@ngrx/store';\nimport { AService } from '../../../data-access/services/a.service';\nimport { AFacade } from '../../../data-access/+state/a.facade';\n\n@Component({ selector: 'a-a', template: '' })\nexport class AComponent {\n  facade = inject(AFacade);\n  service = inject<AService>(AService);\n  store = inject(Store);\n}\n",
+    'src/app/a/data-access/+state/a.store.ts': "import { HttpClient } from '@angular/common/http';\nexport const AStore = signalStore(withProps(() => ({ _http: inject(HttpClient) })));\n",
+    'src/app/a/components-a/feature/a/a.component.ts': "import { Component, inject } from '@angular/core';\nimport { Store } from '@ngrx/store';\nimport { AService } from '../../../data-access/services/a.service';\nimport { AFacade } from '../../../data-access/+state/a.facade';\nimport { ALayoutService } from '../../../data-access/services/a-layout.service';\nimport { AStore } from '../../../data-access/+state/a.store';\n\n@Component({ selector: 'a-a', template: '' })\nexport class AComponent {\n  facade = inject(AFacade);\n  service = inject<AService>(AService);\n  store = inject(Store);\n  layout = inject(ALayoutService);\n  viewStore = inject(AStore);\n}\n",
     'src/app/a/components-a/ui/b/b.component.ts': "import { Component } from '@angular/core';\nimport { AService } from '../../../data-access/services/a.service';\n\n@Component({ selector: 'a-b', template: '' })\nexport class BComponent {\n  constructor(private readonly service: AService) {}\n}\n",
     'src/app/a/shared/utils/c.service.ts': "import { AService } from '../../data-access/services/a.service';\nexport class CService {\n  constructor(private readonly service: AService) {}\n}\n",
   });
   const own = (p) => factsOf(result, p, 'component-injects-data-access');
   const a = own('src/app/a/components-a/feature/a/a.component.ts');
-  assert.deepStrictEqual(a.map((f) => f.lines), [[9, 10]], 'the facade is the way in, the service and the Store are not');
-  assert.match(a[0].text, /AService \(src\/app\/a\/data-access\/services\/a\.service\.ts\) L9, Store \(@ngrx\/store\) L10/);
+  assert.deepStrictEqual(a.map((f) => f.lines), [[11, 12]], 'the signal store, the facade and a service that makes no request are free to inject; the HTTP service and the Store are not');
+  assert.match(a[0].text, /^wstrzykuje Store albo serwis HTTP: AService \(src\/app\/a\/data-access\/services\/a\.service\.ts\) L11, Store \(@ngrx\/store\) L12 /);
   assert.deepStrictEqual(own('src/app/a/components-a/ui/b/b.component.ts').map((f) => f.lines), [[6]], 'a constructor parameter counts');
   assert.deepStrictEqual(own('src/app/a/shared/utils/c.service.ts'), [], 'a service is no component');
   const service = own('src/app/a/data-access/services/a.service.ts');
-  assert.deepStrictEqual(service.map((f) => f.lines), [[1]]);
-  assert.match(service[0].text, /^AService \(L1\) jest wstrzykiwana bezpośrednio przez src\/app\/a\/components-a\/feature\/a\/a\.component\.ts:9, src\/app\/a\/components-a\/ui\/b\/b\.component\.ts:6 /);
+  assert.deepStrictEqual(service.map((f) => f.lines), [[2]]);
+  assert.match(service[0].text, /^AService \(L2\), serwis HTTP, jest wstrzykiwana bezpośrednio przez src\/app\/a\/components-a\/feature\/a\/a\.component\.ts:11, src\/app\/a\/components-a\/ui\/b\/b\.component\.ts:6 /);
   assert.deepStrictEqual(own('src/app/a/data-access/+state/a.facade.ts'), []);
-  assert.ok(result.cross.some((line) => /^Komponenty, dyrektywy i pipe wstrzykujące Store lub klasę data-access z pominięciem fasady: .*a\.component\.ts:10 Store/.test(line)));
+  assert.deepStrictEqual(own('src/app/a/data-access/services/a-layout.service.ts'), [], 'a service without HttpClient is any other service');
+  assert.deepStrictEqual(own('src/app/a/data-access/+state/a.store.ts'), [], 'a store that reaches HttpClient itself is its own finding (signal-store#3), not the component\'s');
+  assert.ok(result.cross.some((line) => /^Komponenty, dyrektywy i pipe wstrzykujące Store lub serwis HTTP: .*a\.component\.ts:12 Store/.test(line)));
 });
 
 test('a state slice registered under a literal is certain when a key constant holds the text, a hint otherwise', () => {
@@ -383,9 +387,8 @@ test('collectFacts finds the answer-key targets of the test environment', () => 
     // models/index.ts is bypassed by the feature component (user-status.enum, user-panel-title.const).
     ['src/app/user-panel/models/index.ts', 'barrel-bypass', [3, 7], false],
     ['src/app/user-panel/models/interfaces/user-dto.interface.ts', 'dto-casing-mixed', [3, 4], false],
-    // The component injects the Store, the service and the UI-state service; the directive the service; the pipe the Store.
-    [`${feature}.ts`, 'component-injects-data-access', [63, 64, 69], false],
-    ['src/app/user-panel/data-access/services/user-panel-ui-state.service.ts', 'component-injects-data-access', [5], false],
+    // The component injects the Store and the HTTP service (its UI-state service makes no request); the directive the HTTP service; the pipe the Store.
+    [`${feature}.ts`, 'component-injects-data-access', [63, 64], false],
     ['src/app/user-panel/components-user-panel/feature/feature-user-panel/highlight.directive.ts', 'component-injects-data-access', [22], false],
     ['src/app/user-panel/shared/pipes/user-status.pipe.ts', 'component-injects-data-access', [11], false],
     ['src/app/user-panel/shared/routes/user-panel.routes.ts', 'state-key-literal', [22], false],
@@ -455,6 +458,34 @@ test('builtin probes: @for without @empty, repeated signal reads, repeated marku
 test('a fact probe points at the lines of the file\'s facts of its kind', () => {
   const fileFacts = [{ kind: 'export-single-importer', lines: [3], text: 't' }, { kind: 'export-unused', lines: [5], text: 'u' }];
   assert.deepStrictEqual(facts.runProbe({ fact: 'export-single-importer' }, 'a.ts', '', fileFacts), [{ line: 3, text: 't' }]);
+});
+
+test('membersByFile: a signal store\'s state, computed signals and methods are members too', () => {
+  const result = collect({
+    'src/a/data-access/+state/a.store.ts': [
+      "import { signalStore, withState, withComputed, withMethods, withProps } from '@ngrx/signals';",
+      'export const AStore = signalStore(',
+      '  withState<AState>({ items: [], isLoading: false }),',
+      "  withProps(() => ({ _service: inject(AService) })),",
+      '  withComputed((store) => ({',
+      '    count: computed(() => store.items().length),',
+      '    isEmpty: computed(() => store.items().length === 0),',
+      '  })),',
+      '  withMethods((store) => ({',
+      '    load: rxMethod<void>(pipe()),',
+      '    clear(): void {',
+      '      patchState(store, { items: [] });',
+      '    },',
+      '  })),',
+      ');',
+    ].join('\n'),
+    'src/a/feature-a.component.ts': "import { AStore } from './data-access/+state/a.store';\nexport class FeatureAComponent {\n  private readonly _aStore = inject(AStore);\n  readonly count = this._aStore.count;\n  go() { this._aStore.load(); }\n}\n",
+    'src/a/feature-a.component.html': '<p>{{ count() }}</p>',
+  });
+  const rows = Object.fromEntries(result.membersByFile.get('src/a/data-access/+state/a.store.ts').map((r) => [r.name, r]));
+  assert.deepStrictEqual(Object.keys(rows), ['items', 'isLoading', 'count', 'isEmpty', 'load', 'clear'], 'a `_` member is private to the store');
+  assert.deepStrictEqual([rows.count.cls, rows.count.line, rows.count.files], ['AStore', 6, ['src/a/feature-a.component.ts', 'src/a/feature-a.component.html']]);
+  assert.deepStrictEqual([rows.load.files, rows.clear.files, rows.isEmpty.files], [['src/a/feature-a.component.ts'], [], []]);
 });
 
 test('membersByFile: where each public member of an exported class is named, among the places that can reach it', () => {

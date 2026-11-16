@@ -26,6 +26,8 @@ const itemPrefix = { severity: 'ważność stała:', sameAs: 'ta sama wada:', pr
 // FIXED IDENTIFIER: the evidence of the OK line the part check writes for an item the script closed
 // (rulebook.cjs subjectAbsent) - `brak wystąpień` for the check, the rest for the reader.
 const closedEvidence = 'brak wystąpień - zamknięte przez skrypt';
+// The same for an item whose subject only the lines the diff left alone hold (bindFile).
+const closedUntouchedEvidence = 'brak wystąpień w zmienionych liniach - zamknięte przez skrypt';
 const factsFileName = 'facts.json';
 const crossBundleName = 'cross-file.bundle.md';
 const notesFileName = 'rulebook-notes.md';
@@ -64,15 +66,20 @@ const outputCost = { perItem: 100, perChangedLine: 60, mechanical: 1500 };
 function walkOutput({ items = 0, changed = 0, mechanical = false } = {}) {
   return mechanical ? outputCost.mechanical : items * outputCost.perItem + changed * outputCost.perChangedLine;
 }
+// What a target's cross-file pass writes, by its files - the time that follows the target's last
+// window, which the workflow's queue counts in (review-windows.js): seven passes of one run wrote
+// 7k-52k tokens, 21k-27k for 9-45 files and 52k for 123 (2026-11-12).
+const crossOutputCost = { base: 20000, perFile: 250 };
+const crossOutput = (files = 0) => crossOutputCost.base + files * crossOutputCost.perFile;
 // A Read shows at most 2 000 characters of a line and refuses a file over 256 KB, and a bundle
 // it cannot open is a file walked blind: a bundle line past `lineChars` is cut wherever the
 // plan does not need it whole, and past `bundleChars` the sections a verdict needs least go
 // first, each replaced by a line saying so. The cross bundle gets the line cut only.
 const bundleCaps = { lineChars: 1500, bundleChars: 200000 };
-const optionalSections = ['## Fakty spoza planu (bez wymogu)', '## Użycia składowych', '## Eksporty tego pliku i ich konsumenci', '## Spec', '## Usunięte deklaracje i ich użycia', '## Kandydaci duplikacji (jscpd)'];
+const optionalSections = ['## Folder pliku', '## Fakty spoza planu (bez wymogu)', '## Użycia składowych', '## Eksporty tego pliku i ich konsumenci', '## Spec', '## Usunięte deklaracje i ich użycia', '## Kandydaci duplikacji (jscpd)'];
 // FIXED IDENTIFIERS. The two replies a window's walker ends with, which SKILL.md tells the main
 // conversation to read, and the file name of a window's brief.
-const windowReplies = { done: 'WINDOW DONE', stopped: 'WINDOW STOPPED' };
+const windowReplies = { done: 'WINDOW DONE', stopped: 'WINDOW STOPPED', gaps: 'GAPS' };
 const windowBriefName = (index) => `window${pad(index, 2)}.md`;
 // The skill folder, named in the bundles' pointers to its reference files.
 const skillDir = path.resolve(__dirname, '..').replace(/\\/g, '/');
@@ -125,7 +132,7 @@ function lineCountOf(text) {
 // fact no walked item names, and no `{ fact }` probe points at, is information only.
 // `text` is null for a file with no readable content (deleted, binary): no probe runs on it.
 // `answers` are the file's repo-facts.cjs answers by name, one per item whose `answer` names it.
-function bindFile({ plan, instructions, filePath, text, facts = [], context = {}, partial = false, answers = {} }) {
+function bindFile({ plan, instructions, filePath, text, facts = [], context = {}, partial = false, answers = {}, changedText = null }) {
   const entries = new Map();
   const entry = (address) => {
     if (!entries.has(address)) entries.set(address, { strong: [], hints: [], probes: new Map() });
@@ -182,15 +189,24 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
   // the part check writes their `OK (brak wystąpień)` line, so the walker never reads them. An item
   // the bundle points a line at, or asks a second question about, stays the walker's, and so does
   // one with a prepared verdict, which the check writes in already.
+  // A modified file (`changedText`: its changed lines with their margin) closes too the items whose
+  // subject only its untouched lines hold: the scope gate reports nothing there. Of a 250-file run's
+  // 141 modified files, the bundles printed the whole plan's text for lines nobody changed (2026-11-12).
   const closed = [];
+  const closedUntouched = [];
   for (const { step, instruction } of steps) {
     for (const n of step.numbers) {
       const address = `${step.id}#${n}`;
       const extra = instruction.extras.get(n);
-      if (!items[address] && !(extra && extra.unverified) && rulebook.subjectAbsent(extra, text)) closed.push(address);
+      if (items[address] || (extra && extra.unverified) || !extra || !extra.subject) continue;
+      if (rulebook.subjectAbsent(extra, text)) closed.push(address);
+      else if (typeof changedText === 'string' && rulebook.subjectAbsent(extra, changedText)) {
+        closed.push(address);
+        closedUntouched.push(address);
+      }
     }
   }
-  return { items, info: unbound, ...(closed.length > 0 ? { closed } : {}) };
+  return { items, info: unbound, ...(closed.length > 0 ? { closed } : {}), ...(closedUntouched.length > 0 ? { closedUntouched } : {}) };
 }
 
 // A binding kept to the lines a walk reads (a data file read in ranges, readRangesOf): a fact or a
@@ -451,9 +467,34 @@ function renderRemoved(removed, root) {
     : `- \`${name}\`: ${total} ${total === 1 ? 'miejsce' : 'miejsc(a)'} - ${capped(hits.map((h) => `${short(h.path, root)}:${h.line}`), 8)}${total > hits.length ? ' …' : ''}`));
 }
 
+// The file's folder in the reviewed revision: its files, and each subfolder with the files directly
+// in it (`tests/`, a `ui-*` child). A third of a run's Globs listed a folder - whether a spec, a
+// stylesheet or a sibling exists - and 45 of them came back empty from a gitignored snapshot
+// (2026-11-12). `paths` are the revision's source paths the facts read.
+const folderCaps = { entries: 30 };
+function folderListing(filePath, paths) {
+  const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
+  const files = [];
+  const subs = new Map();
+  for (const p of paths) {
+    if (!p.startsWith(dir)) continue;
+    const rest = p.slice(dir.length).split('/');
+    if (rest.length === 1) files.push(rest[0]);
+    else if (rest.length === 2) subs.set(rest[0], [...(subs.get(rest[0]) || []), rest[1]]);
+    else if (!subs.has(rest[0])) subs.set(rest[0], []);
+  }
+  const lines = [
+    ...files.sort().map((name) => `- ${name}`),
+    ...[...subs].sort(([a], [b]) => a.localeCompare(b)).map(([name, inner]) => `- ${name}/${inner.length > 0 ? `: ${capped(inner.sort(), 6)}` : ''}`),
+  ];
+  if (lines.length === 0) return [];
+  return lines.length > folderCaps.entries ? [...lines.slice(0, folderCaps.entries), `- … (+${lines.length - folderCaps.entries})`] : lines;
+}
+
 function renderBundle({
   file, kind, instructions, bound = { items: {}, info: [] }, exports = [], members = [], specs = null, candidates = [], factRoot = '',
   partial = false, lineCount = null, partPath = null, batch = null, next = null, mechanical = null, fullPath = null, removed = [], hints = [],
+  folder = [],
 }) {
   const out = [`# ${file.path}`, ''];
   out.push(kind
@@ -534,6 +575,7 @@ function renderBundle({
     out.push('## Użycia składowych', '', 'Gdzie pada nazwa (całe słowo): ten plik, jego szablon, pliki importujące klasę i ich szablony.', ...renderMembers(members, factRoot), '');
   }
   if (specs) out.push('## Spec', '', ...renderSpecs(specs, factRoot, file.path), '');
+  if (folder.length > 0) out.push('## Folder pliku', '', 'Pliki źródłowe folderu tego pliku w recenzowanej rewizji (podfolder: jego pliki) - zamiast Glob:', ...folder, '');
   if (removed.length > 0) out.push('## Usunięte deklaracje i ich użycia', '', 'Nazwy, których deklarację usunął diff tego pliku, i gdzie przeglądana rewizja ich jeszcze używa (całe słowo):', ...renderRemoved(removed, factRoot), '');
   // pattern-checks.cjs: what a regular expression found on the added lines. Each is a candidate for
   // the item it names - the reviewers of 2026-11-06 raised four such points on walked files.
@@ -827,7 +869,7 @@ function renderWindowBrief({ index, total, target, batches }) {
   out.push(`You walk files ${range} of this target, batch by batch in the order below, and nothing else.`);
   out.push(`1. The rules of the walk (codeReview Step 3) and of a part (Step 4) are in your system prompt, the \`doh:codereview-walker\` definition; \`<SKILL_DIR>\` in them is ${skillDir}. A walker started without them Reads ${walkRulesPath} first, in the same response as the Reads of the first batch that still lacks a part.`);
   out.push('2. A file whose part is on disk is finished: skip it and never write it again. Walk every other batch exactly as Step 3 says; the last bundle of a batch ends with `## Dalej`, which names the Reads that ride with its Writes.');
-  out.push(`3. The window ends with its last part: reply with exactly one line, \`${windowReplies.done} ${range}\`, and nothing else - no summary of findings.`);
+  out.push(`3. The window ends with its last part: reply with exactly one line, \`${windowReplies.done} ${range}\`, and nothing else - no summary of findings. When a part of this window leaves an item \`NIEZWERYFIKOWANE: poza recenzją: …\`, end that line with \` ${windowReplies.gaps}\`: only then does an agent read the outside files before the cross-file pass.`);
   out.push(`4. If you cannot go on - the Write of a part is refused, or a part still fails its check after two fixes - reply with the one line \`${windowReplies.stopped} <file number>: <reason>\`. Never write a part through the shell: the conversation that sent you walks the rest.`, '');
   out.push('The `target.*` keys Step 3 and 4 name, for this target (a key missing here is false):', '', '```json', JSON.stringify(target, null, 2), '```', '');
   batches.forEach((batch, k) => {
@@ -923,14 +965,14 @@ function crossInScope(cross, files, factRoot = '') {
 // carry the PR fields (an HTML run). The section between `reportedStart` and `reportedEnd` is
 // review-hooks.cjs's to rewrite (renderReported) when the bundle is read.
 function renderCrossBundle({
-  cross = [], instructions, walked, candidates = null, importLedger = null, factRoot = '', partial = false,
+  cross = [], instructions, walked, candidates = null, importLedger = null, importLedgerPages = null, factRoot = '', partial = false,
   crossPartPath = null, closingPartPath = null, withPr = true, files = [], workDir = null,
 }) {
   const out = ['# Przejście międzyplikowe', ''];
   if (crossPartPath) out.push(`- część: ${crossPartPath}`);
   if (factRoot) out.push(`- ścieżki w faktach: względem \`${factRoot}/\``);
   if (partial) out.push('- fakty z części repozytorium (limit albo błąd git): brak wpisu niczego nie dowodzi');
-  if (importLedger) out.push(`- księga importów: ${importLedger}`);
+  if (importLedger) out.push(`- księga importów: ${pagedRead(importLedger, importLedgerPages)}`);
   const scoped = files.length > 0 ? crossInScope(cross, files, factRoot) : { lines: cross, dropped: 0 };
   out.push('', '## Fakty międzyplikowe', '', ...(scoped.lines.length > 0 ? scoped.lines.map((line) => `- ${line}`) : ['- brak']));
   if (scoped.dropped > 0) out.push(`- pominięte: ${scoped.dropped} fakt(y) o plikach spoza recenzji`);
@@ -1061,11 +1103,11 @@ function factsDocument({ files, factRoot = '', partial = false, rules = null }) 
 }
 
 module.exports = {
-  linePrefix, itemPrefix, closedEvidence, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
-  reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, outputCost, walkOutput, crossInScope, windowReplies, windowBriefName, skillDir,
+  linePrefix, itemPrefix, closedEvidence, closedUntouchedEvidence, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
+  reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, outputCost, walkOutput, crossOutput, crossInScope, windowReplies, windowBriefName, skillDir,
   crossBriefName, crossReplies, questionsOpen, questionIds, crossQuestions, walkRulesPath, bundleCaps,
   bindFile, renderBinding, renderBundle, renderCrossBundle, renderCrossBrief, renderRulebookNotes, factsDocument, fitBundle, renderSkeleton,
   pageLimits, pagesOf, pagedRead, crossPagesOf, gapsBriefName, gapsReplies, renderGapsBrief,
-  planBatches, planWindows, walkTokens, readsOf, readRangesOf, deletionAnchorsOf, textOfRanges, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
+  folderListing, planBatches, planWindows, walkTokens, readsOf, readRangesOf, deletionAnchorsOf, textOfRanges, renderNext, renderWindowBrief, renderReported, withReported, rulesOf, partPathOf, lineCountOf, severityText,
   mechanicalLimits, mechanicalClass, limitsOfClass, renderMechanical,
 };

@@ -18,20 +18,25 @@ export const meta = {
 //
 // args (review-context.cjs `workflow.args`):
 //   lanes    how many walkers work at once, over all targets - their parts are independent files
-//   targets  [{ dir, windows, cross, gaps }] - one per target with windows:
+//   next     the command that assembles every target once the run is done; handed back as `next`,
+//            so the conversation does not need what Step 1 printed an hour before
+//   targets  [{ dir, windows, costs, firsts, cross, gaps }] - one per target with windows:
 //     dir      the target's work folder, where every brief is (`window<NN>.md`, `cross-file.brief.md`, `gaps.brief.md`)
 //     windows  [["<first>-<last>", "<model or ''>", "<effort or ''>", ["<target>:<window>", ...]], ...] in file
 //              order; the fourth entry, when there is one, names the windows (of `targets`, both counted
 //              from 1) that walk the files this window carries verdicts from - a later part of a
 //              stack waits for them, so their parts are on disk when its bundles are read
 //     costs    [<tokens>, ...] per window, optional: the output its walk is estimated to write - the
-//              walk's time - and the lanes start the costliest ready window first
-//     cross    { model, effort } of the cross-file pass's agent
+//              walk's time
+//     firsts   [[<Read>, ...], ...] per window, optional: the Reads of its first batch, which ride
+//              in the message that reads the brief - a turn less for every walker
+//     cross    { model, effort, cost } of the cross-file pass's agent; `cost` its estimated output
 //     gaps     { model, effort } of the agent that closes the items left open for a readable outside
 //              file before the cross-file pass; absent, there is no such step
 // The one-target form of 0.26 (`{ dir, lanes, windows, cross }`) still runs.
-// Returns { targets: [{ dir, windows: [{ window, files, ok, reply }], failed: [window numbers], cross: reply line or null }] },
-// or, for the one-target form, that target's { windows, failed, cross }.
+// Returns { targets: [{ dir, walked, windows: [{ window, files, reply }], failed: [window numbers], cross: reply line or null }], next },
+// `walked` the windows done and `windows` only the ones that are not - or, for the one-target
+// form, that target's { walked, windows, failed, cross }.
 // The run folder's copy carries its args on the next line (review-context.cjs runWorkflow), so the
 // call names only `scriptPath`; `args` passed to the call win over them.
 const baked = null
@@ -51,7 +56,7 @@ const spawnOptions = (setting, label, phaseTitle) => ({
 })
 
 const single = !Array.isArray(input.targets)
-const targets = (single ? [{ dir: input.dir, windows: input.windows, cross: input.cross }] : input.targets).map((t) => {
+const targets = (single ? [{ dir: input.dir, windows: input.windows, costs: input.costs, firsts: input.firsts, cross: input.cross }] : input.targets).map((t) => {
   const dir = String(t.dir || '').replace(/[\\/]+$/, '')
   // `<run>/<branch>/raport.work`: the branch folder names the target in a label.
   const name = single ? '' : `${dir.split('/').slice(-2, -1)[0] || dir}: `
@@ -62,17 +67,25 @@ const targets = (single ? [{ dir: input.dir, windows: input.windows, cross: inpu
     effort: w[2] || '',
     after: Array.isArray(w[3]) ? w[3].map(String) : [],
     cost: Number((t.costs || [])[k]) || 0,
+    first: Array.isArray((t.firsts || [])[k]) ? t.firsts[k].map(String) : [],
     brief: `${dir}/window${pad(k + 1)}.md`,
   }))
   return { dir, name, windows, cross: t.cross || {}, gaps: t.gaps || null, results: [], left: windows.length, failed: [], reply: null, gapsReply: null }
 })
+
+// What a window's walker is sent: its brief and, in the same message, the Reads of its first
+// batch - the brief alone was a turn of its own for each of 76 walkers (2026-11-12). A walker
+// started again reads the brief first: the parts on disk say which batch it resumes at.
+const promptOf = (w, attempt) => (attempt === 1 && w.first.length > 0
+  ? `Read ${w.brief} and follow it. In the same message Read its first batch too:\n${w.first.map((read) => `- ${read}`).join('\n')}`
+  : `Read ${w.brief} and follow it.`)
 
 // One window. A walker that stopped is started once more: it skips every part already on disk.
 async function walk(target, w) {
   let line = ''
   for (let attempt = 1; attempt <= 2; attempt++) {
     const label = `${target.name}window ${w.number}/${target.windows.length}: files ${w.files}${attempt > 1 ? ' (again)' : ''}`
-    line = lastLine(await agent(`Read ${w.brief} and follow it.`, spawnOptions(w, label, 'Windows')))
+    line = lastLine(await agent(promptOf(w, attempt), spawnOptions(w, label, 'Windows')))
     if (line.startsWith('WINDOW DONE')) return { window: w.number, files: w.files, ok: true, reply: line }
   }
   return { window: w.number, files: w.files, ok: false, reply: line || 'no reply' }
@@ -88,7 +101,9 @@ async function crossOf(target) {
   }
   // The items the walk left open for a file outside the review that the revision holds: a light
   // walker reads those files once and settles what they settle. It replies at once when none are.
-  if (target.gaps) {
+  // Only when a window says it left such an item (`WINDOW DONE <range> GAPS`): five of seven targets
+  // of one run had none, and their agent started only to say so (2026-11-12).
+  if (target.gaps && target.results.some((r) => r && / GAPS$/.test(r.reply))) {
     target.gapsReply = lastLine(await agent(`Read ${target.dir}/gaps.brief.md and follow it.`, spawnOptions(target.gaps, `${target.name}open items`, 'Gaps')))
   }
   target.reply = lastLine(await agent(`Read ${target.dir}/cross-file.brief.md and follow it.`, spawnOptions(target.cross, `${target.name}cross-file pass`, 'Cross-file')))
@@ -96,7 +111,7 @@ async function crossOf(target) {
 
 phase('Windows')
 const jobs = targets.flatMap((target, t) => target.windows.map((w) => ({ target, w, key: `${t + 1}:${w.number}`, state: 'pending' })))
-const known = new Set(jobs.map((job) => job.key))
+const byKey = new Map(jobs.map((job) => [job.key, job]))
 const finished = new Set()
 const waiting = []
 const wakeAll = () => {
@@ -104,12 +119,30 @@ const wakeAll = () => {
 }
 // A window whose files carry verdicts from an earlier part of the stack waits for the windows that
 // walk those files; one naming no window of this run waits for nothing.
-const ready = (job) => job.w.after.every((key) => finished.has(key) || !known.has(key))
-// Each lane takes the costliest window, of whichever target, that is free to start (the first one
-// on a tie), as soon as its walker is done; with none free it waits for the next window to finish.
+const ready = (job) => job.w.after.every((key) => finished.has(key) || !byKey.has(key))
+// What still has to run once a window starts: its own walk, then the longer of its target's
+// cross-file pass and the windows that wait for it, each with what follows them - the window's
+// place on the run's critical path. Each lane takes the ready window with the most ahead of it (the
+// costliest on a tie, then the first), as soon as its walker is done; with none free it waits for
+// the next window to finish.
 // In file order the six windows of the first target took every lane, and the 12-minute window of
-// the third started six minutes late and ended the run (2026-11-05).
-const next = () => jobs.reduce((best, j) => (j.state === 'pending' && ready(j) && (!best || j.w.cost > best.w.cost) ? j : best), null)
+// the third started six minutes late and ended the run (2026-11-05). By cost alone every target's
+// windows ended together: five cross-file passes followed one another in the last eight minutes of
+// a 51-minute run, with at most four of six lanes at work (2026-11-12).
+const waiters = new Map()
+for (const job of jobs) for (const key of job.w.after) if (byKey.has(key)) waiters.set(key, [...(waiters.get(key) || []), job])
+const ahead = new Map()
+const aheadOf = (job, path = new Set()) => {
+  if (ahead.has(job.key)) return ahead.get(job.key)
+  if (path.has(job.key)) return 0
+  path.add(job.key)
+  const after = Math.max(Number(job.target.cross.cost) || 0, ...(waiters.get(job.key) || []).map((next) => aheadOf(next, path)))
+  path.delete(job.key)
+  ahead.set(job.key, job.w.cost + after)
+  return ahead.get(job.key)
+}
+const before = (a, b) => aheadOf(a) > aheadOf(b) || (aheadOf(a) === aheadOf(b) && a.w.cost > b.w.cost)
+const next = () => jobs.reduce((best, j) => (j.state === 'pending' && ready(j) && (!best || before(j, best)) ? j : best), null)
 const lane = async () => {
   for (;;) {
     const job = next()
@@ -131,5 +164,13 @@ const lanes = Math.max(1, Math.min(Number(input.lanes) || 1, jobs.length))
 log(`${jobs.length} window(s) of ${targets.length} target(s), ${lanes} at a time`)
 await parallel(Array.from({ length: lanes }, () => lane))
 
-const report = (t) => ({ windows: t.results, failed: t.failed, ...(t.gaps ? { gaps: t.gapsReply } : {}), cross: t.reply })
-return single ? report(targets[0]) : { targets: targets.map((t) => ({ dir: t.dir, ...report(t) })) }
+// The conversation acts on what is not done: a window that ended well is a count.
+const report = (t) => ({
+  walked: t.results.filter((r) => r && r.ok).length,
+  windows: t.results.filter((r) => r && !r.ok).map(({ window, files, reply }) => ({ window, files, reply })),
+  failed: t.failed,
+  ...(t.gaps ? { gaps: t.gapsReply } : {}),
+  cross: t.reply,
+})
+const nextStep = typeof input.next === 'string' && input.next ? { next: input.next } : {}
+return single ? { ...report(targets[0]), ...nextStep } : { targets: targets.map((t) => ({ dir: t.dir, ...report(t) })), ...nextStep }

@@ -24,6 +24,13 @@ test('parseArgs defaults and parsing', () => {
   );
   assert.throws(() => rc.parseArgs(['--walker-effort=extreme']), /Unknown --walker-effort/);
   assert.throws(() => rc.parseArgs(['--walker-model=a b']), /Unknown --walker-model/);
+  // `inherit` asks for the session's own model or effort in place of the walkers' default.
+  assert.deepStrictEqual(
+    [rc.parseArgs(['--walker-model=inherit']).walkerModel, rc.parseArgs(['--walker-effort=inherit']).walkerEffort],
+    ['inherit', 'inherit'],
+  );
+  assert.strictEqual(rc.parseArgs(['--parallel=8']).parallel, 8);
+  assert.throws(() => rc.parseArgs(['--parallel=9']), /Unknown --parallel value \(expected 1-8 windows walked at once\)/);
   assert.deepStrictEqual(
     [rc.parseArgs(['--with-checklist']).withRuleText, rc.parseArgs(['--with-checklist']).withChecklist],
     [true, true],
@@ -766,7 +773,24 @@ test('a target too long for one conversation gets windows: a brief each, and a s
   assert.strictEqual(t0.parallel, 2);
   const costs = t0.windows.map((w) => w.cost);
   assert.ok(costs.every((cost) => cost > 0), 'each window carries the output its walk is estimated to write');
-  assert.deepStrictEqual(workflowArgs(ctx), { lanes: 2, targets: [{ dir: t0.workDir, windows: [['1-4', '', ''], ['5-8', '', '']], costs, cross: { model: '', effort: '' }, gaps: { model: 'sonnet', effort: 'medium' } }] });
+  // A window's first batch rides in the message that reads its brief.
+  assert.deepStrictEqual(t0.windows[0].first, [t0.files[0].bundlePath, t0.files[0].contentPath]);
+  assert.deepStrictEqual(t0.windows[1].first, [t0.files[4].bundlePath, t0.files[4].contentPath]);
+  assert.deepStrictEqual(workflowArgs(ctx), {
+    lanes: 2,
+    // The command that assembles the run comes back with the workflow's result.
+    next: ctx.commands.assembleAll,
+    targets: [{
+      dir: t0.workDir,
+      // Nothing said otherwise, a window walks on sonnet at medium effort.
+      windows: [['1-4', 'sonnet', 'medium'], ['5-8', 'sonnet', 'medium']],
+      costs,
+      firsts: t0.windows.map((w) => w.first),
+      // The cross-file pass keeps the session's model and effort, and names what it is estimated to write.
+      cross: { model: '', effort: '', cost: 22000 },
+      gaps: { model: 'sonnet', effort: 'medium' },
+    }],
+  });
   const runDir = path.dirname(path.dirname(t0.reportPath)).replace(/\\/g, '/');
   assert.strictEqual(ctx.workflow.scriptPath, `${runDir}/review-windows.js`, 'inside the project, where the Workflow tool may read it');
   // The skill's script with the run's args on its `baked` line, and nothing else changed.
@@ -2201,8 +2225,32 @@ test('files of a kind with a walker setting fill windows of their own, spawned w
   const window = t0.windows.find((w) => w.files[0] === enums[0]);
   assert.deepStrictEqual(window.files, [enums[0], enums[enums.length - 1]], 'the enums share one window, alone');
   assert.deepStrictEqual([window.model, window.effort], ['sonnet', 'medium']);
-  assert.ok(t0.windows.filter((w) => w !== window).every((w) => w.effort === 'high' && !w.model), 'every other window carries --walker-effort');
+  assert.ok(t0.windows.filter((w) => w !== window).every((w) => w.effort === 'high' && w.model === 'sonnet'), 'every other window carries --walker-effort, on the walkers\' default model');
   assert.ok(workflowArgs(ctx).targets[0].windows.some(([range, model, effort]) => range === `${window.files[0]}-${window.files[1]}` && model === 'sonnet' && effort === 'medium'));
+});
+
+test('a window walks on sonnet at medium effort unless its kind or the caller says otherwise; the cross-file pass keeps the session\'s', (t) => {
+  const dir = makeRepo(t);
+  const body = (n) => `${Array.from({ length: 70 }, (_, i) => `export const f${n}x${i} = ${i};`).join('\n')}\n`;
+  for (let n = 1; n <= 8; n++) commitFile(dir, `src/f${n}.ts`, body(n), `f${n}`);
+  const skillDir = makeSkillDir(t, [TS_KIND]);
+  const build = (minute, extra = {}) => rc.buildContext({ mode: 'folder', path: 'src', project: dir, skillDir, now: new Date(2026, 6, 15, 18, minute), ...extra });
+  const settings = (ctx) => [ctx.walker, ctx.cross, [...new Set(ctx.targets[0].windows.map((w) => `${w.model || ''}|${w.effort || ''}`))], workflowArgs(ctx).targets[0].cross];
+  const plain = build(1);
+  assert.deepStrictEqual(plain.errors, []);
+  assert.ok(plain.targets[0].windows.length > 1);
+  assert.deepStrictEqual(settings(plain), [{ model: 'sonnet', effort: 'medium' }, { model: '', effort: '' }, ['sonnet|medium'], { model: '', effort: '', cost: 22000 }]);
+  // What the caller names goes to every walker and to the cross-file agent, as before.
+  assert.deepStrictEqual(settings(build(2, { walkerModel: 'opus', walkerEffort: 'high' })), [{ model: 'opus', effort: 'high' }, { model: 'opus', effort: 'high' }, ['opus|high'], { model: 'opus', effort: 'high', cost: 22000 }]);
+  // `inherit` is the session's own: no model on the dispatch, no effort.
+  const own = build(3, { walkerModel: 'inherit', walkerEffort: 'inherit' });
+  assert.deepStrictEqual(settings(own), [{ model: '', effort: '' }, { model: '', effort: '' }, ['|'], { model: '', effort: '', cost: 22000 }]);
+  assert.ok(own.targets[0].windows.every((w) => !('model' in w) && !('effort' in w)));
+  // One of the two named: the other keeps the walkers' default.
+  assert.deepStrictEqual(settings(build(4, { walkerModel: 'inherit' })).slice(0, 3), [{ model: '', effort: 'medium' }, { model: '', effort: '' }, ['|medium']]);
+  // Step 1's summary carries both settings: the Agent tool's dispatch reads them there.
+  const printed = rc.writeContext(plain);
+  assert.deepStrictEqual([printed.walker, printed.cross], [{ model: 'sonnet', effort: 'medium' }, { model: '', effort: '' }]);
 });
 
 test('files a rename only renamed are found mechanical by the script and walked in a light window of their own', (t) => {
@@ -2340,6 +2388,33 @@ test('a stack of branches: each part knows the lines its later parts change, nex
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(p1.stackPath, 'utf8')), { tip: 'part-2', later: ['part-2'], files: { 'src/a.ts': [[5, 5]] } });
   // The window walkers search the reviewed commit, which their brief names.
   assert.strictEqual(rc.stackOf(ctx.targets.slice(1), dir).size, 0, 'one branch is no stack');
+});
+
+test('a part that carries an old version of its base\'s commits is named in a warning: its diff holds the base\'s own changes', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'part-1']);
+  commitFile(dir, 'src/a.ts', 'export const a = 1;\n', 'feat: part 1');
+  commitFile(dir, 'src/a2.ts', 'export const a2 = 1;\n', 'feat: part 1 tests');
+  run(dir, ['checkout', '-q', '-b', 'part-2']);
+  commitFile(dir, 'src/b.ts', 'export const b = 1;\n', 'feat: part 2');
+  run(dir, ['checkout', '-q', '-b', 'part-3']);
+  commitFile(dir, 'src/c.ts', 'export const c = 1;\n', 'feat: part 3');
+  // part-1's last commit is amended after part-2 was cut from it: part-2 still stands on the old one.
+  run(dir, ['checkout', '-q', 'part-1']);
+  fs.writeFileSync(path.join(dir, 'src/a2.ts'), 'export const a2 = 2;\n');
+  run(dir, ['commit', '-q', '-a', '--amend', '-m', 'feat: part 1 tests']);
+  run(dir, ['checkout', '-q', 'main']);
+  const prs = { 'part-1': { base: 'main', number: 1 }, 'part-2': { base: 'part-1', number: 2 }, 'part-3': { base: 'part-2', number: 3 } };
+  const findOpenPr = (project, branch) => ({ pr: prs[branch] || null, error: null });
+  const ctx = rc.buildContext({ mode: 'branches', branches: 'part-1;part-2;part-3', project: dir, skillDir: makeSkillDir(t, [TS_KIND]), now: new Date(2026, 6, 8, 11, 0), findOpenPr });
+  assert.deepStrictEqual(ctx.errors, []);
+  const [, p2, p3] = ctx.targets;
+  assert.deepStrictEqual(p2.files.map((f) => f.path), ['src/a2.ts', 'src/b.ts'], 'the diff starts at the common ancestor, before the amended commit');
+  const off = ctx.warnings.filter((w) => /does not stand on its base/.test(w));
+  assert.strictEqual(off.length, 1, 'part-3 stands on part-2, and a trunk that moved on is no such case');
+  assert.match(off[0], /^\[part-2\] The branch does not stand on its base part-1: the base was amended or rebased after the branch was cut, and the branch still carries its own version of 1 commit\(s\) of it \("feat: part 1 tests"\)\./);
+  assert.match(off[0], /covers 1 file\(s\) the base changes itself, out of 2 - the base's own work, reviewed here again\. Restack the branch first \(\/doh:restack part-2\) to review only what it adds\.$/);
+  assert.deepStrictEqual(p3.files.map((f) => f.path), ['src/c.ts']);
 });
 
 test('a snapshot changed without its spec is pointed at, and the items whose subject a file lacks are closed in its facts', (t) => {

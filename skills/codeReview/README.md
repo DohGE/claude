@@ -21,9 +21,9 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview [target] --with-checklist` | any of the above, but the report keeps every file's walked checklist and coverage marker (the page's **Pokrycie checklist** section), with the full text of its rule under every checklist item (on the page) or after ` — Reguła: ` on the item's line (in an `--only-md` Markdown) |
 | `/codeReview [target] --light` | any of the above, but no checklist walks an item of severity `low`, the report keeps no ⚪ Low finding, and the page shows no code snippet (see [Light runs](#light-runs)) |
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
-| `/codeReview [target] --walker-model=<model>` | any of the above, but every window walker and the cross-file agent are spawned on that model (e.g. `sonnet`) instead of inheriting this session's; a window of light kinds keeps its own setting (see [Token cost](#token-cost)) |
+| `/codeReview [target] --walker-model=<model>` | any of the above, but every window walker and the cross-file agent are spawned on that model (e.g. `opus`); without it a window walks on `sonnet` at effort `medium` and the cross-file agent inherits this session's, and `inherit` gives the walkers the session's too; a window of light kinds keeps its own setting (see [Token cost](#token-cost)) |
 | `/codeReview [target] --walker-effort=<low\|medium\|high\|xhigh\|max>` | any of the above, but every walker is spawned with that effort |
-| `/codeReview [target] --parallel=<n>` | any of the above, but `n` windows (1-6, default 6) are walked at once, over all the targets of the run |
+| `/codeReview [target] --parallel=<n>` | any of the above, but `n` windows (1-8, default 6) are walked at once, over all the targets of the run |
 
 A branch list is split on `,` and `;`. Git allows both characters inside a ref name, so a branch
 literally called `feature/a,b` cannot be named in that list — it would be read as two branches and
@@ -265,6 +265,8 @@ same-as:                       # optional: one defect seen by another instructio
 ## Checklist
 - an item, numbered `<id>#1`, `#2`, … in order
 ```
+
+Two more front-matter lists give items a `subject`, so the script closes what a file has nothing of: `item-subject` (`- 14: <regex>`) for one item, `section-subject` (`- Chart labels: chart`) for every item under that `##`/`###` heading - an item's own wins. A modified file also closes an item whose subject only its untouched lines hold, with the evidence `brak wystąpień w zmienionych liniach - zamknięte przez skrypt`.
 
 `severity`, `item-severity` and `same-as` are what a kind file's instruction says in `severity` and in an item's `severity` and `sameAs`; the skill's item a `same-as` names is given the link back in the run's rulebook, since a local rule cannot edit the skill's kinds. Before, a local rule had no severity at all: `--light` walked all 87 items of a wording rule whose own text calls most of them Low, and one hard-coded option label came back as two Medium findings on the same lines.
 
