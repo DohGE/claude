@@ -107,7 +107,41 @@ function landOptionsFromRun(run, branch) {
     worktree: t.worktree, branch, parent: stack.parent || (t.pr && t.pr.base) || '',
     parentTipAtStart: stack.parentTipAtStart || '', remoteTipAtStart: t.remoteTipAtStart || '',
     checksDir: t.checksDir ? path.join(t.checksDir, 'restack') : '',
+    parentChanges: parentChangesOf(run, branch),
   };
+}
+
+// What the fix agents of the parts below a part removed, renamed or re-signed that this part still
+// uses: each agent's `stackImpact` (<reportPath>.result.json), the uses of this branch only,
+// bottom-first - "symbol: change (path:line, …); …", or `none`. On 2026-11-16 the orchestrator
+// gathered these by hand for every conflict agent, and part-5 needed part-1's and part-3's too.
+function parentChangesOf(run, branch) {
+  const byBranch = new Map((run.targets || []).map((t) => [t.branch, t]));
+  const below = [];
+  for (let at = byBranch.get(branch), guard = 0; at && at.stack && at.stack.parent && guard < 50; guard += 1) {
+    const parent = byBranch.get(at.stack.parent);
+    if (!parent) break;
+    below.unshift(parent);
+    at = parent;
+  }
+  const items = [];
+  const seen = new Set();
+  for (const part of below) {
+    let impact = [];
+    try {
+      impact = JSON.parse(fs.readFileSync(`${part.reportPath}.result.json`, 'utf8')).stackImpact || [];
+    } catch {
+      impact = [];
+    }
+    for (const item of Array.isArray(impact) ? impact : []) {
+      const uses = (item.usedIn || []).map(String).filter((u) => u.startsWith(`${branch}:`)).map((u) => u.slice(branch.length + 1));
+      const key = `${item.symbol}|${item.change}`;
+      if (uses.length === 0 || seen.has(key)) continue;
+      seen.add(key);
+      items.push(`${item.symbol}: ${item.change} (${uses.join(', ')})`);
+    }
+  }
+  return items.length > 0 ? items.join('; ') : 'none';
 }
 
 function pairsFromRun(run) {
@@ -129,7 +163,7 @@ function fillFromRun(args) {
   if (!args.project && run.project) args.project = run.project;
   if (args.action === 'land' && args.branch) {
     const from = landOptionsFromRun(run, args.branch);
-    for (const key of ['worktree', 'parent', 'parentTipAtStart', 'remoteTipAtStart', 'checksDir']) if (!args[key]) args[key] = from[key];
+    for (const key of ['worktree', 'parent', 'parentTipAtStart', 'remoteTipAtStart', 'checksDir', 'parentChanges']) if (!args[key]) args[key] = from[key];
   }
   if (args.action === 'verify' && args.pairs.length === 0) args.pairs = pairsFromRun(run);
 }
@@ -357,11 +391,28 @@ function squashedBoundary(dir, upstream, head, forkPoint, mergedHeads = []) {
 
 // The values of restack-agent.md a landing knows (`briefVars`, for render-agent-prompt.cjs --vars).
 // render-agent-prompt.test.cjs reads these names as part of fixPr's documented contract.
-function briefVarsOf({ tree = '', branch = '', parent = '', oldTip = '', lease = '', files = [], checksDir = '', push = 'yes' } = {}) {
+// MODE: `conflict` (the move stopped at a conflict) or `adapt` (the move went through and the gate
+// is red: this part's code has to follow what the parts below it changed).
+function briefVarsOf({ tree = '', branch = '', parent = '', oldTip = '', lease = '', files = [], checksDir = '', push = 'yes', mode = 'conflict', parentChanges = 'none', parentDiff = 'none' } = {}) {
   return {
-    ROOT: tree, BRANCH: branch, PARENT: parent, OLD_TIP: oldTip, LEASE: lease || '', FILES: files.join(', '),
+    ROOT: tree, BRANCH: branch, PARENT: parent, OLD_TIP: oldTip, LEASE: lease || '', FILES: files.length > 0 ? files.join(', ') : 'none',
     CHECKS_DIR: checksDir ? path.resolve(checksDir) : '', SKILL_DIR: path.join(__dirname, '..'), PUSH: push === 'no' ? 'no' : 'yes',
+    MODE: mode, PARENT_CHANGES: parentChanges || 'none', PARENT_DIFF: parentDiff || 'none',
   };
+}
+
+// The parent's landed change - of the conflicting files, or all of it - for the agent's brief:
+// the conflict agents of 2026-11-16 each ran three or four `git diff`/`git show` calls to see it.
+const parentDiffCap = 256 * 1024;
+
+function writeParentDiff(tree, from, to, files, dir) {
+  if (!from || !to) return 'none';
+  const res = spawnSync('git', ['-C', tree, 'diff', from, to, ...(files.length > 0 ? ['--', ...files] : [])], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const diff = res.status === 0 ? String(res.stdout || '') : '';
+  if (!diff.trim()) return 'none';
+  const file = path.join(dir, 'parent-diff.patch');
+  fs.writeFileSync(file, diff.length > parentDiffCap ? `${diff.slice(0, parentDiffCap)}\n… (cut at ${parentDiffCap} bytes)\n` : diff, 'utf8');
+  return file;
 }
 
 function land(options, { runGate = defaultGate } = {}) {
@@ -376,6 +427,24 @@ function land(options, { runGate = defaultGate } = {}) {
   const fail = (message) => {
     result.errors.push(message);
     return result;
+  };
+  // What the agent's brief needs and this landing knows, for render-agent-prompt.cjs --vars: the
+  // orchestrator adds only the pull request and its language.
+  const writeBrief = (mode, { oldTip, lease, files }) => {
+    if (!options.checksDir) return;
+    const dir = path.resolve(options.checksDir);
+    const varsFile = path.join(dir, 'restack-agent-vars.json');
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const parentDiff = writeParentDiff(tree, oldTip, result.newParentTip, files, dir);
+      fs.writeFileSync(varsFile, `${JSON.stringify(briefVarsOf({
+        tree, branch, parent, oldTip, lease, files, checksDir: options.checksDir, push: options.push, mode, parentChanges: options.parentChanges || 'none', parentDiff,
+      }), null, 1)}\n`, 'utf8');
+      result.briefVars = varsFile;
+      result.mode = mode;
+    } catch (err) {
+      result.warnings.push(`Could not write ${varsFile}: ${(err && err.message) || err}`);
+    }
   };
   if (!git(tree, ['rev-parse', '--git-dir']).ok) return fail(`Not a git worktree: ${tree}`);
   // A tracked file the install touched (husky's line endings, 2026-11-03) is no reason to leave a
@@ -431,20 +500,7 @@ function land(options, { runGate = defaultGate } = {}) {
       if (inRebase(tree)) {
         git(tree, ['rebase', '--abort']);
         result.status = 'conflict';
-        // What the conflict agent's brief needs and this landing knows, for render-agent-prompt.cjs
-        // --vars: the orchestrator adds only the pull request, its language and the parent's changes.
-        if (options.checksDir) {
-          const varsFile = path.join(path.resolve(options.checksDir), 'restack-agent-vars.json');
-          try {
-            fs.mkdirSync(path.dirname(varsFile), { recursive: true });
-            fs.writeFileSync(varsFile, `${JSON.stringify(briefVarsOf({
-              tree, branch, parent, oldTip: forkPoint, lease, files: result.conflictFiles, checksDir: options.checksDir, push: options.push,
-            }), null, 1)}\n`, 'utf8');
-            result.briefVars = varsFile;
-          } catch (err) {
-            result.warnings.push(`Could not write ${varsFile}: ${(err && err.message) || err}`);
-          }
-        }
+        writeBrief('conflict', { oldTip: forkPoint, lease, files: result.conflictFiles });
         return result;
       }
     }
@@ -473,6 +529,9 @@ function land(options, { runGate = defaultGate } = {}) {
       // `--keep`, not `--hard`: an uncommitted file the move did not touch stays as it was.
       if (!git(tree, ['reset', '--keep', before]).ok) result.warnings.push(`Could not take ${branch} back to ${before}; it holds the moved commits.`);
       result.status = 'gate-red';
+      // The gate's red steps are this part's code meeting what landed below it: the conflict agent
+      // adapts it (MODE adapt) instead of the run ending here with a question for the user.
+      writeBrief('adapt', { oldTip: result.oldParentTip || options.parentTipAtStart || '', lease, files: [] });
       return result;
     }
   }
@@ -571,7 +630,7 @@ function compactPart(p) {
     redSteps: gate ? (gate.steps || []).filter((s) => s.status === 'failed').map((s) => ({ label: s.label, errorsPath: s.errorsPath || null })) : [],
     conflictFiles: p.conflictFiles || [], oldParentTip: p.oldParentTip || null,
     autoResolved: (p.autoResolved || []).map((r) => r.file || r), worktree: p.worktree || null,
-    ...(p.squashed ? { squashed: p.squashed } : {}), ...(p.briefVars ? { briefVars: p.briefVars } : {}),
+    ...(p.squashed ? { squashed: p.squashed } : {}), ...(p.briefVars ? { briefVars: p.briefVars } : {}), ...(p.mode ? { mode: p.mode } : {}),
     warnings: p.warnings || [], errors: p.errors || [],
   };
 }
@@ -629,7 +688,7 @@ function climb(options, deps = {}) {
     result.parts.push({
       branch, parent, status: landed.status, commit: landed.commit || null, oldTip: tips.get(branch) || null, pushed: Boolean(landed.pushed), rebased: Boolean(landed.rebased),
       autoResolved: landed.autoResolved || [], conflictFiles: landed.conflictFiles || [], oldParentTip: landed.oldParentTip || null, gate: landed.gate || null,
-      squashed: landed.squashed || null,
+      squashed: landed.squashed || null, mode: landed.mode || null,
       worktree: keep || (removed && !removed.removed) ? added.worktree : null, warnings: [...(added.warnings || []), ...(landed.warnings || []), ...((removed && removed.warnings) || [])], errors: landed.errors || [],
     });
     if (keep) {
@@ -714,9 +773,9 @@ function renderConflictBrief(project, part, { prs, checksDir, push, language }) 
   const pr = prs[part.branch] || {};
   const values = {
     ROOT: part.worktree || '', BRANCH: part.branch, PR_NUMBER: pr.number ? String(pr.number) : 'none', PR_URL: pr.url || 'none',
-    PARENT: part.parent || '', OLD_TIP: part.oldParentTip || '', LEASE: part.oldTip || '', FILES: (part.conflictFiles || []).join(', '),
+    PARENT: part.parent || '', OLD_TIP: part.oldParentTip || '', LEASE: part.oldTip || '', FILES: (part.conflictFiles || []).length ? part.conflictFiles.join(', ') : 'none',
     CHECKS_DIR: path.join(checksDir, part.branch), SKILL_DIR: path.join(__dirname, '..'), PUSH: push || 'yes', LANGUAGE: language || 'English',
-    PARENT_CHANGES: 'none',
+    PARENT_CHANGES: 'none', MODE: part.mode || 'conflict', PARENT_DIFF: 'none',
   };
   const rendered = rap.renderFile({ template: agentTemplate, out: path.join(project, '.claude', 'doh', slug, `${slug}-restack-agent-prompt.md`), values });
   return { agentPrompt: rendered.errors.length ? null : rendered.out, agentPromptErrors: rendered.errors };
@@ -771,7 +830,7 @@ function stackAction(options, deps = {}) {
   const result = climb({ ...options, project, stack, base, startIndex, startParentOldTip, checksDir, mergedHeads }, deps);
   const parts = result.parts.map(compactPart);
   const last = parts[parts.length - 1];
-  if (last && last.status === 'conflict') Object.assign(last, renderConflictBrief(project, last, { prs, checksDir, push: options.push, language: options.language }));
+  if (last && (last.status === 'conflict' || (last.status === 'gate-red' && last.mode === 'adapt'))) Object.assign(last, renderConflictBrief(project, last, { prs, checksDir, push: options.push, language: options.language }));
   for (const p of parts) {
     p.conflictCount = p.conflictFiles.length;
     p.conflictFiles = p.conflictFiles.slice(0, conflictListCap);
@@ -806,6 +865,6 @@ function main() {
   process.exit(result.errors && result.errors.length ? 1 : 0);
 }
 
-module.exports = { parseArgs, parsePairs, land, verify, push, cascade, climb, stackAction, plan, discoverStack, compactPart, landOptionsFromRun, pairsFromRun, mergeJson3, autoResolve, pushWithRetry, squashedBoundary, briefVarsOf, absent };
+module.exports = { parseArgs, parsePairs, land, verify, push, cascade, climb, stackAction, plan, discoverStack, compactPart, landOptionsFromRun, pairsFromRun, parentChangesOf, mergeJson3, autoResolve, pushWithRetry, squashedBoundary, briefVarsOf, absent };
 
 if (require.main === module) main();

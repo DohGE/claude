@@ -12,7 +12,7 @@
     "Inline `styles` are walked as CSS (component-styles gate), so component-styles and the style-related accessibility items apply to this TS file too.",
     "Routed and dialog feature components share this kind: feature-component#15 binds dialogs, feature-component#11-14 bind routed features."
   ],
-  "itemCount": 135,
+  "itemCount": 134,
   "instructions": [
     {
       "id": "feature-component",
@@ -675,7 +675,7 @@
         "This instruction OWNS accessibility across the whole diff — template semantics, ARIA, keyboard operability, focus management, contrast, motion and target size. When the component template, the component styles or any other instruction touches the same occurrence, it is reported ONCE — here, with this severity.",
         "Scope is the skill's scope gate: the finding is anchored on a line the diff touched. Markup, styles or handlers the diff ADDS are reviewed even when they extend an already inaccessible structure; a barrier living entirely in untouched lines is not a finding. Judge only what the diff itself makes checkable — a hard-coded color pair, a declared size, a missing name, a handler bound to one input modality. Never guess at a value that would need the running app (a themed color resolved at runtime, a screen-reader announcement) and never report a criterion as passing or failing on a hunch."
       ],
-      "selectedItems": "3,6-17,19-21,23-29,32-35",
+      "selectedItems": "3,6-17,19-21,23-29,32-33,35",
       "checklistSize": 37,
       "items": [
         {
@@ -805,11 +805,6 @@
           "id": "accessibility#33",
           "text": "An overlay has an accessible name: `aria-labelledby` pointing at its visible title, or an `aria-label` resolved from an i18n key (4.1.2).",
           "subject": "dialog|modal|overlay|drawer|popover|bottom-?sheet|sidenav|menu|cdk-overlay|alertdialog|popup|panel|flyout|lightbox"
-        },
-        {
-          "id": "accessibility#34",
-          "text": "Escape closes an open overlay (2.1.2).",
-          "subject": "dialog|modal|overlay|drawer|popover|bottom-?sheet|sidenav|menu|cdk-overlay|alertdialog|popup|panel|flyout|lightbox|tooltip"
         },
         {
           "id": "accessibility#35",

@@ -113,8 +113,11 @@ Without that tool, re-read the file or re-run the command with narrower output.
   moved by hand.
 - The stack is GitHub's, not the run's. The collector reads it from the open pull requests: a part
   named alone is still held on the part below it, a bottom with parts above it still keeps its base,
-  and every open part above a landed one moves after it (Step 5 point 3) - named or not. On
+  and every open part above a landed one moves after it (Step 5 point 4) - named or not. On
   2026-11-06 a run of part-1 and part-2 left part-3..5 sitting on the old part-2.
+- Every step of a branch goes through its script - `fixpr-launch.cjs`, `restack.cjs`, `fixpr-after.cjs`,
+  `fixpr-summary.cjs` - each reading the run file (`--run=<runPath>`) and the agent's result file. You
+  never copy a value, a sha or a verdict from one answer into another call by hand.
 - Every `restack.cjs` call that acts on a target takes `--run=<runPath>` and the branch: the worktree,
   parent, tips and checks folder come from the run file. You never copy shas by hand.
 
@@ -177,12 +180,14 @@ warning names any it could not fetch. A branch with open pull requests based on 
 does not name carries them in `stack.above` (bottom-first): they move after it in Step 5. A part
 whose base is an open pull request the run does not name is held on it (`stack.parentOutsideRun`).
 `stack.allAbove` lists every part above a target, in the run or not. `runPath` is the run file
-every later `restack.cjs` call reads (`--run`). A read GitHub refused for a moment is retried in
+every later script reads (`--run`). A read GitHub refused for a moment is retried in
 the collector; a branch still dropped by an error stays a part of its stack (a warning says where).
 
 With `--local` it reads no comment of the pull request: each target's `commentsPath` holds the
 matched `findings[]`, the target carries `local: true` and `counts.findings`, and a warning names
-every id no report of the named branches holds.
+every id no report of the named branches holds. A finding whose lines changed since its review
+(the report's revision against the branch now) is marked `stale` (`counts.stale`, and a warning
+naming the ids): its agent checks it still applies before it changes anything.
 
 Parse the JSON from stdout:
 
@@ -193,118 +198,79 @@ Parse the JSON from stdout:
 - `targets` empty → stop here, after reporting. Every branch was dropped by an error.
 
 `targets` come bottom-first: every part of a stack after the part it is based on. `stacks[]` lists
-each stack bottom-first (`["part-1", "part-2", …]`).
-
-Each target carries: `branch`, `pr` (`number`, `title`, `url`, `base`), `commitMessage`,
-`commitPrefix`, `commentsPath`, `reportPath`, `promptPath`, `checksDir`, `worktree`, `local` (with `--local`),
-`landing` (`rebase` | `keep-base` | `hold`), `stack` (`parent`, `children`, `parentTipAtStart`,
-`allAbove`, and `above` / `parentOutsideRun` where they apply), `remoteTipAtStart`, and `counts`
-(`openThreads`, `resolvedThreads`, `outdatedThreads`, `conversation`, `reviews`, `candidates`, and
-`findings` under `--local`). Keep
-exactly those; the comment bodies stay in the file.
+each stack bottom-first (`["part-1", "part-2", …]`). Each target carries `branch`, `pr` (`number`,
+`title`, `url`, `base`), `landing` (`rebase` | `keep-base` | `hold`), `stack` and `counts`; the
+scripts below read the rest from the run file - you copy no value of it.
 
 Tell the user, in Polish, what was found per branch — the pull request number and title, how many
 threads are open, how many were already resolved and skipped, how many conversation comments and
-review summaries there are — under `--local`, how many of the named findings each branch's reports held. Name every stack bottom-first (`part-1 ← part-2 ← …`): its parts are fixed side by side and land one after another. `candidates: 0` is reported as "no open comments; this branch runs for its
-checks only", never as a skip.
+review summaries there are — under `--local`, how many of the named findings each branch's reports
+held and how many are `stale`. Name every stack bottom-first (`part-1 ← part-2 ← …`): its parts are
+fixed side by side and land one after another. `candidates: 0` is reported as "no open comments;
+this branch runs for its checks only", never as a skip.
 
 **`--dry-run` stops here**, after that listing. It stays comment-only on purpose: reporting on the
 gate would need a worktree and a dependency install, which is exactly what `--dry-run` exists not to
 do. Say so if the user expected the checks in it.
 
-## Step 3 — One worktree per branch
+### Step 2b — What the stack's split left out (a stack of two parts or more)
 
-For each target, in `targets` order (the bottom of a stack first), create its worktree and spawn its
-agent (Step 4) right after it - never every worktree first: on 2026-11-03 five worktrees made one after
+    node "<SKILL_DIR>/scripts/stack-preflight.cjs" --run="<runPath>"
+
+From git alone, in seconds: each part's changed files, their relative and tsconfig-alias imports,
+and every import of a file only a later part adds. It writes each target's `leaks` (its own) and
+`restore` (its own and those of the parts below its tree still lacks) into the run file; the
+launch hands `restore` to the agent, which brings those files back verbatim from that later part
+first, so every part restores the same copy. On 2026-11-16 four agents found such a red gate one by
+one and copied the files on their own, two of them differently. Report each target's `restore` in
+Polish (`part-2: 3 pliki z part-5 - agent przywróci je przed poprawkami`). `errors[]` → report them;
+the run goes on, and the agents meet the red gate themselves.
+
+## Step 3 — Launch each branch: worktree and brief
+
+For each target, in `targets` order (the bottom of a stack first), launch it and spawn its agent
+(Step 4) right after - never every worktree first: on 2026-11-03 five worktrees made one after
 another held the first agent back nineteen minutes, and the bottom part of the stack started last.
 
-    node "<SKILL_DIR>/scripts/worktree.cjs" --action=add --branch="<branch>" --project="<PROJECT>"
+    node "<SKILL_DIR>/scripts/fixpr-launch.cjs" --run="<runPath>" --branch="<branch>" --push=<yes|no> --language=<language>
 
-Parse its JSON. `errors[]` non-empty → that branch is OUT of the run: report the error in Polish and
-move to the next target. The errors are deliberate refusals, each with the fix in its text, and none
-of them is something to work around:
+`--push=no` when `--no-push` was passed; `<language>` is the language THIS conversation is held in,
+named plainly (`Polish`, `English`, …). It makes the worktree (worktree.cjs) and renders the brief
+(`promptPath`) and the two files the agent reads at one step only (`visualBrief`, `landBrief`) from
+the run file and the worktree's answer; every value also goes to `varsPath`, which the agent's
+workers' briefs are rendered from. Parse its JSON:
 
-- the branch is checked out somewhere AND holds commits origin does not have;
-- it has no `origin/<branch>`, so the fix could never reach the pull request;
-- it has diverged from `origin/<branch>`, so no push could succeed;
-- a folder is in the way that holds something of its own - a registered worktree, a `.git`, a
-  link, or a file the branch does not have (the error names it).
-
-Two things that used to stop a branch no longer do, and are warnings to report instead:
-- A branch the user has checked out (`heldBy`) is worked on `doh-fixpr/<branch>` (`localBranch`)
-  and pushed to `origin/<branch>`. Tell the user, in the summary, to `git pull --rebase` in that
-  checkout afterwards.
-- A leftover folder of an earlier run - empty, or holding only the branch's own and ignored files -
-  is removed by `worktree.cjs` itself ("Removed the leftover …"). You still never delete a folder
-  yourself, never pass `--force` to git, and never re-run the command hoping for a different answer.
-
-Report the other `warnings[]` too — a fast-forward, an install that failed or a missing lockfile
-(either way the gate will be skipped), and the `.env*` files copied in. Keep `rulebook` (a path or
-null) and `visual` (how the app is started for a look at a fix - `.claude/doh/checks.json`
-`"visual": {"command":"npm run dpx:local -- --port {port}","url":"http://localhost:{port}/#","backend":["http://localhost:3001"],"authFile":".claude/doh/auth.json"}`
-- or null) for Step 4a. A project without `visual` gets no visual check; say once, in the summary,
-that adding it lets the agents look at their template and logic fixes in the running app.
+- `errors[]` non-empty → that branch is OUT of the run: report the error in Polish and move to the
+  next target. The errors are deliberate refusals of worktree.cjs, each with the fix in its text,
+  and none of them is something to work around: the branch is checked out somewhere AND holds
+  commits origin does not have; it has no `origin/<branch>`; it has diverged from `origin/<branch>`;
+  a folder is in the way that holds something of its own (a registered worktree, a `.git`, a link,
+  a file the branch does not have). A placeholder error names a template - report it as a plugin
+  defect.
+- `heldBy` → the branch is checked out by the user; it is worked on `doh-fixpr/<branch>` and pushed
+  to `origin/<branch>`. The summary tells the user to `git pull --rebase` in that checkout.
+- `mainBroken: true` → the main checkout's `node_modules` misses packages its `package.json`
+  declares, so no worktree can have a gate. STOP the run before any agent: remove the worktrees made
+  so far (`node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"`),
+  and tell the user, in Polish, to run `npm ci` in their checkout and start the run again.
+- `visual: true` for the first time this run → start, in the background (Bash, `run_in_background: true`),
+  once: `node "<SKILL_DIR>/../implementNewFeature/scripts/ensure-playwright.cjs"`. The agents' look
+  at the running app needs it; on 2026-11-16 an agent installed it in the middle of its run.
+  A run where no target has `visual` gets no visual check: say once, in the summary, that a
+  `"visual"` key in `.claude/doh/checks.json` lets the agents look at their template fixes.
+- Report the other `warnings[]` — a leftover folder removed, an install that failed (that agent
+  skips its gate), the `.env*` files copied in.
 
 A worktree whose lockfile is the main checkout's gets that checkout's `node_modules` linked in
-(`dependencies.linked`) instead of an install, and a copy of its gitignored `.claude/doh/` config
-(`dohConfig`: rulebook, `local/` rules, `checks.json`). Only `worktree.cjs --action=remove` takes such
+instead of an install, and only `worktree.cjs --action=remove` (fixpr-after.cjs calls it) takes such
 a worktree down: it unlinks first, where git's own recursive delete walks into the linked folder.
-
-Keep each branch's `installed` from this JSON: it becomes `INSTALLED` in Step 4a, and it is the one
-thing that decides whether the agent runs the gate at all.
-
-`mainBroken: true` → the main checkout's `node_modules` misses packages its `package.json`
-declares, so no worktree can have a gate. STOP the run before any agent: remove the worktrees
-made so far (`--action=remove`), and tell the user, in Polish, the warning's command to run in
-their checkout (`npm ci`), and that the run is to be started again after it. On 2026-11-05 five
-agents found that out one by one, two ran `npm ci` themselves against a registry the VPN did not
-reach, and one sat 135 minutes waiting for the user.
+You never delete a folder yourself, never pass `--force` to git, and never re-run a launch hoping for
+a different answer.
 
 ## Step 4 — One background agent per branch
 
-For every branch that got a worktree: FIRST render its brief, THEN spawn the agent on it, in the
-BACKGROUND, before the next worktree. Spawn every agent before you wait for any of them. Every fix
-agent opens with the same system prompt and tool definitions: the first one, alone in its message,
-writes that prefix into the prompt cache, and each one spawned after it reads that copy at a tenth of
-the price.
-
-### 4a — Render the brief
-
-    node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/fix-agent.md" --out="<promptPath>" --set=ROOT=<worktree> --set=BRANCH=<branch> --set=BASE=<pr.base> --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=COMMENTS=<commentsPath> --set=REPORT=<reportPath> --set=CHECKS_DIR=<checksDir> --set=COMMIT_MESSAGE=<commitMessage> --set=COMMIT_PREFIX=<commitPrefix> --set=PROJECT=<PROJECT> --set=SKILL_DIR=<SKILL_DIR> --set=PUSH=<yes|no> --set=INSTALLED=<yes|no> --set=LANGUAGE=<language> --set=LANDING=<landing> --set=RULEBOOK=<rulebook|none> --set=ABOVE=<allAbove|none> --set=LOCAL=<yes|no> --set=TASK=<yes|no> --set=MEDIA=<yes|no> --set=VISUAL=<visual as JSON|none>
-
-The brief holds blocks for every landing, push setting and input kind; the renderer keeps only this
-agent's (a held part's brief is a quarter shorter, and the agent reads it on every turn).
-
-| Value | Where it comes from |
-|---|---|
-| `ROOT` | the target's `worktree` |
-| `BRANCH`, `PR_NUMBER`, `PR_URL` | from the target |
-| `BASE` | the target's `pr.base`: the branch the agent rebases its commit onto |
-| `COMMENTS`, `REPORT`, `CHECKS_DIR` | the target's `commentsPath`, `reportPath` and `checksDir` |
-| `COMMIT_MESSAGE`, `COMMIT_PREFIX` | the target's `commitMessage` and `commitPrefix`, verbatim — never re-derive either yourself. The agent picks between them: the `CR` message when it fixed a comment, the prefix plus `Fix <labels>` when it only repaired checks. |
-| `PROJECT`, `SKILL_DIR` | the values from Step 1 |
-| `PUSH` | `no` when `--no-push` was passed, otherwise `yes` |
-| `INSTALLED` | `yes` when this branch's Step 3 returned `installed: true`, otherwise `no`. `no` tells the agent to skip the gate rather than spend the run repairing a missing `node_modules`. |
-| `LANDING` | the target's `landing`, verbatim: `rebase`, `keep-base` or `hold` |
-| `RULEBOOK` | Step 3's `rulebook` path, or `none` when it is null - the agent then looks for no project rules |
-| `ABOVE` | the target's `stack.allAbove` joined by `, `, or `none` when it is empty |
-| `LOCAL`, `TASK`, `MEDIA` | `yes` when the target has `local: true`, `counts.task`, a `counts.media` above 0 - otherwise `no` |
-| `VISUAL` | Step 3's `visual` as one line of JSON (`{"command":…,"url":…,"backend":[…],"authFile":…}`), or `none` when it is null: the agent then has no step 5b (looking at a fix in the running app) |
-| `LANGUAGE` | the language THIS conversation is being held in, named plainly (`Polish`, `English`, …) — never a locale code, never "the user's language" left unresolved |
-
-`errors[]` non-empty → that branch is OUT of the run, exactly like a refused worktree: report the
-error in Polish, remove the worktree, move on. The commonest one names a placeholder nobody filled,
-and the fix is the missing `--set`, never spawning the agent without it.
-
-**Never assemble that prompt by hand.** Reading `fix-agent.md` into your own context and writing the
-substituted copy back out as the Agent argument costs you the whole file TWICE per branch — the same
-context the comment bodies are kept out of on purpose. The renderer also refuses a brief with an
-unfilled placeholder; a hand-made one delivers `{{ROOT}}` to the agent as if it were a path.
-
-### 4b — Spawn
-
-Agent tool, `subagent_type: "general-purpose"`, background. The prompt is short and points at the
-rendered brief — it never repeats it:
+Right after its launch: Agent tool, `subagent_type: "general-purpose"`, background. The prompt is
+short and points at the rendered brief — it never repeats it:
 
     Your complete instructions are in the file <promptPath>. Read it in full with the Read tool
     before doing anything else, then follow it exactly. It is already resolved: every path,
@@ -314,135 +280,94 @@ rendered brief — it never repeats it:
 
 Anything this particular run has to add — a note about a previous failure, something the user said
 after the fact — goes in that spawn prompt, under its own heading, after the pointer. It never goes
-into the rendered file.
+into the rendered file. Spawn every agent before you wait for any of them: every fix agent opens with
+the same system prompt and tool definitions, and the first one, alone in its message, writes that
+prefix into the prompt cache for the others.
 
 Then wait for the completion notifications and handle each branch as it lands. Never predict a
 result that has not arrived, and never summarise a branch whose agent is still running — if the user
 asks in the meantime, say it is still working.
 
-Each agent ends with one JSON object, alone: the plugin's SubagentStop hook (`agent-stop.cjs`)
-sends a final message with prose in it, or a turn ended while the agent's own gate still ran, back
-to the agent once. An agent that still finishes with NO parsable JSON — it crashed, was
-cut off, or answered in prose — counts as `{"type":"error"}` for its branch: nothing is resolved,
-the worktree is kept, and the report says the agent ended without a result.
+Each agent ends with one short JSON object: `{"type":"result","committed","pushed","held","commit",
+"commitMessage","counts","stackImpact","resultPath"}` or `{"type":"error","report","resultPath"}`;
+everything else is in its `resultPath` file, which the scripts read. The plugin's SubagentStop hook
+(`agent-stop.cjs`) sends a final message with prose in it, or a turn ended while the agent's own gate
+still ran, back to the agent once. An agent that still finishes with NO parsable JSON counts as
+`{"type":"error"}`: nothing is resolved, the worktree is kept.
 
-**What a fix changes for the parts above it.** A result whose `stackImpact` is not empty removed or
-renamed names that parts stacked above still use. Right away - before landing anything - send each
-agent of a part in that target's `stack.allAbove` that is still running one message (SendMessage,
-to its agent id): "The part below yours, <branch>, changed: <each symbol: change, usedIn>. Adapt
-your branch's uses before your commit." Keep the list: it goes to the conflict agent of those parts
-(`PARENT_CHANGES`) and into the summary. On 2026-11-06 nobody told part-2..4 that part-1 had
-removed a state flag; three conflict agents and a question to the user found it afterwards.
+**What a fix changes for the parts above it** (`stackImpact` above 0): nothing to do now. The
+parts above cannot adapt before they sit on this one - three agents of 2026-11-16 answered exactly
+that, and the message cut into a running gate. restack.cjs gathers every landed part's
+`stackImpact` for each part it lands (`PARENT_CHANGES` in the landing agent's brief).
 
 ## Step 5 — Land each branch
 
-A target with `landing: hold` lands only after its parent (`stack.parent`) has: once the parent's
-landing below is final - pushed, refused or failed - and its own agent ended with
-`{"type":"result", …}`, move it with (Bash, `run_in_background: true`):
+A stack lands bottom-up; a branch outside any stack lands when its agent ends.
 
-    node "<SKILL_DIR>/scripts/restack.cjs" --action=land --run="<runPath>" --branch="<branch>" --push=<yes|no> --summary=yes [--pending-steps=build]
+1. **A target whose agent ended with `result` and whose landing is its own** (`rebase`, `keep-base`):
+   run, in the background (Bash, `run_in_background: true`):
 
-`--pending-steps=build` whenever the agent committed: a held part's agent runs lint, typecheck and
-the tests, and its build runs here, once, on the code that is pushed.
+       node "<SKILL_DIR>/scripts/fixpr-after.cjs" --run="<runPath>" --branch="<branch>" --land-next=yes --push=<yes|no> [--reply=no] [--keep-worktree=yes]
 
-It fetches the parent, moves the part's own commits onto it (`rebase --onto`, nothing of the old
-parent replayed), runs the full gate inside the worktree when the move changed the code under it
-(a move that left the tree as it was runs none), and pushes `HEAD` with a lease pinned to
-`remoteTipAtStart`. A part whose agent committed nothing still goes
-through it: its branch has to sit on the landed parent too. Act on its JSON `status`:
+   (`--reply=no` with `--no-reply`, `--keep-worktree=yes` with `--keep-worktree`). It closes the
+   threads the agent fixed once the fix is pushed (with a reply naming the commit; only the threads
+   whose files the commit changes), checks every comment against the agent's verdicts (verify-fix.cjs,
+   against GitHub when pushed), stops the app its visual check left running, takes the worktree
+   down (kept when it holds uncommitted work or the agent ended in error), records all of it in the
+   run file - and moves the next held part of the stack onto it (`next`), when that part's agent
+   has ended. A `--local` target closes no thread.
+2. **A held part** lands only after its parent: its landing comes as the parent's `next`, or - when
+   its own agent ended after the parent had landed (`next: { waiting: true }`) - from
+   (background):
 
-- `landed` → the part's commit is `commit` and its push `pushed`: go on with point 1 below, with
-  those two instead of the agent's.
-- `conflict` → render the conflict agent's brief next to the fix agent's (`<promptPath>` with
-  `-restack` before `.md`). The landing wrote everything it knows - worktree, branch, parent, old
-  tip, lease, the conflicting files, checks folder, push - to `briefVars`; never copy those into
-  `--set=` flags yourself:
+       node "<SKILL_DIR>/scripts/restack.cjs" --action=land --run="<runPath>" --branch="<branch>" --push=<yes|no> --summary=yes [--pending-steps=build]
 
-      node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/restack-agent.md" --out="<restack prompt path>" --vars="<briefVars>" --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=LANGUAGE=<language> --set=PARENT_CHANGES=<the parent's stackImpact, one "symbol: change (usedIn)" per item joined by "; ", or none>
+   (`--pending-steps=build` when its agent committed: the held agent built nothing.) It moves the
+   part's own commits onto the landed parent, runs the gate when the move changed the code under
+   it, and pushes with a lease pinned to `remoteTipAtStart`. Act on its `status`:
+   - `landed` → `fixpr-after.cjs` as in point 1, with `--commit=<commit> --pushed=<yes|no>` of the landing.
+   - `conflict`, or `gate-red` with `briefVars` (`mode: adapt` - the move went through and the gate
+     is red on code the parts below changed) → the landing agent. Render its brief next to the fix
+     agent's (`<promptPath>` with `-restack` before `.md`):
 
-  and spawn it like a fix agent (Step 4b, pointing at that file). Its `result` → point 1 with its
-  `commit` and `pushed`, and its `resolvedFiles` in the summary; its `error` → like an agent's error.
-  An `error` that ends in a choice (A/B) is a question for the user: ask it (AskUserQuestion), then
-  send the answer to that same agent (SendMessage) - it resumes with the rerere record of the
-  files it already settled.
-- `gate-red`, `push-rejected`, `error` → like an agent's `{"type":"error"}`: nothing resolved, the
-  worktree kept; name the red steps (`redSteps[].errorsPath`) or the refusal.
+         node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/restack-agent.md" --out="<restack prompt path>" --vars="<briefVars>" --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=LANGUAGE=<language>
 
-The parts above it wait for this one, whatever the outcome: a part that did not land leaves
-`origin/<branch>` where it was, and its children move onto that.
+     `briefVars` already holds the worktree, parent, old tip, lease, files, mode, the changes of
+     every landed part below that this part uses (`PARENT_CHANGES`) and the parent's landed diff
+     (`PARENT_DIFF`); never copy those into `--set=` flags yourself. Spawn it like a fix agent
+     (Step 4, pointing at that file). Its `result` → `fixpr-after.cjs` with its `commit` and
+     `pushed`; its `error` → like an agent's error. An `error` that ends in a choice (A/B) is a
+     question for the user: ask it (AskUserQuestion), then send the answer to that same agent
+     (SendMessage) - it resumes with the rerere record of the files it already settled.
+   - `gate-red` without `briefVars`, `push-rejected`, `error` → like an agent's `{"type":"error"}`:
+     nothing resolved, the worktree kept; name the red steps (`redSteps[].errorsPath`) or the refusal.
+   The parts above it wait for this one, whatever the outcome: a part that did not land leaves
+   `origin/<branch>` where it was, and its children move onto that.
+3. **An agent that ended with `error`**: `fixpr-after.cjs --run="<runPath>" --branch="<branch>" --keep-worktree=yes`
+   - it records the outcome and checks the comments; nothing is resolved, removed or landed above it.
+4. Read each `fixpr-after.cjs` answer: `verify.ok` false or `resolve.failed`/`unverified` go into the
+   summary (the script prints them); `keptWorktree` names a worktree left for the user. A
+   `cascade` entry means open parts above that the run does not name sit on the old commit: move
+   them, bottom-up, with no agent (background):
 
-On `{"type":"result", …}` (for a held part: once `restack.cjs` or its conflict agent has landed it):
+       node "<SKILL_DIR>/scripts/restack.cjs" --action=cascade --project="<PROJECT>" --stack="<cascade.stack>" --from="<cascade.from>" --from-old-tip="<cascade.fromOldTip>" --checks-dir="<checksDir>/cascade" --push=<yes|no>
 
-1. **Resolve the threads**, but only when `fixedThreadIds` is non-empty AND `committed` is true AND
-   `pushed` is true. Any of the three missing → skip this point entirely and say why in the summary.
-
-       node "<SKILL_DIR>/scripts/resolve-threads.cjs" --project="<PROJECT>" --threads="<id,id,…>" --comments="<commentsPath>" --root="<worktree>" --commit="<commit>" [--via="<id>:<path>|<path>;…"] [--no-reply]
-
-   `--via` carries the agent's `fixedVia` (a thread fixed in another file than its own), `--no-reply`
-   the user's flag. Each thread gets a reply naming the commit before it is closed (`replied[]`,
-   `replyFailed[]` - a refused reply never keeps a fixed thread open).
-
-   A `--local` target has no thread to resolve: skip this point.
-   It resolves only the threads whose file the commit changes. Report `unverified[]` in Polish: the
-   agent called those threads fixed, but its commit does not touch their files, so they stay open.
-   Report `failed[]` entries in Polish — usually a token that may not resolve other people's threads.
-   A failed resolve never fails the branch: the fix is pushed, and an open thread is a leftover the
-   user can close by hand. A 5xx is retried there, and a thread that already carries this commit's
-   reply gets no second one.
-2. **Check that every comment was handled** - always, `{"type":"error"}` included:
-
-       node "<SKILL_DIR>/scripts/verify-fix.cjs" --comments="<commentsPath>" --result="<reportPath>.result.json" --project="<PROJECT>" --remote=<yes when anything was pushed, else no>
-
-   It holds the agent's `verdicts[]` against every item of the comments file and, with
-   `--remote=yes`, against the pull request as GitHub has it now. `ok: false` names each gap:
-   `unaccounted` (an item with no verdict), `noGround`, `inconsistent`, `mediaNotSeen` (pictures
-   the agent did not look at), `stillOpen` (a fixed thread GitHub still shows open), `newSinceRun`
-   (a thread opened while the agent worked). Each one goes into the summary under its own heading;
-   none is fixed by you. A missing result file is itself the gap: say the agent left no verdicts.
-3. **Move the open parts above it that the run does not name.** A target with `stack.above` whose
-   landing pushed a new commit changed what those parts sit on (a `--task`, a fix, a bottom that
-   had to be rebased). Move them, bottom-up, with no agent (Bash, background):
-
-       node "<SKILL_DIR>/scripts/restack.cjs" --action=cascade --project="<PROJECT>" --stack="<branch>;<stack.above joined by ;>" --from="<branch>" --from-old-tip="<remoteTipAtStart>" --checks-dir="<checksDir>/cascade" --push=<yes|no>
-
-   Conflicts where both sides only appended (translation keys, enum members, exports) are merged
-   in the script and proved by the gate. Every `parts[]` entry is a row of the summary; one with
-   `status: conflict` keeps its `worktree` - spawn the conflict agent on it as in Step 5's
-   `conflict` (its `PARENT` the part below, `OLD_TIP` its `oldParentTip`, `PARENT_CHANGES` the
-   landed target's `stackImpact`), then run the cascade again `--from` that part with
-   `--from-old-tip` = that part's `oldTip`. `waiting[]` are the parts above a stop, left where they were.
-4. **Remove the worktree**, unless `--keep-worktree` was passed or the agent reported
-   `committed: false` with work still in the tree. First stop whatever app the agent's visual
-   check left running (a dev server holds the folder open):
-
-       node "<SKILL_DIR>/../implementNewFeature/scripts/task-processes.cjs" cleanup --task-dir="<checksDir>/visual"
-       node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"
-
-   A refusal here quotes git's own reason: uncommitted files, or a file another process holds
-   open (Windows). Report the path and that reason in Polish and leave it alone. A warning that an
-   empty folder is still held is no refusal: the next `add` of that branch clears it. Never reach for
-   `--force`, a recursive delete or `Remove-Item -Recurse` — that would delete the very work the
-   gate protected, and through a link the main checkout's `node_modules` with it.
-   The self-review's report sat inside the worktree: `keptReports` names where `remove` moved it,
-   and the summary prints that path, never the agent's `reviewReport`.
-
-The agent reports the commit message it actually used as `commitMessage` — `<prefix>: CR` when it
-fixed a comment, `<prefix>: Fix <labels>` when it only repaired checks. Print that string; never
-re-derive it from the target, which only ever holds the `CR` form.
-
-On `{"type":"error", …}`: resolve nothing, remove nothing. Report the branch as failed, with the
-agent's report and the path of the worktree the user can go and inspect.
+   Append-only conflicts merge in the script and the gate proves them; a part with
+   `status: conflict` gets the landing agent as in point 2 (its brief from that part's `briefVars`,
+   or rendered by hand with `--set=` for a part outside the run), and the cascade runs again
+   `--from` that part with `--from-old-tip` = its `oldTip`.
 
 ## Step 5c — Keep what the comments taught (once, after every branch has landed)
 
-The agents' `lessons` are rules a fixed comment teaches - so the next `/doh:codeReview` raises them
-before a reviewer does. When any result carries one:
+Skip this step under `--local`: every finding there comes from the review's own rules, and the 31
+lessons offered after such a run on 2026-11-16 were refused, every one. Otherwise, when any result
+file carries `lessons`:
 
     node "<SKILL_DIR>/../codeReview/scripts/pr-lessons.cjs" --action=list --project="<PROJECT>" --from="<each target's reportPath>.result.json,…"
 
 Show the user, in Polish, every candidate numbered (its rule, group and source), the ones the
-project's rules already hold (`known`) marked, and ask (AskUserQuestion): add all new ones / only
-the numbers I give / none. Then:
+project's rules already hold or another candidate words differently (`known`: a file, or `#<n>`)
+marked, and ask (AskUserQuestion): add all new ones / only the numbers I give / none. Then:
 
     node "<SKILL_DIR>/../codeReview/scripts/pr-lessons.cjs" --action=add --project="<PROJECT>" --from="<the same files>" [--pick=<numbers>]
 
@@ -451,46 +376,19 @@ files in the summary. Never add one the user did not choose.
 
 ## Step 6 — Terminal summary (Polish)
 
-After every branch has landed, check each stack once (one call for all of them):
+After every branch has landed (or stopped):
 
-    node "<SKILL_DIR>/scripts/restack.cjs" --action=verify --run="<runPath>"
+    node "<SKILL_DIR>/scripts/fixpr-summary.cjs" --run="<runPath>"
 
-It checks every parent>child pair of the run file, the parts above the run included. Every
-`broken[]` pair - a part that does not sit on its parent - goes into the summary with its `command`,
-and with the one call that moves them all: `/doh:restack <child>`.
-
-Then print one summary, in Polish, and nothing else:
-
-- one row per branch: pull request number and title, the agent's `commitMessage` and the sha (or why
-  no commit was made), how it landed (rebased onto the base, kept on it, moved onto its parent by
-  `restack.cjs` or the conflict agent, or why not), whether it was pushed, how many comments were
-  fixed / rejected / left without action, and how many threads were resolved on GitHub;
-- every stack, bottom-first, and every `broken[]` pair of the check above with its command;
-- under `--local`, which finding ids were fixed (`fixedFindingIds`) and which were not;
-- what the agent's `/doh:codeReview staged` found: the report path (`reviewReport`), how many findings it
-  fixed and how many it left, with the ground of each left one from the report the agent wrote;
-- for every REJECTED comment, its one-line ground — this is the part the user has to act on, and it
-  exists nowhere else in their terminal;
-- the comment check (Step 5 point 2) per branch: "wszystkie <total> komentarze obsłużone" when
-  `ok`, otherwise every gap with its author and url - a comment with no verdict first;
-- every `stackImpact` item: the name a fix removed or renamed, and the parts above it that used it;
-- the visual check per branch: each `visualChecks` item with its result and screenshot path, and why
-  a skipped one was skipped;
-- every branch with code newer than its last codeReview (`review`, Step 2), with its command - the
-  next reviewers' comments start there;
-- the lessons added in Step 5c, with their files;
-- every branch worked on `doh-fixpr/<branch>` because the user had it checked out (`heldBy`), with
-  `git pull --rebase` to run in that checkout;
-- every `uiUnverified` file of the agent, with the comment it answers: the look of those changes
-  was checked by nobody, and the user is the one to open the page;
-- a `--task`: whether it was done, and the cascade's rows (each part moved, merged on its own,
-  or stopped with why);
-- the gate per branch: which commands the agent repaired (`checksFixed`), which passed, which were
-  skipped and why, and which are STILL red — a red one is the reason there is no commit, so it is
-  named with the path of its log rather than summarised;
-- where the report is (`reportPath`) and, for a branch whose worktree survived, where the worktree is
-  and why it is still there;
-- every error and warning from Steps 1–5 that has not already been reported.
+It prints the summary from the run file and the result files: one row per pull request (commit,
+landing, push, fixed / rejected / without action), every rejected comment with its ground (the
+part the user acts on), what was answered, the `--local` findings not fixed, the comment and thread
+check per branch, the self-review's report and counts, every `stackImpact`, the files nobody looked
+at (`uiUnverified`), the visual checks, the gate per branch with every still-red step's log, every
+stack bottom-first with each pair that does not sit on its parent (restack.cjs verify) and its
+command, and the checkouts to `git pull --rebase`. Your final message is that text as it is,
+followed only by what no file holds: errors and warnings of Steps 1-5 not reported yet, the lessons
+added in 5c with their files, the cascade's rows, and the note on a missing `visual` key.
 
 Then stop. Do not offer to merge, do not offer to open a pull request, and do not remove a worktree
 the user has not been told about yet.
@@ -516,3 +414,7 @@ the user has not been told about yet.
 | "I will write one script that rebases the whole stack" | `restack.cjs --action=stack` is that script (`/doh:restack`). A hand-made one that force-pushes was refused by the auto-mode classifier on 2026-11-06. |
 | "restack.cjs stopped at a conflict, I will resolve it myself" | The conflict agent resolves it, in the worktree, with the gate after it. You hold paths and verdicts, never a file's content. |
 | "I will read `fix-agent.md` and paste it into the prompt myself" | That is the file twice over, per branch, in the context you emptied of comment bodies to make room. Render it with the script and pass the path. |
+| "I will render the brief with my own --set list, it is only 22 flags" | `fixpr-launch.cjs` reads every value from the run file. A hand-built list is 1.5k characters a call and one dropped value away from a refused render (2026-11-16). |
+| "part-1 removed a name part-3 uses - I will SendMessage part-3 now" | A held part cannot adapt before it sits on the new parent; three agents said so on 2026-11-16, and the message cut into a running gate. restack.cjs gives the landing agent every such change (`PARENT_CHANGES`). |
+| "The move went through but the gate is red - that is an error for the user" | A `gate-red` with `briefVars` is the landing agent's work in `adapt` mode: this part's code following what the parts below changed. |
+| "I will write the summary myself, I have every reply" | `fixpr-summary.cjs` prints it from the files, rejected grounds and files to look at included; your final message is its text plus what no file holds. |

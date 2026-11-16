@@ -478,6 +478,47 @@ test('--local takes the named codeReview findings of each branch instead of the 
   assert.throws(() => pc.parseArgs(['--local=not-an-id']), /no codeReview finding id/);
 });
 
+// 2026-11-16: 5 of part-5's 30 picked findings sat on code a commit after the review had already
+// changed; the agent found that out one finding at a time.
+test('--local marks a finding whose lines changed since its review as stale', (t) => {
+  const dir = makeRepo(t);
+  const sha = () => execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  const lines = Array.from({ length: 30 }, (_, i) => `const v${i + 1} = ${i + 1};`);
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), `${lines.join('\n')}\n`);
+  run(dir, ['add', '.']);
+  run(dir, ['commit', '-q', '-m', 'reviewed']);
+  const reviewed = sha();
+  run(dir, ['switch', '-q', '-c', 'feat/a']);
+  lines[19] = 'const v20 = 2000;';
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), `${lines.join('\n')}\n`);
+  run(dir, ['commit', '-q', '-am', 'later']);
+  const runDir = path.join(dir, '.claude', 'doh', 'codeReview', 'runs', '2026-11-16-10-36-40', 'feat-a');
+  fs.mkdirSync(runDir, { recursive: true });
+  const data = {
+    revision: reviewed,
+    files: [{ path: 'src/a.ts', findings: [
+      { id: 'aaaaaaaa', lines: '5', severity: 'low', rule: 'r#1', problem: 'p', expected: 'e' },
+      { id: 'bbbbbbbb', lines: '19-21', severity: 'low', rule: 'r#2', problem: 'p', expected: 'e' },
+    ] }],
+  };
+  fs.writeFileSync(path.join(runDir, 'raport.html'), `<html><script id="report-data" type="application/json">${JSON.stringify(data)}</script></html>`);
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    local: ['aaaaaaaa', 'bbbbbbbb'],
+    api: fakeApi(),
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(X): y', url: 'u', base: 'main' } }),
+  });
+  const [target] = result.targets;
+  const payload = JSON.parse(fs.readFileSync(target.commentsPath, 'utf8'));
+  const byId = Object.fromEntries(payload.findings.map((f) => [f.id, f]));
+  assert.strictEqual(byId.aaaaaaaa.stale, undefined);
+  assert.match(byId.bbbbbbbb.stale, /changed since the review/);
+  assert.strictEqual(target.counts.stale, 1);
+  assert.ok(result.warnings.some((w) => w.includes('bbbbbbbb') && w.includes('feat/a')), 'the stale ids are named');
+});
+
 // A stack - pull requests of one run each based on another one's branch - lands bottom-up:
 // two of them landed side by side once left part-2 on a part-1 that part-1's own rebase had
 // rewritten, and part-4 on a part-3 that moved after it pushed (DPXN-11966, 2026-11-03).

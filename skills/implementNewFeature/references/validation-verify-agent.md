@@ -90,9 +90,9 @@ the verdict — E2E below stands for this whole command:
   live.
 - The runner runs `*.parallel.spec.cjs` files side by side and every other spec one at a time. Do
   not override that with `--workers`.
-- A run that can take more than four minutes goes in the background (Bash
+- A run that can take more than three minutes goes in the background (Bash
   `run_in_background: true`, output redirected to a file), and you wait for that file in slices of
-  under four minutes: `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty`
+  under three minutes: `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty`
   → `PART_READY` or `PART_PENDING` (again). Never `sleep N`, never one call that blocks longer:
   past five idle minutes your prompt cache expires, and the next call pays for this whole
   conversation again.

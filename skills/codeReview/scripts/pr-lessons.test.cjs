@@ -43,6 +43,19 @@ test('a lesson the project already carries is listed as known and not added agai
   assert.deepStrictEqual(third.added, [], 'nothing new left');
 });
 
+// 2026-11-16: two agents wrote one data-test rule in two wordings, and the user was offered both.
+test('a lesson another candidate already words differently is listed as that candidate\'s twin', (t) => {
+  const { project, from } = setup(t, [
+    { files: 'html', rule: 'Name a data-test hook after the element\'s purpose and end it with the control kind, never the control kind alone.' },
+    { files: 'html', rule: 'A data-test value ends with the kind of control it hooks (-toggle, -select, -input, -button).' },
+    switchLesson,
+    specLesson,
+  ]);
+  const listed = pl.candidates(project, [from]);
+  assert.strictEqual(listed[1].known, '#1');
+  assert.deepStrictEqual([listed[0].known, listed[2].known, listed[3].known], [null, null, null], 'different rules stay apart');
+});
+
 test('history keeps the reviewers\' threads of the last closed pull requests', (t) => {
   const project = fs.realpathSync.native(tempDir(t, 'cr-history-'));
   const out = path.join(project, 'h.json');

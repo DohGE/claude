@@ -98,7 +98,7 @@ const mechanicalWalker = { model: 'sonnet', effort: 'medium' };
 const lightRunMin = 3;
 
 function parseArgs(argv) {
-  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true, walkerModel: '', walkerEffort: '', parallel: 0 };
+  const args = { mode: 'auto', branches: '', path: '', project: process.cwd(), output: 'html', sinceLast: false, withChecklist: false, withRuleText: false, light: false, batch: true, windows: true, dedupItems: true, walkerModel: '', walkerEffort: '', parallel: 0, decisions: '', inlineUnder: 0 };
   const unknown = [];
   for (const arg of argv) {
     // Incremental review: only the files whose content moved since the previous
@@ -129,11 +129,21 @@ function parseArgs(argv) {
     else if (m[1] === 'walker-model') args.walkerModel = m[2].trim();
     else if (m[1] === 'walker-effort') args.walkerEffort = m[2].trim();
     else if (m[1] === 'parallel') args.parallel = /^\d+$/.test(m[2].trim()) ? Number(m[2].trim()) : NaN;
+    // What the author of the change already decided (fixPr's self-review: the findings it applied
+    // or rejected on purpose): a finding that would undo one is not raised.
+    else if (m[1] === 'decisions') {
+      if (!m[2].trim()) throw new Error('--decisions needs a file (--decisions=<path>)');
+      args.decisions = m[2].trim();
+    }
+    // A change of fewer changed lines than this makes its cross-file pass in the conversation that
+    // walked it, past the four files of a plain run, while the walk leaves room for it.
+    else if (m[1] === 'inline-under') args.inlineUnder = /^\d+$/.test(m[2].trim()) ? Number(m[2].trim()) : NaN;
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --light, --dedup-items, --walker-model, --walker-effort, --parallel; the skill's own --only-md maps to --output=md)`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --mode, --branches, --path, --project, --output, --since-last, --with-checklist, --light, --dedup-items, --walker-model, --walker-effort, --parallel, --decisions, --inline-under; the skill's own --only-md maps to --output=md)`);
   }
+  if (Number.isNaN(args.inlineUnder)) throw new Error('--inline-under takes a number of changed lines');
   if (args.walkerModel && !/^[A-Za-z0-9][\w.[\]-]{0,63}$/.test(args.walkerModel)) {
     throw new Error(`Unknown --walker-model=${args.walkerModel} (expected a value the Agent tool's model parameter takes, e.g. sonnet)`);
   }
@@ -1150,6 +1160,12 @@ function buildContext(options) {
     errors: [],
   };
 
+  if (options.decisions) {
+    const file = path.resolve(options.decisions);
+    if (fs.existsSync(file)) result.decisionsPath = file.replace(/\\/g, '/');
+    else result.warnings.push(`The decisions file ${options.decisions} is not there; the review goes on without it.`);
+  }
+
   if (tryGit(project, ['rev-parse', '--git-dir']) === null) {
     result.errors.push(`Not a git repository: ${project}`);
     return result;
@@ -1222,7 +1238,7 @@ function buildContext(options) {
   const claudeMdPath = path.join(project, 'CLAUDE.md');
   result.projectInstructionsDir = hasProjectInstructions ? projectInstructionsDir : null;
   result.claudeMd = fs.existsSync(claudeMdPath) ? claudeMdPath : null;
-  result.warnings = [...rules.warnings];
+  result.warnings = [...result.warnings, ...rules.warnings];
   if (rules.kinds.length === 0) {
     result.warnings.push('instructions/ holds no file kind - review uses only the project CLAUDE.md and the universal points (cross-file consistency, regressions, readability).');
   }
@@ -1650,6 +1666,12 @@ function buildContext(options) {
   const pendingWork = new Map();
   // What the cross-file bundle of each target is written from, once the walked items are known.
   const pendingCross = new Map();
+  // The stack's last later part, known before any brief is written (briefSettingsOf).
+  for (const [target, parts] of laterPartsOf(result.targets, project)) {
+    const tip = parts[parts.length - 1];
+    target.stackTipBranch = tip.branch;
+    target.stackTipRevision = tip.revision;
+  }
   for (const target of result.targets) {
     const blobs = pendingSnapshots.get(target);
     const { readContent, reviewed: reviewedTexts } = textsOf(target);
@@ -1956,7 +1978,18 @@ function buildContext(options) {
     // A target the conversation walks itself in a few files is no long walk to escape: it makes
     // the pass too, with every file still in its context. A fresh agent re-read 0.4M tokens of its
     // own to answer the pass over three files of one component, and found nothing (2026-10-27).
-    const crossInline = windows.length === 0 && n > 0 && n <= crossInlineMax;
+    // --inline-under: a change of fewer changed lines keeps its pass here past four files too, while
+    // the walk fills under 80% of a window - the pass's own bundle needs the rest (fixPr's
+    // self-review spawned five fresh cross-file agents of 74k tokens each on 2026-11-16).
+    const changedTotal = pending.reduce((sum, b) => sum + (b.file.changedLines === null || b.file.changedLines === undefined
+      ? b.lineCount || 0
+      : String(b.file.changedLines).split(',').reduce((s, range) => {
+        const [from, to = from] = range.trim().split('-').map(Number);
+        return Number.isFinite(from) ? s + Math.max(1, to - from + 1) : s;
+      }, 0)), 0);
+    const walkTotal = pending.reduce((sum, b) => sum + reviewBundle.walkTokens(charsOf.get(b.number), isMechanical(b.number) ? reviewBundle.mechanicalLimits.fileTokens : undefined), 0);
+    const smallChange = options.inlineUnder > 0 && changedTotal < options.inlineUnder && walkTotal <= reviewBundle.windowLimits.tokens * 0.8;
+    const crossInline = windows.length === 0 && n > 0 && (n <= crossInlineMax || smallChange);
     if (crossInline) target.crossInline = true;
     const batchOf = new Map();
     batches.forEach((batch, k) => {
@@ -1995,18 +2028,7 @@ function buildContext(options) {
       }
     }
     // A window's brief is the one thing its sub-agent is sent: the main conversation passes the path.
-    const settings = {
-      reportPath: target.reportPath,
-      htmlReportPath: target.htmlReportPath,
-      workDir: target.workDir,
-      withChecklist: target.withChecklist,
-      withRuleText: target.withRuleText,
-      light: target.light,
-      dedupItems: target.dedupItems,
-      ...(target.revision ? { revision: target.revision } : {}),
-      ...(target.snapshotDir ? { snapshotDir: target.snapshotDir } : {}),
-      commands: { grep: target.commands.grep },
-    };
+    const settings = briefSettingsOf(target, { decisionsPath: result.decisionsPath });
     target.windows = windows.map((window, k) => {
       const brief = `${target.workDir}/${reviewBundle.windowBriefName(k + 1)}`;
       writes.push([brief, reviewBundle.renderWindowBrief({
@@ -2131,6 +2153,8 @@ function buildContext(options) {
           importLedger: target.importLedger,
           ...(target.light ? { light: true } : {}),
           ...(target.snapshotDir ? { snapshotDir: target.snapshotDir } : {}),
+          ...(result.decisionsPath ? { decisionsPath: result.decisionsPath } : {}),
+          ...(target.stackTipRevision ? { stackTip: { branch: target.stackTipBranch, revision: target.stackTipRevision } } : {}),
           commands: { grep: target.commands.grep },
         },
         crossBundlePath: target.crossBundlePath,
@@ -2317,9 +2341,11 @@ function oldSideRanges(diff) {
 // reviewed files those parts change (its revision against the stack's tip, old side): a finding
 // there may be settled - or made worse - by a later part, and the page says so (render-report.cjs
 // attachStack). A five-part run reported part-3 for a function part-5 completed (2026-10-30).
-function stackOf(targets, project) {
+// The later parts of each stacked branch target among the run's targets, nearest first.
+function laterPartsOf(targets, project) {
   const branches = targets.filter((t) => t && t.kind === 'branch' && t.revision);
-  if (branches.length < 2) return new Map();
+  const out = new Map();
+  if (branches.length < 2) return out;
   const short = (ref) => String(ref || '').replace(/^refs\/(?:heads|remotes)\//, '').replace(/^origin\//, '');
   const baseCommits = new Map();
   const baseCommit = (t) => {
@@ -2331,7 +2357,6 @@ function stackOf(targets, project) {
     const below = branches.find((t) => t !== upper && (short(upper.baseBranch) === short(t.branch) || baseCommit(upper) === t.revision));
     if (below && !above.has(below)) above.set(below, upper);
   }
-  const out = new Map();
   for (const target of branches) {
     const later = [];
     const seen = new Set([target]);
@@ -2339,16 +2364,45 @@ function stackOf(targets, project) {
       seen.add(next);
       later.push(next);
     }
+    if (later.length > 0) out.set(target, later);
+  }
+  return out;
+}
+
+// The settings a window's walker (and the cross-file agent) reads from its brief: the target's own,
+// the author's decisions (`--decisions`) and the commit of the stack's last later part, which a
+// walker asks before it calls something unused that a later part may still use.
+function briefSettingsOf(target, { decisionsPath = null } = {}) {
+  return {
+    reportPath: target.reportPath,
+    htmlReportPath: target.htmlReportPath,
+    workDir: target.workDir,
+    withChecklist: target.withChecklist,
+    withRuleText: target.withRuleText,
+    light: target.light,
+    dedupItems: target.dedupItems,
+    ...(target.revision ? { revision: target.revision } : {}),
+    ...(target.snapshotDir ? { snapshotDir: target.snapshotDir } : {}),
+    ...(decisionsPath ? { decisionsPath } : {}),
+    ...(target.stackTipRevision ? { stackTip: { branch: target.stackTipBranch, revision: target.stackTipRevision } } : {}),
+    commands: { grep: target.commands && target.commands.grep },
+  };
+}
+
+function stackOf(targets, project) {
+  const later = laterPartsOf(targets, project);
+  const out = new Map();
+  for (const [target, parts] of later) {
     const paths = target.files.filter((f) => f.status !== 'D').map((f) => f.path);
-    if (later.length === 0 || paths.length === 0) continue;
-    const tip = later[later.length - 1];
+    if (paths.length === 0) continue;
+    const tip = parts[parts.length - 1];
     // A path list longer than a command line holds is filtered afterwards instead.
     const limited = paths.join(' ').length < 20000;
     const diff = tryGit(project, ['-c', 'core.quotepath=false', 'diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', target.revision, tip.revision, ...(limited ? ['--', ...paths] : [])]);
     if (diff === null) continue;
     const reviewed = new Set(paths);
     const files = Object.fromEntries(Object.entries(oldSideRanges(diff)).filter(([p]) => reviewed.has(p)));
-    out.set(target, { tip: tip.branch, later: later.map((t) => t.branch), files });
+    out.set(target, { tip: tip.branch, later: parts.map((t) => t.branch), files });
   }
   return out;
 }
@@ -2588,6 +2642,7 @@ function writeContext(context) {
     cross: context.cross || { model: '', effort: '' },
     rulebookNotesPath: context.rulebookNotesPath,
     claudeMd: context.claudeMd,
+    ...(context.decisionsPath ? { decisionsPath: context.decisionsPath } : {}),
     workflow: context.workflow || null,
     // Every target assembled in one call, which ends with the run's summary (Step 5).
     commands: { assembleAll },
@@ -2607,6 +2662,7 @@ function writeContext(context) {
         ...(t.snapshotDir ? { snapshotDir: t.snapshotDir } : {}),
         ...(t.revision ? { revision: t.revision } : {}),
         ...(t.stackTip ? { stackTip: t.stackTip } : {}),
+        ...(t.stackTipRevision ? { stackTipRevision: t.stackTipRevision } : {}),
         crossBundlePath: t.crossBundlePath,
         crossBriefPath: t.crossBriefPath || null,
         ...(t.gapsBriefPath ? { gapsBriefPath: t.gapsBriefPath } : {}),
@@ -2626,6 +2682,6 @@ function writeContext(context) {
   };
 }
 
-module.exports = { foldWarnings, bigRunWindows, contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { foldWarnings, bigRunWindows, contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, laterPartsOf, briefSettingsOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

@@ -219,9 +219,9 @@ text — it reads as unfinished; use the "review complete" wording above.
 
 - NEVER `git commit` — the pipeline ends with changes staged, nothing more.
 - The checklist's compliance is not yours to measure: step 6 runs before validation has measured it, and after step 9 the regression's E2E run is what proves the `verify: e2e` items still hold.
-- **Long-running commands.** A command that can take more than four minutes — a suite, a first
+- **Long-running commands.** A command that can take more than three minutes — a suite, a first
   build, a dev server coming up — runs in the background (Bash `run_in_background: true`, its
-  output redirected to a file), and you wait for that file in slices of under four minutes:
+  output redirected to a file), and you wait for that file in slices of under three minutes:
   `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` →
   `PART_READY` or `PART_PENDING` (run it again). Never one tool call that blocks longer, and never
   `sleep N`: past five idle minutes your prompt cache expires, and the next call pays for this

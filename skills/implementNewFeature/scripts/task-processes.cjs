@@ -11,7 +11,7 @@
 //
 // `start` is how an agent brings a dev server up: the port is recorded BEFORE the process exists,
 // so an agent that dies mid-step - killed for memory, cut off - still leaves the record the
-// orchestrator's cleanup stops it by. `wait` answers in under four minutes, so the agent waits in
+// orchestrator's cleanup stops it by. `wait` answers in under three minutes, so the agent waits in
 // slices without blocking a tool call past its prompt cache. `kill` stops a stray listener the
 // record does not know, but only one started from the task's own worktree: the user's own dev
 // server on the same machine is never a task's to stop.
@@ -36,8 +36,9 @@ const FILE = 'processes.json';
 // The stepper itself, which no task may stop.
 const PROTECTED_PORTS = new Set([9999]);
 const COMMANDS = ['register', 'start', 'wait', 'kill', 'cleanup'];
-// Under the four minutes a tool call may block before the agent's prompt cache goes cold.
-const WAIT_SLICE_MS = 210 * 1000;
+// Under the 180 s after which the harness moves a foreground command to the background (and well
+// under the five minutes before the agent's prompt cache goes cold).
+const WAIT_SLICE_MS = 170 * 1000;
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -265,4 +266,4 @@ if (require.main === module) {
   })();
 }
 
-module.exports = { parseArgs, register, start, wait, kill, cleanup, listeners, stop, commandLine, answers };
+module.exports = { parseArgs, register, start, wait, kill, cleanup, listeners, stop, commandLine, answers, WAIT_SLICE_MS };

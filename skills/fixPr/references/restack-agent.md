@@ -5,21 +5,30 @@ because there is no one on the other end.
 
 Branch: `{{BRANCH}}` | Pull request: `#{{PR_NUMBER}}` ({{PR_URL}}) | Working dir: `{{ROOT}}`
 Parent: `{{PARENT}}` | Its tip when the run began: `{{OLD_TIP}}` | Lease: `{{LEASE}}`
-Conflicting files: {{FILES}}
+Mode: `{{MODE}}` | Conflicting files: {{FILES}}
+The parent's landed change{{#if MODE=conflict}} of those files{{/if}}: `{{PARENT_DIFF}}` (a diff; `none` when there is none)
 Check logs: `{{CHECKS_DIR}}` | Skill dir: `{{SKILL_DIR}}` | Push: `{{PUSH}}` | User language: `{{LANGUAGE}}`
 
 `{{ROOT}}` is the `git worktree` of `{{BRANCH}}`, a part of a stack of pull requests: its base is
 `{{PARENT}}`, another open pull request's branch. `{{PARENT}}` has just landed (its review fixes, or
-a move onto a newer base), and `restack.cjs` stopped moving this branch onto it at a conflict in
-the files above. Work only inside `{{ROOT}}`, and never `cd` anywhere: every command takes
-`git -C "{{ROOT}}"` or an absolute path (a shell left in `{{ROOT}}` holds the folder open, and its
-removal then fails).
+a move onto a newer base), and `restack.cjs` could not land this branch on it:
+{{#if MODE=conflict}}
+the move stopped at a conflict in the files above.
+{{/if}}
+{{#if MODE=adapt}}
+the move went through without a conflict, but this branch's gate is red on top of the new parent -
+code of this branch that uses what the parts below changed (a rename, a removed member, a changed
+signature). Adapting it is your work.
+{{/if}}
+Work only inside `{{ROOT}}`, and never `cd` anywhere: every command takes `git -C "{{ROOT}}"` or an
+absolute path (a shell left in `{{ROOT}}` holds the folder open, and its removal then fails; a hook
+refuses such a `cd`, and a shell read of the worktree too - use Read, Grep and Glob).
 {{#if PARENT_CHANGES!=none}}
 
-What `{{PARENT}}`'s own fix removed or renamed that this branch may still use (its agent's
-`stackImpact`): {{PARENT_CHANGES}}
-Bring this branch's uses in line with that change - the parent's side is reviewed work. A use
-that cannot follow it without changing what this branch does is the `error` case of point 3: name
+What the fix agents of the parts below removed, renamed or re-signed that this branch still uses
+(their `stackImpact`, gathered by restack.cjs, bottom part first): {{PARENT_CHANGES}}
+Bring this branch's uses in line with those changes - the other side is reviewed work. A use
+that cannot follow one without changing what this branch does is the `error` case of point 3: name
 it, and the user decides (on 2026-11-06 a removed state flag still drove a dialog of part-3).
 {{/if}}
 
@@ -27,14 +36,21 @@ it, and the user decides (on 2026-11-06 a removed state flag still drove a dialo
 
 Move this branch's own commits - the ones after `{{OLD_TIP}}` - onto `origin/{{PARENT}}`, resolving
 every conflict so that BOTH sides' changes survive; then bring the gate green and push with the
-lease. Nothing else: no review comment is yours, no refactor, no new commit.
+lease. Nothing else: no review comment is yours, no refactor{{#if MODE=conflict}}, no new commit{{/if}}.
+{{#if MODE=adapt}}
+In this mode the move itself has no conflict: your work is point 4's red gate. Each change that
+brings this branch's code in line with the parts below goes into this branch's LAST commit
+(`git -C "{{ROOT}}" commit --amend --no-edit` after staging it by path) - the same commit the run's
+fix made, or the branch's own last one when the run committed nothing. Never a commit of its own.
+{{/if}}
 
 ## Waiting, and the tools you have
 
 Never call `ToolSearch` or `Monitor`; every tool you need is loaded. Your prompt cache lives five
 minutes: the gate runs in the background and you wait for its result file in slices with
-`node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` (under four
-minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
+`node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` (under three
+minutes - give the Bash call `timeout: 175000`; `PART_PENDING` → run it again). Never end your turn
+while it runs.
 
 ## Steps
 
@@ -51,8 +67,9 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
    `<last>` in place of `{{OLD_TIP}}` in point 2, and name it in your summary. On 2026-11-10 this
    turned 29 "conflicting" files into a rebase with no conflict at all.
 2. `git -C "{{ROOT}}" -c rerere.enabled=true rebase --onto origin/{{PARENT}} {{OLD_TIP}}`.
-3. At every stop, `git -C "{{ROOT}}" diff --name-only --diff-filter=U` lists the files. For each one,
-   Read it and resolve every conflict block:
+3. At every stop, `git -C "{{ROOT}}" diff --name-only --diff-filter=U` lists the files. Read
+   `{{PARENT_DIFF}}` once first, when it is not `none`: what the parent's landing changed, so no
+   `git show`/`git diff` of yours has to find it. For each file, Read it and resolve every conflict block:
    - the `{{PARENT}}` side is reviewed and pushed work: keep its renames, moved code and changed
      signatures;
    - this branch's side is what its own commits change on top: keep that change too, written against
@@ -79,8 +96,11 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
        node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{PARENT}}" --result-file="{{CHECKS_DIR}}/gate-restack-<n>.json"
 
    and wait for the result file. `green` or `skipped` → point 5. `red` → Read each failed step's
-   `errorsPath` and repair what your resolution broke - nothing else; at most two more passes. Still
-   red → `git -C "{{ROOT}}" reset --hard <before>` and end with the `error` JSON.
+   `errorsPath` and repair what {{#if MODE=adapt}}the parts below changed under this branch: bring each use in line with
+   their change (the list above, `{{PARENT_DIFF}}`), stage it by path and amend this branch's last
+   commit{{/if}}{{#if MODE!=adapt}}your resolution broke{{/if}} - nothing else; at most two more passes. A red typecheck skips the
+   tests and the build: repair it, and the next pass runs them. Still red →
+   `git -C "{{ROOT}}" reset --hard <before>` and end with the `error` JSON.
 5. Push, only when `{{PUSH}}` is `yes`:
    `node "{{SKILL_DIR}}/scripts/restack.cjs" --action=push --worktree="{{ROOT}}" --branch={{BRANCH}} --lease={{LEASE}}`
    (a `--force-with-lease={{BRANCH}}:{{LEASE}}` push that retries a transient GitHub failure). A
@@ -89,7 +109,8 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
 
 ## Rules
 
-- No commit of your own: the rebase replays this branch's commits, resolved, and that is all.
+- No commit of your own: the rebase replays this branch's commits, resolved, and that is all{{#if MODE=adapt}} - the
+  adapting changes go into this branch's last commit by `--amend`{{/if}}.
 - Never `--no-verify`, never a bare `--force`, never `reset --hard` except to `<before>` in point 4.
 - Never resolve a review thread or post on the pull request: the orchestrator does that.
 
@@ -98,5 +119,5 @@ minutes; `PART_PENDING` → run it again). Never end your turn while it runs.
 Your final message IS one of these JSON objects - alone, no text before or after it (the plugin's
 SubagentStop hook sends a message with prose back once):
 
-- `{"type":"result","rebased":true,"pushed":<bool>,"commit":"<HEAD sha>","resolvedFiles":["<path>",…],"gate":"green|skipped","summary":"<in {{LANGUAGE}}: per file, what each side changed and how you combined them; the push>"}`
+- `{"type":"result","mode":"{{MODE}}","rebased":true,"pushed":<bool>,"commit":"<HEAD sha>","resolvedFiles":["<path>",…],"adapted":["<path>",…],"gate":"green|skipped","summary":"<in {{LANGUAGE}}: per file, what each side changed and how you combined them; what you adapted; the push>"}`
 - `{"type":"error","report":"<in {{LANGUAGE}}: the file and why it could not be resolved, or the red step; the state of the worktree>","resolvedFiles":["<path>",…]}`

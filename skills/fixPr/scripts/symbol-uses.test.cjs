@@ -54,6 +54,40 @@ test('findUses stops at its limit and says so', (t) => {
   assert.strictEqual(out.truncated, true);
 });
 
+// 2026-11-16: a call over a dozen names and four parts took 1.3-1.6 min and printed 35-51 KB,
+// which the harness saved to a file the agent then had to Read.
+test('findUses asks git once per place and kind of name, whatever the number of names', (t) => {
+  const dir = repo(t);
+  const calls = [];
+  const grep = (root, patterns, opts) => { calls.push({ patterns, opts }); return { lines: [], error: null }; };
+  su.findUses({ root: dir, names: ['a', 'b', 'c', 'd', 'e'], refs: ['part-2', 'part-3'], limit: 50 }, { grep });
+  assert.strictEqual(calls.length, 2, 'the worktree once, every revision together once');
+  assert.deepStrictEqual(calls[1].opts.refs, ['part-2', 'part-3']);
+});
+
+test('a name with many uses keeps its count and its first ones, and --out keeps every one', (t) => {
+  const dir = repo(t);
+  write(dir, 'src/many.ts', Array.from({ length: 30 }, (_, i) => `isLoadingTapeOperation; // ${i}`).join('\n'));
+  const out = path.join(dir, 'uses.json');
+  const res = su.findUses({ root: dir, names: ['isLoadingTapeOperation'], refs: [], limit: 200, per: 5, out });
+  assert.strictEqual(res.uses.length, 5);
+  assert.deepStrictEqual(res.counts, [{ name: 'isLoadingTapeOperation', ref: 'worktree', count: 31 }]);
+  assert.strictEqual(res.truncated, true);
+  assert.strictEqual(JSON.parse(fs.readFileSync(out, 'utf8')).uses.length, 31);
+  assert.deepStrictEqual(su.parseArgs(['--root=/r', '--names=a', '--per=3', '--out=/o.json']).per, 3);
+});
+
+// A codeReview walker asks a later part of a stack whether it still uses a name; the checkout it runs
+// in holds some other revision, and the review's hooks refuse a git grep of its own.
+test('--worktree=no asks only the revisions', (t) => {
+  const dir = repo(t);
+  const calls = [];
+  const grep = (root, patterns, opts) => { calls.push(opts.refs); return { lines: [], error: null }; };
+  su.findUses({ root: dir, names: ['a'], refs: ['abc123'], worktree: false }, { grep });
+  assert.deepStrictEqual(calls, [['abc123']]);
+  assert.strictEqual(su.parseArgs(['--root=/r', '--names=a', '--refs=x', '--worktree=no']).worktree, false);
+});
+
 test('otherLocale keeps the base language and skips the rest', () => {
   assert.strictEqual(su.otherLocale('a/i18n/en.json'), false);
   assert.strictEqual(su.otherLocale('a/i18n/de.json'), true);

@@ -186,6 +186,20 @@ For each file:
    project's own folders goes to the same path in `snapshotDir` (the hook rewrites its `path`,
    and refuses a path the reviewed revision lacks), and `git grep`/`git show`/`git diff` or a
    recursive shell grep of the working tree is refused. `target.revision` is the reviewed commit.
+   **A later part of the stack may be the consumer.** A target with `target.stackTip`
+   (`{ branch, revision }`: the last later part of its stack) reviews a part whose code the parts
+   above it build on. Before a finding that calls a symbol unused, single-consumer, fit to be made
+   private, dead, or fit to move into a component's or view's own state, ask that revision too
+   (Bash, one call for every such symbol of the file):
+   `node "<SKILL_DIR>/../fixPr/scripts/symbol-uses.cjs" --root="<project>" --names="<symbol>,<symbol>" --refs=<stackTip.revision> --worktree=no`.
+   A use there outside this file is a consumer: no finding - the item is `OK` with the lines and
+   `używane w <stackTip.branch>` as its evidence. 4 findings of a five-part review were rejected on
+   2026-11-16 for exactly that: part-4 and part-5 used what part-1's review called unused.
+   **The author's decisions.** A target with `target.decisionsPath` (fixPr's self-review: the
+   findings and comments its run applied or rejected on purpose) - Read that file once, with the
+   first batch's Reads. A finding that would undo or contradict one of its lines is not raised: the
+   item is `OK` with the lines and `decyzja autora` as its evidence. 6 of 21 self-review findings of
+   2026-11-16 asked to take back what the user had picked.
    The searches one file needs do not depend on one another: issue them all as parallel calls in ONE message, because every message is one more request that carries the whole conversation again.
    Collect them first: after the file's Reads, list every rule that asks "does it exist elsewhere" and every symbol to follow, then send all their Greps and Globs at once; a window of 52 messages spent most of them on one search each (2026-11-05).
    **One round of lookups per file, two at most.** The first round holds every search the file's rules need; a second round only follows what a hit of the first named (a symbol, a file). A message with one Grep is a round of its own: in a 250-file run 62% of the lookup messages held one call, and they were 56% of all tokens read (2026-11-12).
@@ -467,7 +481,8 @@ For each file:
    to every line the bundle points at, a finding behind every `NARUSZENIE`, and cited lines that
    exist in `contentPath`.
    A part that fails is NOT written: the refusal lists its problems and keeps the text in a draft.
-   What to do then is in `references/refused-part.md` in this skill's directory: Read it with the draft, once, the first time a part of yours is refused.
+   What to do then is in `references/refused-part.md` in this skill's directory: Read it once, the first time a part of yours is refused.
+   Read each refused part's draft before its first Edit - every refused part, not only the first: Edit refuses a file this conversation has not read, and 9 of 26 refused walker writes of 2026-11-16 were that refusal.
    Never answer a refusal by ticking an item you did not check: an item you cannot verify is
    `[ ] … — NIEZWERYFIKOWANE: <reason>`, which the check accepts whenever the reason is one of the
    three of point 2, it cites the lines the bundle points at, and no `FAKT` settles the item.

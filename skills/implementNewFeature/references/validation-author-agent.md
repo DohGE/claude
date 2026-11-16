@@ -125,7 +125,7 @@ run at the same time, and a shared one would have you delete each other's artifa
 - When a failure's cause is not obvious from the assertion, read what the run captured under
   `{{SESSION}}/test-results/{{SPEC_FILE}}/<test>/`: `error-context.md` (the page snapshot at the
   moment of failure) and the failure screenshot — before you guess.
-- A run that can take more than four minutes goes in the background (Bash
+- A run that can take more than three minutes goes in the background (Bash
   `run_in_background: true`, output redirected to a file) and you wait for that file in slices:
   `node "{{SKILL_DIR}}/../codeReview/scripts/wait-part.cjs" --path="<file>" --nonempty` →
   `PART_READY` or `PART_PENDING` (again). Never `sleep`, never one call that blocks longer: past

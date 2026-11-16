@@ -142,14 +142,17 @@ the script and proved by that gate. The JSON:
   `oldTip` (where it stood before), `rebased`, `pushed`, `gate` (verdict), `redSteps`,
   `conflictFiles` (the first 10), `conflictCount`, `oldParentTip`, `autoResolved`, `squashed`
   (`commits` of a squash-merged parent left out), `worktree` (kept only when it did not land),
-  `agentPrompt` / `agentPromptErrors` (a conflict only), `warnings`, `errors`;
+  `agentPrompt` / `agentPromptErrors` (a conflict, or a red gate after a clean move: `mode: adapt`),
+  `warnings`, `errors`;
 - `waiting[]` — the parts above a stop, untouched.
 
 Act on the LAST part:
 
 - every part `landed` → Step 5.
 - `conflict` → Step 4.
-- `gate-red` → stop. Name each red step with its `errorsPath`; the worktree stays for the user.
+- `gate-red` with `mode: adapt` → Step 4: the move went through and the part's gate is red on what
+  the parts below changed; the same agent adapts it (its brief says how).
+- `gate-red` without it → stop. Name each red step with its `errorsPath`; the worktree stays for the user.
 - `push-rejected` → stop. Somebody pushed to that branch during the climb; say so.
 - `error` → stop with its `errors`.
 

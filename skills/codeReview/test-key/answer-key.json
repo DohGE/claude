@@ -5885,16 +5885,14 @@
    "items": [
     "accessibility#15",
     "accessibility#32",
-    "accessibility#33",
-    "accessibility#34"
+    "accessibility#33"
    ],
    "wcag": [
     "1.3.1",
-    "4.1.2",
-    "2.1.2"
+    "4.1.2"
    ],
    "severity": "medium",
-   "text": "the dialog has no `role=\"dialog\"`/`aria-modal`, no accessible name, no focus management and no Escape handling."
+   "text": "the dialog has no `role=\"dialog\"`/`aria-modal`, no accessible name and no focus management."
   },
   {
    "id": "v466",

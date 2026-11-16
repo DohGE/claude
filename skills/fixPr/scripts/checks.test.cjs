@@ -997,3 +997,132 @@ test('a --changed-since the repository cannot resolve stops a configured gate', 
   assert.match(result.errors.join(' '), /origin\/nope/);
   assert.strictEqual(checks.exitCodeFor(result), 2);
 });
+
+// 2026-11-16: part-4's typecheck failed after 43 s and jest still ran for 943 s, holding a slot
+// three other agents' gates waited six minutes for. The tests and the build compile the same code.
+test('a red typecheck skips the tests and the build, unless --keep-going asks for every step', (t) => {
+  const root = makeProject(t, { lint: 'eslint .', typecheck: 'tsc --noEmit', test: 'vitest', build: 'vite build' });
+  const run = fakeRunner({ typecheck: { exitCode: 2, output: 'src/a.ts(1,1): error TS2307' } });
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run });
+  assert.deepStrictEqual(run.calls.map((c) => c.options.step), ['lint', 'typecheck']);
+  for (const step of ['test', 'build']) {
+    assert.strictEqual(stepNamed(result, step).status, 'skipped');
+    assert.match(stepNamed(result, step).reason, /typecheck is red/);
+  }
+  assert.strictEqual(result.gate, 'red');
+  const every = fakeRunner({ typecheck: { exitCode: 2 } });
+  checks.runChecks({ root, outDir: outDirFor(t), run: every, keepGoing: true });
+  assert.deepStrictEqual(every.calls.map((c) => c.options.step), ['lint', 'typecheck', 'test', 'build']);
+  assert.strictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', '--keep-going=yes']).keepGoing, true);
+});
+
+test('a red typecheck of a checks.json gate skips its configured tests and build too', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { typecheck: { command: 'npx tsc --noEmit' }, test: { command: 'npx jest --findRelatedTests {files}' }, build: { command: 'npx ng build app' } } });
+  const run = fakeRunner({ typecheck: { exitCode: 1 } });
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: ['app/a.ts'] });
+  assert.deepStrictEqual(run.calls.map((c) => c.options.step), ['typecheck']);
+  assert.match(stepNamed(result, 'test').reason, /typecheck is red/);
+});
+
+function gitProject(t, files) {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-near-'));
+  const git = (...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@t.local');
+  git('config', 'user.name', 'T');
+  git('config', 'commit.gpgsign', 'false');
+  for (const [file, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), text);
+  }
+  git('add', '.');
+  git('commit', '-q', '-m', 'base');
+  return dir;
+}
+
+// A pass in the middle of a fix needs the specs of what it touched, not every suite that imports a
+// shared mock: part-4's related tests took 494 s on a green tree (2026-11-16).
+test('nearSpecsOf picks the changed specs, the specs named after a changed file and the specs importing it', (t) => {
+  const root = gitProject(t, {
+    'app/x/a.service.ts': 'export const a = 1;\n',
+    'app/x/tests/a.service.spec.ts': "import { a } from '../a.service';\n",
+    'app/x/tests/a.service.extra.spec.ts': "import { a } from '../a.service';\n",
+    'app/y/b.component.ts': "import { a } from '../x/a.service';\n",
+    'app/y/b.component.spec.ts': "import { a } from '../x/a.service';\n",
+    'app/z/c.spec.ts': "import { c } from './c';\n",
+    'app/q/d.spec.ts': 'it("d", () => {});\n',
+    'app/m/model.ts': 'export type M = 1;\n',
+  });
+  const near = checks.nearSpecsOf(root, ['app/x/a.service.ts', 'app/q/d.spec.ts', 'app/m/model.ts']);
+  assert.deepStrictEqual(near, ['app/q/d.spec.ts', 'app/x/tests/a.service.extra.spec.ts', 'app/x/tests/a.service.spec.ts', 'app/y/b.component.spec.ts']);
+});
+
+test('--tests=near hands the test step the specs near the change, and skips it when there are none', (t) => {
+  const root = gitProject(t, {
+    'app/x/a.service.ts': 'export const a = 1;\n',
+    'app/x/a.service.spec.ts': "import { a } from './a.service';\n",
+    'app/m/model.ts': 'export type M = 1;\n',
+  });
+  configure(root, { steps: { test: { command: 'npx jest --findRelatedTests {files}', files: '^app/.+\\.ts$' } } });
+  const run = fakeRunner();
+  const near = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: ['app/x/a.service.ts'], tests: 'near' });
+  assert.match(run.calls[0].command, /--findRelatedTests app\/x\/a\.service\.spec\.ts( |$)/);
+  assert.strictEqual(stepNamed(near, 'test').status, 'passed');
+  assert.strictEqual(near.gate, 'partial', 'a pass over part of the tests is no verdict on the gate');
+  const none = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedFiles: ['app/m/model.ts'], tests: 'near' });
+  assert.strictEqual(stepNamed(none, 'test').status, 'skipped');
+  assert.match(stepNamed(none, 'test').reason, /no spec near the changed files/);
+  assert.strictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', '--tests=near']).tests, 'near');
+  assert.throws(() => checks.parseArgs(['--root=/a', '--out-dir=/b', '--tests=some']), /--tests takes/);
+});
+
+// The bottom part of a stack holds every landing above it: its gate goes first.
+test('acquireSlot lets a waiter with a lower priority number take a freed slot first', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-prio-'));
+  const held = checks.acquireSlot(1, { dir });
+  const queue = path.join(dir, 'queue');
+  fs.mkdirSync(queue, { recursive: true });
+  const other = 424242;
+  const ticket = path.join(queue, checks.ticketName(0, Date.now() - 1000, other));
+  fs.writeFileSync(ticket, '');
+  let sleeps = 0;
+  const low = checks.acquireSlot(1, {
+    dir,
+    priority: 5,
+    alive: (pid) => pid === process.pid || pid === other,
+    sleep: () => {
+      sleeps += 1;
+      if (sleeps === 1) held.release();
+      else if (sleeps === 2) fs.rmSync(ticket);
+      else throw new Error('waited past the higher-priority waiter');
+    },
+  });
+  assert.strictEqual(sleeps, 2, 'the freed slot went to the priority-0 waiter first');
+  low.release();
+  assert.deepStrictEqual(fs.readdirSync(queue), [], 'its own ticket left the queue');
+  assert.strictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', '--priority=2']).priority, 2);
+});
+
+test('a ticket whose owner is gone does not hold the queue', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-prio-dead-'));
+  const queue = path.join(dir, 'queue');
+  fs.mkdirSync(queue, { recursive: true });
+  fs.writeFileSync(path.join(queue, checks.ticketName(0, Date.now(), 999999)), '');
+  const slot = checks.acquireSlot(1, { dir, priority: 9, alive: (pid) => pid === process.pid, sleep: () => { throw new Error('must not wait'); } });
+  slot.release();
+  assert.deepStrictEqual(fs.readdirSync(queue), []);
+});
+
+// Lint waited 365-471 s for a slot behind long jest runs on 2026-11-16, for a 4-30 s step.
+test('lint takes no slot unless its checks.json entry asks for one', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { maxParallel: 1, steps: { lint: { command: 'npx eslint {files}' }, typecheck: { command: 'npx tsc --noEmit', slot: true } } });
+  const slotsDir = fs.realpathSync(tempDir(t, 'fpc-lint-slot-'));
+  const held = checks.acquireSlot(1, { dir: slotsDir });
+  const refuse = () => { throw new Error('waited for a slot'); };
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedFiles: ['a.ts'], slots: 1, slotsDir, slotSleep: refuse, only: ['lint'] });
+  assert.strictEqual(stepNamed(result, 'lint').status, 'passed');
+  assert.throws(() => checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedFiles: ['a.ts'], slots: 1, slotsDir, slotSleep: refuse, only: ['typecheck'] }), /waited for a slot/);
+  held.release();
+});

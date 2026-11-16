@@ -6,9 +6,11 @@
 // waits here instead of ending its turn: a sub-agent of the pipeline that ends its turn while
 // its walker runs wakes the orchestrator above it with a "waiting on background work" notice -
 // a whole-context turn for nothing - and a turn that sits idle past the prompt cache's lifetime
-// pays for its context again when it resumes. A slice is kept under the cache's five minutes.
+// pays for its context again when it resumes. A slice is kept under the cache's five minutes,
+// and under the 180 s after which the harness moves a foreground command to the background: a
+// 230 s slice left about twenty waiters running behind one run's agents (2026-11-16).
 //
-// Usage: node wait-part.cjs --path=<part file> [--path=<part file> ...] [--seconds=230] [--nonempty]
+// Usage: node wait-part.cjs --path=<part file> [--path=<part file> ...] [--seconds=170] [--nonempty]
 // Prints one line per path, a FIXED IDENTIFIER: `PART_READY <path>` or `PART_PENDING <path>`.
 // With several paths - the last parts of the windows walked side by side - it returns as soon
 // as one of them is ready, so the next window can take that walker's place.
@@ -19,10 +21,10 @@
 const fs = require('node:fs');
 
 const pollMs = 2000;
-const maxSeconds = 280;
+const maxSeconds = 175;
 
 function parseArgs(argv) {
-  const args = { paths: [], seconds: 230, nonempty: false };
+  const args = { paths: [], seconds: 170, nonempty: false };
   for (const arg of argv) {
     if (arg === '--nonempty') { args.nonempty = true; continue; }
     const m = arg.match(/^--(path|seconds)=(.*)$/);

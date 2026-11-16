@@ -489,6 +489,15 @@ test('renderHtml keeps report text as data and cannot be broken out of', () => {
   );
 });
 
+// fixPr --local reads which revision a finding's lines belong to: 5 of 30 findings of 2026-11-16
+// sat on code a later commit had already changed.
+test('the page carries the reviewed revision, and null where there is none', () => {
+  const report = rr.parseReport(REPORT);
+  assert.strictEqual(embeddedPayload(rr.renderHtml(report, 'r.html')).revision, null);
+  report.revision = '0123456789abcdef0123456789abcdef01234567';
+  assert.strictEqual(embeddedPayload(rr.renderHtml(report, 'r.html')).revision, report.revision);
+});
+
 test('renderHtml escapes the title and counts findings in Polish', () => {
   const report = rr.parseReport(REPORT);
   report.title = 'Code Review: <b>x</b> → y';

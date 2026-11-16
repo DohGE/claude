@@ -28,6 +28,7 @@ This is point 3 of Step 3 (`references/walk.md`), answered once for the whole ta
 
 After the per-file pass, do ONE cross-file pass over the whole diff, written as part `N+1` (`N` = `target.files.length`): its findings sections, one `<!-- questions:` block and, when the rule below asks for it, one `<!-- unverified:` block — no checklist block and no coverage marker.
 That part is written on every target with files — without findings when the pass found nothing, because the assembly refuses a report without it — and its `<!-- questions:` block is never left out: it is how the check knows the pass was made.
+A target with `target.decisionsPath` (fixPr's self-review): Read that file with the bundle; a finding that would undo or contradict one of its lines is not raised (the walk's rule, `references/walk.md` Step 3). A target with `target.stackTip`: a question that would call something unused or single-consumer asks that revision first, the walk's way (`symbol-uses.cjs --refs=<stackTip.revision> --worktree=no`).
 
 The pass works from `target.crossBundlePath` (a FIXED IDENTIFIER, like every key of the context JSON), read with the Read tool:
 - `## Fakty międzyplikowe` — the facts that span files: repeated literals and conditions, label mappings implemented more than once, relative imports that leave their area;
