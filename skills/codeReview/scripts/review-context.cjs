@@ -75,6 +75,10 @@ const walkerEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
 // tools took 12%, the rest was the model (2026-11-12), so the lanes are the run's clock.
 const defaultParallel = 6;
 const maxParallel = 8;
+// A run of this many windows or more takes every lane without being asked: 70 windows on six
+// lanes kept all six busy for 39 of 47 minutes (263 walker-minutes, 2026-11-16) - two more lanes
+// are a quarter of that run's clock.
+const bigRunWindows = 40;
 // What walks a window when neither its kind nor the caller says: the lighter model at medium
 // effort. A window that inherited the session's model and effort ran on whatever the session
 // happened to be set to - a review started from a session on the largest model at maximum effort
@@ -1580,7 +1584,7 @@ function buildContext(options) {
       const found = revisionScope(project, scanSources.get(target), textsOf(target).reviewed);
       targetScopes.set(target, found);
       if (found.scope) {
-        result.warnings.push(`[${target.branch}] The duplication scan and the repository facts read ${found.scope.roots.length} project(s) of the repository - the reviewed files' own, the ones they import and the importers of a reviewed library: ${found.scope.roots.join(', ')}.`);
+        result.warnings.push(`[${target.branch}] Skan duplikatów i fakty repozytorium objęły ${found.scope.roots.length} projekt(y) repozytorium - własne projekty przeglądanych plików, te, które importują, oraz importujące przeglądaną bibliotekę: ${found.scope.roots.join(', ')}.`);
       }
     }
     return targetScopes.get(target);
@@ -1608,7 +1612,7 @@ function buildContext(options) {
       result.warnings.push(`[${target.branch}] Duplication scan: ${scan.omitted} more duplication candidate(s) found than the ${scan.candidates.length} listed - they are not in this review.`);
     }
     if (scan.boilerplate > 0) {
-      result.warnings.push(`[${target.branch}] Duplication scan: ${scan.boilerplate} changed block(s) repeat a pattern found more than ${duplication.maxCopies} times in the codebase - boilerplate, not listed as candidates.`);
+      result.warnings.push(`[${target.branch}] Skan duplikatów: ${scan.boilerplate} zmienionych bloków powtarza wzorzec występujący w kodzie ponad ${duplication.maxCopies} razy - boilerplate, nie ma ich na liście kandydatów.`);
     }
   };
   const jobOf = (target, i) => ({
@@ -2443,7 +2447,7 @@ const bakedArgsLine = /^const baked = null\b.*$/m;
 function runWorkflow(result, options) {
   const windowed = result.targets.filter((target) => (target.windows || []).length > 0);
   const total = windowed.reduce((sum, target) => sum + target.windows.length, 0);
-  const lanes = Math.max(1, Math.min(options.parallel || defaultParallel, total));
+  const lanes = Math.max(1, Math.min(options.parallel || (total >= bigRunWindows ? maxParallel : defaultParallel), total));
   for (const target of result.targets) target.parallel = target.windows && target.windows.length > 0 ? lanes : 1;
   if (windowed.length === 0) return null;
   // The windows of the earlier parts a window's carried verdicts come from (stack-carry.cjs): it
@@ -2521,6 +2525,32 @@ function main() {
 // FIXED IDENTIFIER: the file in a report's folder that names its context (check-part.cjs reads it).
 const contextPointerName = '.review-context-path';
 
+// A warning several targets get word for word is one line naming them all, and one whose words
+// differ only in a number is one line with each target's number (check-part.cjs folds the first
+// kind the same way for the run's summary).
+function foldWarnings(warnings) {
+  const groups = new Map();
+  for (const warning of warnings) {
+    const m = String(warning).match(/^\[([^\]]+)\] ([\s\S]*)$/);
+    if (!m) { groups.set(`\0${groups.size}`, { text: String(warning), names: [] }); continue; }
+    const numbers = m[2].match(/\d+/g) || [];
+    const key = m[2].replace(/\d+/g, '#');
+    if (!groups.has(key)) groups.set(key, { text: m[2], shape: key, names: [], numbers: [] });
+    const group = groups.get(key);
+    group.names.push(m[1]);
+    group.numbers.push(numbers);
+  }
+  return [...groups.values()].map((g) => {
+    if (g.names.length === 0) return g.text;
+    if (g.names.length === 1 || g.numbers.every((n) => n.join() === g.numbers[0].join())) return `[${g.names.join(', ')}] ${g.text}`;
+    // The numbers that differ between targets, in the sentence's own order, per target.
+    const differing = g.numbers[0].map((_, k) => k).filter((k) => g.numbers.some((n) => n[k] !== g.numbers[0][k]));
+    let k = -1;
+    const text = g.shape.replace(/#/g, () => { k++; return differing.includes(k) ? '<n>' : g.numbers[0][k]; });
+    return `[${g.names.map((name, t) => `${name}: ${differing.map((d) => g.numbers[t][d]).join('/')}`).join(', ')}] ${text}`;
+  });
+}
+
 function writeContext(context) {
   if (!context.targets || context.targets.length === 0) return context;
   const first = context.targets[0];
@@ -2542,10 +2572,13 @@ function writeContext(context) {
       fs.writeFileSync(path.join(path.dirname(target.reportPath), contextPointerName), `${contextPath}\n`);
     } catch {}
   }
+  const assembleAll = (context.commands && context.commands.assembleAll) || null;
   return {
     contextPath,
     errors: errors || [],
-    warnings: warnings || [],
+    // One line per sentence, naming every target it is about: a seven-target run printed two
+    // sentences seven times each (2026-11-16). The context file keeps them one by one (`runWarnings`).
+    warnings: foldWarnings(warnings || []),
     // What the review itself uses, so the reviewer never reads the whole context file: the
     // scripts and hooks read that one. Keys a step needs beyond these stay in `contextPath`.
     // Counts, not lists: a 115-file run printed 31 kB here - more than the harness shows inline,
@@ -2557,7 +2590,7 @@ function writeContext(context) {
     claudeMd: context.claudeMd,
     workflow: context.workflow || null,
     // Every target assembled in one call, which ends with the run's summary (Step 5).
-    commands: { assembleAll: (context.commands && context.commands.assembleAll) || null },
+    commands: { assembleAll },
     targets: context.targets.map((t) => {
       const windows = (t.windows || []).length;
       const unchanged = t.unchangedSinceLastReview;
@@ -2583,7 +2616,9 @@ function writeContext(context) {
         ...(t.light ? { light: true } : {}),
         skipped: (t.skipped || []).length,
         ...(unchanged ? { unchangedSinceLastReview: Array.isArray(unchanged) ? unchanged.length : unchanged, previousReportPath: t.previousReportPath || null } : {}),
-        commands: { assemble: t.commands && t.commands.assemble },
+        // One target's own assembly only where no command assembles them all: `assembleAll` is the
+        // line the run uses, and seven copies of a 500-character command said nothing more.
+        ...(assembleAll ? {} : { commands: { assemble: t.commands && t.commands.assemble } }),
         resumed: !!t.resume,
         resume: t.resume || null,
       };
@@ -2591,6 +2626,6 @@ function writeContext(context) {
   };
 }
 
-module.exports = { contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { foldWarnings, bigRunWindows, contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
 
 if (require.main === module) main();

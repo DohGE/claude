@@ -516,8 +516,14 @@ For each file:
      Lines and a path are the evidence of ONE item; only `brak wystąpień` closes a range - and a
      path closes a range of an instruction in `checklistPerFile` (`test-coverage#1-6 — OK
      (tests/a.spec.ts)`), whose items are facets of one requirement one spec meets.
-     `<where>` never names another item: `OK (pod general#6)` is no evidence, and an item the code
-     breaks is `NARUSZENIE` even when another item's finding already cites the lines (point 3).
+     An OK line names no other item anywhere - not as `<where>`, not in the note after the `;`,
+     not in a `fakt nie dotyczy:` reason: the check refuses the line for any address in it.
+     `OK (pod general#6)` is no evidence, and `OK (L12; kształt wymagany przez ngrx-actions#4)` is
+     refused although its lines are right - say what the other rule asks for in words
+     (`OK (L12; kształt zdarzeń fail narzuca konwencja akcji)`), or leave the note out.
+     Of the 58 problems the check named in a 245-file run, 33 were such a note (2026-11-16).
+     An item the code breaks is `NARUSZENIE` even when another item's finding already cites the
+     lines (point 3): a note saying whose defect it is does not make it `OK`.
    - `[x] … — BRAMKA: <what is absent>` — the instruction's `gate` failed for this file (point 2),
      so its whole range is ticked in one line. Only an instruction listed in `checklistGates` may
      produce such a line, and the reason names what the file does not contain.

@@ -2477,3 +2477,43 @@ test('a later part of a stack carries the verdicts of the items its diff cannot 
   assert.deepStrictEqual([carried.target, carried.number, carried.eligible], [0, 1, ['a11y#1']], 'the image is far from the changed button line; the button and the item without subject are walked');
   assert.deepStrictEqual(carried.hunks, [[9, 1, 9, 1]]);
 });
+
+test('foldWarnings: one line per sentence, with each target\'s own number where only a number differs', () => {
+  const { foldWarnings } = require('./review-context.cjs');
+  assert.deepStrictEqual(foldWarnings([
+    '[a] Skan: 9 bloków ponad 12 razy.',
+    '[b] Skan: 1 bloków ponad 12 razy.',
+    '[a] Objęto 2 projekty: x, y.',
+    '[b] Objęto 2 projekty: x, y.',
+    '[c] Objęto 2 projekty: x, z.',
+    'Bez celu.',
+    '[a] Tylko raz.',
+  ]), [
+    '[a: 9, b: 1] Skan: <n> bloków ponad 12 razy.',
+    '[a, b] Objęto 2 projekty: x, y.',
+    '[c] Objęto 2 projekty: x, z.',
+    'Bez celu.',
+    '[a] Tylko raz.',
+  ]);
+});
+
+test('runWorkflow: a run of bigRunWindows windows or more takes eight lanes, a smaller one six, --parallel wins', (t) => {
+  const { runWorkflow, bigRunWindows } = require('./review-context.cjs');
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doh-lanes-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'run', 'feature'), { recursive: true });
+  const lanesOf = (count, parallel) => {
+    const target = {
+      reportPath: path.join(root, 'run', 'feature', 'raport.md'),
+      workDir: path.join(root, 'run', 'feature', 'raport.work'),
+      files: Array.from({ length: count }, () => ({})),
+      windows: Array.from({ length: count }, (_, k) => ({ files: [k + 1, k + 1] })),
+    };
+    runWorkflow({ targets: [target], warnings: [] }, { parallel });
+    return target.parallel;
+  };
+  assert.strictEqual(lanesOf(bigRunWindows, 0), 8);
+  assert.strictEqual(lanesOf(bigRunWindows - 1, 0), 6);
+  assert.strictEqual(lanesOf(bigRunWindows, 4), 4);
+  assert.strictEqual(lanesOf(3, 0), 3);
+});

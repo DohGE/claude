@@ -547,7 +547,7 @@ const STEP1_INPUTS = {
   contractsText: '#contractsText', hintsNote: '#hintsNote',
   refinement: '#refinement', generateMockups: '#genMockups', darkMockups: '#darkMockups',
   storyDescription: '#storyDesc',
-  authLogin: '#authLogin', authPassword: '#authPassword', rememberAuth: '#rememberAuth',
+  authLogin: '#authLogin', authPassword: '#authPassword',
   agentModel: '#agentModel', agentEffort: '#agentEffort',
   // One draft key per override, so the whole form still travels as one flat record:
   // the snapshot, the copy that seeds a new task and the re-render all read it.
@@ -1404,10 +1404,6 @@ function renderStep1(task) {
   // revisit would make the form differ from what was sent and offer to resubmit
   // over a change the user never made.
   const savedAuth = revisit ? null : stored;
-  // The switch says what is actually kept - unless the user has just moved it, which
-  // the draft holds. Without that, unticking would spring back on the next redraw and
-  // the following submit would store the password they had just refused to store.
-  const remember = d.rememberAuth !== undefined ? !!d.rememberAuth : (stored ? true : !revisit);
   // Implementation is the point of no return for what the task is: from there the
   // description, branch, steps and files are the record of what was asked for, not
   // something the pipeline can still be sent back over. The settings stay open until
@@ -1564,13 +1560,6 @@ function renderStep1(task) {
       <button type="button" id="togglePassword" class="reveal" aria-pressed="false"
         aria-label="Show password" title="Show password">${EYE}</button>
     </div>
-    <div class="switch">
-      <input type="checkbox" id="rememberAuth"${remember ? ' checked' : ''}>
-      <label for="rememberAuth">Remember on this browser</label>
-    </div>
-    <p class="hint">Kept in this browser's storage for this project only, so the next task and
-      the next run start with them filled in. Unticking this deletes them right away; the
-      run's own copy still dies with the pipeline.</p>
     ${finished ? '<p class="hint">The pipeline has finished — the requirements are the record of'
       + ' this task now. Copy it from the sidebar to take the feature in another direction.</p>'
       : `${frozen ? `<p class="hint" id="frozenHint">Implementation has started — the description,
@@ -1779,15 +1768,6 @@ function renderStep1(task) {
     // form starts there, whether or not this one is ever sent.
     writeStore(LS_AGENTS, agentsOnScreen());
   }));
-  // Unticking is a delete, and it happens now rather than at the next submit - a
-  // switch that only takes effect later is not a way to remove a stored password.
-  $('#rememberAuth').addEventListener('change', () => {
-    if ($('#rememberAuth').checked) return;
-    writeStore(authKey(), null);
-    $('#authLogin').value = '';
-    $('#authPassword').value = '';
-    onEdit();
-  });
   gate();   // a form that arrived filled in must enable Next without a keystroke
   refreshGate = gate;
   // The tab's label is the branch being typed, and onEdit above has already put it in
@@ -1854,7 +1834,8 @@ function renderStep1(task) {
     }
     // Under the project's own key: one fixed port means one origin for every project
     // on this machine, and these are the credentials of exactly one of them.
-    if ($('#rememberAuth').checked && a.complete) {
+    // Always kept: the next task and the next run start with them filled in.
+    if (a.complete) {
       writeStore(authKey(), { login: a.login, password: a.password });
     }
     const sent = await sendAnswer({ kind: 'step1',
