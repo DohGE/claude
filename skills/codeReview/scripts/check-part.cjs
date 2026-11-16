@@ -2844,6 +2844,8 @@ function assemble(argv) {
 // (2026-10-30). Exit 1 while any target is not assembled.
 const summaryStart = '=== PODSUMOWANIE (Step 5) ===';
 const summaryEnd = '=== KONIEC PODSUMOWANIA ===';
+// FIXED IDENTIFIER: the file in a report's folder that keeps what its assembly printed.
+const assemblyOutputName = '.assembly-output.json';
 function assembleAll(contextPath) {
   let context;
   try {
@@ -2861,8 +2863,28 @@ function assembleAll(contextPath) {
     const run = spawnSync(process.execPath, [__filename, `--context=${contextPath}`, `--report=${target.reportPath}`, '--assemble'], { encoding: 'utf8' });
     const result = { target, status: run.status === null ? 1 : run.status, stdout: run.stdout || '', stderr: run.stderr || '' };
     results.push(result);
-    process.stdout.write(`--- ${target.branch || path.basename(target.reportPath)} ---\n${result.stdout}`);
-    if (result.stderr) process.stderr.write(`--- ${target.branch || path.basename(target.reportPath)} ---\n${result.stderr}`);
+    // A target that assembled says everything in the summary below: its own lines, printed here
+    // too, doubled the output of a seven-target run, and the harness cut the summary that followed
+    // (2026-11-16). Only a target that failed prints what its assembly said.
+    if (result.status !== 0) {
+      process.stdout.write(`--- ${target.branch || path.basename(target.reportPath)} ---\n${result.stdout}`);
+      if (result.stderr) process.stderr.write(`--- ${target.branch || path.basename(target.reportPath)} ---\n${result.stderr}`);
+      continue;
+    }
+    // What the assembly printed is kept next to the report: a second call finds the target already
+    // assembled, and its summary still carries the counts of the first.
+    const kept = path.join(path.dirname(target.reportPath), assemblyOutputName);
+    if (/jest już złożony/.test(result.stdout)) {
+      try {
+        const saved = JSON.parse(fs.readFileSync(kept, 'utf8'));
+        result.stdout = String(saved.stdout || '');
+        result.stderr = String(saved.stderr || '');
+      } catch {}
+    } else {
+      try {
+        fs.writeFileSync(kept, JSON.stringify({ stdout: result.stdout, stderr: result.stderr }));
+      } catch {}
+    }
   }
   const failed = results.filter((result) => result.status !== 0);
   if (failed.length > 0) {
@@ -2893,6 +2915,10 @@ function runSummary(context, results, repeats = 0) {
     if (coverage) out.push(`- pokrycie: ${coverage[0].replace(/^check-part: /, '')}`);
     for (const line of stdout.split(/\r?\n/).filter((l) => /^check-part: (ważność stała|scalono)/.test(l))) out.push(`- ${line.replace(/^check-part: /, '')}`);
     for (const line of stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) out.push(`- ostrzeżenie renderera: ${line}`);
+    // Files the review never opened (binary, generated, lock files): the report's header lists
+    // them, and a summary without their count read as a review of the whole diff (2026-11-16).
+    const skipped = Array.isArray(target.skipped) ? target.skipped.length : Number(target.skipped) || 0;
+    if (skipped > 0) out.push(`- pominięte pliki (poza przeglądem, lista w nagłówku raportu): ${skipped}`);
     if (target.light) out.push('- --light: checklisty bez pozycji ważności low, raport bez znalezisk Low (strona bez fragmentów kodu) - krótki raport nie znaczy czysty.');
     if (target.unchangedSinceLastReview) {
       const count = Array.isArray(target.unchangedSinceLastReview) ? target.unchangedSinceLastReview.length : target.unchangedSinceLastReview;
@@ -2920,7 +2946,7 @@ function foldWarnings(warnings) {
 }
 
 module.exports = {
-  foldWarnings, foldDeferrals, markRepeats, normalizeRuleSources, ruleSources, renderArgsOf, withDraftLines, findingBlocks, foldFindings, assembleAll, runSummary, summaryStart, summaryEnd,
+  foldWarnings, foldDeferrals, markRepeats, normalizeRuleSources, ruleSources, renderArgsOf, withDraftLines, findingBlocks, foldFindings, assembleAll, runSummary, summaryStart, summaryEnd, assemblyOutputName,
   checkPart, checkAssembly, findContextFor, hookResult, normalizePart, fillPart, checkQuestions, windowOf, scanPart, planItems, compact,
   rewriteCoverage, rewriteSeverities, coverageLine, draftPathOf, shellReviewRead, shellOtherRevision, shellWalkerOnly, beyondHint, pathFinder, gapsOf, gapsReplies, shellWrites, expandWord,
   promoteDraft, promoteLater, reportedState, readFacts, sameBatch, formatProblems, rePartName, noSpecConflicts,

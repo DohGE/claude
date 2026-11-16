@@ -36,7 +36,8 @@ scope gate of `references/walk.md`).
 1. Steps 1–2 run once per run, before anything else, and stand at the end of this file, after the one-time marker.
 2. Step 3 has each target's files walked and every file's part written in the Step 4 format: right after Step 1 the summary's one `workflow` starts the windows of every target that has some, in the background; then this conversation walks each target without windows by the rules of `references/walk.md`.
 3. The cross-file pass follows the last file: the workflow's fresh agent for a windowed target; this conversation for a target with `crossInline` (its last bundle says so); else a fresh `doh:codereview-cross` with `target.crossBriefPath`.
-4. After the last target's cross-file pass, one `commands.assembleAll` assembles every target and prints Step 5's summary: `references/assembly.md`, which the cross-file reference names.
+4. After the last target's cross-file pass, one `commands.assembleAll` — verbatim, in ONE Bash call — assembles every target and prints Step 5's summary between `=== PODSUMOWANIE (Step 5) ===` and `=== KONIEC PODSUMOWANIA ===` (FIXED IDENTIFIERS): that block, as it is, is your final message, and nothing else.
+   Read `references/assembly.md` only when the command exits 1 or this conversation walked a file itself: a run whose every target the workflow finished needs nothing more of it.
 
 After a compaction, this skill's hook names where the run stands and what to read again: continue from there, and never write a finished part anew.
 
@@ -119,7 +120,7 @@ With windows you do not walk the files yourself. Take the first way this session
    Then walk the targets without windows here, cross-file pass included; end your turn once only the workflow is left.
    The result names per target `walked` (windows done) and under `windows` only the ones that are not, and at the top `next`: the assembly command, the same line as `commands.assembleAll`.
    When the notification arrives, per target: `failed` empty and `cross` is `CROSS DONE` → done; a window in `failed` → walk it yourself (Step 2 first) from its first file without a part — each bundle's `## Dalej` names what you read next — then the cross-file pass below; any other `cross` → the cross-file pass below.
-   Every target done → the assembly of all of them, `commands.assembleAll` (`references/assembly.md`).
+   Every target done → the assembly of all of them: run `next` (run order, point 4) — no reference to read first.
 2. **The Agent tool.** Read the target's `windows` from the context file (the summary counts them) and dispatch them in order, up to `target.parallel` at once — one message with that many calls: `Agent(subagent_type: "doh:codereview-walker", description: "window <k>/<n>", model: <window.model>, effort: <window.effort>, prompt: "Read <window.brief> and follow it.")`, leaving out `model` and `effort` when the window has none.
    An Agent tool without an `effort` parameter gets one more prompt line instead: `medium` → `Effort: medium — think before each non-trivial decision.`, `high` → `Effort: high — think hard before each non-trivial decision.`, `xhigh` and `max` → the max line of `references/effort-lines.md` in this skill's directory, read only then (the effort keywords are FIXED IDENTIFIERS, English verbatim); `low` adds nothing.
    A walker's reply is the one line `WINDOW DONE <first>-<last>` (with ` GAPS` at its end when it left an item open for an outside file) or `WINDOW STOPPED <file>: <reason>` (FIXED IDENTIFIERS).
@@ -162,7 +163,7 @@ After a compaction, the hook names what of them to read again.
      Without it a window walks on `sonnet` and the cross-file agent inherits this session's model; `inherit` makes the walkers inherit it too. A window made only of files whose kind declares a `walker` setting (the models kinds: `sonnet`, effort `medium`) is spawned with that one instead.
    - `--walker-effort=<low|medium|high|xhigh|max>` → pass it through to the context script (`walker.effort`, `cross.effort`): the `effort` every walker is spawned with (Step 3, Windows).
      Without it a window walks at `medium` and the cross-file agent inherits this session's; `inherit` makes the walkers inherit it too.
-   - `--parallel=<n>` → pass it through to the context script (`workflow.args.lanes`, `target.parallel`): how many windows are walked at once over all targets, 1-8 (default 6, never more than the run has windows).
+   - `--parallel=<n>` → pass it through to the context script (`workflow.args.lanes`, `target.parallel`): how many windows are walked at once over all targets, 1-8 (default 6, and 8 for a run of 40 windows or more; never more than the run has windows).
    - `--project=<path>` → `PROJECT=<path>`. Everything is relative to it: which repository is read
      and — in staged mode — staged, where the reports land, and which `CLAUDE.md` and
      `.claude/doh/instructions/` bind. A caller whose work lives somewhere other than the current
@@ -207,12 +208,13 @@ After a compaction, the hook names what of them to read again.
 5. Parse the JSON from stdout — the part of the context the review uses:
    - Report every `errors[]` entry to the user immediately, in Polish.
    - No targets / exit code 1 → stop after reporting the errors.
-   - Report every top-level `warnings[]` entry, in Polish.
+   - Do not repeat the top-level `warnings[]` now: Step 5's summary prints every one of them, and a run told them twice (2026-11-16).
+     Report them here, in Polish, only when the run ends before its assembly (no targets, a stop the user asked for).
    - The file at `contextPath` IS the context every later step calls "the context JSON"; the scripts
      and hooks read it. Its keys you use — `rulebookNotesPath`, `claudeMd`, `walker`, `workflow` (the one
      call for every target with windows, null when none has any), `commands.assembleAll` (the assembly of
      every target and the run's summary), and per target `files` and `windows`
-     (counts), `parallel`, `start` (a target walked here), `crossInline`, `snapshotDir`, `revision`, `commands.assemble`,
+     (counts), `parallel`, `start` (a target walked here), `crossInline`, `snapshotDir`, `revision`, `commands.assemble` (only in a context without `commands.assembleAll`),
      `reportPath`, `htmlReportPath`, `workDir`, `crossBundlePath`, `crossBriefPath`, `gapsBriefPath`, `baseBranch`,
      `baseSource`, `prNumber`, `stackTip` (a stacked target's last later part), `resume`, `skipped` (a count) — are in this summary: do not Read the file, whose
      60–75 kB would stay in your context until the first compaction. Read it (Read tool, never

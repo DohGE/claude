@@ -53,8 +53,8 @@
    down server", or the server dies. Point them at the button rather than letting them close the
    terminal: pressing it is also what wipes every task's `auth.json`, so a run killed any other way
    leaves the credentials they typed sitting in the session directory (git-ignored, but still on
-   disk) until they delete them by hand. The browser keeps its own copy when "Remember on this
-   browser" was left ticked on the step-1 form — that one is the user's to clear, by unticking it,
+   disk) until they delete them by hand. The browser always keeps its own copy, in its storage for this project (the step-1 form
+   fills itself from it) — that one is the user's to clear, with the browser's site data,
    and no shutdown touches it. Say so if they ask where their password lives.
 8. On `{"kind":"summary","decision":"shutdown"}` (or `SERVER_GONE`) with T's pull request open
    (`pr.status` `created` or `exists`, as you last posted it): remove T's worktree —

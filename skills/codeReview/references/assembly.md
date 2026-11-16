@@ -27,7 +27,7 @@ Once the check passes it also prints `check-part: pliki z pełnym przejściem ch
 
 ## Step 5 — Terminal summary (Polish)
 
-`commands.assembleAll` prints it, once every target is assembled, between the lines `=== PODSUMOWANIE (Step 5) ===` and `=== KONIEC PODSUMOWANIA ===` (FIXED IDENTIFIERS): print that block as your final message, as it is, and nothing else — it already holds everything below, read off what each assembly printed.
+`commands.assembleAll` prints it — and, while every target assembles, nothing else: a target's own lines appear only when its assembly failed — once every target is assembled, between the lines `=== PODSUMOWANIE (Step 5) ===` and `=== KONIEC PODSUMOWANIA ===` (FIXED IDENTIFIERS): print that block as your final message, as it is, and nothing else — it already holds everything below, read off what each assembly printed.
 Written by hand, the summary of a five-target run left two warnings out (2026-10-30).
 Only when you assembled with `target.commands.assemble` alone (an older context without `commands.assembleAll`) write it yourself, by these rules.
 

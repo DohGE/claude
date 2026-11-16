@@ -121,44 +121,24 @@ test('dane logowania są przypisane do projektu, nie do przeglądarki', async ({
   expect(keys).toContain('inf.agents');
 });
 
-test('wyłączenie zapamiętywania kasuje zapisane hasło', async ({ page }) => {
+test('formularz nie ma przełącznika zapamiętywania, a login i hasło są zapisywane zawsze', async ({ page }) => {
   await page.goto(base);
   await page.waitForSelector('#authLogin');
+  await expect(page.locator('#rememberAuth')).toHaveCount(0);
+  await expect(page.getByText('Remember on this browser')).toHaveCount(0);
   await fillRequired(page);
   await page.fill('#authLogin', 'qa@example.com');
   await page.fill('#authPassword', 'tajne123');
-  await expect(page.locator('#rememberAuth')).toBeChecked();
   await page.click('#next');
   await page.click('#confirmOk');
   await expect.poll(async () => (await getState()).tasks[0].authSaved).toBe(true);
+  const { project } = await getState();
+  expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), `inf.auth.${project}`))
+    .toEqual({ login: 'qa@example.com', password: 'tajne123' });
   await page.click('#createEmptyTask');
-  await page.waitForSelector('#rememberAuth');
+  await page.waitForSelector('#authLogin');
+  await expect(page.locator('#authLogin')).toHaveValue('qa@example.com');
   await expect(page.locator('#authPassword')).toHaveValue('tajne123');
-  await page.uncheck('#rememberAuth');
-  // Odznaczenie działa od razu, a nie dopiero przy następnym zgłoszeniu.
-  expect(await page.evaluate(() => Object.keys(localStorage)
-    .filter(k => k.startsWith('inf.auth.')))).toEqual([]);
-  await expect(page.locator('#authLogin')).toHaveValue('');
-  await expect(page.locator('#authPassword')).toHaveValue('');
-});
-
-test('odznaczone zapamiętywanie przeżywa przerysowanie panelu', async ({ page }) => {
-  await page.goto(base);
-  await page.waitForSelector('#rememberAuth');
-  await fillRequired(page);
-  await page.uncheck('#rememberAuth');
-  await page.fill('#authLogin', 'qa@example.com');
-  await page.fill('#authPassword', 'tajne123');
-  // Zwykły tick serwera przerysowuje panel — przełącznik nie może wrócić na "tak",
-  // bo następne zgłoszenie zapisałoby hasło, którego użytkownik zapisać nie chciał.
-  await page.locator('.step[data-step="1"]').click();
-  await page.waitForSelector('#rememberAuth');
-  await expect(page.locator('#rememberAuth')).not.toBeChecked();
-  await page.click('#next');
-  await page.click('#confirmOk');
-  await expect.poll(async () => (await getState()).tasks[0].authSaved).toBe(true);
-  expect(await page.evaluate(() => Object.keys(localStorage)
-    .filter(k => k.startsWith('inf.auth.')))).toEqual([]);
 });
 
 test('lista modeli jest z sesji, a zapamiętany model spoza niej to dziedziczenie', async ({ page }) => {

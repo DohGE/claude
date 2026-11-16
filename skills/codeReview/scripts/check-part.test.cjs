@@ -1162,7 +1162,7 @@ test('assemble-all: every target assembled in turn, then the run\'s summary betw
   fs.writeFileSync(f.part(1), partA());
   fs.writeFileSync(f.part(2), partB);
   fs.writeFileSync(f.part(3), answered);
-  Object.assign(f.target, { baseBranch: 'master', baseSource: 'fork' });
+  Object.assign(f.target, { baseBranch: 'master', baseSource: 'fork', skipped: ['package-lock.json'] });
   f.context.runWarnings = ['[feature] Ostrzeżenie kroku 1.'];
   fs.writeFileSync(f.contextPath, JSON.stringify(f.context));
   const all = () => spawnSync(process.execPath, [script, `--context=${f.contextPath}`, '--assemble-all'], { encoding: 'utf8' });
@@ -1175,6 +1175,7 @@ test('assemble-all: every target assembled in turn, then the run\'s summary betw
     '- baza: master (gałąź, z której wyszła)',
     '- severity: critical=0 high=0 medium=1 low=0 missing-unit-test=0',
     '- pokrycie: pliki z pełnym przejściem checklisty: 2/2 (w tym z otwartymi tylko dla narzędzia albo działającej aplikacji (component#2): 1).',
+    '- pominięte pliki (poza przeglądem, lista w nagłówku raportu): 1',
     'Ostrzeżenia kontekstu (Step 1):',
     '- [feature] Ostrzeżenie kroku 1.',
     cp.summaryEnd,
@@ -1182,7 +1183,11 @@ test('assemble-all: every target assembled in turn, then the run\'s summary betw
   // Run again, the assembled target is skipped and still named.
   const again = all();
   assert.strictEqual(again.status, 0, again.stderr);
-  assert.match(again.stdout, /raport był już złożony/);
+  // An assembled target prints nothing of its own, and a second call still has the first one's counts.
+  assert.ok(!r.stdout.includes('--- feature ---'), r.stdout);
+  assert.strictEqual(again.stdout, r.stdout, 'the summary of a second call is the first one\'s');
+  fs.rmSync(path.join(path.dirname(f.reportPath), cp.assemblyOutputName));
+  assert.match(all().stdout, /raport był już złożony/, 'without what the assembly kept, the summary says so');
   // A target whose parts fail its check: exit 1, no summary.
   const g = fixture(t);
   fs.writeFileSync(g.part(1), partA({ general13: '[x] general#1,#3 — OK' }));
