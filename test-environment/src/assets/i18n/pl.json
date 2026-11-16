@@ -1,0 +1,16 @@
+{
+  "actions": {
+    "save": "Save"
+  },
+  "labels": {
+    "userName": "User name",
+    "userName": "Nazwa użytkownika"
+  },
+  "page": {
+    "userPanel": {
+      "labels": {
+        "newKeyOnlyInPolish": "Etykieta istniejąca tylko po polsku"
+      }
+    }
+  }
+}
