@@ -116,3 +116,30 @@ test('the summary shows the final state of threads resolved again (--resolve-onl
   const text = summary.render({ run: file, verify: 'no' });
   assert.match(text, /#7: rozwiązane wątki 5 \(w tym wcześniej: 2\), nieudane: 1 — HTTP 401: Bad credentials; ponowione 2026-11-19 10:15/);
 });
+
+// 2026-11-18: a gate with no unit test said green, and Jenkins failed four parts of seven.
+test('the summary says when no unit test ran, and what CI said per branch', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-ci-'));
+  const target = (n, extra) => ({
+    branch: `part-${n}`, pr: { number: 200 + n, title: `feat(X): part ${n}`, url: `u${n}` }, reportPath: path.join(dir, `p${n}.md`),
+    checksDir: path.join(dir, `c${n}`), stack: { parent: null }, landing: 'rebase',
+    outcome: { commit: `c${n}abcdef`, commitMessage: 'feat(X): CR', pushed: true, landedBy: 'agent' }, ...extra,
+  });
+  const run = { project: dir, stacks: [], targets: [target(1), target(2), target(3)] };
+  fs.writeFileSync(`${run.targets[0].reportPath}.result.json`, JSON.stringify({ type: 'result', gate: 'green-no-tests', verdicts: [] }));
+  const ciFile = (n, body) => {
+    fs.mkdirSync(path.join(dir, `c${n}`), { recursive: true });
+    fs.writeFileSync(path.join(dir, `c${n}`, 'ci-status.json'), JSON.stringify({ branch: `part-${n}`, sha: `c${n}abcdef00`, ...body }));
+  };
+  ciFile(1, { state: 'failure', failed: [{ name: 'jenkins/pr-merge', url: 'https://j/job/a/1/', lines: ["x.spec.ts:1:1 - error TS2304: Cannot find name 'a'.", 'Tests:  1 failed'] }] });
+  ciFile(2, { state: 'pending', pending: ['jenkins/pr-merge'] });
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file, verify: 'no' });
+  assert.match(text, /#201[^\n]*testy jednostkowe NIE uruchomione/);
+  assert.match(text, /### CI/);
+  assert.match(text, /#201 `c1abcdef0`: CI czerwone — jenkins\/pr-merge: https:\/\/j\/job\/a\/1\//);
+  assert.match(text, /error TS2304/);
+  assert.match(text, /#202 `c2abcdef0`: CI nadal trwa \(jenkins\/pr-merge\)/);
+  assert.ok(!/#203[^\n]*CI/.test(text), 'a branch whose CI nobody asked about says nothing');
+});

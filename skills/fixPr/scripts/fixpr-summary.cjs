@@ -162,6 +162,29 @@ function partRanges(parts) {
   return [...out, ...plain.sort()].join(', ');
 }
 
+// What CI said about the pushed commit (ci-status.cjs, `<checksDir>/ci-status.json`): green, red
+// with the lines that say why, or still running. Nothing when CI was never asked.
+const ciShown = 8;
+
+function ciText(pr, t) {
+  const s = t.checksDir ? readJson(path.join(t.checksDir, 'ci-status.json')) : null;
+  if (!s) return null;
+  const at = `\`${short(s.sha)}\``;
+  if (s.state === 'success') return [`- ${pr} ${at}: CI zielone`];
+  if (s.state === 'pending') return [`- ${pr} ${at}: CI nadal trwa (${(s.pending || []).join(', ') || 'start'})`];
+  if (s.state === 'none') return [`- ${pr} ${at}: CI nie zgłosiło żadnego statusu`];
+  if (s.state === 'error') return [`- ${pr} ${at}: CI nieodczytane: ${s.error || 'błąd'}`];
+  const out = [];
+  for (const f of s.failed || [{ name: 'CI' }]) {
+    out.push(`- ${pr} ${at}: CI czerwone — ${f.name}${f.description ? ` (${f.description})` : ''}${f.url ? `: ${f.url}` : ''}`);
+    const lines = f.lines || [];
+    for (const line of lines.slice(0, ciShown)) out.push(`  - \`${line.replace(/`/g, "'")}\``);
+    if (lines.length > ciShown) out.push(`  - … ${lines.length - ciShown} więcej${f.log ? ` w ${f.log}` : ''}`);
+    if (f.logError) out.push(`  - log niedostępny: ${f.logError}`);
+  }
+  return out;
+}
+
 function render(options, deps = {}) {
   const run = deps.run || runScript;
   const data = JSON.parse(fs.readFileSync(options.run, 'utf8'));
@@ -173,6 +196,7 @@ function render(options, deps = {}) {
   const impact = [];
   const visual = [];
   const gate = [];
+  const ci = [];
   const checks = [];
   const review = [];
   const notes = [];
@@ -195,7 +219,11 @@ function render(options, deps = {}) {
     for (const s of r.stackImpact || []) impact.push({ pr, resultFile: `${t.reportPath}.result.json`, ...s });
     for (const v of r.visualChecks || []) visual.push(`- ${pr} ${v.item}: ${v.result}${v.reason ? ` (${v.reason})` : ''}${v.mocked ? ', dane z fixture' : ''}${v.screenshot ? ` — ${v.screenshot}` : ''}`);
     const red = (r.verification || []).filter((v) => v.result === 'failed');
-    gate.push(`- ${pr}: naprawione: ${(r.checksFixed || []).join(', ') || '—'}${red.length ? `; czerwone: ${red.map((v) => `${v.label} (${v.logPath || 'brak logu'})`).join(', ')}` : ''}`);
+    // `green-no-tests`: committed on a gate that ran no unit test - said here, never read as green.
+    const untested = r.gate === 'green-no-tests' || (t.landingResult && t.landingResult.gate === 'green-no-tests');
+    gate.push(`- ${pr}: naprawione: ${(r.checksFixed || []).join(', ') || '—'}${red.length ? `; czerwone: ${red.map((v) => `${v.label} (${v.logPath || 'brak logu'})`).join(', ')}` : ''}${untested ? '; testy jednostkowe NIE uruchomione (gate nie zna komendy testów: `.claude/doh/checks.json`)' : ''}`);
+    const ciLine = ciText(pr, t);
+    if (ciLine) ci.push(...ciLine);
     if (o.verify) {
       checks.push(o.verify.ok
         ? `- ${pr}: wszystkie ${o.verify.total || ''} komentarze obsłużone`.replace('  ', ' ')
@@ -225,6 +253,7 @@ function render(options, deps = {}) {
   lines.push(...section('Do obejrzenia ręcznie', look));
   lines.push(...section('Sprawdzenie wizualne', visual));
   lines.push(...section('Gate', gate));
+  lines.push(...section('CI', ci));
   const stacks = (data.stacks || []).filter((s) => s.length > 1).map((s) => `- ${s.join(' ← ')}`);
   if (options.verify === 'yes' && stacks.length) {
     const verified = run(path.join(__dirname, 'restack.cjs'), ['--action=verify', `--run=${options.run}`]) || {};

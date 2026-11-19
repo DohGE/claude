@@ -330,6 +330,18 @@ The collector greps the project's CI files (`Jenkinsfile`, `.github/workflows/*.
 counterpart for it (`ciTestGap` in the collector's JSON), with the checks.json that would close the
 gap.
 
+After the last landing the orchestrator starts `scripts/ci-status.cjs --run=<run file>` in the
+background (`/doh:restack`: `--project=<path> --branches=<a;b>`). For each pushed commit it reads the
+commit statuses (`/repos/{owner}/{repo}/commits/{sha}/status`) and the check runs (`…/check-runs`)
+and waits until none is pending, at most `--timeout-min` (default 15; `0` looks once; CI that has
+reported nothing gets three minutes to start before it counts as `none`). A red status whose link is
+a Jenkins build gets its `consoleText` read without credentials, when the server allows it, and cut
+to the decisive lines: TypeScript errors, `FAIL <spec>`, Jest's failure headers, the `Tests:` /
+`Test Suites:` totals, `ERROR:` (a log with none of those goes through the gate's own excerpt); a
+red check run brings its title and summary. Each branch's answer is `<checksDir>/ci-status.json`,
+rewritten every round, so the summary says per branch "CI green", "CI red" with those lines, or
+"CI still running".
+
 **Every red command is the run's work** — whether the agent's own fixes broke it or it was already red
 when the run started. That is the change the rename is about: the gate used to be a guard that only
 had to stay as green as it was found, and it is now a job.
@@ -673,7 +685,8 @@ rule itself: editing its own settings is refused as self-modification.
 | `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file; what it was given and made kept there (`launch`); run in the background, one per target (`linked` says whether `node_modules` is the main checkout's) |
 | `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`); identical resolve and reply failures as one `{ error, count, ids }` each; `--resolve-only=yes` runs the thread step alone again |
 | `scripts/fixpr-resume.cjs` | a stopped run's next step per target (`--resume`), from the run file, the result files and git |
-| `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files and the stack check; `stackImpact` one line per name, parts as ranges (`part-3..7`), paths cut to their distinct tail, capped with "+N" naming the result file |
+| `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files, the stack check and what CI said (`ci-status.json`); `stackImpact` one line per name, parts as ranges (`part-3..7`), paths cut to their distinct tail, capped with "+N" naming the result file |
+| `scripts/ci-status.cjs` | after a push: the commit statuses and check runs of each pushed commit, waited on until none is pending (bounded by `--timeout-min`), a red Jenkins build's decisive console lines |
 | `scripts/split-work.cjs` | a fix agent's many items cut into groups of whole folders for `doh:pipeline-worker` agents (`references/fix-worker-agent.md`) |
 | `scripts/bash-guard.cjs` | PreToolUse hook: a shell read of a fix worktree, or a `cd` into one that outlives its command, is refused with the tool to use; so are a package-manager install there and an `rm` of `node_modules/`, which reach the main checkout's packages through the link |
 

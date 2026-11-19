@@ -116,7 +116,7 @@ Without that tool, re-read the file or re-run the command with narrower output.
   and every open part above a landed one moves after it (Step 5 point 4) - named or not. On
   2026-11-06 a run of part-1 and part-2 left part-3..5 sitting on the old part-2.
 - Every step of a branch goes through its script - `fixpr-launch.cjs`, `restack.cjs`, `fixpr-after.cjs`,
-  `fixpr-summary.cjs` - each reading the run file (`--run=<runPath>`) and the agent's result file. You
+  `ci-status.cjs`, `fixpr-summary.cjs` - each reading the run file (`--run=<runPath>`) and the agent's result file. You
   never copy a value, a sha or a verdict from one answer into another call by hand.
 - Every `restack.cjs` call that acts on a target takes `--run=<runPath>` and the branch: the worktree,
   parent, tips and checks folder come from the run file. You never copy shas by hand.
@@ -458,6 +458,22 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
    or rendered by hand with `--set=` for a part outside the run), and the cascade runs again
    `--from` that part with `--from-old-tip` = its `oldTip`.
 
+## Step 5b — What CI says (once, after every branch has landed; not with `--no-push`)
+
+Start, in the background (Bash, `run_in_background: true`), once every branch has landed or stopped
+and at least one pushed:
+
+    node "<SKILL_DIR>/scripts/ci-status.cjs" --run="<runPath>" --timeout-min=15
+
+It reads the commit statuses and check runs of each pushed commit through the GitHub API, waits
+until none is pending - never past `--timeout-min` - and for a red Jenkins build reads
+`<build>/consoleText` (when it needs no login) for the decisive lines: TypeScript errors,
+`FAIL <spec>`, the `Tests:` / `Test Suites:` totals, `ERROR:`. Each branch's answer goes to
+`<checksDir>/ci-status.json`, rewritten every round. Do Step 5c meanwhile; run Step 6 when it ends.
+On 2026-11-18 Jenkins failed four of seven parts after seven green gates, and nobody looked until
+the user did. A red CI is reported, never repaired in this run: the user decides on a new
+`/doh:fixPr` of that branch, whose agent gets the red lines from the summary.
+
 ## Step 5c — Keep what the comments taught (once, after every branch has landed)
 
 Skip this step under `--local`: every finding there comes from the review's own rules, and the 31
@@ -486,7 +502,8 @@ landing, push, fixed / rejected / without action), every rejected comment with i
 part the user acts on), what was answered, the `--local` findings not fixed, the comment and thread
 check per branch, the self-review's report and counts, every `stackImpact`, the files nobody looked
 at (`uiUnverified`), the visual checks, the gate per branch with every still-red step's log and
-every branch committed on `green-no-tests` (no unit test ran: never call it green), every
+every branch committed on `green-no-tests` (no unit test ran: never call it green), what CI said
+per pushed branch (Step 5b: green, red with its decisive lines, or still running), every
 stack bottom-first with each pair that does not sit on its parent (restack.cjs verify) and its
 command, and the checkouts to `git pull --rebase`. Your final message is that text as it is,
 followed only by what no file holds: errors and warnings of Steps 1-5 not reported yet, the lessons

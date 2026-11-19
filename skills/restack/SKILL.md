@@ -218,13 +218,25 @@ Wait for its notification; never predict it. It ends with one JSON object:
 
 `broken` must be empty now; any pair in it goes into the summary with its `command`.
 
+With `PUSH=yes` and at least one part pushed, start in the background (Bash,
+`run_in_background: true`) what CI says about the pushed tips:
+
+    node "<FIXPR>/scripts/ci-status.cjs" --project="<PROJECT>" --branches="<the pushed parts, ;-separated>" --timeout-min=15 --out="<PROJECT>/.claude/doh/restack-checks/ci-status.json"
+
+It waits until no status or check run of those commits is pending, never past `--timeout-min`, and
+gives each part's `state` (`success`, `failure`, `pending` when CI still runs at the timeout, `none`)
+with, for a red one, `failed[]`: the check's name, link and decisive lines (a Jenkins build's
+TypeScript errors, `FAIL <spec>`, test totals, `ERROR:` lines from its console). Write the summary
+when it ends. A green gate is the plugin's verdict; CI is the pull request's.
+
 Then one summary, and nothing else:
 - the stack, bottom-first, with its base;
 - one row per part: the pull request, `oldTip` → `commit` (short shas), how it moved (not at all:
   `noop`, with its `reason`; rebased with no conflict, off a squash-merged parent - `squashed.commits` left out - conflicts
   merged by the script - `autoResolved` - or by the conflict agent, with its `resolvedFiles`), the
   gate verdict (reused when its warning says so; `green-no-tests` means every command passed and no
-  unit test ran - say so, never "green"), whether it was pushed;
+  unit test ran - say so, never "green"), whether it was pushed, and what CI said (green, red with
+  at most a few decisive lines and the link, or still running);
 - every part that did not land, with why, its worktree and what the user can do;
 - `waiting` parts, left where they were;
 - every branch moved on `doh-fixpr/<branch>` because the user had it checked out (a warning of its
