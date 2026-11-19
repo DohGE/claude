@@ -155,6 +155,15 @@ test('a run file gives a part the changes of every landed part below it that it 
   assert.strictEqual(restack.parentChangesOf(run, 'p1'), 'none');
 });
 
+test('a part\'s changes below name each path once, and take a use written as origin/<branch>', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-impact-'));
+  const file = path.join(dir, 'p1.md');
+  fs.writeFileSync(`${file}.result.json`, JSON.stringify({ stackImpact: [{ symbol: 'a', change: 'removed', usedIn: ['origin/p2:src/x.ts:1', 'p2:src/x.ts:7', 'p2:src/y.ts:2', 'p3:src/z.ts:3'] }] }));
+  const run = { targets: [{ branch: 'p1', reportPath: file, stack: { parent: null } }, { branch: 'p2', reportPath: path.join(dir, 'p2.md'), stack: { parent: 'p1' } }] };
+  assert.deepStrictEqual(restack.parentImpactOf(run, 'p2'), [{ symbol: 'a', change: 'removed', uses: ['src/x.ts:1', 'src/x.ts:7', 'src/y.ts:2'] }]);
+  assert.strictEqual(restack.parentChangesOf(run, 'p2'), 'a: removed (src/x.ts:1, 7; src/y.ts:2)');
+});
+
 test('a conflict brief carries the mode, the changes below and the parent\'s landed diff of the conflicting files', (t) => {
   const s = stack(t);
   fs.writeFileSync(path.join(s.tree, 'shared.txt'), 'one\nTWO from part 2\nthree\n');
@@ -172,22 +181,59 @@ test('a conflict brief carries the mode, the changes below and the parent\'s lan
   assert.match(fs.readFileSync(vars.PARENT_DIFF, 'utf8'), /\+TWO from part 1/);
 });
 
+// 2026-11-18: the whole landed parent went into every brief (10-14 KB) for a conflict in one
+// import block. The cut diff holds the conflicting files and the files that change a name this
+// part still uses; the full one stays a file away.
+test('a conflict brief\'s diff covers the conflicting files and the names this part still uses, the full diff a file away', (t) => {
+  const s = stack(t);
+  fs.writeFileSync(path.join(s.tree, 'shared.txt'), 'one\nTWO from part 2\nthree\n');
+  fs.writeFileSync(path.join(s.tree, 'uses.ts'), 'export const y = oldName();\n');
+  git(s.tree, 'add', 'uses.ts');
+  git(s.tree, 'commit', '-q', '-am', 'part 2 edits shared and uses oldName');
+  git(s.work, 'switch', '-q', 'part-1');
+  fs.writeFileSync(path.join(s.work, 'shared.txt'), 'one\nTWO from part 1\nthree\n');
+  fs.writeFileSync(path.join(s.work, 'api.ts'), 'export function newName() {}\n// was oldName\n');
+  for (let i = 0; i < 6; i += 1) fs.writeFileSync(path.join(s.work, `noise${i}.ts`), `export const noise${i} = ${'1'.repeat(400)};\n`);
+  git(s.work, 'add', '-A');
+  git(s.work, 'commit', '-q', '-m', 'part 1 renames oldName and adds noise');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  const parentImpact = [
+    { symbol: 'oldName', change: 'renamed to newName', uses: ['uses.ts:1'] },
+    { symbol: 'gone', change: 'removed', uses: ['two.txt:1'] },
+  ];
+  const result = land(s, { checksDir: path.join(s.tree, '..', 'checks-cut'), parentImpact });
+  assert.strictEqual(result.status, 'conflict');
+  const vars = JSON.parse(fs.readFileSync(result.briefVars, 'utf8'));
+  assert.strictEqual(vars.PARENT_CHANGES, 'oldName: renamed to newName (uses.ts:1)', 'an entry this part no longer uses is left out');
+  const cut = fs.readFileSync(vars.PARENT_DIFF, 'utf8');
+  assert.deepStrictEqual([...cut.matchAll(/^diff --git a\/(\S+)/gm)].map((m) => m[1]), ['api.ts', 'shared.txt']);
+  const full = fs.readFileSync(vars.PARENT_DIFF_FULL, 'utf8');
+  assert.strictEqual([...full.matchAll(/^diff --git /gm)].length, 8);
+  assert.ok(cut.length * 3 < full.length, `${cut.length} of ${full.length} bytes`);
+});
+
 // A rename below that breaks this part without a textual conflict used to end the landing as an
 // error for the user; it is the conflict agent's work, in its adapting mode.
-test('a red gate after a clean move writes the brief of an adapting agent', (t) => {
+test('a red gate after a clean move writes the brief of an adapting agent, its diff cut to what the errors name', (t) => {
   const s = stack(t);
   git(s.work, 'switch', '-q', 'part-1');
   commit(s.work, 'one.txt', 'part one, fixed\n', 'CR 1');
+  commit(s.work, 'other.txt', 'unrelated\n', 'CR 1b');
   git(s.work, 'push', '-q', 'origin', 'part-1');
+  const errorsPath = path.join(s.tree, '..', 'typecheck.errors.log');
+  fs.writeFileSync(errorsPath, `${path.join(s.tree, 'one.txt').replace(/\//g, '\\')}(1,1): error TS2304: Cannot find name 'partOne'.\n`);
   const result = restack.land(
     { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'yes', checksDir: path.join(s.tree, '..', 'checks-adapt'), parentChanges: 'none' },
-    { runGate: () => ({ gate: 'red', steps: [{ label: 'typecheck', status: 'failed', errorsPath: '/x/typecheck.errors.log' }] }) },
+    { runGate: () => ({ gate: 'red', steps: [{ label: 'typecheck', status: 'failed', errorsPath }] }) },
   );
   assert.strictEqual(result.status, 'gate-red');
   assert.strictEqual(result.mode, 'adapt');
   const vars = JSON.parse(fs.readFileSync(result.briefVars, 'utf8'));
   assert.deepStrictEqual([vars.MODE, vars.FILES, vars.OLD_TIP], ['adapt', 'none', s.tips.a1]);
-  assert.match(fs.readFileSync(vars.PARENT_DIFF, 'utf8'), /part one, fixed/);
+  const cut = fs.readFileSync(vars.PARENT_DIFF, 'utf8');
+  assert.match(cut, /part one, fixed/);
+  assert.doesNotMatch(cut, /unrelated/);
+  assert.match(fs.readFileSync(vars.PARENT_DIFF_FULL, 'utf8'), /unrelated/);
   assert.strictEqual(restack.compactPart(result).mode, 'adapt');
 });
 
@@ -344,7 +390,7 @@ test('a run file gives land its part and verify its pairs', (t) => {
       { branch: 'p2', worktree: '/w/p2', remoteTipAtStart: 'b', checksDir: '/c/p2', stack: { parent: 'p1', children: [], parentTipAtStart: 'a', above: ['p3', 'p4'] } },
     ],
   };
-  assert.deepStrictEqual(restack.landOptionsFromRun(run, 'p2'), { worktree: '/w/p2', branch: 'p2', parent: 'p1', parentTipAtStart: 'a', remoteTipAtStart: 'b', checksDir: path.join('/c/p2', 'restack'), parentChanges: 'none' });
+  assert.deepStrictEqual(restack.landOptionsFromRun(run, 'p2'), { worktree: '/w/p2', branch: 'p2', parent: 'p1', parentTipAtStart: 'a', remoteTipAtStart: 'b', checksDir: path.join('/c/p2', 'restack'), parentImpact: [] });
   assert.deepStrictEqual(restack.pairsFromRun(run), [
     { parent: 'p1', child: 'p2', oldTip: 'a' }, { parent: 'p2', child: 'p3', oldTip: 'b' }, { parent: 'p3', child: 'p4', oldTip: null },
   ]);
@@ -586,4 +632,225 @@ test('stack refuses to climb when the preflight fails', () => {
   assert.deepStrictEqual(out.errors, ['preflight origin: E - F']);
   assert.deepStrictEqual(out.parts, []);
   assert.strictEqual(out.preflight.ok, false);
+});
+
+// --- no-op moves and old tips -----------------------------------------------------------------
+
+// 2026-11-18: a cascade given a wrong old tip answered `landed`, `gate: skipped`, with the part's
+// commit unchanged - read as a move that happened.
+test('land reports a part that already sits on its parent and on origin as a no-op, not as landed', (t) => {
+  const s = stack(t);
+  git(s.tree, 'reset', '-q', '--hard', s.tips.b1);
+  const result = restack.land(
+    { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'yes' },
+    { runGate: () => { throw new Error('no gate expected'); } },
+  );
+  assert.deepStrictEqual([result.status, result.rebased, result.pushed, result.commit, result.gate], ['noop', false, false, s.tips.b1, null]);
+  assert.match(result.reason, /already sits on origin\/part-1/);
+  assert.strictEqual(restack.compactPart(result).status, 'noop');
+});
+
+test('land refuses an old parent tip the part was not built on, and one that is no commit', (t) => {
+  const s = stack(t);
+  git(s.work, 'switch', '-q', 'main');
+  const elsewhere = commit(s.work, 'main.txt', 'newer main\n', 'main moved');
+  git(s.work, 'push', '-q', 'origin', 'main');
+  git(s.work, 'switch', '-q', 'part-1');
+  commit(s.work, 'one.txt', 'part one, fixed\n', 'CR 1');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  const wrong = land(s, { parentTipAtStart: elsewhere });
+  assert.strictEqual(wrong.status, 'error');
+  assert.match(wrong.errors[0], /is not an ancestor of part-2/);
+  assert.strictEqual(git(s.tree, 'rev-parse', 'HEAD'), s.tips.b2, 'nothing moved');
+  const bogus = land(s, { parentTipAtStart: 'deadbeefdeadbeef' });
+  assert.strictEqual(bogus.status, 'error');
+  assert.match(bogus.errors[0], /is no commit of this repository/);
+});
+
+test('cascade and stack --start refuse an old tip the first part does not sit on, before any worktree', (t) => {
+  const calls = [];
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2', p3: 't3' },
+    isAncestor: (sha, branch) => !(sha === 'wrong' && ['p2', 'p3'].includes(branch)),
+    discover: () => ({ stack: ['p1', 'p2', 'p3'], base: 'base', prs: {}, warnings: [] }),
+    worktree: { add: ({ branch }) => { calls.push(branch); return { worktree: `/w/${branch}`, errors: [] }; }, remove: () => ({ removed: true }) },
+    land: () => { throw new Error('no landing expected'); },
+  };
+  const out = restack.cascade({ project: process.cwd(), stack: ['p1', 'p2', 'p3'], from: 'p1', fromOldTip: 'wrong' }, deps);
+  assert.match(out.errors.join(' '), /wrong is not an ancestor of p2/);
+  assert.deepStrictEqual([out.parts, out.waiting, calls], [[], ['p2', 'p3'], []]);
+  const project = fs.realpathSync(tempDir(t, 'fpc-start-'));
+  const started = restack.stackAction({ project, stack: ['p1', 'p2', 'p3'], base: 'base', start: 'p3', parentOldTip: 'wrong', push: 'yes', gate: 'yes', ontoBase: 'yes', checksDir: path.join(project, 'checks') }, deps);
+  assert.match(started.errors.join(' '), /wrong is not an ancestor of p3/);
+  assert.deepStrictEqual(calls, []);
+});
+
+test('a climb takes a no-op part\'s worktree down and goes on, and a part off its parent moves off what it shares with it', () => {
+  const calls = [];
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2', p3: 't3' },
+    // p3 was built on an older p2 than t2: land would refuse t2.
+    isAncestor: (sha, branch) => !(sha === 't2' && branch === 'p3'),
+    worktree: { add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }), remove: ({ branch }) => { calls.push(['remove', branch]); return { removed: true, warnings: [] }; } },
+    land: (o) => { calls.push(['land', o.branch, o.parentTipAtStart]); return o.branch === 'p2' ? { status: 'noop', commit: 't2', reason: 'nothing to move' } : { status: 'landed', commit: `n-${o.branch}`, pushed: true, rebased: true }; },
+  };
+  const out = restack.cascade({ project: process.cwd(), stack: ['p1', 'p2', 'p3'], from: 'p1' }, deps);
+  assert.deepStrictEqual(calls, [['land', 'p2', 't1'], ['remove', 'p2'], ['land', 'p3', ''], ['remove', 'p3']]);
+  assert.deepStrictEqual(out.parts.map((p) => [p.branch, p.status, p.worktree]), [['p2', 'noop', null], ['p3', 'landed', null]]);
+  assert.match(out.warnings.join(' '), /p3 did not sit on p2 at t2/);
+});
+
+test('stack records no stop at a no-op part', (t) => {
+  const project = fs.realpathSync(tempDir(t, 'fpc-noop-'));
+  const deps = {
+    tips: { base: 'm0', p1: 't1' },
+    discover: () => ({ stack: ['p1'], base: 'base', prs: {}, warnings: [] }),
+    worktree: { add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }), remove: () => ({ removed: true, warnings: [] }) },
+    land: () => ({ status: 'noop', commit: 't1', reason: 'nothing to move' }),
+  };
+  const checksDir = path.join(project, 'checks');
+  const out = restack.stackAction({ project, stack: ['p1'], push: 'yes', gate: 'yes', ontoBase: 'yes', checksDir }, deps);
+  assert.deepStrictEqual(out.parts.map((p) => [p.status, p.reason, p.worktree]), [['noop', 'nothing to move', null]]);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(checksDir, 'restack-state.json'), 'utf8')).stopped, null);
+});
+
+// --- a missing git identity -------------------------------------------------------------------
+
+// 2026-11-18: user.name and user.email were gone; land said `conflict` with no file, and a landing
+// agent spent 4 minutes finding "Committer identity unknown".
+test('land without a git identity is an error that names user.name and user.email, never a conflict', (t) => {
+  const s = stack(t);
+  git(s.work, 'switch', '-q', 'part-1');
+  commit(s.work, 'one.txt', 'part one, fixed\n', 'CR 1');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  const emptyGlobal = path.join(s.tree, '..', 'empty.gitconfig');
+  fs.writeFileSync(emptyGlobal, '');
+  const names = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'EMAIL'];
+  const saved = Object.fromEntries(names.map((k) => [k, process.env[k]]));
+  t.after(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+  for (const k of names.slice(2)) delete process.env[k];
+  Object.assign(process.env, { GIT_CONFIG_GLOBAL: emptyGlobal, GIT_CONFIG_NOSYSTEM: '1' });
+  git(s.work, 'config', '--unset', 'user.name');
+  git(s.work, 'config', '--unset', 'user.email');
+  // No guess from the host name either: git refuses as it does on a machine without a domain.
+  git(s.work, 'config', 'user.useConfigOnly', 'true');
+  const result = land(s, { gate: 'yes', checksDir: path.join(s.tree, '..', 'checks-id') });
+  assert.strictEqual(result.status, 'error', JSON.stringify(result));
+  assert.match(result.errors[0], /No git identity: user\.name and user\.email are not set/);
+  assert.deepStrictEqual(result.conflictFiles, []);
+  assert.strictEqual(git(s.tree, 'rev-parse', 'HEAD'), s.tips.b2);
+  assert.match(restack.checkIdentity(s.tree), /git config --global user\.email/);
+});
+
+test('git\'s identity complaints are told from a conflict', () => {
+  for (const text of ['Committer identity unknown\n\n*** Please tell me who you are.', "fatal: unable to auto-detect email address (got 'u@host.(none)')", 'fatal: no email was given and auto-detection is disabled']) {
+    assert.ok(restack.identityProblem.test(text), text);
+  }
+  assert.ok(!restack.identityProblem.test('CONFLICT (content): Merge conflict in a.ts'));
+});
+
+test('a climb without a git identity stops before its first worktree', () => {
+  const calls = [];
+  const out = restack.cascade({ project: process.cwd(), stack: ['p1', 'p2'], from: 'p1' }, {
+    identity: () => 'No git identity: user.email is not set',
+    worktree: { add: ({ branch }) => { calls.push(branch); return { worktree: `/w/${branch}`, errors: [] }; }, remove: () => ({ removed: true }) },
+    land: () => { throw new Error('no landing expected'); },
+  });
+  assert.deepStrictEqual([out.errors, out.waiting, calls], [['No git identity: user.email is not set'], ['p2'], []]);
+});
+
+// --- import blocks --------------------------------------------------------------------------
+
+// mergeImports(ours, base, theirs): in a rebase "ours" is the landed parent, "theirs" the part's commit.
+const js = (...lines) => `${lines.join('\n')}\n`;
+
+test('mergeImports: the parent removes names and the part adds others to one multi-line import', () => {
+  const base = js("import { Injectable } from '@angular/core';", 'import {', '  Alpha,', '  Beta,', '  Gamma,', "} from '../types';", '', 'export const x = 1;');
+  const ours = base.replace('  Beta,\n', '');
+  const theirs = base.replace('  Gamma,\n', '  Gamma,\n  Delta,\n').replace('x = 1', 'x = 2');
+  assert.strictEqual(restack.mergeImports(ours, base, theirs), js("import { Injectable } from '@angular/core';", 'import {', '  Alpha,', '  Gamma,', '  Delta,', "} from '../types';", '', 'export const x = 2;'));
+  // Both drop and add in the same spot: the base's names, minus both removals, plus both additions.
+  const ours2 = base.replace('  Beta,\n  Gamma,\n', '  Epsilon,\n');
+  const theirs2 = base.replace('  Gamma,\n', '  Zeta,\n');
+  assert.strictEqual(restack.mergeImports(ours2, base, theirs2), js("import { Injectable } from '@angular/core';", 'import {', '  Alpha,', '  Epsilon,', '  Zeta,', "} from '../types';", '', 'export const x = 1;'));
+});
+
+test('mergeImports: a name or a module both sides add is imported once', () => {
+  const base = js("import React, { useState } from 'react';", "import { A } from 'm';", '', 'A();');
+  const ours = js("import React, { useState, useEffect } from 'react';", "import { A, B, C } from 'm';", "import { X } from 'x';", '', 'A();');
+  const theirs = js("import React, { useState, useMemo } from 'react';", "import { A, B, D } from 'm';", "import { X, Y } from 'x';", '', 'A();');
+  assert.strictEqual(restack.mergeImports(ours, base, theirs), js("import React, { useState, useEffect, useMemo } from 'react';", "import { A, B, C, D } from 'm';", "import { X, Y } from 'x';", '', 'A();'));
+});
+
+test('mergeImports: a module one side removed goes, unless the other side added a name to it', () => {
+  const base = js("import { Old } from './old';", "import { Keep } from './keep';", '', 'Keep();');
+  const ours = js("import { Keep } from './keep';", '', 'Keep();');
+  assert.strictEqual(restack.mergeImports(ours, base, js("import { Old } from './old';", "import { Keep, Extra } from './keep';", '', 'Keep();')), js("import { Keep, Extra } from './keep';", '', 'Keep();'));
+  assert.strictEqual(restack.mergeImports(ours, base, js("import { Old, More } from './old';", "import { Keep } from './keep';", '', 'Keep();')), js("import { More } from './old';", "import { Keep } from './keep';", '', 'Keep();'));
+});
+
+test('mergeImports keeps each side\'s formatting: indent, trailing comma, braces, quotes, semicolons, CRLF', () => {
+  const base = ['import {', '    a,', '    b', '} from "./four"', 'import {c,d} from "./tight"', '', 'run()', ''].join('\r\n');
+  const ours = base.replace('    a,\r\n', '').replace('{c,d}', '{c}');
+  const theirs = base.replace('    b\r\n', '    b,\r\n    e\r\n').replace('{c,d}', '{c,d,f}');
+  assert.strictEqual(restack.mergeImports(ours, base, theirs), ['import {', '    b,', '    e', '} from "./four"', 'import {c, f} from "./tight"', '', 'run()', ''].join('\r\n'));
+});
+
+test('mergeImports keeps type modifiers and aliases, and `import type` apart from the values of one module', () => {
+  const base = js("import type { A, B } from './types';", "import { c, d as e } from './types';", '', 'e(c);');
+  const ours = js("import type { A } from './types';", "import { c, d as e, type F } from './types';", '', 'e(c);');
+  const theirs = js("import type { A, B, G } from './types';", "import { c as cc, d as e } from './types';", '', 'e(c);');
+  assert.strictEqual(restack.mergeImports(ours, base, theirs), js("import type { A, G } from './types';", "import { c as cc, d as e, type F } from './types';", '', 'e(c);'));
+});
+
+test('mergeImports: side-effect imports are kept or dropped whole, in place', () => {
+  const base = js("import 'zone.js';", "import './polyfills';", "import { A } from 'a';", '', 'A();');
+  const ours = js("import 'zone.js';", "import { A } from 'a';", '', 'A();');
+  const theirs = js("import 'zone.js';", "import './styles';", "import './polyfills';", "import { A, B } from 'a';", '', 'A();');
+  assert.strictEqual(restack.mergeImports(ours, base, theirs), js("import 'zone.js';", "import './styles';", "import { A, B } from 'a';", '', 'A();'));
+});
+
+test('mergeImports leaves anything but imports to the agent', () => {
+  // A conflict that holds a line of code next to the import.
+  const base = js("import { A } from 'a';", 'const x = 1;');
+  assert.strictEqual(restack.mergeImports(js("import { A, B } from 'a';", 'const x = 2;'), base, js("import { A, C } from 'a';", 'const x = 3;')), null);
+  // One binding both sides changed differently.
+  const b2 = js("import { A } from 'a';", '', 'A;');
+  assert.strictEqual(restack.mergeImports(js("import { type A } from 'a';", '', 'A;'), b2, js("import { B as A } from 'a';", '', 'A;')), null);
+  // A statement this does not read.
+  assert.strictEqual(restack.mergeImports(js("import x = require('y');", "import { A, B } from 'a';"), js("import x = require('y');", "import { A } from 'a';"), js("import x = require('y');", "import { A, C } from 'a';")), null);
+  // A comment in the block the part changed.
+  assert.strictEqual(restack.mergeImports(js("import { A, B } from 'a';", '// one', "import { Z } from 'z';"), js("import { A } from 'a';", '// one', "import { Z } from 'z';"), js("import { A, C } from 'a';", '// two', "import { Z } from 'z';")), null);
+});
+
+test('land merges a conflict of two parts that only changed one import block, and the gate proves it', (t) => {
+  const s = stack(t);
+  const storeOf = (...names) => js("import { Injectable } from '@angular/core';", 'import {', ...names.map((n) => `  ${n},`), "} from './models';", '', 'export class Store {}');
+  git(s.work, 'switch', '-q', 'main');
+  commit(s.work, 'store.ts', storeOf('Alpha', 'Beta', 'Gamma'), 'store');
+  git(s.work, 'push', '-q', 'origin', 'main');
+  git(s.work, 'switch', '-q', 'part-1');
+  git(s.work, 'merge', '-q', '--no-edit', 'main');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  const forkTip = git(s.work, 'rev-parse', 'HEAD');
+  git(s.tree, 'merge', '-q', '--no-edit', 'origin/part-1');
+  fs.writeFileSync(path.join(s.tree, 'store.ts'), storeOf('Alpha', 'Beta', 'Gamma', 'Delta'));
+  git(s.tree, 'commit', '-q', '-am', 'part 2 imports Delta');
+  fs.writeFileSync(path.join(s.work, 'store.ts'), storeOf('Alpha', 'Beta'));
+  git(s.work, 'commit', '-q', '-am', 'CR 1 drops Gamma');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  let gateRan = false;
+  const result = restack.land(
+    { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: forkTip, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'no', checksDir: path.join(s.tree, '..', 'checks') },
+    { runGate: () => { gateRan = true; return { gate: 'green', steps: [] }; } },
+  );
+  assert.strictEqual(result.status, 'landed', JSON.stringify(result));
+  assert.deepStrictEqual(result.autoResolved.map((r) => [r.file, r.how]), [['store.ts', 'imports']]);
+  assert.ok(gateRan, 'the gate proves an automatic merge');
+  assert.strictEqual(fs.readFileSync(path.join(s.tree, 'store.ts'), 'utf8').replace(/\r\n/g, '\n'), storeOf('Alpha', 'Beta', 'Delta'));
 });

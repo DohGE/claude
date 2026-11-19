@@ -1,6 +1,6 @@
 ---
 name: restack
-description: Use when the user wants a stack of pull requests (each based on another one's branch) moved onto its newest base, or a stack whose parts no longer sit on each other put back in line - takes one branch of the stack (the rest is read from GitHub) or the whole stack bottom-first, moves the bottom onto its base and every part onto the part below it, bottom-up, each in its own worktree with the project's gate after a move that changed code, merges append-only conflicts itself, hands real conflicts to a background conflict agent, and pushes every part with a lease; it never touches the user's checkout
+description: Use when the user wants a stack of pull requests (each based on another one's branch) moved onto its newest base, or a stack whose parts no longer sit on each other put back in line - takes one branch of the stack (the rest is read from GitHub) or the whole stack bottom-first, moves the bottom onto its base and every part onto the part below it, bottom-up, each in its own worktree with the project's gate after a move that changed code, merges append-only and import-only conflicts itself, hands real conflicts to a background conflict agent, and pushes every part with a lease; it never touches the user's checkout
 argument-hint: "<branch>[;<branch>…] [--base=<branch>] [--no-onto-base] [--start=<part> --parent-old-tip=<sha>] [--dry-run] [--no-push] [--no-gate] [--project=<path>]"
 hooks:
   PreToolUse:
@@ -104,7 +104,8 @@ Strip the flags first, wherever they sit:
   put back on each other.
 - `--resume` → the previous climb stopped at a part that has landed since (its conflict agent, or
   the user, pushed it): Step 3 with `--resume=yes`, Step 2 skipped.
-- `--start=<part>` with `--parent-old-tip=<sha>` → start a climb at that part by hand.
+- `--start=<part>` with `--parent-old-tip=<sha>` → start a climb at that part by hand. The script refuses
+  a `<sha>` that part is not built on (not its ancestor), before any worktree.
 - `--dry-run` → Step 2 only.
 - `--no-push` → `PUSH=no`; `--no-gate` → `GATE=no` (say in the summary that nothing was built).
 
@@ -149,8 +150,12 @@ Each part gets a worktree (`worktree.cjs`: a branch the user has checked out is 
 commits only - and is checked by the project's gate when the move changed the code under it (a
 gate already green on the same tree is reused). A bottom whose parent pull request was
 squash-merged into the base moves off that parent's last commit, never replaying it (`squashed`).
-Conflicts where both sides only appended (translation keys, enum members, exports) are merged by
-the script and proved by that gate. The JSON:
+Conflicts where both sides only appended (translation keys, enum members, exports), and conflicts
+held in an import block alone (`import { … } from '…'`: the base's names, minus what a side removed,
+plus what a side added), are merged by the script and proved by that gate (`autoResolved`: `json-keys`,
+`both-insertions`, `imports`). A part already on its parent and on origin moves nothing: `noop`. A
+climb first checks that git can write commits (`user.name`, `user.email`); without them it stops
+before any worktree, with an `errors` entry that names what is missing. The JSON:
 
 - `stack`, `base`, `prs`; `resumedAfter` with `--resume=yes`;
 - `parts[]`, one per part it reached, bottom-up: `branch`, `parent`, `status`, `commit` (new sha),
@@ -158,18 +163,22 @@ the script and proved by that gate. The JSON:
   `conflictFiles` (the first 10), `conflictCount`, `oldParentTip`, `autoResolved`, `squashed`
   (`commits` of a squash-merged parent left out), `worktree` (kept only when it did not land),
   `agentPrompt` / `agentPromptErrors` (a conflict, or a red gate after a clean move: `mode: adapt`),
-  `warnings`, `errors`;
+  `reason` (a `noop`: why nothing moved), `warnings`, `errors`;
 - `waiting[]` — the parts above a stop, untouched.
 
 Act on the LAST part:
 
-- every part `landed` → Step 5.
+- no part, and an `errors` entry → stop with it: a missing git identity (tell the user the two
+  `git config --global` commands it names), or an old tip the part is not built on (ask for the right one).
+- every part `landed` or `noop` → Step 5. A `noop` is no failure: the part already sat on its parent
+  and origin had it; its worktree is gone like a landed part's.
 - `conflict` → Step 4.
 - `gate-red` with `mode: adapt` → Step 4: the move went through and the part's gate is red on what
   the parts below changed; the same agent adapts it (its brief says how).
 - `gate-red` without it → stop. Name each red step with its `errorsPath`; the worktree stays for the user.
 - `push-rejected` → stop. Somebody pushed to that branch during the climb; say so.
-- `error` → stop with its `errors`.
+- `error` → stop with its `errors` (a missing `user.name`/`user.email` is named there, never as a
+  conflict).
 
 ## Step 4 — A conflict
 
@@ -203,8 +212,8 @@ Wait for its notification; never predict it. It ends with one JSON object:
 
 Then one summary, and nothing else:
 - the stack, bottom-first, with its base;
-- one row per part: the pull request, `oldTip` → `commit` (short shas), how it moved (not at all,
-  rebased with no conflict, off a squash-merged parent - `squashed.commits` left out - conflicts
+- one row per part: the pull request, `oldTip` → `commit` (short shas), how it moved (not at all:
+  `noop`, with its `reason`; rebased with no conflict, off a squash-merged parent - `squashed.commits` left out - conflicts
   merged by the script - `autoResolved` - or by the conflict agent, with its `resolvedFiles`), the
   gate verdict (reused when its warning says so), whether it was pushed;
 - every part that did not land, with why, its worktree and what the user can do;

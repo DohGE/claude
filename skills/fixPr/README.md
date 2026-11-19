@@ -292,6 +292,22 @@ brings the gate green and pushes the same way. A part that did not land leaves i
 was, and its children move onto that. After the run, `restack.cjs --action=verify` names every part
 that does not sit on its parent, with the command that moves it.
 
+A landing that moves nothing - the part already sits on its parent and origin already has it - is
+`status: noop`, with a `reason`, and its worktree goes like a landed part's. It used to be `landed`
+with `gate: skipped`, which read as a move that happened: on 2026-11-18 a cascade given a wrong old
+tip answered exactly that, with the part where it was. That old tip is checked now: a
+`--parent-tip-at-start` (land), `--from-old-tip` (cascade) or `--parent-old-tip` (stack `--start`)
+that is not an ancestor of the part being moved is refused with an error before anything moves. Inside
+a climb, a part that did not sit on its parent's old tip (a stack out of line) moves off the last
+commit it shares with it, with a warning.
+
+A move writes commits, so git needs `user.name` and `user.email`. Without them land answers
+`status: error`, its first error naming what is missing and the two `git config --global` commands,
+and a climb checks it once before its first worktree. On 2026-11-18 the rebase stopped at its first
+pick with "Committer identity unknown", land reported a `conflict` with no conflicting file, and a
+landing agent spent 4 minutes and about 55k tokens finding why. A rebase that stops with no
+conflicting file for any other reason is an `error` with git's own line too.
+
 Two parts that only appended at the same spot - a translation key each, an enum member each, an
 export each - no longer stop the move. `land` merges such a conflict itself: a JSON file key by key
 (both sides' new keys kept in place, a key both changed differently refused, and only a file that
@@ -299,6 +315,26 @@ export each - no longer stop the move. `land` merges such a conflict itself: a J
 insertions with an empty base. It does so only when the gate runs after the move, which proves the
 merge; `autoResolved[]` names each file and how. On 2026-11-05 four restacks of DPXN-11967 stopped on
 exactly these (`en.json`, `ButtonTooltip`), each spending a conflict agent.
+
+A conflict held in the import block of a JS/TS file is merged the same way (`how: imports`): per
+module specifier, the base's names, minus the ones a side removed, plus the ones a side added -
+`type` modifiers and aliases kept, `import type` apart from the values of one module, a default
+import kept beside the named ones, a side-effect or namespace import kept or dropped whole, an import
+left with no name dropped. The parent's order and formatting stay (single- or multi-line, indent,
+trailing comma, quotes, semicolons, line endings); a name only the part added comes after the one it
+follows in the part. Only where every conflicting hunk holds import lines alone (or is an insertion
+with an empty base): a hunk with any other line, a binding both sides changed differently, a comment
+the part changed in the block or a statement it cannot read stays a conflict for the agent. On
+2026-11-18 five parts of one stack each stopped on the same import block of one store file - the
+parent had dropped names the child kept, the child had added others - and five landing agents
+(55-75k tokens and 4-7 minutes each) resolved it the same way.
+
+The landing agent's brief carries the parent's diff cut to what the landing is about (`PARENT_DIFF`):
+the conflicting files, or in `adapt` mode the files and the quoted names of the red step's errors,
+plus every file whose changed lines hold a name of the parts below that this part still uses.
+`PARENT_CHANGES` lists only the entries whose name this part's files still hold. The whole diff stays
+in `parent-diff-full.patch` next to it (`PARENT_DIFF_FULL`), for the agent to grep. On 2026-11-18 the
+whole landed parent went to each agent, 10-14 KB of brief and diff for a conflict in one import block.
 
 `restack.cjs --action=cascade` moves every part above a changed one, bottom-up, with no agent - after
 a `--task` on part-1, the parts 2..n the run did not name. Each part gets a worktree for the move and
@@ -470,7 +506,7 @@ rule itself: editing its own settings is refused as self-modification.
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
 | `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`), removal (links first, git's own reason on a refusal, the main `node_modules` counted before and after) |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice |
-| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append conflicts merged, `--run` reads the part from the run file, `--pending-steps`, `--summary`), checks a stack (`verify`, `--run`), moves the parts above a changed one (`cascade`), moves a whole stack onto its base (`stack`, `plan` - /doh:restack) and pushes `HEAD` with retry (`push`) |
+| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append and import-block conflicts merged, `noop` when nothing moves, a missing git identity or a wrong old tip an error, `--run` reads the part from the run file, `--pending-steps`, `--summary`), checks a stack (`verify`, `--run`), moves the parts above a changed one (`cascade`), moves a whole stack onto its base (`stack`, `plan` - /doh:restack) and pushes `HEAD` with retry (`push`) |
 | `scripts/symbol-uses.cjs` | where names are still used - in the worktree (a rename's leftovers) and in the parts stacked above (`--refs`) |
 | `scripts/agent-stop.cjs` | SubagentStop hook: a fix or restack agent ends with its JSON object alone, and never while its own background work runs |
 | `scripts/pr-media.cjs` | downloads the screenshots and recordings of the comments, a recording as still frames |

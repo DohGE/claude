@@ -46,6 +46,7 @@ function landingText(t) {
   if (t.landing !== 'hold') return t.landing === 'keep-base' ? 'na bazie (keep-base)' : 'rebase na bazę';
   if (!l) return 'nie przeniesiona';
   if (l.status === 'landed') return `przeniesiona na ${(t.stack && t.stack.parent) || 'rodzica'}`;
+  if (l.status === 'noop') return `bez zmian: już siedziała na ${(t.stack && t.stack.parent) || 'rodzicu'}`;
   if (t.outcome && t.outcome.landedBy === 'landing') return `przeniesiona przez agenta (${l.mode || l.status})`;
   return `zatrzymana: ${l.status}`;
 }

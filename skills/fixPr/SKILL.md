@@ -165,9 +165,9 @@ It runs the preflight first (as Step 2 describes it, without the token check's s
 with `ok: false` → stop the run before anything moved, and report its `errors[]` in Polish with their
 fixes. Otherwise handle its JSON exactly as `/doh:restack` Steps 3-4 say (`<SKILL_DIR>/../restack/SKILL.md`): a
 part in `conflict` gets the conflict agent, and the climb resumes above it. Only when every part
-`landed` go on to Step 2: the collector then reads the moved branches and their new tips. A part
-that did not land → stop the run, report it in Polish with its worktree, and say the fixes wait
-for it.
+`landed` (or was a `noop`: it already sat on its parent) go on to Step 2: the collector then reads
+the moved branches and their new tips. A part that did not land → stop the run, report it in
+Polish with its worktree, and say the fixes wait for it.
 
 ## Step 2 — Collect the open comments (one call, all branches)
 
@@ -346,6 +346,8 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
    part's own commits onto the landed parent, runs the gate when the move changed the code under
    it, and pushes with a lease pinned to `remoteTipAtStart`. Act on its `status`:
    - `landed` → `fixpr-after.cjs` as in point 1, with `--commit=<commit> --pushed=<yes|no>` of the landing.
+   - `noop` → nothing moved: the part already sat on its parent and origin had it, so its agent
+     committed nothing. `fixpr-after.cjs` as in point 1 with `--pushed=no` and no `--commit`.
    - `conflict`, or `gate-red` with `briefVars` (`mode: adapt` - the move went through and the gate
      is red on code the parts below changed) → the landing agent. Render its brief next to the fix
      agent's (`<promptPath>` with `-restack` before `.md`):
@@ -353,14 +355,18 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
          node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/restack-agent.md" --out="<restack prompt path>" --vars="<briefVars>" --set=PR_NUMBER=<pr.number> --set=PR_URL=<pr.url> --set=LANGUAGE=<language>
 
      `briefVars` already holds the worktree, parent, old tip, lease, files, mode, the changes of
-     every landed part below that this part uses (`PARENT_CHANGES`) and the parent's landed diff
-     (`PARENT_DIFF`); never copy those into `--set=` flags yourself. Spawn it like a fix agent
+     every landed part below that this part still uses (`PARENT_CHANGES`), the parent's landed diff
+     cut to the conflicting files - or the files and names of the red step's errors - and those names
+     (`PARENT_DIFF`), and the whole diff as a file the agent greps only when it must
+     (`PARENT_DIFF_FULL`); never copy those into `--set=` flags yourself. Spawn it like a fix agent
      (Step 4, pointing at that file). Its `result` → `fixpr-after.cjs` with its `commit` and
      `pushed`; its `error` → like an agent's error. An `error` that ends in a choice (A/B) is a
      question for the user: ask it (AskUserQuestion), then send the answer to that same agent
      (SendMessage) - it resumes with the rerere record of the files it already settled.
    - `gate-red` without `briefVars`, `push-rejected`, `error` → like an agent's `{"type":"error"}`:
      nothing resolved, the worktree kept; name the red steps (`redSteps[].errorsPath`) or the refusal.
+     An `error` that names a missing `user.name`/`user.email` (git cannot write the moved commits)
+     or an old tip the part is not built on is the user's to fix: report it as written, never as a conflict.
    The parts above it wait for this one, whatever the outcome: a part that did not land leaves
    `origin/<branch>` where it was, and its children move onto that.
 3. **An agent that ended with `error`**: `fixpr-after.cjs --run="<runPath>" --branch="<branch>" --keep-worktree=yes`
@@ -373,7 +379,9 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
 
        node "<SKILL_DIR>/scripts/restack.cjs" --action=cascade --project="<PROJECT>" --stack="<cascade.stack>" --from="<cascade.from>" --from-old-tip="<cascade.fromOldTip>" --checks-dir="<checksDir>/cascade" --push=<yes|no>
 
-   Append-only conflicts merge in the script and the gate proves them; a part with
+   Append-only and import-only conflicts merge in the script and the gate proves them; a part with
+   `status: noop` moved nothing and the climb went on above it; a `--from-old-tip` the part above
+   is not built on is refused before any worktree (`errors`); a part with
    `status: conflict` gets the landing agent as in point 2 (its brief from that part's `briefVars`,
    or rendered by hand with `--set=` for a part outside the run), and the cascade runs again
    `--from` that part with `--from-old-tip` = its `oldTip`.

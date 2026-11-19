@@ -86,3 +86,18 @@ test('failed resolves and replies are counted from the grouped form, each error 
   const text = summary.render({ run: file, verify: 'no' });
   assert.ok(text.includes(`- #5: rozwiązane wątki 1, nieudane: 3, odpowiedzi nieudane: 4 — ${err}`), text);
 });
+
+test('a held part whose landing moved nothing is said to be unchanged, not moved', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-noop-'));
+  const run = {
+    project: dir,
+    stacks: [['part-1', 'part-2']],
+    targets: [
+      { branch: 'part-2', pr: { number: 102, title: 'feat(X): part 2', url: 'u2' }, reportPath: path.join(dir, 'p2.md'), local: true, stack: { parent: 'part-1' }, landing: 'hold', landingResult: { status: 'noop', commit: 'c2' }, outcome: { commit: null, pushed: false } },
+    ],
+  };
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file }, { run: () => ({}) });
+  assert.match(text, /bez zmian: już siedziała na part-1/);
+});
