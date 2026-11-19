@@ -166,7 +166,6 @@
           background:transparent; color:var(--muted); line-height:0; border-radius:8px; }
   button.copy:hover:not(:disabled) { color:var(--text); background:var(--card);
           transform:none; filter:none; }
-  button.copy:disabled { background:transparent; }
   button.reveal { position:absolute; top:50%; right:6px; transform:translateY(-50%); margin:0;
           background:transparent; padding:6px 8px; color:var(--muted); line-height:0;
           border-radius:8px; }
@@ -864,7 +863,8 @@ function lockPanel(message, remember = true, hide = false) {
     v.lockedSig = lastSig;
     v.lockedHide = hide;
   }
-  document.querySelectorAll('#panel button, #panel textarea, #panel input, #panel select')
+  // A copy button only reads its field, so no lock ever takes it (wireCopyButtons).
+  document.querySelectorAll('#panel button:not(.copy), #panel textarea, #panel input, #panel select')
     .forEach(el => { el.disabled = true; });
   if (hide) [...$('#panel').children].forEach(el => { el.style.display = 'none'; });
   const n = document.createElement('div');
@@ -890,7 +890,9 @@ function autoGrow(el) {
 
 // A decorator rather than a change in every render function: every step's text
 // fields get a copy button, including any field added later. Password fields opt
-// out with data-no-copy, because revealing one flips its type to text.
+// out with data-no-copy, because revealing one flips its type to text. The button is
+// never tied to its field's state: a disabled or read-only field (a frozen form, a
+// finished task, a locked panel) still copies, and every disabling selector skips .copy.
 function wireCopyButtons() {
   document.querySelectorAll('#panel textarea, #panel input[type=text]').forEach(el => {
     if (el.dataset.copyWired || el.dataset.noCopy) return;
@@ -1658,7 +1660,7 @@ function renderStep1(task) {
   const wireRuns = ed => {
     $(ed.add).disabled = finished || runsOnScreen(ed.box).length >= reviewRunsMax;
     if (finished) {
-      document.querySelectorAll(`${ed.box} input, ${ed.box} button`)
+      document.querySelectorAll(`${ed.box} input, ${ed.box} button:not(.copy)`)
         .forEach(el => { el.disabled = true; });
       return;
     }
@@ -2081,7 +2083,7 @@ function wireSendable(field, button, key) {
 // them. A gate is the server's to take down - it does so as it records the answer - so
 // the poll run right away redraws the panel without it, not one round of the agent later.
 async function sendFrom(scope, send, sync) {
-  const controls = [...document.querySelectorAll(`${scope} button, ${scope} textarea, ${scope} input`)]
+  const controls = [...document.querySelectorAll(`${scope} button:not(.copy), ${scope} textarea, ${scope} input`)]
     .filter(el => !el.disabled);
   controls.forEach(el => { el.disabled = true; });
   const ok = await send();
