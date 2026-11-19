@@ -97,7 +97,8 @@ function findRun(input, env = process.env) {
       if (server && Number.isInteger(server.pid) && isAlive(server.pid)) runs.push({ dir, stamp, port: server.port, pid: server.pid });
     }
   }
-  // One server holds the fixed port at a time; were there two, the newest run is the one going on.
+  // Each run's server is on the port its server.json names; were two of them live, the newest
+  // run is the one going on.
   runs.sort((a, b) => b.stamp.localeCompare(a.stamp));
   return runs[0] || null;
 }

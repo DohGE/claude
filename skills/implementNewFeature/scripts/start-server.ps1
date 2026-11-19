@@ -1,8 +1,10 @@
 param(
   [Parameter(Mandatory = $true)][string]$SessionDir,
-  # The stepper lives at one fixed URL so the browser tab, and everything it
-  # remembers for that origin, survives every restart. The override exists for
-  # tooling that must not fight a live run for the port.
+  # The stepper prefers one URL so the browser tab, and everything it remembers for
+  # that origin, survives every restart. Not given, it is the port this session's
+  # server last had (a restart keeps every sub-agent's port valid), else 9999; the
+  # server moves to the next free port when the preferred one is taken. The
+  # override exists for tooling.
   [int]$Port = 9999,
   # Where the sessions of the tasks added from the stepper open (launch-orchestrator.cjs);
   # the current directory when not given.
@@ -18,14 +20,15 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverJs = Join-Path $scriptDir 'server.cjs'
 New-Item -ItemType Directory -Force $SessionDir | Out-Null
 $serverJson = Join-Path $SessionDir 'server.json'
-# The old instance has to go first: it holds the port, and the new one refuses to
-# start anywhere else. Two servers would otherwise share this session's state file
-# while the user's open tab talks to the one the orchestrator no longer polls.
+# The old instance has to go first: it holds the port the new one prefers, and two
+# servers would otherwise share this session's state file while the user's open tab
+# talks to the one the orchestrator no longer polls.
 if (Test-Path $serverJson) {
   $prevPid = 0
   try {
     $prev = Get-Content $serverJson -Raw | ConvertFrom-Json
     $prevPid = $prev.pid
+    if (-not $PSBoundParameters.ContainsKey('Port') -and [int]$prev.port -gt 0) { $Port = [int]$prev.port }
   } catch { $prevPid = 0 }
   # Only ever stop a process we can PROVE is this server. A clean shutdown removes
   # server.json, but a crash does not, and a pid Windows has since handed to something
@@ -61,8 +64,8 @@ $proc = Start-Process -FilePath 'node' `
   -ArgumentList $nodeArgs `
   -WindowStyle Hidden -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $log
 
-# A taken port makes the server exit instead of moving, so waiting out the full
-# timeout would hide the one line that says what is on it.
+# A server that cannot listen at all exits, so waiting out the full timeout would
+# hide the one line that says why. server.json names the port it really bound.
 $deadline = (Get-Date).AddSeconds(15)
 while (-not (Test-Path $serverJson)) {
   if ($proc.HasExited) {

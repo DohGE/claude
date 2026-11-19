@@ -77,19 +77,28 @@ const tokenSources = [
   { name: 'gh CLI', find: (project, o) => (o.skipCli ? null : ghToken(project)) },
 ];
 
+// One answer per project and process: the first source that holds a token - or, once a request
+// found that token refused and a later source's token accepted, that later one (see `request`).
 const tokenCache = new Map();
 function tokenWithSource(project, options = {}) {
   const cacheable = !Object.keys(options).length;
   if (cacheable && tokenCache.has(project)) return tokenCache.get(project);
-  const tried = [];
-  let found = { token: null, source: null, tried };
-  for (const source of tokenSources) {
-    tried.push(source.name);
-    const value = source.find(project, options);
-    if (value) { found = { token: value, source: source.name, tried }; break; }
-  }
+  const found = firstToken(project, options, tokenSources);
   if (cacheable) tokenCache.set(project, found);
   return found;
+}
+
+// The first source at or after `from` whose token is none of `skip`. Two sources often hold the
+// same value (GH_TOKEN and GITHUB_TOKEN exported together, or gh's file and gh's CLI), and asking
+// again with a token GitHub has just refused would only fail the same way.
+function firstToken(project, options, sources, from = 0, skip = []) {
+  const tried = [];
+  for (let i = from; i < sources.length; i++) {
+    tried.push(sources[i].name);
+    const value = sources[i].find(project, options);
+    if (value && !skip.includes(value)) return { token: value, source: sources[i].name, tried, index: i };
+  }
+  return { token: null, source: null, tried, index: -1 };
 }
 
 function token(project) {
@@ -258,14 +267,54 @@ function ghToken(project) {
 // One API call, performed by a child copy of this file (see the header).
 // Failures never throw: every caller has something sensible to do without an
 // answer from GitHub.
-function request(project, options) {
-  const payload = {
+//
+// A 401 with a token this module picked itself is asked once more with the next source that
+// holds a DIFFERENT token. On 2026-11-18 a stale GH_TOKEN in the environment outranked a valid
+// `git credential`, and 26 thread resolves and replies of one run failed with "Bad credentials"
+// while the working token sat one source further down. The token that worked is cached for the
+// project, so every later call of the process goes straight to it; the answer names both sources
+// (`tokenNote`: "GH_TOKEN was rejected; used git credential") and never a token's value.
+// `deps` is the tests' seam: `transport` stands in for the child process, `sources` and `cache`
+// for the real token sources and the process-wide cache.
+function request(project, options, deps = {}) {
+  const transport = deps.transport || send;
+  const ask = (tokenValue) => transport({
     url: options.url || `${apiRoot}${options.path}`,
     method: options.method || 'GET',
     accept: options.accept || 'application/vnd.github+json',
     body: options.body === undefined ? null : options.body,
-    token: options.token === undefined ? token(project) : options.token,
-  };
+    token: tokenValue,
+  });
+  if (options.token !== undefined) return ask(options.token);
+  const sources = deps.sources || tokenSources;
+  const cache = deps.cache || tokenCache;
+  const found = deps.sources || deps.cache
+    ? (cache.get(project) || cache.set(project, firstToken(project, {}, sources)).get(project))
+    : tokenWithSource(project);
+  const first = ask(found.token);
+  if (first.status !== 401 || !found.token || found.exhausted) return first;
+  const rejected = [...(found.rejected || []), found.source];
+  const next = firstToken(project, {}, sources, found.index + 1, [found.token, ...(found.rejectedTokens || [])]);
+  if (!next.token) {
+    // Nothing else to try: remembered, so the next call does not walk the sources again.
+    cache.set(project, { ...found, rejected, exhausted: true });
+    return { ...first, rejectedSources: rejected, error: `${found.source} was rejected and no other token source holds a different token - ${first.error}` };
+  }
+  const second = ask(next.token);
+  if (second.status === 401) {
+    cache.set(project, { ...found, rejected: [...rejected, next.source], exhausted: true });
+    return { ...second, rejectedSources: [...rejected, next.source], error: `${rejected.join(', ')} was rejected; ${next.source} was rejected too - ${second.error}` };
+  }
+  const note = `${rejected.join(', ')} was rejected; used ${next.source}`;
+  cache.set(project, {
+    token: next.token, source: next.source, tried: [...(found.tried || []), ...next.tried], index: next.index,
+    rejected, rejectedTokens: [...(found.rejectedTokens || []), found.token], note,
+  });
+  return { ...second, tokenNote: note };
+}
+
+// The child-process half of `request`: one payload in, one parsed answer out.
+function send(payload) {
   const out = run(process.execPath, [__filename, '--serve'], {
     input: JSON.stringify(payload),
     timeout: requestTimeoutMs,
@@ -396,7 +445,7 @@ async function serve() {
 }
 
 module.exports = {
-  repoSlug, token, tokenWithSource, credentialToken, netrcToken, ghConfigToken,
+  repoSlug, token, tokenWithSource, tokenSources, firstToken, credentialToken, netrcToken, ghConfigToken,
   request, findOpenPr, mergedPrHeads, pullRequestDiff, postReview, errorOf,
 };
 

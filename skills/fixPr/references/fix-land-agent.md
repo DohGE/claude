@@ -35,7 +35,7 @@ legitimately committed nothing). Worktree: `{{ROOT}}` | Base: `{{BASE}}` | Landi
     gate (step 5, without `--tests=near`) once more. Red now → the base and your change do not fit
     together: `git -C "{{ROOT}}" reset --hard ORIG_HEAD` (back to your commit before the rebase - the
     only reset you ever run), `rebased: false`, the red command in `summary`, and go on un-rebased.
-    Green → `rebased: true`.
+    Green (or `green-no-tests`: no unit test ran, as in step 5) → `rebased: true`.
 {{/if}}
 {{#if PUSH=no}}
 

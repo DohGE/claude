@@ -25,6 +25,8 @@ That is the branch a reviewer most often wants finished off.
 | `/doh:fixPr feature/a --local=da3d32cd,b4309764` | fix those findings of the branch's doh codeReview reports (the 8-hex id on a finding of the report page, newest run first) instead of the pull request's comments; everything else - worktree, gate, commit, rebase, push - as without it, and no thread is resolved |
 | `/doh:fixPr part-1 --task="add … to the Load into label"` | one more change the user wants in that branch, beside its comments; the open pull requests based on it are moved onto the result afterwards (`restack.cjs --action=cascade`) |
 | `/doh:fixPr feature/a --project=<path>` | against the repository at `<path>` instead of the current directory |
+| `/doh:fixPr --resume` | go on with the project's newest run whose orchestrator stopped (a crash, a closed session): each target's next step from the run file, the result files and git |
+| `/doh:fixPr --resume=<runPath>` | the same for that run file (`.claude/doh/fixpr-run-*.json`) |
 
 The branch list is split on `,` and `;`, exactly like `codeReview`. Git allows both characters inside a
 ref name, so a branch literally called `feature/a,b` cannot be named here — it would be read as two
@@ -158,6 +160,48 @@ project is copied to the same relative path, and so is the project's gitignored 
 self-review walk the project's own rules. A failed install is a warning, not a failure — it only means
 the verification gate will be skipped.
 
+The link is the default whenever the lockfile matches and the main checkout's `node_modules` holds
+what its `package.json` declares. In the default (`auto`) mode a main checkout with no
+`node_modules` at all is `mainBroken` whatever the lockfiles say, and one that misses declared
+packages is when the lockfile matches: the run stops with the install for the user's checkout ("run
+`npm ci` in <project>"), and no worktree installs in its place - an install next to or through a link
+to that folder is what emptied it on 2026-11-18. `--deps=install` is the explicit way to install in a
+worktree anyway. One health check (`mainModulesHealth`) answers for the preflight, the link and every
+remove alike.
+
+Whatever is in the worktree's way - a stale or dangling link, the
+half tree of a stopped install, an earlier run's folder - is cleared first, links unlinked and never
+followed, and the link made in its place (`replaced` in `dependencies`, and a warning). A link to the
+main checkout that is already there is kept. When `auto` still installs, the reason it could not
+link travels with the answer (`dependencies.linkRefused`, and a warning): on 2026-11-18 one part of
+seven installed for ten minutes and nobody could tell why.
+
+An install never runs through a link: a `node_modules` link in the worktree is unlinked first, since
+`npm ci` empties the folder it finds entry by entry - through a junction, the main checkout's
+(measured with npm 10 on Windows). It is bounded: after 10 minutes the install is stopped with
+every process it started (`taskkill /T` on Windows, a process group elsewhere - a timeout that killed
+only the shell left npm writing on, and the retry met it with `ENOTEMPTY`), and its half tree is
+cleared. Its failure is reported by the first error lines of the package manager's output, never by
+the deprecation warnings before them, and a stopped install says so.
+
+What an install rewrites in tracked files never leaves a worktree dirty. husky's `prepare` rewrites
+`.husky/_/husky.sh` and `.husky/.gitignore`, and a repository that tracks them with CRLF checkouts
+finds them "modified" after every install - on 2026-11-18 that made `remove` refuse every worktree of
+a stack and a cascade stop at "already exists and is kept". `add` puts back every tracked file the
+dependency step changed (only an unstaged modification, only one that was not changed before the
+step) and records what the step made of it (path and content hash, in the worktree's private git
+dir). `HUSKY=0` was not the way: it covers husky alone and skips the hook helpers a commit there
+runs; `skip-worktree` would hide a real edit of the file from status and from the commit. `remove`
+recognises such leftovers - a file whose content is what the recorded install made of it, or a
+husky helper whose change is line endings only or equals the main checkout's copy - and discards
+them, but only when they are ALL the worktree holds; anything else still makes it refuse, and the
+tree is left exactly as it was.
+
+The `add` steps that write the repository (fetch, `worktree add`, the fast-forward) run under a lock
+in the shared git dir (`doh-worktree.lock`), so launches started side by side do not fail on git's
+own config and ref locks; the dependency step runs outside it. A lock older than five minutes is a
+crashed run's, and a wait longer than two minutes goes on without it.
+
 After a successful commit the worktree is removed. `git worktree remove` is called **without**
 `--force`, ever: git refuses a worktree holding modified or untracked files, and that refusal is the
 last guard against deleting work the verification gate stopped from being committed. Before it, the
@@ -165,6 +209,19 @@ self-review's reports (`.claude/doh/codeReview/runs/`, gitignored, so git would 
 `<project>/.claude/doh/<branch>/codeReview/runs/`, and every link in the tree is unlinked: git's
 recursive delete walks into a junction and empties what it points at. Take a worktree down with
 `worktree.cjs --action=remove`, never with `git worktree remove --force`.
+
+Every remove watches the main checkout's `node_modules`. When it existed before and is gone after
+(or holds fewer entries), the answer carries `mainModulesLost: true` and an error - "The main
+checkout's node_modules disappeared while removing <worktree>; run `npm ci` there" - which
+`fixpr-after.cjs` puts in its `errors[]` and the target's `outcome.mainModulesLost` (the summary
+prints it first; the next part's landing is held, `next.held`), and `restack.cjs` turns into a stop
+of the climb (resumable with `--resume=yes` once the user has installed). On 2026-11-19 that folder was gone at the end of a
+run, and no step had said when. What a shell can do to it is guarded too (`bash-guard.cjs`): an
+install in a fix worktree (`npm ci`/`install`, `pnpm install`, `yarn`, …) and an `rm` of
+`node_modules/` are refused, because both go through the link into the main checkout's packages.
+Every recursive delete of a worktree folder (`add`'s leftover, implementNewFeature's
+`verify-parts.cjs`) unlinks the links in it first (`removeTree`); `fs.rmSync`, `rmdir /s` and git
+2.56 were measured not to follow a junction, `rm -rf <link>/` and npm were measured to.
 
 ## The gate
 
@@ -197,14 +254,102 @@ Gate steps of every run on the machine share `maxParallel` slots (default: a qua
 `DOH_CHECKS_SLOTS` or `--slots=` override it, `0` lifts the limit): five agents building at once made
 a grep over one translation file take two minutes. A step waits for a free slot (`slotWaitMs`).
 
-Without a config: whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
+### Single specs: `related`
+
+A test entry may carry `related`, the command that runs a few given specs. A fix and a landing agent
+run the specs of their change with it (`--tests=near` passes, and `checks.cjs --specs=<spec>,…`)
+instead of a whole project's suite:
+
+```json
+{
+  "steps": {
+    "test": [
+      {
+        "command": "npx ng test web",
+        "files": "^projects/(web|shared)/",
+        "related": "node node_modules/@angular/cli/bin/ng.js test web --test-path-pattern={pattern}"
+      },
+      {
+        "command": "npx jest --config packages/api/jest.config.js",
+        "files": "^packages/api/",
+        "related": "npx jest --config packages/api/jest.config.js {specs}"
+      }
+    ]
+  }
+}
+```
+
+`{pattern}` becomes the specs as one quoted regular expression, each path escaped (`+`, `(`, `.`
+and the rest) and several joined as `(a|b)` - what `--testPathPattern` and `--test-path-pattern` take.
+`{specs}` becomes the quoted paths themselves. A long list runs as several commands. An entry
+without `related` is not run for single specs; the step says so.
+
+    node scripts/checks.cjs --root=<worktree> --out-dir=<dir> --specs=projects/web/src/app/+state/tests/items.effects.spec.ts
+
+answers `partial`, like every pass over part of the tests.
+
+### Without a config
+
+Whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
 `type-check`), `test:unit` (else `test`), `build`. `test:unit` comes first because a project that has
 both usually keeps `test` for everything, an e2e suite included, and that suite cannot pass in a
 worktree with no backend. Missing scripts are `skipped`, not failures; so is the whole gate when
 there is no `package.json`, the dependency install failed, or there is no lockfile to install from.
+
+With neither `test:unit` nor `test` (npm's "no test specified" placeholder counts as none), the
+test step looks further before it gives up - a gate that ran only `build` once reported seven pull
+requests green that CI then failed on their specs:
+
+- every unit-test target of `angular.json` (`@angular-builders/jest:run`, karma, jest, unit-test,
+  web-test-runner; never an e2e builder), run through the script that runs it when there is one
+  (`test:<project>`, or any script whose text is `ng test <project>`), else through the local
+  Angular CLI (`node node_modules/@angular/cli/bin/ng.js`, which resolves where `npx` does not in a
+  worktree with a linked `node_modules`);
+- every other `test:<name>` script whose name is a folder (`<name>`, `packages/<name>`,
+  `apps/<name>`, `libs/<name>`, `projects/<name>`).
+
+Each runs for the files under its project's folder: with `--changed-since` only the projects the
+change touches run. A library project's change runs every project's tests (the apps import it), and
+so does a change to a workspace-wide file (`package.json`, `angular.json`, a root `tsconfig*.json`,
+jest or karma config). The single specs of such a project run as `ng test <project>
+--test-path-pattern=<escaped path>` (jest builder) or `--include=<path in the project>` (karma and
+the others), or after `--` of a `jest` / `vitest` script. Other `test:*` scripts (`test:ci`,
+`test:coverage`) are never guessed at: the skip reason names them. `testSource` in the result says
+the commands were detected.
+
+### Verdicts
+
 A skipped gate is never a red one. Neither is a `partial` one: a `--only=<step>` re-run reports
 `partial` however well that step went, because it never looked at the others — only a full pass can
 answer for the whole gate, and only a green full pass lets the run commit.
+
+`green-no-tests` is a full pass in which every command passed and no unit test ran, because the
+project has no test command the gate knows (no script, nothing detected, or a checks.json without a
+`test` step; one with `"test": false` turned them off on purpose and stays `green`). `noTests` says
+why, and a warning names `.claude/doh/checks.json`. The run may commit on it, like on `green`, but
+it is never reported as green: the fix agent's report and result (`gate`), the landing's `gate`
+and the summary all say the tests did not run. A change that touched no project with tests is
+plain `green`: the tests exist, and nothing of theirs changed.
+
+### CI
+
+The collector greps the project's CI files (`Jenkinsfile`, `.github/workflows/*.yml`,
+`.gitlab-ci.yml`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`) for a test command
+(`npm run test…`, `ng test`, `jest`, `vitest`, …) and warns once per run when the gate has no
+counterpart for it (`ciTestGap` in the collector's JSON), with the checks.json that would close the
+gap.
+
+After the last landing the orchestrator starts `scripts/ci-status.cjs --run=<run file>` in the
+background (`/doh:restack`: `--project=<path> --branches=<a;b>`). For each pushed commit it reads the
+commit statuses (`/repos/{owner}/{repo}/commits/{sha}/status`) and the check runs (`…/check-runs`)
+and waits until none is pending, at most `--timeout-min` (default 15; `0` looks once; CI that has
+reported nothing gets three minutes to start before it counts as `none`). A red status whose link is
+a Jenkins build gets its `consoleText` read without credentials, when the server allows it, and cut
+to the decisive lines: TypeScript errors, `FAIL <spec>`, Jest's failure headers, the `Tests:` /
+`Test Suites:` totals, `ERROR:` (a log with none of those goes through the gate's own excerpt); a
+red check run brings its title and summary. Each branch's answer is `<checksDir>/ci-status.json`,
+rewritten every round, so the summary says per branch "CI green", "CI red" with those lines, or
+"CI still running".
 
 **Every red command is the run's work** — whether the agent's own fixes broke it or it was already red
 when the run started. That is the change the rename is about: the gate used to be a guard that only
@@ -292,13 +437,51 @@ brings the gate green and pushes the same way. A part that did not land leaves i
 was, and its children move onto that. After the run, `restack.cjs --action=verify` names every part
 that does not sit on its parent, with the command that moves it.
 
+A landing that moves nothing - the part already sits on its parent and origin already has it - is
+`status: noop`, with a `reason`, and its worktree goes like a landed part's. It used to be `landed`
+with `gate: skipped`, which read as a move that happened: on 2026-11-18 a cascade given a wrong old
+tip answered exactly that, with the part where it was. That old tip is checked now: a
+`--parent-tip-at-start` (land), `--from-old-tip` (cascade) or `--parent-old-tip` (stack `--start`)
+that is not an ancestor of the part being moved is refused with an error before anything moves. Inside
+a climb, a part that did not sit on its parent's old tip (a stack out of line) moves off the last
+commit it shares with it, with a warning.
+
+A move writes commits, so git needs `user.name` and `user.email`. Without them land answers
+`status: error`, its first error naming what is missing and the two `git config --global` commands,
+and a climb checks it once before its first worktree. On 2026-11-18 the rebase stopped at its first
+pick with "Committer identity unknown", land reported a `conflict` with no conflicting file, and a
+landing agent spent 4 minutes and about 55k tokens finding why. A rebase that stops with no
+conflicting file for any other reason is an `error` with git's own line too.
+
 Two parts that only appended at the same spot - a translation key each, an enum member each, an
 export each - no longer stop the move. `land` merges such a conflict itself: a JSON file key by key
 (both sides' new keys kept in place, a key both changed differently refused, and only a file that
 `JSON.stringify` reproduces byte for byte), any other file only where every conflicting hunk is two
 insertions with an empty base. It does so only when the gate runs after the move, which proves the
-merge; `autoResolved[]` names each file and how. On 2026-11-05 four restacks of DPXN-11967 stopped on
+merge: `--auto-resolve` follows `--gate` when it is not given, so `--gate=no` leaves every conflict
+to the agent unless `--auto-resolve=yes` says outright to merge unproved. `autoResolved[]` names each
+file and how. On 2026-11-05 four restacks of DPXN-11967 stopped on
 exactly these (`en.json`, `ButtonTooltip`), each spending a conflict agent.
+
+A conflict held in the import block of a JS/TS file is merged the same way (`how: imports`): per
+module specifier, the base's names, minus the ones a side removed, plus the ones a side added -
+`type` modifiers and aliases kept, `import type` apart from the values of one module, a default
+import kept beside the named ones, a side-effect or namespace import kept or dropped whole, an import
+left with no name dropped. The parent's order and formatting stay (single- or multi-line, indent,
+trailing comma, quotes, semicolons, line endings); a name only the part added comes after the one it
+follows in the part. Only where every conflicting hunk holds import lines alone (or is an insertion
+with an empty base): a hunk with any other line, a binding both sides changed differently, a comment
+the part changed in the block or a statement it cannot read stays a conflict for the agent. On
+2026-11-18 five parts of one stack each stopped on the same import block of one store file - the
+parent had dropped names the child kept, the child had added others - and five landing agents
+(55-75k tokens and 4-7 minutes each) resolved it the same way.
+
+The landing agent's brief carries the parent's diff cut to what the landing is about (`PARENT_DIFF`):
+the conflicting files, or in `adapt` mode the files and the quoted names of the red step's errors,
+plus every file whose changed lines hold a name of the parts below that this part still uses.
+`PARENT_CHANGES` lists only the entries whose name this part's files still hold. The whole diff stays
+in `parent-diff-full.patch` next to it (`PARENT_DIFF_FULL`), for the agent to grep. On 2026-11-18 the
+whole landed parent went to each agent, 10-14 KB of brief and diff for a conflict in one import block.
 
 `restack.cjs --action=cascade` moves every part above a changed one, bottom-up, with no agent - after
 a `--task` on part-1, the parts 2..n the run did not name. Each part gets a worktree for the move and
@@ -309,6 +492,47 @@ moment (`fatal error in commit_refs_rules`, a 5xx, a dropped connection) and nev
 Each closed thread gets a reply naming the commit first (`--no-reply` leaves it out), and a thread
 whose fix landed in another file than its own - keys renamed in `en.json` for a thread on an effects
 file - is closed when the commit changes that file (`fixedVia`).
+
+## Resume
+
+A run whose orchestrator stops half way - on 2026-11-18 one was killed (exit 137) in the middle of
+seven landings - goes on with `/doh:fixPr --resume[=<runPath>]`. Every state it needs is on disk:
+the run file keeps, per target, what its launch was given and made (`launch`: push, language,
+worktree), what its landing and push did (`landingResult`, `pushResult`, with the lease), and what
+`fixpr-after.cjs` did (`outcome`); the agent's result file holds its commit and verdicts.
+`scripts/fixpr-resume.cjs` reads them with git and names, per target, the one next step and its
+command:
+
+| Action | When | Command |
+|---|---|---|
+| `spawn` | no result file, or an agent that ended in error with work in its worktree | `fixpr-launch.cjs --resume=yes` (the stopped run's worktree taken as it is), then the agent |
+| `land` | a held part whose parent has landed; a commit made (or landed) and never pushed that a worktree or the local branch still holds - `rebase`, `keep-base` and held targets alike | `restack.cjs --action=land`: the commit checked against its base or parent again and moved when that moved (`--keep-base=yes`: onto its base only when it no longer merges), the gate on a move, the push with the lease; the worktree made again first when it is gone |
+| `push` | a commit never pushed that no worktree or local branch holds any more, so `land` (which moves HEAD) cannot carry it | `restack.cjs --action=push --commit=<sha>`, from the project, with the lease once the commit rewrote the branch - no base check, which its `reason` says |
+| `landing-agent` | a landing agent stopped in the middle of its rebase | its brief rendered again |
+| `after` | landed, `fixpr-after.cjs` never ran | `fixpr-after.cjs` with the landing's commit |
+| `resolve` | pushed, threads left open (a 401) or a push made after `fixpr-after.cjs` | `fixpr-after.cjs --resolve-only=yes` |
+| `cascade` | pushed under open parts the run does not name, still on the old commit | `restack.cjs --action=cascade` |
+| `wait` / `manual` / `done` | a parent not landed yet / nothing a script can do / nothing left | - |
+
+A held part still lands only after its parent; a landing that answered `noop` counts as landed. A run
+whose main checkout lost its `node_modules` (`outcome.mainModulesLost`, or a launch's `mainBroken`)
+answers an `errors[]` entry with the install to run while that folder is still broken, and no command
+goes on before it. The orchestrator runs each command once and asks again until every target is done,
+waits on a running agent, or needs the user.
+
+A fix agent spawned again (`spawn`) on a worktree that already holds the stopped agent's commit builds
+on it: it never amends it and never resets it away, adds its own commit on top with the same message,
+and reports both (`priorCommits` in its result file, a line of the summary). The land brief moves both.
+
+The run file is written by several scripts at once - every launch runs in the background - so each
+write of a target's `launch`, `landingResult`, `pushResult` or `outcome` reads the file again and
+writes it under a lock folder next to it (`scripts/run-file.cjs`); none drops what another kept.
+
+`fixpr-after.cjs --resolve-only=yes` is the thread step alone, for a target that landed and pushed
+while its resolves failed: it works with the worktree gone (the commit is read from the main
+checkout's object store, after a fetch), checks that origin holds the commit, skips every thread
+GitHub already shows resolved (`resolve-threads.cjs --skip-resolved`), posts no second reply naming
+the same commit, and keeps the new state in the target's `outcome`, which the summary prints.
 
 Comments first, then the gate. There is no separate baseline run before the fixes: it would name
 exactly which failures pre-dated the run, at the price of a second full `build` on every branch, and
@@ -353,6 +577,37 @@ The token comes from the `codeReview` skill's `github.cjs` — `GH_TOKEN`, `GITH
 credential store, `.netrc`, the `gh` config file, then the `gh` CLI, in that order. No `gh` binary is
 required. The account needs write access to the repository; resolving another person's thread also needs
 write access, and a token without it produces a warning and leaves those threads open.
+
+A token GitHub refuses (401) is not the end of the list: the request is asked once more with the next
+source that holds a different token, and the one that works is kept for the rest of the process. A
+stale `GH_TOKEN` in the environment no longer hides a valid stored credential - on 2026-11-18 it failed
+26 resolves and replies of one run. The answer names the sources, never a token: `GH_TOKEN was
+rejected; used git credential`, or, when nothing works, `GH_TOKEN was rejected; git credential was
+rejected too`.
+
+## Preflight
+
+Before a comment is read, the collector checks what the run will need from this machine
+(`scripts/preflight.cjs`, also runnable alone):
+
+- `origin` answers `git ls-remote` without a prompt (`GIT_TERMINAL_PROMPT=0`, Git Credential Manager
+  non-interactive, 20 s timeout). A failure carries git's first line and its fix - for Git Credential
+  Manager's "Unable to persist credentials with the 'wincredman' credential store",
+  `git config --global credential.credentialStore dpapi` or one login from a normal terminal.
+- `user.name` and `user.email` are set: without them a rebase stops as if it conflicted.
+- The GitHub token works: one call to the repository, naming the source used and any refused one.
+- The main checkout's `node_modules` exists and holds every declared package (worktree.cjs's
+  `mainModulesHealth`, the same check as `mainBroken` and `mainModulesLost`).
+
+Which failures stop the run depends on what it will do: an unreachable origin with `--push=yes`, a
+missing identity whenever something is committed, a refused token when threads are resolved, broken
+dependencies when a gate runs. `--dry-run=yes` turns every one into a warning. A stop comes before any
+worktree exists, with the fix in its text (`preflight.ok: false` in the collector's JSON). On
+2026-11-18 each of the four surfaced in the middle of a run instead: seven "Could not fetch" warnings
+and a push refused 25 minutes in, a "conflict" with no conflicting file, 26 failed resolves, a ten-minute
+install in one worktree. `restack.cjs --action=plan` and `--action=stack` run the same check
+(`--preflight=no` skips it); implementNewFeature's commit and pull request step can call `preflight()`.
+A fetch that still fails later says why (git's first line) instead of only that it failed.
 
 ## Lean mode
 
@@ -410,7 +665,9 @@ Each agent proposes `lessons` - the general rule behind a fixed comment - and th
 them to the user after the run (`codeReview/scripts/pr-lessons.cjs`), into the project's
 `.claude/doh/local/pr-lessons-*.md` rules that every codeReview loads. Before the run, the collector
 warns about every branch with commits newer than its last codeReview
-(`codeReview/scripts/review-freshness.cjs`): reviewers saw that code, no review did.
+(`codeReview/scripts/review-freshness.cjs`): reviewers saw that code, no review did. A warning every
+branch gets alike ("no codeReview of this branch on record") is one line naming the branches, with
+`<branch>` where each one's name stood.
 
 ## Permissions
 
@@ -432,11 +689,12 @@ rule itself: editing its own settings is refused as self-modification.
 | `SKILL.md` | the orchestrator: arguments, collection, worktrees, dispatch, landing, summary |
 | `references/fix-agent.md` | the background agent's prompt: verdicts, fixes, gate, commit, push |
 | `scripts/pr-api.cjs` | GraphQL review threads and the resolve mutation, plus the two REST lists |
-| `scripts/pr-comments.cjs` | argument parsing, the commit prefix and `CR` message, and the per-branch comment JSON |
+| `scripts/pr-comments.cjs` | argument parsing, the preflight (`--push`, `--dry-run`, `--preflight`), the commit prefix and `CR` message, the per-branch comment JSON, and identical per-branch warnings folded into one line |
+| `scripts/preflight.cjs` | before any worktree: origin reachable without a prompt, a git identity, a GitHub token GitHub accepts (and its source), a complete main `node_modules`; each failure with its fix |
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
-| `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`), removal (links first, git's own reason on a refusal, the main `node_modules` counted before and after) |
-| `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice |
-| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append conflicts merged, `--run` reads the part from the run file, `--pending-steps`, `--summary`), checks a stack (`verify`, `--run`), moves the parts above a changed one (`cascade`), moves a whole stack onto its base (`stack`, `plan` - /doh:restack) and pushes `HEAD` with retry (`push`) |
+| `scripts/worktree.cjs` | branch-state refusals, worktree creation under a repository lock, bootstrap (a main `node_modules` that is gone or misses declared packages stops the run before any agent, never an install in its place: `mainBroken`, from `mainModulesHealth`; a stale `node_modules` cleared and linked over; a bounded install that never runs through a link; install artefacts in tracked files put back), removal (install artefacts discarded when they are all there is, links first, git's own reason on a refusal, a main `node_modules` that disappeared or shrank reported as `mainModulesLost`); `--resume=yes` takes a stopped run's worktree as it is, or makes it again from the local branch holding its unpushed commit |
+| `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice; `--skip-resolved` leaves the threads GitHub shows closed alone |
+| `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append and import-block conflicts merged, `noop` when nothing moves, a missing git identity or a wrong old tip an error, `--run` reads the part from the run file, `--pending-steps`, `--summary`), checks a stack (`verify`, `--run`), moves the parts above a changed one (`cascade`), moves a whole stack onto its base (`stack`, `plan` - /doh:restack) and pushes `HEAD` (or `--commit`) with retry (`push`); `land --keep-base=yes` moves a bottom only when it no longer merges; with `--run`, land and push keep their answer in the run file |
 | `scripts/symbol-uses.cjs` | where names are still used - in the worktree (a rename's leftovers) and in the parts stacked above (`--refs`) |
 | `scripts/agent-stop.cjs` | SubagentStop hook: a fix or restack agent ends with its JSON object alone, and never while its own background work runs |
 | `scripts/pr-media.cjs` | downloads the screenshots and recordings of the comments, a recording as still frames |
@@ -446,11 +704,14 @@ rule itself: editing its own settings is refused as self-modification.
 | `test-key/` | the meter's fixture (`fixture/`, built by `make-fixture.cjs`), its key (`key.json`) and the reference fix (`solution/`) |
 | `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled and only the `{{#if …}}` blocks of this agent kept (its landing, push, inputs), so the orchestrator hands the agent a path instead of carrying the brief twice; an absolute path with `..` in it is written the way it resolves |
 | `scripts/stack-preflight.cjs` | before the agents: every part of a stack that imports a file only a later part adds (`leaks`), and what each part restores verbatim first (`restore`), from git alone |
-| `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file |
-| `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`) |
-| `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files and the stack check |
+| `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file; what it was given and made kept there (`launch`); run in the background, one per target (`linked` says whether `node_modules` is the main checkout's) |
+| `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`); identical resolve and reply failures as one `{ error, count, ids }` each; `--resolve-only=yes` runs the thread step alone again |
+| `scripts/fixpr-resume.cjs` | a stopped run's next step per target (`--resume`), from the run file, the result files and git; an unpushed commit a worktree or branch holds goes through `land`, a bare `push` only for one nothing holds |
+| `scripts/run-file.cjs` | every write of a target's field into the run file, read again and written under a lock folder, so background launches and landings never drop each other's |
+| `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files, the stack check and what CI said (`ci-status.json`); `stackImpact` one line per name, parts as ranges (`part-3..7`), paths cut to their distinct tail, capped with "+N" naming the result file |
+| `scripts/ci-status.cjs` | after a push: the commit statuses and check runs of each pushed commit, waited on until none is pending (bounded by `--timeout-min`), a red Jenkins build's decisive console lines |
 | `scripts/split-work.cjs` | a fix agent's many items cut into groups of whole folders for `doh:pipeline-worker` agents (`references/fix-worker-agent.md`) |
-| `scripts/bash-guard.cjs` | PreToolUse hook: a shell read of a fix worktree, or a `cd` into one that outlives its command, is refused with the tool to use |
+| `scripts/bash-guard.cjs` | PreToolUse hook: a shell read of a fix worktree, or a `cd` into one that outlives its command, is refused with the tool to use; so are a package-manager install there and an `rm` of `node_modules/`, which reach the main checkout's packages through the link |
 
 What changed in 0.35.0, measured on the five-part DPXN-12003 run of 2026-11-16 (94 min, 141M cache read):
 the gate stops after a red typecheck and runs only the specs near the change until its last pass

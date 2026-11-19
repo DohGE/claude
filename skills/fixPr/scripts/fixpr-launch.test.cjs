@@ -50,6 +50,7 @@ test('launch makes the worktree and renders the brief and its step files from th
   assert.deepStrictEqual(out.errors, []);
   assert.deepStrictEqual(calls[0].slice(0, 2), ['worktree.cjs', '--action=add']);
   assert.strictEqual(out.worktree, path.join(dir, 'wt-1'));
+  assert.strictEqual(out.linked, false, 'an install, not a link: its reason is among the warnings');
   const brief = fs.readFileSync(out.promptPath, 'utf8');
   for (const piece of ['part-1', '#101', 'Polish', 'src/mock.ts', '--priority=0', out.visualBrief, out.landBrief]) assert.ok(brief.includes(piece), piece);
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(brief), 'no placeholder left');
@@ -61,11 +62,33 @@ test('launch makes the worktree and renders the brief and its step files from th
 
 test('a held part above the bottom gets its place in the slot queue, and a refused worktree renders nothing', (t) => {
   const { dir, file } = runFile(t);
-  const ok = launch.launch({ run: file, branch: 'part-2' }, { run: () => ({ worktree: path.join(dir, 'wt-2'), installed: true, errors: [] }) });
+  const ok = launch.launch({ run: file, branch: 'part-2' }, { run: () => ({ worktree: path.join(dir, 'wt-2'), installed: true, dependencies: { manager: 'npm', linked: true, error: null }, errors: [] }) });
   assert.ok(fs.readFileSync(ok.promptPath, 'utf8').includes('--priority=1'));
+  assert.strictEqual(ok.linked, true);
   const refused = launch.launch({ run: file, branch: 'part-2' }, { run: () => ({ errors: ['part-2 has diverged from origin/part-2'] }) });
   assert.deepStrictEqual(refused.errors, ['part-2 has diverged from origin/part-2']);
   assert.strictEqual(refused.promptPath, undefined);
   assert.throws(() => launch.parseArgs(['--run=r', '--branch=b', '--pusj=no']), /Unknown argument/);
   assert.throws(() => launch.launch({ run: file, branch: 'nope' }, { run: () => ({}) }), /not a target/);
+});
+
+// 2026-11-18: the orchestrator died; what each launch was given (push, language) and made was in
+// no file, and its registered worktrees refused every add.
+test('a launch keeps what it was given and made in the run file, and --resume takes the stopped run\'s worktree', (t) => {
+  const { dir, file } = runFile(t);
+  const calls = [];
+  const out = launch.launch({ run: file, branch: 'part-1', push: 'no', language: 'Polish', resume: 'yes' }, {
+    run: (script, args) => {
+      calls.push(args);
+      return { worktree: path.join(dir, 'wt-1'), installed: true, reused: true, localBranch: 'doh-fixpr/part-1', heldBy: dir, warnings: [], errors: [] };
+    },
+  });
+  assert.deepStrictEqual(out.errors, []);
+  assert.ok(calls[0].includes('--resume=yes'));
+  assert.strictEqual(out.reused, true);
+  const kept = JSON.parse(fs.readFileSync(file, 'utf8')).targets.find((x) => x.branch === 'part-1').launch;
+  assert.deepStrictEqual([kept.push, kept.language, kept.worktree, kept.localBranch, kept.reused, kept.errors], ['no', 'Polish', path.join(dir, 'wt-1'), 'doh-fixpr/part-1', true, []]);
+  launch.launch({ run: file, branch: 'part-2' }, { run: () => ({ errors: ['refused'] }) });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).targets.find((x) => x.branch === 'part-2').launch.errors, ['refused']);
+  assert.throws(() => launch.parseArgs(['--run=r', '--branch=b', '--resume=maybe']), /--resume takes yes or no/);
 });

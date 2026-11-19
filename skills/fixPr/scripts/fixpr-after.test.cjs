@@ -80,3 +80,94 @@ test('a worktree holding uncommitted work, or an agent that ended in error, keep
   assert.match(out.keptWorktree.reason, /uncommitted/);
   assert.throws(() => after.parseArgs(['--run=r', '--branch=b', '--lan-next=yes']), /Unknown argument/);
 });
+
+// 2026-11-18: one refused token, 26 threads, the same sentence 52 times in the orchestrator's answer.
+test('identical resolve and reply failures come back once each, with their count and ids', (t) => {
+  const { file } = setup(t, { child: false });
+  const err = 'Bad credentials - the GitHub token was rejected';
+  const run = fakeRun({
+    'resolve-threads.cjs': () => ({ resolved: [], failed: [{ id: 'T1', error: err }, { id: 'T2', error: err }], replyFailed: [{ id: 'T1', error: err }, { id: 'T2', error: 'HTTP 502' }], unverified: [] }),
+    'verify-fix.cjs': () => ({ ok: true }),
+    'worktree.cjs': () => ({ removed: true }),
+  });
+  const out = after.after({ run: file, branch: 'part-1', push: 'yes' }, { run, dirty: () => false });
+  assert.deepStrictEqual(out.resolve.failed, [{ error: err, count: 2, ids: ['T1', 'T2'] }]);
+  assert.deepStrictEqual(out.resolve.replyFailed, [{ error: err, count: 1, ids: ['T1'] }, { error: 'HTTP 502', count: 1, ids: ['T2'] }]);
+  assert.strictEqual(after.failureCount(out.resolve.replyFailed), 2);
+  assert.strictEqual(after.failureCount([{ id: 'x', error: 'old shape' }]), 1, 'a run file written before the grouping still counts');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual(saved.targets[0].outcome.resolve.failed, out.resolve.failed, 'the run file keeps every id');
+});
+
+// 2026-11-19: the main checkout's node_modules was gone at the end of a run, and no step said when.
+test('a remove that lost the main checkout\'s node_modules is an error of the landing, not a kept worktree', (t) => {
+  const { file } = setup(t);
+  const lost = 'The main checkout\'s node_modules disappeared while removing /w/part-1; run `npm ci` there (/p) before the next run.';
+  const run = fakeRun({
+    'verify-fix.cjs': () => ({ ok: true }),
+    'resolve-threads.cjs': () => ({ resolved: [] }),
+    'worktree.cjs': () => ({ removed: true, mainModulesLost: true, errors: [lost], warnings: [] }),
+  });
+  const out = after.after({ run: file, branch: 'part-1' }, { run, dirty: () => false });
+  assert.strictEqual(out.removed, true);
+  assert.strictEqual(out.keptWorktree, undefined);
+  assert.deepStrictEqual(out.errors, [lost]);
+});
+
+// A git seam: every call recorded, each answered by the first rule whose verb (and ref) matches.
+function fakeGit(answers = {}) {
+  const calls = [];
+  const git = (dir, args) => {
+    calls.push([dir, ...args]);
+    const key = args[0] === 'merge-base' ? `merge-base ${args[args.length - 1]}` : args[0];
+    return { ok: key in answers ? answers[key] : true, out: '', err: '' };
+  };
+  git.calls = calls;
+  return git;
+}
+
+// 2026-11-18: 26 resolves and replies of six landed parts failed with a 401; their worktrees were
+// gone, and a one-off script re-ran resolve-threads.cjs with --root at the main checkout.
+test('--resolve-only closes the threads again from the main checkout, skips closed ones, keeps the new state', (t) => {
+  const { dir, file } = setup(t, { child: false });
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  data.targets[0].outcome = { commit: 'c1', committed: true, pushed: true, reply: 'yes', resolve: { resolved: 0, failed: [{ id: 'T1', error: 'HTTP 401: Bad credentials' }, { id: 'T2', error: 'HTTP 401: Bad credentials' }], unverified: [], replyFailed: [] }, verify: { ok: true } };
+  fs.writeFileSync(file, JSON.stringify(data));
+  const run = fakeRun({ 'resolve-threads.cjs': () => ({ resolved: ['T2'], alreadyResolved: ['T1'], failed: [], unverified: [], replyFailed: [] }) });
+  const git = fakeGit();
+  const out = after.after({ run: file, branch: 'part-1', resolveOnly: 'yes' }, { run, git });
+  assert.deepStrictEqual(run.calls.map((c) => c[0]), ['resolve-threads.cjs'], 'nothing but the threads: no verify, no worktree, no landing');
+  const call = run.calls[0];
+  assert.ok(call.includes(`--root=${dir}`) && call.includes('--skip-resolved') && call.includes('--commit=c1') && call.includes('--threads=T1,T2'));
+  assert.deepStrictEqual(git.calls.filter((c) => c[1] === 'fetch').length, 1, 'one fetch, before the commit is read');
+  assert.strictEqual(out.resolve.resolved, 2);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')).targets[0].outcome;
+  assert.deepStrictEqual([saved.resolve.resolved, saved.resolve.alreadyResolved, saved.resolve.failed.length, saved.pushed, saved.verify.ok], [2, 1, 0, true, true]);
+  assert.ok(saved.resolve.resolveOnly);
+});
+
+test('--resolve-only claims nothing for a commit origin does not hold, and needs an outcome first', (t) => {
+  const { file } = setup(t, { child: false });
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const before = { resolved: 0, failed: [{ id: 'T1', error: 'HTTP 401' }], unverified: [], replyFailed: [] };
+  data.targets[0].outcome = { commit: 'c1', committed: true, pushed: false, resolve: before };
+  fs.writeFileSync(file, JSON.stringify(data));
+  const run = fakeRun();
+  const out = after.after({ run: file, branch: 'part-1', resolveOnly: 'yes' }, { run, git: fakeGit({ 'merge-base refs/remotes/origin/part-1': false }) });
+  assert.deepStrictEqual(run.calls, []);
+  assert.match(out.resolve.skipped, /not pushed/);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).targets[0].outcome.resolve, before, 'the earlier answer says more and stays');
+  const second = setup(t, { child: false });
+  assert.match(after.after({ run: second.file, branch: 'part-1', resolveOnly: 'yes' }, { run, git: fakeGit() }).errors[0], /no outcome/);
+  assert.throws(() => after.parseArgs(['--run=r', '--branch=b', '--resolve-only=maybe']), /yes or no/);
+});
+
+test('after reads the commit from the main checkout once the worktree is gone', (t) => {
+  const { dir, file } = setup(t, { child: false });
+  const run = fakeRun({ 'resolve-threads.cjs': () => ({ resolved: ['T1', 'T2'] }), 'verify-fix.cjs': () => ({ ok: true }), 'worktree.cjs': () => ({ removed: false, warnings: ['nothing to remove'] }) });
+  const git = fakeGit();
+  after.after({ run: file, branch: 'part-1' }, { run, dirty: () => false, git });
+  assert.ok(run.calls[0].includes(`--root=${dir}`));
+  assert.ok(git.calls.some((c) => c[0] === dir && c[1] === 'fetch'));
+  assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).targets[0].outcome.reply, 'yes');
+});

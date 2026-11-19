@@ -258,6 +258,20 @@ function threadHasReply(project, threadId, prefix, send = github.request) {
   return { found: comments.some((c) => String(c.body || '').trim().startsWith(prefix)), error: null };
 }
 
+// Whether a thread is resolved on GitHub now: a resolve run again after a failure (fixpr-after.cjs
+// --resolve-only) skips the ones an earlier try, or the user, already closed.
+const threadStateQuery = `query($id:ID!){
+  node(id:$id){ ... on PullRequestReviewThread{ id isResolved } }
+}`;
+
+function threadResolved(project, threadId, send = github.request) {
+  const { data, error } = graphql(project, threadStateQuery, { id: threadId }, send);
+  if (error) return { resolved: null, error };
+  const node = data && data.node;
+  if (!node) return { resolved: null, error: 'no such thread' };
+  return { resolved: Boolean(node.isResolved), error: null };
+}
+
 // The reply resolve-threads.cjs posts before it closes a thread: which commit fixed it.
 function replyToThread(project, threadId, body, send = github.request) {
   const { data, error } = graphql(project, replyMutation, { id: threadId, body }, send);
@@ -341,6 +355,6 @@ function reviewBodies(project, slug, number, send = github.request) {
 
 module.exports = {
   graphql, reviewThreads, restOfThread, resolveThread, replyToThread, issueComments, reviewBodies, readRetry,
-  normalizeThread, normalizeComment, stripAnchor, isTransient, withRetry, threadHasReply, sleepMs,
-  threadsQuery, threadCommentsQuery, resolveMutation, replyMutation,
+  normalizeThread, normalizeComment, stripAnchor, isTransient, withRetry, threadHasReply, threadResolved, sleepMs,
+  threadsQuery, threadCommentsQuery, threadStateQuery, resolveMutation, replyMutation,
 };

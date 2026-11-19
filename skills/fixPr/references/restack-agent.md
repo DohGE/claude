@@ -6,7 +6,8 @@ because there is no one on the other end.
 Branch: `{{BRANCH}}` | Pull request: `#{{PR_NUMBER}}` ({{PR_URL}}) | Working dir: `{{ROOT}}`
 Parent: `{{PARENT}}` | Its tip when the run began: `{{OLD_TIP}}` | Lease: `{{LEASE}}`
 Mode: `{{MODE}}` | Conflicting files: {{FILES}}
-The parent's landed change{{#if MODE=conflict}} of those files{{/if}}: `{{PARENT_DIFF}}` (a diff; `none` when there is none)
+The parent's landed change, cut to {{#if MODE=conflict}}those files{{/if}}{{#if MODE=adapt}}the files and names of the red step's errors{{/if}} and to the files that change a name of the parts below this branch still uses: `{{PARENT_DIFF}}` (a diff; `none` when nothing matched)
+All of the parent's landed change: `{{PARENT_DIFF_FULL}}` - read it only when the cut leaves a question open
 Check logs: `{{CHECKS_DIR}}` | Skill dir: `{{SKILL_DIR}}` | Push: `{{PUSH}}` | User language: `{{LANGUAGE}}`
 
 `{{ROOT}}` is the `git worktree` of `{{BRANCH}}`, a part of a stack of pull requests: its base is
@@ -68,8 +69,13 @@ while it runs.
    turned 29 "conflicting" files into a rebase with no conflict at all.
 2. `git -C "{{ROOT}}" -c rerere.enabled=true rebase --onto origin/{{PARENT}} {{OLD_TIP}}`.
 3. At every stop, `git -C "{{ROOT}}" diff --name-only --diff-filter=U` lists the files. Read
-   `{{PARENT_DIFF}}` once first, when it is not `none`: what the parent's landing changed, so no
-   `git show`/`git diff` of yours has to find it. For each file, Read it and resolve every conflict block:
+   `{{PARENT_DIFF}}` once first, when it is not `none`: what the parent's landing changed in those
+   files, so no `git show`/`git diff` of yours has to find it. A conflict whose other side is not
+   in it (a later commit's file, a name it does not show) → Grep `{{PARENT_DIFF_FULL}}` for that
+   file or name rather than reading all of it. A conflict in an import block: per module, the
+   base's names minus the ones either side removed plus the ones either side added (the script
+   merges it so itself when nothing else conflicts).
+   For each file, Read it and resolve every conflict block:
    - the `{{PARENT}}` side is reviewed and pushed work: keep its renames, moved code and changed
      signatures;
    - this branch's side is what its own commits change on top: keep that change too, written against
@@ -95,9 +101,14 @@ while it runs.
 
        node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{PARENT}}" --result-file="{{CHECKS_DIR}}/gate-restack-<n>.json"
 
-   and wait for the result file. `green` or `skipped` → point 5. `red` → Read each failed step's
+   and wait for the result file. `green` or `skipped` → point 5. `green-no-tests` → point 5 too:
+   every command passed but no unit test ran (the project has none the gate knows, `noTests`) -
+   your `gate` says `green-no-tests` and your `summary` says the tests did not run. A spec of yours
+   alone: the same command with `--specs=<spec>[,<spec>…]` in place of `--changed-since` (it
+   escapes the path; never a hand-built `npx jest`). `red` → Read each failed step's
    `errorsPath` and repair what {{#if MODE=adapt}}the parts below changed under this branch: bring each use in line with
-   their change (the list above, `{{PARENT_DIFF}}`), stage it by path and amend this branch's last
+   their change (the list above, `{{PARENT_DIFF}}`; Grep `{{PARENT_DIFF_FULL}}` for a name an error
+   quotes that the cut does not show), stage it by path and amend this branch's last
    commit{{/if}}{{#if MODE!=adapt}}your resolution broke{{/if}} - nothing else; at most two more passes. A red typecheck skips the
    tests and the build: repair it, and the next pass runs them. Still red →
    `git -C "{{ROOT}}" reset --hard <before>` and end with the `error` JSON.
@@ -119,5 +130,5 @@ while it runs.
 Your final message IS one of these JSON objects - alone, no text before or after it (the plugin's
 SubagentStop hook sends a message with prose back once):
 
-- `{"type":"result","mode":"{{MODE}}","rebased":true,"pushed":<bool>,"commit":"<HEAD sha>","resolvedFiles":["<path>",…],"adapted":["<path>",…],"gate":"green|skipped","summary":"<in {{LANGUAGE}}: per file, what each side changed and how you combined them; what you adapted; the push>"}`
+- `{"type":"result","mode":"{{MODE}}","rebased":true,"pushed":<bool>,"commit":"<HEAD sha>","resolvedFiles":["<path>",…],"adapted":["<path>",…],"gate":"green|green-no-tests|skipped","summary":"<in {{LANGUAGE}}: per file, what each side changed and how you combined them; what you adapted; the push>"}`
 - `{"type":"error","report":"<in {{LANGUAGE}}: the file and why it could not be resolved, or the red step; the state of the worktree>","resolvedFiles":["<path>",…]}`

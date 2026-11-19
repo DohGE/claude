@@ -97,7 +97,7 @@ async function getJson(url, fetchImpl, init) {
 }
 
 // The port of the run's own server, when one is up: server.json's pid may have been handed to
-// another process since, and port 9999 may be another run's - only its answer proves it.
+// another process since, and its port may be another run's now - only its answer proves it.
 async function livePort(run, fetchImpl) {
   if (!run.server || !Number.isInteger(run.server.port) || !run.tasks.length) return null;
   const r = await getJson(`http://127.0.0.1:${run.server.port}/api/orchestrator?taskId=${run.tasks[0].id}`, fetchImpl);

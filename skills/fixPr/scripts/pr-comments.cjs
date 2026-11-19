@@ -25,7 +25,7 @@ const defaultSkillDir = path.resolve(__dirname, '..');
 const artifactsRetain = 30;
 
 function parseArgs(argv) {
-  const args = { branches: '', project: process.cwd(), skillDir: '', replay: '', local: null, task: '' };
+  const args = { branches: '', project: process.cwd(), skillDir: '', replay: '', local: null, task: '', push: 'yes', dryRun: 'no', preflight: 'yes' };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -35,11 +35,17 @@ function parseArgs(argv) {
     else if (m[1] === 'skill-dir') args.skillDir = m[2];
     else if (m[1] === 'replay') args.replay = m[2];
     else if (m[1] === 'task') args.task = m[2].trim();
+    else if (m[1] === 'push') args.push = m[2].trim();
+    else if (m[1] === 'dry-run') args.dryRun = m[2].trim();
+    else if (m[1] === 'preflight') args.preflight = m[2].trim();
     else if (m[1] === 'local') args.local = m[2].split(/[\s,;]+/).map((id) => id.trim().toLowerCase()).filter(Boolean);
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir, --replay, --local, --task).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --branches, --project, --skill-dir, --replay, --local, --task, --push, --dry-run, --preflight).`);
+  }
+  for (const [flag, value] of [['--push', args.push], ['--dry-run', args.dryRun], ['--preflight', args.preflight]]) {
+    if (!['yes', 'no'].includes(value)) throw new Error(`${flag} takes yes or no.`);
   }
   if (args.local !== null && args.local.length === 0) {
     throw new Error('--local needs the ids of the codeReview findings to fix (--local="da3d32cd,b4309764").');
@@ -676,6 +682,17 @@ function collect(options) {
     result.errors.push('No branches given (expected --branches="a,b;c").');
     return result;
   }
+  // What the run will need from this machine, before a comment is read: origin reachable without
+  // a prompt, a git identity, a token GitHub accepts, a complete node_modules (preflight.cjs). A
+  // failure the run cannot get past stops it here, with its fix, before any worktree exists.
+  if (options.preflight) {
+    const pre = (options.runPreflight || require('./preflight.cjs').preflight)(project, options.preflight);
+    result.preflight = { ok: pre.ok, checks: pre.checks };
+    result.errors.push(...pre.errors);
+    result.warnings.push(...pre.warnings);
+    if (!pre.ok) return result;
+    if (pre.checks.token && pre.checks.token.source) result.tokenSource = pre.checks.token.source;
+  }
   // Two branches can sanitise to one folder name (`feature/x` and `feature-x`
   // both become `feature-x`), and their artifacts would then overwrite each
   // other inside one run.
@@ -748,6 +765,20 @@ function collect(options) {
       // a review history that cannot be read is no reason to stop the fixes
     }
   }
+  // CI runs a test command the gate does not: every agent would report a green gate CI then
+  // refuses (2026-11-18: the gate ran `build` alone, Jenkins ran the specs and failed 4 of 7 parts).
+  // Once per run, from the project's own CI files; a cheap grep, never a reason to stop.
+  if (!replay && result.targets.length > 0) {
+    try {
+      const gap = (options.ciTestGap || require('./checks.cjs').ciTestGap)(project);
+      if (gap) {
+        result.ciTestGap = { ciFiles: gap.ciFiles, missing: gap.missing };
+        result.warnings.push(gap.warning);
+      }
+    } catch {
+      // a CI file that cannot be read is no reason to stop the fixes
+    }
+  }
   // A branch of the stack that could not be collected still moves: say where it sits.
   const collected = new Set(result.targets.map((t) => t.branch));
   for (const t of result.targets) {
@@ -763,7 +794,33 @@ function collect(options) {
       result.warnings.push(`--local: ${missing.join(', ')} found in no codeReview report of ${names.join(', ')} - check the id on the report page, and that its branch is among the named ones.`);
     }
   }
+  result.warnings = foldWarnings(result.warnings, names);
   return result;
+}
+
+// One line for a warning every branch gets alike: on 2026-11-18 "no codeReview of this branch on
+// record" came once per part of a stack of seven, seven lines saying one thing. A warning of the
+// shape `<branch>: <text>` whose text is the same once the branch's own name in it reads
+// `<branch>` folds into `<b1>, <b2>: <text>`; nothing is lost, since the placeholder stands for
+// each named branch in turn (and each target's `review` keeps its own command).
+function foldWarnings(warnings, branches) {
+  const names = [...branches].sort((a, b) => b.length - a.length);
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const groups = new Map();
+  const out = [];
+  for (const warning of warnings) {
+    const owner = names.find((b) => warning.startsWith(`${b}: `));
+    if (!owner) { out.push(warning); continue; }
+    // The branch's name inside the text, not a longer name that contains it (part-1 in part-10).
+    const text = warning.slice(owner.length + 2).replace(new RegExp(`(?<![\\w./-])${escape(owner)}(?![\\w/-]|\\.\\w)`, 'g'), '<branch>');
+    if (!groups.has(text)) {
+      groups.set(text, { branches: [], at: out.length, original: warning });
+      out.push(null);
+    }
+    groups.get(text).branches.push(owner);
+  }
+  for (const [text, g] of groups) out[g.at] = g.branches.length > 1 ? `${g.branches.join(', ')}: ${text}` : g.original;
+  return out;
 }
 
 function main() {
@@ -773,7 +830,14 @@ function main() {
     // The meter starts the whole skill with the variable set; the orchestrator's command
     // stays the one SKILL.md prints.
     if (!args.replay && process.env.DOH_FIXPR_REPLAY) args.replay = process.env.DOH_FIXPR_REPLAY;
-    result = collect(args);
+    // A replay reads nothing from the network; a dry run commits, pushes and resolves nothing and
+    // runs no gate, so for it every check only warns.
+    const dry = args.dryRun === 'yes';
+    const push = args.push === 'yes' && !dry;
+    const preflight = args.preflight === 'yes' && !args.replay
+      ? { push, commit: !dry, resolve: push && !args.local, gate: !dry }
+      : null;
+    result = collect({ ...args, preflight });
     writeRunFile(result);
   } catch (err) {
     result = { targets: [], errors: [String((err && err.message) || err)], warnings: [] };
@@ -795,6 +859,6 @@ function writeRunFile(result) {
   return file;
 }
 
-module.exports = { writeRunFile, openChildren, stackAbove, dedupeBotNotes, parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf, annotateStacks, remoteTips };
+module.exports = { foldWarnings, writeRunFile, openChildren, stackAbove, dedupeBotNotes, parseArgs, commitPrefixFor, commitMessageFor, pruneArtifacts, collectBranch, collect, briefThread, briefNote, replaySource, localFindings, reportFilesOf, annotateStacks, remoteTips };
 
 if (require.main === module) main();

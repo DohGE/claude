@@ -1,6 +1,6 @@
 ---
 name: restack
-description: Use when the user wants a stack of pull requests (each based on another one's branch) moved onto its newest base, or a stack whose parts no longer sit on each other put back in line - takes one branch of the stack (the rest is read from GitHub) or the whole stack bottom-first, moves the bottom onto its base and every part onto the part below it, bottom-up, each in its own worktree with the project's gate after a move that changed code, merges append-only conflicts itself, hands real conflicts to a background conflict agent, and pushes every part with a lease; it never touches the user's checkout
+description: Use when the user wants a stack of pull requests (each based on another one's branch) moved onto its newest base, or a stack whose parts no longer sit on each other put back in line - takes one branch of the stack (the rest is read from GitHub) or the whole stack bottom-first, moves the bottom onto its base and every part onto the part below it, bottom-up, each in its own worktree with the project's gate after a move that changed code, merges append-only and import-only conflicts itself, hands real conflicts to a background conflict agent, and pushes every part with a lease; it never touches the user's checkout
 argument-hint: "<branch>[;<branch>…] [--base=<branch>] [--no-onto-base] [--start=<part> --parent-old-tip=<sha>] [--dry-run] [--no-push] [--no-gate] [--project=<path>]"
 hooks:
   PreToolUse:
@@ -104,9 +104,12 @@ Strip the flags first, wherever they sit:
   put back on each other.
 - `--resume` → the previous climb stopped at a part that has landed since (its conflict agent, or
   the user, pushed it): Step 3 with `--resume=yes`, Step 2 skipped.
-- `--start=<part>` with `--parent-old-tip=<sha>` → start a climb at that part by hand.
+- `--start=<part>` with `--parent-old-tip=<sha>` → start a climb at that part by hand. The script refuses
+  a `<sha>` that part is not built on (not its ancestor), before any worktree.
 - `--dry-run` → Step 2 only.
-- `--no-push` → `PUSH=no`; `--no-gate` → `GATE=no` (say in the summary that nothing was built).
+- `--no-push` → `PUSH=no`; `--no-gate` → `GATE=no` (say in the summary that nothing was built). With
+  no gate the script merges no conflict itself either: append, JSON-key and import merges are proved
+  by the gate, so `--auto-resolve` follows `--gate`, and every conflict goes to the conflict agent.
 
 What remains is the stack, verbatim: one branch (the rest is read from GitHub) or the whole stack
 bottom-first, split on `;` or `,`. Nothing → stop and say, in Polish, that the skill needs a branch
@@ -114,7 +117,19 @@ bottom-first, split on `;` or `,`. Nothing → stop and say, in Polish, that the
 
 ## Step 2 — The plan
 
-    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>]
+    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>] --push=<yes|no> --gate=<yes|no>
+
+It runs the preflight first (`preflight.cjs`): `origin` answers `git ls-remote` without a prompt,
+`user.name`/`user.email` are set (every move is a rebase that commits), the GitHub token works, and,
+with `--gate=yes`, the main checkout's `node_modules` is there and complete. Its answer is `preflight`.
+Under `--dry-run` pass `--push=no --gate=no`: an unreachable origin is then a warning, and the
+plan is still answered beside a failed check.
+`preflight.ok` false → stop here, before anything moves: report each `errors[]` entry that starts
+with `preflight` in Polish, with its fix - every command in it verbatim, e.g. `git config --global
+credential.credentialStore dpapi` or one login from a normal terminal for an origin Git Credential
+Manager cannot reach from this process - and tell the user to start again once it is fixed. On
+2026-11-18 a missing identity made a move stop as a "conflict" with no conflicting file, and an
+unreachable origin surfaced only as a refused push.
 
 Tell the user, in Polish, the stack bottom-first with its base (`master ← part-1 ← part-2 ← …`),
 the pull request number of each part (`prs`), which pairs already sit on each other (`ok`) and which
@@ -127,15 +142,23 @@ gives the stack and `--base` by hand. **`--dry-run` stops here.**
 
 Run (Bash, `run_in_background: true`):
 
-    node "<FIXPR>/scripts/restack.cjs" --action=stack --project="<PROJECT>" --stack="<stack>" [--base=<base>] --onto-base=<yes|no> --checks-dir="<PROJECT>/.claude/doh/restack-checks" --push=<yes|no> --gate=<yes|no> --language=<language of this conversation> [--resume=yes | --start=<part> --parent-old-tip=<sha>]
+    node "<FIXPR>/scripts/restack.cjs" --action=stack --project="<PROJECT>" --stack="<stack>" [--base=<base>] --onto-base=<yes|no> --checks-dir="<PROJECT>/.claude/doh/restack-checks" --push=<yes|no> --gate=<yes|no> --language=<language of this conversation> --preflight=<no after Step 2, yes otherwise> [--resume=yes | --start=<part> --parent-old-tip=<sha>]
+
+(Step 2 already ran the preflight; a climb started without it - `--start` by hand - runs it here and
+answers a failed one with `preflight` and its `errors`, moving nothing: stop as Step 2 says.)
 
 Each part gets a worktree (`worktree.cjs`: a branch the user has checked out is moved on
 `doh-fixpr/<branch>` and pushed to its pull request), is moved with `rebase --onto` - its own
 commits only - and is checked by the project's gate when the move changed the code under it (a
 gate already green on the same tree is reused). A bottom whose parent pull request was
 squash-merged into the base moves off that parent's last commit, never replaying it (`squashed`).
-Conflicts where both sides only appended (translation keys, enum members, exports) are merged by
-the script and proved by that gate. The JSON:
+Conflicts where both sides only appended (translation keys, enum members, exports), and conflicts
+held in an import block alone (`import { … } from '…'`: the base's names, minus what a side removed,
+plus what a side added), are merged by the script and proved by that gate - never without one:
+`--auto-resolve` follows `--gate` unless given (`autoResolved`: `json-keys`,
+`both-insertions`, `imports`). A part already on its parent and on origin moves nothing: `noop`. A
+climb first checks that git can write commits (`user.name`, `user.email`); without them it stops
+before any worktree, with an `errors` entry that names what is missing. The JSON:
 
 - `stack`, `base`, `prs`; `resumedAfter` with `--resume=yes`;
 - `parts[]`, one per part it reached, bottom-up: `branch`, `parent`, `status`, `commit` (new sha),
@@ -143,18 +166,30 @@ the script and proved by that gate. The JSON:
   `conflictFiles` (the first 10), `conflictCount`, `oldParentTip`, `autoResolved`, `squashed`
   (`commits` of a squash-merged parent left out), `worktree` (kept only when it did not land),
   `agentPrompt` / `agentPromptErrors` (a conflict, or a red gate after a clean move: `mode: adapt`),
-  `warnings`, `errors`;
-- `waiting[]` — the parts above a stop, untouched.
+  `reason` (a `noop`: why nothing moved), `warnings`, `errors`;
+- `waiting[]` — the parts above a stop, untouched;
+- `errors[]` at the top level — a stop that is not a part's own: above all "The main checkout's
+  node_modules disappeared while removing …" (or "went from N to M entries"), checked after every
+  part's worktree is taken down.
+
+Act on the top-level `errors[]` first: a lost main `node_modules` → stop, every part above it
+`waiting`. Tell the user, in Polish and as the first line, that their checkout's `node_modules` is
+gone and that they must run the install the error names in their checkout; after that, Step 3 again
+with `--resume=yes` climbs on above the last landed part. Never run the install yourself.
 
 Act on the LAST part:
 
-- every part `landed` → Step 5.
+- no part, and an `errors` entry → stop with it: a missing git identity (tell the user the two
+  `git config --global` commands it names), or an old tip the part is not built on (ask for the right one).
+- every part `landed` or `noop` → Step 5. A `noop` is no failure: the part already sat on its parent
+  and origin had it; its worktree is gone like a landed part's.
 - `conflict` → Step 4.
 - `gate-red` with `mode: adapt` → Step 4: the move went through and the part's gate is red on what
   the parts below changed; the same agent adapts it (its brief says how).
 - `gate-red` without it → stop. Name each red step with its `errorsPath`; the worktree stays for the user.
 - `push-rejected` → stop. Somebody pushed to that branch during the climb; say so.
-- `error` → stop with its `errors`.
+- `error` → stop with its `errors` (a missing `user.name`/`user.email` is named there, never as a
+  conflict).
 
 ## Step 4 — A conflict
 
@@ -182,16 +217,29 @@ Wait for its notification; never predict it. It ends with one JSON object:
 
 ## Step 5 — Check and summary (Polish)
 
-    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>]
+    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>] --preflight=no
 
 `broken` must be empty now; any pair in it goes into the summary with its `command`.
 
+With `PUSH=yes` and at least one part pushed, start in the background (Bash,
+`run_in_background: true`) what CI says about the pushed tips:
+
+    node "<FIXPR>/scripts/ci-status.cjs" --project="<PROJECT>" --branches="<the pushed parts, ;-separated>" --timeout-min=15 --out="<PROJECT>/.claude/doh/restack-checks/ci-status.json"
+
+It waits until no status or check run of those commits is pending, never past `--timeout-min`, and
+gives each part's `state` (`success`, `failure`, `pending` when CI still runs at the timeout, `none`)
+with, for a red one, `failed[]`: the check's name, link and decisive lines (a Jenkins build's
+TypeScript errors, `FAIL <spec>`, test totals, `ERROR:` lines from its console). Write the summary
+when it ends. A green gate is the plugin's verdict; CI is the pull request's.
+
 Then one summary, and nothing else:
 - the stack, bottom-first, with its base;
-- one row per part: the pull request, `oldTip` → `commit` (short shas), how it moved (not at all,
-  rebased with no conflict, off a squash-merged parent - `squashed.commits` left out - conflicts
+- one row per part: the pull request, `oldTip` → `commit` (short shas), how it moved (not at all:
+  `noop`, with its `reason`; rebased with no conflict, off a squash-merged parent - `squashed.commits` left out - conflicts
   merged by the script - `autoResolved` - or by the conflict agent, with its `resolvedFiles`), the
-  gate verdict (reused when its warning says so), whether it was pushed;
+  gate verdict (reused when its warning says so; `green-no-tests` means every command passed and no
+  unit test ran - say so, never "green"), whether it was pushed, and what CI said (green, red with
+  at most a few decisive lines and the link, or still running);
 - every part that did not land, with why, its worktree and what the user can do;
 - `waiting` parts, left where they were;
 - every branch moved on `doh-fixpr/<branch>` because the user had it checked out (a warning of its

@@ -170,7 +170,7 @@
       "id": "ui-component",
       "name": "UI (presentational) component",
       "selectedItems": "2,5",
-      "checklistSize": 8,
+      "checklistSize": 9,
       "items": [
         {
           "id": "ui-component#2",
@@ -226,7 +226,7 @@
       "items": [
         {
           "id": "architecture#9",
-          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach. A function shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is no such element: it is never reported for not reusing, or not becoming, a shared util.",
+          "text": "Reuse before creating: nothing new (component, native-element markup, util, function, model, mapper, const, i18n key) is written before the shared library and the application have been SEARCHED for an equivalent — it usually already exists. The search is part of the change, not an optional courtesy: a hand-written table, input, button, dialog, tooltip or pagination, a util re-implementing a shared builder or ID generator, a second const/i18n key for a value already named somewhere — each is a finding that names the existing symbol to use instead. A per-area copy of a model, constant, util or helper that a shared place already declares with the same meaning is a finding at its first copy, naming the shared declaration to import instead. When the change itself introduces a shared declaration, it deletes the existing copies and repoints their users in the same change: a new shared declaration left beside the copies it replaces is a finding naming every copy still in place. Only when the search genuinely comes back empty is a new element created, and then in the shared place its consumers can reach. A function shorter than 5 lines whose logic is simple - a single filter, map, find, some/every or sort over its input, or a property pick - is no such element: it is never reported for not reusing, or not becoming, a shared util.",
           "severity": "medium",
           "sameAs": [
             "component-template#16"

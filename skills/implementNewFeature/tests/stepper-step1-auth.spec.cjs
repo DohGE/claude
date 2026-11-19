@@ -137,14 +137,68 @@ test('skopiowane credentials zapisują się do auth.json nowego taska', async ({
   expect(saved).toEqual({ login: 'qa@example.com', password: 'S3kret!' });
 });
 
-test('New empty task startuje bez credentials', async ({ page }) => {
+test('New empty task startuje z ostatnio wpisanymi credentials', async ({ page }) => {
   await fillRequired(page);
   await page.fill('#authLogin', 'qa@example.com');
   await page.fill('#authPassword', 'S3kret!');
   await page.click('#createEmptyTask');
   await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
-  await expect(page.locator('#authLogin')).toHaveValue('');
+  await expect(page.locator('#task')).toHaveValue('');
+  await expect(page.locator('#authLogin')).toHaveValue('qa@example.com');
+  await expect(page.locator('#authPassword')).toHaveValue('S3kret!');
+});
+
+test('credentials zapisują się przy każdej edycji i wracają po przeładowaniu, bez wysyłania', async ({ page }) => {
+  await page.fill('#authLogin', 'qa@example.com');
+  await page.fill('#authPassword', 'S3kret!');
+  const store = await page.evaluate(() => Object.keys(localStorage)
+    .filter(k => k.startsWith('inf.auth.')).map(k => JSON.parse(localStorage.getItem(k))));
+  expect(store).toEqual([{ login: 'qa@example.com', password: 'S3kret!' }]);
+  await page.reload();
+  await page.waitForSelector('#authLogin');
+  await expect(page.locator('#authLogin')).toHaveValue('qa@example.com');
+  await expect(page.locator('#authPassword')).toHaveValue('S3kret!');
+  // Ostatnia wartość wygrywa - także wyczyszczona.
+  await page.fill('#authLogin', 'admin@example.com');
+  await page.fill('#authPassword', '');
+  await page.reload();
+  await page.waitForSelector('#authLogin');
+  await expect(page.locator('#authLogin')).toHaveValue('admin@example.com');
   await expect(page.locator('#authPassword')).toHaveValue('');
+});
+
+test('wysłany formularz po powrocie ma credentials, a samo wypełnienie nie oferuje ponownego wysłania',
+  async ({ page }) => {
+    await fillRequired(page);
+    await page.fill('#authLogin', 'qa@example.com');
+    await page.fill('#authPassword', 'S3kret!');
+    await submit(page, '#next');
+    await (await fetch(`${base}/api/answer?wait=10`)).json();
+    await page.reload();
+    await page.waitForSelector('#authLogin');
+    await expect(page.locator('#authLogin')).toHaveValue('qa@example.com');
+    await expect(page.locator('#authPassword')).toHaveValue('S3kret!');
+    await expect(page.locator('#next')).toHaveText('Resubmit');
+    await expect(page.locator('#next')).toBeDisabled();
+    // Zmiana hasła to już realna zmiana ustawień.
+    await page.fill('#authPassword', 'Nowe!');
+    await expect(page.locator('#next')).toBeEnabled();
+  });
+
+test('niepusty szkic taska wygrywa z zapamiętanymi credentials, pusty nie', async ({ page }) => {
+  // Task 1 zostaje z pustymi polami w szkicu.
+  await page.click('#createEmptyTask');
+  await expect(page.locator('#tabs .tab.selected')).toContainText('Task 2');
+  await page.fill('#authLogin', 'drugi@example.com');
+  await page.fill('#authPassword', 'Drugie!');
+  // Pusty szkic taska 1 nie jest wartością - dostaje ostatnio wpisane.
+  await page.click('#tabs .tab[data-task=t1]');
+  await expect(page.locator('#authLogin')).toHaveValue('drugi@example.com');
+  await expect(page.locator('#authPassword')).toHaveValue('Drugie!');
+  await page.fill('#authLogin', 'pierwszy@example.com');
+  // Task 2 trzyma swój niepusty szkic, więc pokazuje swoje, nie ostatnio wpisane.
+  await page.click('#tabs .tab[data-task=t2]');
+  await expect(page.locator('#authLogin')).toHaveValue('drugi@example.com');
 });
 
 test('usunięcie wgranego pliku nie czyści wpisanych pól', async ({ page }) => {

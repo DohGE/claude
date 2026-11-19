@@ -52,6 +52,9 @@
           transform:none; filter:none; }
   .tabs-bar .tab.selected { color:var(--text); border-color:var(--accent);
           background:rgba(124,140,248,.14); }
+  /* A task that waits for the user (needsUser) - selected or not, hovered or not. */
+  .tabs-bar .tab.attention, .tabs-bar .tab.attention:hover:not(:disabled) {
+          border-color:var(--warn); box-shadow:0 0 0 1px var(--warn); }
   .tabs-bar .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22ch; }
   .tabs-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--waiting); flex:none; }
   .tabs-bar .dot.in_progress { background:var(--accent); }
@@ -163,7 +166,6 @@
           background:transparent; color:var(--muted); line-height:0; border-radius:8px; }
   button.copy:hover:not(:disabled) { color:var(--text); background:var(--card);
           transform:none; filter:none; }
-  button.copy:disabled { background:transparent; }
   button.reveal { position:absolute; top:50%; right:6px; transform:translateY(-50%); margin:0;
           background:transparent; padding:6px 8px; color:var(--muted); line-height:0;
           border-radius:8px; }
@@ -861,7 +863,8 @@ function lockPanel(message, remember = true, hide = false) {
     v.lockedSig = lastSig;
     v.lockedHide = hide;
   }
-  document.querySelectorAll('#panel button, #panel textarea, #panel input, #panel select')
+  // A copy button only reads its field, so no lock ever takes it (wireCopyButtons).
+  document.querySelectorAll('#panel button:not(.copy), #panel textarea, #panel input, #panel select')
     .forEach(el => { el.disabled = true; });
   if (hide) [...$('#panel').children].forEach(el => { el.style.display = 'none'; });
   const n = document.createElement('div');
@@ -887,7 +890,9 @@ function autoGrow(el) {
 
 // A decorator rather than a change in every render function: every step's text
 // fields get a copy button, including any field added later. Password fields opt
-// out with data-no-copy, because revealing one flips its type to text.
+// out with data-no-copy, because revealing one flips its type to text. The button is
+// never tied to its field's state: a disabled or read-only field (a frozen form, a
+// finished task, a locked panel) still copies, and every disabling selector skips .copy.
 function wireCopyButtons() {
   document.querySelectorAll('#panel textarea, #panel input[type=text]').forEach(el => {
     if (el.dataset.copyWired || el.dataset.noCopy) return;
@@ -1111,7 +1116,7 @@ function renderTabs(state) {
     // Step 1 in_progress is just an unsubmitted form, so the pipeline has started
     // once the form was submitted — that is what closes the × for good.
     const closable = !t.step1Submitted && t.steps.slice(1).every(s => s.status === 'waiting');
-    return `<span class="tab${open ? ' selected' : ''}" role="tab"
+    return `<span class="tab${open ? ' selected' : ''}${needsUser(t) ? ' attention' : ''}" role="tab"
       aria-selected="${open}" tabindex="0" data-task="${esc(t.id)}">
       <span class="dot ${activeStepOf(t).status}"></span>
       <span class="label">${esc(tabLabel(t, i))}</span>
@@ -1152,7 +1157,7 @@ function renderTabs(state) {
 }
 
 const tabsSig = state => state.tasks.map((t, i) => [t.id, tabLabel(t, i),
-  activeStepOf(t).status, pending(t) ? '!' : '', t.step1Submitted ? 'S' : '',
+  activeStepOf(t).status, pending(t) ? '!' : '', needsUser(t) ? 'A' : '', t.step1Submitted ? 'S' : '',
   t.steps.slice(1).every(s => s.status === 'waiting') ? 'w' : '',
   t.id === activeTask ? '*' : ''].join(':')).join(',');
 
@@ -1292,6 +1297,11 @@ const gateOpen = gate => !!gate && !gate.answered;
 const pending = task => !!(task.question || gateOpen(task.reviewSummary) || gateOpen(task.mockupReview))
   || task.steps.some(s => s.stopped);
 
+// Everything a task can wait on the user for, which its tab shows with a yellow border: what
+// `pending` covers, and a failed step whose Retry / Skip / Finish nobody has picked yet.
+const needsUser = task => pending(task)
+  || (activeStepOf(task).status === 'failed' && liveOf(task, activeStepOf(task)));
+
 // Whether this step is the one the pipeline is on — so its buttons answer something
 // and its composer reaches an agent. Step 7 is the exception on the summary test: its
 // gate opens after the summary is written.
@@ -1397,13 +1407,12 @@ function renderStep1(task) {
   // values (a copy's, a draft's) still win.
   const d = { ...(revisit ? {} : readStore(LS_OPTIONS, {})), ...(task.step1 || {}), ...(v.draft || {}) };
   // The agent settings and the credentials are the two things this browser carries
-  // over from the last run; both only ever fill a form that has nothing of its own.
+  // over from the last run. The agents only fill a form that has nothing of its own.
   const ag = agentsForForm(task, d);
-  const stored = readStore(authKey(), null);
-  // The fields are only ever filled on a form that was never submitted: doing it on a
-  // revisit would make the form differ from what was sent and offer to resubmit
-  // over a change the user never made.
-  const savedAuth = revisit ? null : stored;
+  // The credentials are always the last ones typed in this browser for this project
+  // (written on every edit, below): a new task, a copy, a revisit and a reload all start
+  // with them, and only a non-empty value of the task's own draft outranks them.
+  const stored = readStore(authKey(), null) || {};
   // Implementation is the point of no return for what the task is: from there the
   // description, branch, steps and files are the record of what was asked for, not
   // something the pipeline can still be sent back over. The settings stay open until
@@ -1550,7 +1559,7 @@ function renderStep1(task) {
   esc(d.contractsText || '')}</textarea>
     <h3>Authorization (optional)</h3>
     <p class="muted">Credentials for E2E tests only — stored in the session dir, outside git.</p>
-    ${task.authSaved ? '<p class="hint">Credentials are stored for this task — fill both fields'
+    ${task.authSaved ? '<p class="hint">Credentials are stored for this task — edit both fields'
       + ' to replace them.</p>' : ''}
     <label>Login</label>
     <input type="text" id="authLogin" autocomplete="off">
@@ -1575,10 +1584,8 @@ function renderStep1(task) {
   // state document, and a FileList cannot be written as an attribute. Both are what a
   // redraw used to drop, so both are put back by hand.
   // A draft outranks storage: what is half-typed is newer than what was saved.
-  $('#authLogin').value = d.authLogin !== undefined ? d.authLogin
-    : (savedAuth && savedAuth.login) || '';
-  $('#authPassword').value = d.authPassword !== undefined ? d.authPassword
-    : (savedAuth && savedAuth.password) || '';
+  $('#authLogin').value = d.authLogin || stored.login || '';
+  $('#authPassword').value = d.authPassword || stored.password || '';
   // The files picked since the last submit, each with its own ×. The input is only the
   // picker: a pick is added to the ones before it, so a second trip never loses the first.
   const drawPicked = cat => {
@@ -1650,7 +1657,7 @@ function renderStep1(task) {
   const wireRuns = ed => {
     $(ed.add).disabled = finished || runsOnScreen(ed.box).length >= reviewRunsMax;
     if (finished) {
-      document.querySelectorAll(`${ed.box} input, ${ed.box} button`)
+      document.querySelectorAll(`${ed.box} input, ${ed.box} button:not(.copy)`)
         .forEach(el => { el.disabled = true; });
       return;
     }
@@ -1693,6 +1700,12 @@ function renderStep1(task) {
     const password = $('#authPassword').value;
     return { login, password, complete: !!(login && password.trim()) };
   };
+  // What the credential fields held when this task's form first came up (or were last sent
+  // with): prefilled values are no edit of their own, so a revisit does not offer to resubmit.
+  if (!v.authBase) {
+    const { login, password } = auth();
+    v.authBase = { login, password };
+  }
   // Walking back to the form to re-read it is free; re-running refinement is not,
   // so a resubmission has to carry something the agents have not seen. What the task
   // is and how it is run are told apart, because only the first repeats anything.
@@ -1709,8 +1722,10 @@ function renderStep1(task) {
       && $('#storyDesc').checked === !!prev.storyDescription);
   };
   const settingsEdited = () => {
+    // Credentials changed since the form came up, or complete ones the task does not hold yet.
     const a = auth();
-    if (a.login || a.password) return true;
+    if (a.login !== v.authBase.login || a.password !== v.authBase.password
+      || (a.complete && !task.authSaved)) return true;
     const prev = task.step1 || {};
     return JSON.stringify(runsOnScreen()) !== JSON.stringify(prev.codeReview || reviewRunsDefault)
       || JSON.stringify(runsOnScreen('#finalRuns')) !== JSON.stringify(prev.finalCodeReview || finalRunsDefault)
@@ -1758,6 +1773,10 @@ function renderStep1(task) {
     .forEach(sel => $(sel).addEventListener('input', onEdit));
   ['#refinement', '#genMockups', '#darkMockups', '#storyDesc']
     .forEach(sel => $(sel).addEventListener('change', onEdit));
+  // Kept on every keystroke, not on submit, under the project's own key: the next form - a
+  // new task, a copy, a reload - starts with whatever was typed last, sent or not.
+  ['#authLogin', '#authPassword'].forEach(sel => $(sel).addEventListener('input', () =>
+    writeStore(authKey(), { login: $('#authLogin').value, password: $('#authPassword').value })));
   $('#finalReview').addEventListener('change', () => {
     $('#finalReviewBox').hidden = !$('#finalReview').checked;
     onEdit();
@@ -1832,12 +1851,6 @@ function renderStep1(task) {
       await postJson('/api/auth',
         { taskId: activeTask, login: a.login, password: a.password });
     }
-    // Under the project's own key: one fixed port means one origin for every project
-    // on this machine, and these are the credentials of exactly one of them.
-    // Always kept: the next task and the next run start with them filled in.
-    if (a.complete) {
-      writeStore(authKey(), { login: a.login, password: a.password });
-    }
     const sent = await sendAnswer({ kind: 'step1',
       taskDescription: $('#task').value.trim(),
       branch: $('#branch').value.trim(),
@@ -1863,6 +1876,7 @@ function renderStep1(task) {
     v.draft = null;
     v.picked = null;
     v.filesDirty = false;
+    v.authBase = { login: a.login, password: a.password };
     // Submitting means "go", so the view rejoins the pipeline wherever it now is. On a
     // resubmission the server has already moved it - back to the first step that repeats,
     // the ones after it waiting again, or nowhere when nothing does - so the page follows
@@ -2073,7 +2087,7 @@ function wireSendable(field, button, key) {
 // them. A gate is the server's to take down - it does so as it records the answer - so
 // the poll run right away redraws the panel without it, not one round of the agent later.
 async function sendFrom(scope, send, sync) {
-  const controls = [...document.querySelectorAll(`${scope} button, ${scope} textarea, ${scope} input`)]
+  const controls = [...document.querySelectorAll(`${scope} button:not(.copy), ${scope} textarea, ${scope} input`)]
     .filter(el => !el.disabled);
   controls.forEach(el => { el.disabled = true; });
   const ok = await send();

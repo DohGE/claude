@@ -10,7 +10,8 @@
 // state that cannot end in a clean fast-forward push is refused by name, with
 // the command that fixes it, instead of being forced through.
 
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -22,7 +23,7 @@ const bootstrapTimeoutMs = 10 * 60 * 1000;
 const depsModes = ['auto', 'install', 'link'];
 
 function parseArgs(argv) {
-  const args = { action: 'add', branch: '', project: process.cwd(), worktree: '', bootstrap: true, deps: 'auto' };
+  const args = { action: 'add', branch: '', project: process.cwd(), worktree: '', bootstrap: true, deps: 'auto', resume: false };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--no-bootstrap') {
@@ -39,10 +40,11 @@ function parseArgs(argv) {
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'worktree') args.worktree = m[2];
     else if (m[1] === 'deps') args.deps = m[2];
+    else if (m[1] === 'resume' && ['yes', 'no'].includes(m[2])) args.resume = m[2] === 'yes';
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --branch, --project, --worktree, --deps, --no-bootstrap).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --branch, --project, --worktree, --deps, --resume=yes|no, --no-bootstrap).`);
   }
   if (!['add', 'remove'].includes(args.action)) {
     throw new Error(`Unknown --action=${args.action} (expected add|remove).`);
@@ -270,14 +272,66 @@ const installCommands = {
 // last five lines handed the reader "aliases: clean-install, ic, install-clean" as the
 // reason their gate cannot run. The prefix-only lines every manager emits between
 // paragraphs carry nothing, so dropping them keeps the five that travel real ones.
+//
+// Warnings are dropped while there is an error line to show: a slow `npm ci` writes dozens of
+// `npm warn deprecated …` lines before its real error, and a failure of 2026-11-18 was reported by
+// five deprecation notices and nothing else. A run killed by the timeout says so first - its
+// output never got to an error line at all.
+const warnLine = /^(npm|pnpm|yarn)?\s*(warn(ing)?|WARN)\b/i;
+const errorLine = /^(npm\s+(error|ERR!)|ERR_PNPM_|\s*error\b|YN\d+:.*error)/i;
+
 function installFailure(err) {
   const text = String((err && err.stderr) || (err && err.message) || err);
-  return text.split(/\r?\n/)
+  const lines = text.split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line && !/^(npm|pnpm|yarn)?\s*(error|warn|ERR!)?\s*$/i.test(line))
-    .slice(0, 5)
-    .join(' ')
-    .trim();
+    .filter((line) => line && !/^(npm|pnpm|yarn)?\s*(error|warn|ERR!)?\s*$/i.test(line));
+  const errors = lines.filter((line) => errorLine.test(line));
+  const chosen = errors.length > 0 ? errors : lines.filter((line) => !warnLine.test(line));
+  const head = (chosen.length > 0 ? chosen : lines).slice(0, 5).join(' ').trim();
+  if (err && err.timedOut) {
+    const minutes = Math.round((err.timeoutMs || bootstrapTimeoutMs) / 60000);
+    return `the install did not finish within ${minutes} min and was stopped with every process it started${errors.length > 0 ? `; its first errors: ${head}` : ''}`;
+  }
+  return head;
+}
+
+// The runner that bounds an install: a child Node process starts the command, and on the
+// deadline kills its WHOLE process tree. `execFileSync`'s own timeout kills only the process it
+// started - on Windows the `cmd.exe` around the package manager's `.cmd` shim - and npm, orphaned,
+// went on writing into node_modules: the retry that followed (`npm ci`) met it there with
+// `ENOTEMPTY: rmdir node_modules\@…` (2026-11-18). `taskkill /T` (Windows) and a process group
+// (elsewhere) reach every process the install started.
+const boundedRunner = `
+const o = JSON.parse(process.argv[1]);
+const { spawn, spawnSync } = require('node:child_process');
+const cap = 4 * 1024 * 1024;
+const keep = (s, d) => (s.length + d.length > cap ? s : s + d);
+let out = '';
+let err = '';
+let timedOut = false;
+const child = spawn(o.cmd, o.args, { cwd: o.cwd, shell: o.shell, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+child.stdout.on('data', (d) => { out = keep(out, String(d)); });
+child.stderr.on('data', (d) => { err = keep(err, String(d)); });
+const timer = setTimeout(() => {
+  timedOut = true;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+  else { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+}, o.timeoutMs);
+child.on('error', (e) => { clearTimeout(timer); process.stdout.write(JSON.stringify({ status: null, error: e.message, stdout: out, stderr: err, timedOut })); });
+child.on('close', (code) => { clearTimeout(timer); process.stdout.write(JSON.stringify({ status: code, stdout: out, stderr: err, timedOut })); });
+`;
+
+// The environment is inherited, never sent along: the options travel on a command line, which
+// Windows caps at 32k characters.
+function runBounded(cmd, args, { cwd, timeoutMs = bootstrapTimeoutMs, shell = false } = {}) {
+  const res = spawnSync(process.execPath, ['-e', boundedRunner, JSON.stringify({ cmd, args, cwd, timeoutMs, shell })], {
+    encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs + 60000,
+  });
+  try {
+    return JSON.parse(String(res.stdout || '').trim());
+  } catch {
+    return { status: null, error: String(res.stderr || (res.error && res.error.message) || 'the install runner failed').trim(), stdout: '', stderr: '', timedOut: Boolean(res.error && res.error.code === 'ETIMEDOUT') };
+  }
 }
 
 // A worktree is created from HEAD of the branch, so it carries neither
@@ -285,22 +339,32 @@ function installFailure(err) {
 // gate before the commit runs the project's own lint, tests and build.
 // Without this the gate would fail on every branch for want of a dependency
 // tree, which reads as "the fixes broke the build".
-function installDependencies(root) {
+//
+// Never through a link: `npm ci` empties the node_modules it finds entry by entry, and through a
+// junction those entries are the main checkout's - measured on npm 10 (Windows), the main
+// checkout's node_modules was left empty and the link replaced by a folder of the worktree's own.
+// A link found here is unlinked (the link alone) before the install starts.
+// HUSKY=0 is not set: it would also skip writing the hook helpers a commit in this worktree runs,
+// so what an install rewrites in tracked files is put back afterwards instead (add).
+function installDependencies(root, { timeoutMs = bootstrapTimeoutMs, runner = runBounded } = {}) {
   const manager = detectPackageManager(root);
   if (!manager) return { manager: null, error: null };
-  try {
-    // A shell is needed on Windows, where every package manager is a `.cmd` shim - and
-    // with one, the finished command line is the documented form: Node deprecates
-    // concatenating a separate args array into it without escaping (DEP0190). Joining is
-    // lossless here because both halves are literals of this file: the manager name and
-    // its entry in `installCommands`, neither of which holds a space.
-    const useShell = process.platform === 'win32';
-    const argv = installCommands[manager];
-    execFileSync(useShell ? [manager, ...argv].join(' ') : manager, useShell ? [] : argv, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: bootstrapTimeoutMs, shell: useShell });
-    return { manager, error: null };
-  } catch (err) {
-    return { manager, error: installFailure(err) };
-  }
+  const cleared = clearDependencyFolder(path.join(root, 'node_modules'), { linksOnly: true });
+  if (cleared.error) return { manager, error: cleared.error };
+  // A shell is needed on Windows, where every package manager is a `.cmd` shim - and
+  // with one, the finished command line is the documented form: Node deprecates
+  // concatenating a separate args array into it without escaping (DEP0190). Joining is
+  // lossless here because both halves are literals of this file: the manager name and
+  // its entry in `installCommands`, neither of which holds a space.
+  const useShell = process.platform === 'win32';
+  const argv = installCommands[manager];
+  const res = runner(useShell ? [manager, ...argv].join(' ') : manager, useShell ? [] : argv, { cwd: root, timeoutMs, shell: useShell });
+  if (res.status === 0 && !res.timedOut) return { manager, error: null };
+  const error = installFailure({ stderr: `${res.stderr || ''}\n${res.error || ''}\n${res.status !== 0 && !res.stderr ? res.stdout || '' : ''}`, timedOut: res.timedOut, timeoutMs });
+  // What a stopped install leaves is half a tree: the next install meets it with ENOTEMPTY, the
+  // gate with missing modules. It goes, so the worktree reads as "no dependencies" - the truth.
+  if (res.timedOut) clearDependencyFolder(path.join(root, 'node_modules'));
+  return { manager, error: error || `${manager} ${argv.join(' ')} exited with ${res.status}`, ...(res.timedOut ? { timedOut: true } : {}) };
 }
 
 const lockfileOf = { npm: 'package-lock.json', pnpm: 'pnpm-lock.yaml', yarn: 'yarn.lock' };
@@ -318,6 +382,59 @@ const unlinkOne = (p) => {
     fs.unlinkSync(p);
   } catch {
     fs.rmdirSync(p);
+  }
+};
+
+const lstatOf = (p) => {
+  try {
+    return fs.lstatSync(p);
+  } catch {
+    return null;
+  }
+};
+
+// A folder deleted without ever following a link inside it: every link and junction under it is
+// unlinked first (unlinkLinks, the link alone), then the rest goes. `fs.rmSync` itself does not
+// follow a junction on the Node versions measured (22, Windows), and `rmdir /s` does not either
+// - but `rm -rf <link>/` and npm do, and a folder that still held a junction to the main
+// checkout's node_modules is exactly what an earlier version of this delete would have walked.
+function removeTree(dir) {
+  const st = lstatOf(dir);
+  if (!st) return;
+  if (st.isSymbolicLink()) {
+    unlinkOne(dir);
+    return;
+  }
+  if (st.isDirectory()) unlinkLinks(dir);
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+}
+
+// A worktree's `node_modules` that is in the way: a link (a stale or dangling one, or one an
+// earlier run left), a half-written folder of a stopped install, or a stray file. Removed without
+// following any link. `linksOnly` leaves a real folder alone - what an install about to run in it
+// reuses. `{ removed, error }`.
+function clearDependencyFolder(target, { linksOnly = false } = {}) {
+  const st = lstatOf(target);
+  if (!st) return { removed: null, error: null };
+  try {
+    if (st.isSymbolicLink()) {
+      unlinkOne(target);
+      return { removed: 'link', error: null };
+    }
+    if (linksOnly) return { removed: null, error: null };
+    removeTree(target);
+    return { removed: st.isDirectory() ? 'folder' : 'file', error: null };
+  } catch (err) {
+    return { removed: null, error: `${target} could not be cleared (${(err && err.message) || err}); remove it by hand - a link with rmdir, never a recursive delete` };
+  }
+}
+
+const sameFolder = (a, b) => {
+  try {
+    const k = (p) => fs.realpathSync.native(p);
+    return process.platform === 'win32' ? k(a).toLowerCase() === k(b).toLowerCase() : k(a) === k(b);
+  } catch {
+    return false;
   }
 };
 
@@ -344,39 +461,96 @@ function dependencyHealth(project) {
   return { ok: missing.length === 0, missing, declared: names.length };
 }
 
-const entriesOf = (dir) => {
+// The install command a main checkout's node_modules is repaired with, for the messages below.
+const repairCommand = (manager) => `${manager || 'npm'} ${(manager || 'npm') === 'npm' ? 'ci' : 'install'}`;
+
+// The main checkout's node_modules as every check of it reads it - preflight.cjs before a run
+// (checkDeps), linkDependencies before a link (`mainBroken`), remove around a worktree's removal
+// (`mainModulesLost`) - so the three never disagree on what "broken" means. `state`: `ok`,
+// `missing` (no folder: nothing to link, and an install next to a link emptied it on 2026-11-18)
+// or `incomplete` (declared packages absent). `entries`: what the folder holds, null when gone.
+function mainModulesHealth(project, manager = detectPackageManager(project) || 'npm') {
+  const command = repairCommand(manager);
+  const entries = entriesOf(path.join(project, 'node_modules'));
+  if (entries === null) {
+    return { ok: false, state: 'missing', entries, missing: [], declared: 0, command, reason: 'the main checkout has no node_modules' };
+  }
+  const health = dependencyHealth(project);
+  if (!health.ok) {
+    return {
+      ok: false, state: 'incomplete', entries, missing: health.missing, declared: health.declared, command,
+      reason: `the main checkout's node_modules misses ${health.missing.length} of ${health.declared} declared packages (${health.missing.slice(0, 3).join(', ')}${health.missing.length > 3 ? ', …' : ''})`,
+    };
+  }
+  return { ok: true, state: 'ok', entries, missing: [], declared: health.declared, command, reason: null };
+}
+
+function entriesOf(dir) {
   try {
     return fs.readdirSync(dir).length;
   } catch {
     return null;
   }
-};
+}
 
 function linkDependencies(project, root, manager, isIgnored = (dir) => tryGit(dir, ['check-ignore', '-q', 'node_modules']) !== null) {
   const lock = lockfileOf[manager];
   const source = path.join(project, 'node_modules');
   const target = path.join(root, 'node_modules');
-  if (!lock || !sameText(path.join(project, lock), path.join(root, lock))) return { linked: false, reason: 'its lockfile differs from the main checkout' };
-  if (!isDirectory(source)) return { linked: false, reason: 'the main checkout has no node_modules' };
-  const health = dependencyHealth(project);
-  if (!health.ok) {
-    return {
-      linked: false,
-      mainBroken: true,
-      reason: `the main checkout's node_modules misses ${health.missing.length} of ${health.declared} declared packages (${health.missing.slice(0, 3).join(', ')}${health.missing.length > 3 ? ', …' : ''}): run \`${manager} ${manager === 'npm' ? 'ci' : 'install'}\` in ${project} first - never inside a worktree, whose node_modules is a link to it`,
-    };
+  // The checkout itself is no worktree: its node_modules is the source, and clearing "what is in the
+  // way" below would delete it.
+  if (sameFolder(root, project)) return { linked: false, reason: 'the worktree is the main checkout itself' };
+  const main = mainModulesHealth(project, manager);
+  // A main checkout with no node_modules at all is broken too, whatever the lockfiles say: on
+  // 2026-11-18 it was emptied by an install that ran next to (or through) a worktree's link to it,
+  // so the one thing never to do then is an install inside a worktree. The user runs the install in
+  // their checkout once; every worktree then links it.
+  if (main.state === 'missing') {
+    return { linked: false, mainBroken: true, reason: `${main.reason}: run \`${main.command}\` in ${project} first - never inside a worktree, whose install would sit next to a link to it` };
   }
-  if (fs.existsSync(target)) return { linked: false, reason: 'the worktree already has a node_modules' };
+  if (!lock || !sameText(path.join(project, lock), path.join(root, lock))) return { linked: false, reason: 'its lockfile differs from the main checkout' };
+  if (!main.ok) {
+    return { linked: false, mainBroken: true, reason: `${main.reason}: run \`${main.command}\` in ${project} first - never inside a worktree, whose node_modules is a link to it` };
+  }
+  // What is already there. A link to the main checkout's folder is the result this call wants (a
+  // second launch of the same worktree). Anything else - a dangling or foreign link, the half
+  // tree of a stopped install, an earlier run's folder - used to send the worktree to a ten-minute
+  // install with `the worktree already has a node_modules` as the silent reason (2026-11-18, one
+  // part of seven). The lockfile is the main checkout's and that checkout is healthy, so its
+  // tree is the right one: the stale one is cleared (links unlinked, never followed) and linked.
+  let replaced = null;
+  const existing = lstatOf(target);
+  if (existing && existing.isSymbolicLink() && sameFolder(target, source)) {
+    if (!isIgnored(root)) return { linked: false, reason: 'git does not ignore a linked node_modules here' };
+    return { linked: true, reason: null, reused: true };
+  }
+  if (existing) {
+    const cleared = clearDependencyFolder(target);
+    if (cleared.error) return { linked: false, reason: cleared.error };
+    replaced = cleared.removed;
+  }
+  const makeLink = () => fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
   try {
-    fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+    makeLink();
   } catch (err) {
-    return { linked: false, reason: `the link could not be made (${(err && err.message) || err})` };
+    // Made by another process in the meantime: the same link is fine, anything else is cleared once.
+    if (lstatOf(target) && sameFolder(target, source)) {
+      // fall through to the ignore check
+    } else {
+      const again = clearDependencyFolder(target);
+      try {
+        if (again.error) throw err;
+        makeLink();
+      } catch (err2) {
+        return { linked: false, reason: `the link could not be made (${(err2 && err2.message) || err2})` };
+      }
+    }
   }
   if (!isIgnored(root)) {
     unlinkOne(target);
     return { linked: false, reason: 'git does not ignore a linked node_modules here' };
   }
-  return { linked: true, reason: null };
+  return { linked: true, reason: null, ...(replaced ? { replaced } : {}) };
 }
 
 // `mode`: `auto` links when it can and installs otherwise, `install` always installs, `link`
@@ -386,11 +560,14 @@ function provideDependencies(project, root, { mode = 'auto', install = installDe
   if (!manager) return { manager: null, linked: false, error: null };
   if (mode !== 'install') {
     const link = linkDependencies(project, root, manager, isIgnored);
-    if (link.linked) return { manager, linked: true, error: null };
+    if (link.linked) return { manager, linked: true, error: null, ...(link.replaced ? { replaced: link.replaced } : {}) };
     // A broken main checkout is the user's to repair, once, before the run - not five installs
     // in five worktrees against a registry that may not even answer.
     if (link.mainBroken) return { manager, linked: false, mainBroken: true, error: link.reason };
     if (mode === 'link') return { manager, linked: false, error: `node_modules could not be linked: ${link.reason}` };
+    // Why it installs, kept: the install that ran instead of a link on 2026-11-18 left no trace of
+    // the reason, and nobody could tell afterwards which of five it was.
+    return { ...install(root), linked: false, linkRefused: link.reason };
   }
   return { ...install(root), linked: false };
 }
@@ -517,8 +694,205 @@ function copyLocalFiles(project, root, list = () => tryGit(project, ['ls-files',
   return copied;
 }
 
+// The pull request's branch from origin, never waiting on a prompt nobody can answer; the first
+// line git wrote is the reason a failure carries.
+function fetchBranch(project, branch) {
+  try {
+    git(project, ['fetch', 'origin', branch, '--quiet'], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    return { ok: true, reason: '' };
+  } catch (err) {
+    const text = String((err && (err.stderr || err.message)) || '');
+    return { ok: false, reason: text.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '' };
+  }
+}
+
+// What an install rewrites in tracked files. husky's `prepare` (`husky install`) writes
+// `.husky/_/husky.sh` and `.husky/.gitignore`; a repository that tracks them and checks out with
+// CRLF (core.autocrlf) finds both "modified" after every install - same content, other line
+// endings. On 2026-11-18 that left every worktree of a seven-part stack dirty: restack warned
+// "holds uncommitted changes" for each part, `remove` refused each worktree, and a cascade then
+// stopped at "already exists and is kept". Generic, not husky's alone: any tracked file an
+// install step changed in a worktree nobody has worked in yet is put back right after the step.
+//
+// Why put back, and not the alternatives: HUSKY=0 covers husky only and also skips the hook
+// helpers a commit there runs; skip-worktree hides every later change of the file - an agent's
+// real edit included - from status and from the commit. A checkout of the files the step changed
+// touches nothing else, and the step's own result is recorded (path and content hash, in the
+// worktree's private git dir, which `git worktree remove` deletes) so a later reinstall can be
+// told apart from an edit.
+const artefactRecordName = 'doh-install-artefacts.json';
+// Paths no person edits in a worktree: husky's generated helpers.
+const knownArtefact = (rel) => /^\.husky\/(_\/.+|\.gitignore)$/.test(rel);
+
+// The tracked changes of a worktree as `{ xy, path }` (porcelain v1, NUL-separated: no quoting),
+// or null when git cannot say.
+function trackedChanges(root, { untracked = false } = {}) {
+  const res = spawnSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${untracked ? 'all' : 'no'}`], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  if (res.status !== 0) return null;
+  const parts = String(res.stdout || '').split('\0');
+  const out = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const entry = parts[i];
+    if (!entry) continue;
+    const xy = entry.slice(0, 2);
+    out.push({ xy, path: entry.slice(3) });
+    if (xy[0] === 'R' || xy[0] === 'C') i += 1;
+  }
+  return out;
+}
+
+const fileHash = (file) => {
+  try {
+    return crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+  } catch {
+    return null;
+  }
+};
+
+const recordPathOf = (root) => {
+  const gitDir = tryGit(root, ['rev-parse', '--absolute-git-dir']);
+  return gitDir ? path.join(gitDir, artefactRecordName) : null;
+};
+
+function readArtefactRecord(root) {
+  const file = recordPathOf(root);
+  try {
+    return file ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  } catch {
+    return {};
+  }
+}
+
+// The main checkout of a worktree: the folder its shared `.git` sits in.
+function mainCheckoutOf(root) {
+  const common = tryGit(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  return common && path.basename(common) === '.git' ? path.dirname(common) : null;
+}
+
+// Tracked files changed by the step that just ran (`before`: what was changed already) put back,
+// with what the step made of them recorded. Only an unstaged modification (` M`): an install
+// stages nothing, and a staged change is someone's work.
+function restoreInstallArtefacts(root, before) {
+  const fresh = (trackedChanges(root) || []).filter((c) => c.xy === ' M' && !before.has(c.path)).map((c) => c.path);
+  if (fresh.length === 0) return [];
+  const file = recordPathOf(root);
+  const record = readArtefactRecord(root);
+  for (const rel of fresh) record[rel] = fileHash(path.join(root, rel));
+  try {
+    if (file) fs.writeFileSync(file, `${JSON.stringify(record, null, 1)}\n`, 'utf8');
+  } catch {
+    // without the record a later reinstall's copy is still recognised for the known paths
+  }
+  if (tryGit(root, ['checkout', '--', ...fresh]) === null) return [];
+  return fresh;
+}
+
+// The tracked changes of a worktree that are an install's and nothing else's: a file whose content
+// is byte for byte what an install of this worktree made of it (the record), or a known
+// install-artefact path whose change git cannot see in its content (line endings only) or which
+// equals the main checkout's copy - the same install, run there.
+function installArtefacts(root, project) {
+  const changes = (trackedChanges(root) || []).filter((c) => c.xy === ' M');
+  if (changes.length === 0) return [];
+  const record = readArtefactRecord(root);
+  const main = project || mainCheckoutOf(root);
+  const known = changes.filter((c) => knownArtefact(c.path)).map((c) => c.path);
+  const contentChanged = new Set();
+  if (known.length > 0) {
+    const res = spawnSync('git', ['-C', root, 'diff', '--name-only', '-z', '--', ...known], { encoding: 'utf8', windowsHide: true });
+    if (res.status !== 0) known.forEach((p) => contentChanged.add(p));
+    else String(res.stdout || '').split('\0').filter(Boolean).forEach((p) => contentChanged.add(p));
+  }
+  return changes.filter((c) => {
+    const hash = fileHash(path.join(root, c.path));
+    if (hash && record[c.path] === hash) return true;
+    if (!knownArtefact(c.path)) return false;
+    if (!contentChanged.has(c.path)) return true;
+    return Boolean(main) && path.resolve(main) !== path.resolve(root) && hash !== null && fileHash(path.join(main, c.path)) === hash;
+  }).map((c) => c.path);
+}
+
+// The worktree's changes that are someone's work: everything but install artefacts. Untracked
+// files count when asked for. Null when git cannot read the worktree.
+function ownChanges(root, { project, untracked = false } = {}) {
+  const changes = trackedChanges(root, { untracked });
+  if (changes === null) return null;
+  const artefacts = new Set(installArtefacts(root, project));
+  return changes.filter((c) => !artefacts.has(c.path)).map((c) => c.path);
+}
+
+// Install artefacts discarded, but only when they are ALL the worktree holds (untracked files
+// included): a worktree with real work stays exactly as it was for whoever inspects it.
+function discardInstallArtefacts(root, project) {
+  const all = trackedChanges(root, { untracked: true });
+  if (!all || all.length === 0) return [];
+  const artefacts = new Set(installArtefacts(root, project));
+  if (!all.every((c) => artefacts.has(c.path))) return [];
+  const list = [...artefacts];
+  return tryGit(root, ['checkout', '--', ...list]) === null ? [] : list;
+}
+
+// Concurrent launches (Step 3 runs them in the background) write one repository: a fetch updates
+// shared refs, `worktree add -b` writes the upstream into the shared config, and git fails a second
+// writer at once ("could not lock config file") rather than waiting. The short git part of `add`
+// therefore runs one launch at a time; the slow dependency step after it does not. A lock older
+// than `staleMs` is a crashed run's, and a wait past `waitMs` goes on unlocked - git's own locks
+// still refuse a real collision by name.
+function withRepoLock(project, fn, { waitMs = 120000, staleMs = 300000, wait = sleepMs } = {}) {
+  const common = tryGit(project, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!common) return fn();
+  const lock = path.join(common, 'doh-worktree.lock');
+  const start = Date.now();
+  let held = false;
+  while (!held) {
+    try {
+      fs.mkdirSync(lock);
+      held = true;
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') break;
+      const st = lstatOf(lock);
+      if (st && Date.now() - st.mtimeMs > staleMs) {
+        try { fs.rmdirSync(lock); } catch { /* taken over by another run */ }
+        continue;
+      }
+      if (Date.now() - start > waitMs) break;
+      wait(250);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    if (held) {
+      try { fs.rmdirSync(lock); } catch { /* already gone */ }
+    }
+  }
+}
+
+// What the brief says about a worktree: its rulebook (or that there is none, so no agent spends
+// its calls looking) and how the app is started for a look at a fix (`checks.json` "visual":
+// command, url, backend, authFile) - the fix agent's visual check; null when the project
+// describes none.
+function describeWorktree(worktree, result) {
+  const rules = path.join(worktree, '.claude', 'doh', 'instructions');
+  result.rulebook = isDirectory(rules) ? rules : null;
+  try {
+    const checks = JSON.parse(fs.readFileSync(path.join(worktree, '.claude', 'doh', 'checks.json'), 'utf8'));
+    result.visual = checks && checks.visual && typeof checks.visual.command === 'string' ? checks.visual : null;
+  } catch {
+    result.visual = null;
+  }
+}
+
 function add(options) {
   const project = path.resolve(options.project || process.cwd());
+  const result = withRepoLock(project, () => checkoutWorktree(options, project), options.lock);
+  if (!result.created || result.errors.length > 0) return result;
+  return bootstrapWorktree(options, project, result);
+}
+
+// The git half of `add`: the checks, the worktree and its fast-forward, under the repository lock.
+// The rest - copies and dependencies - runs in `bootstrapWorktree` once the lock is released.
+function checkoutWorktree(options, project) {
   // The git seam. It exists for the one failure this function has to clean up
   // after - a fast-forward that does not take - which no arrangement of a real
   // repository produces: a branch that is strictly behind always fast-forwards.
@@ -537,13 +911,55 @@ function add(options) {
   }
   // The pull request's branch as GitHub has it is the only correct starting
   // point, and a repository that has not fetched in a week does not have it.
-  if (run(project, ['fetch', 'origin', branch, '--quiet']) === null) {
-    result.warnings.push(`Could not fetch origin/${branch}; working from the refs already in the repository.`);
+  // preflight.cjs has proven origin reachable before the run, so a failure here is rare - and its
+  // reason travels with it: on 2026-11-18 the bare "Could not fetch" came seven times while the
+  // cause (a credential store git could not use from this process) stayed hidden until the push.
+  const fetched = options.git ? { ok: run(project, ['fetch', 'origin', branch, '--quiet']) !== null, reason: '' } : fetchBranch(project, branch);
+  if (!fetched.ok) {
+    result.warnings.push(`Could not fetch origin/${branch}${fetched.reason ? ` (${fetched.reason})` : ''}; working from the refs already in the repository - preflight.cjs names the fix.`);
+  }
+
+  // --resume=yes (fixpr-resume.cjs): a run whose orchestrator died goes on where it stopped. The
+  // worktree it made, still registered for this branch or the run's own branch of it, is taken as
+  // it is - uncommitted work and all - instead of the refusal "a worktree git still has registered".
+  // On 2026-11-18 the orchestrator re-created one by hand after a crash.
+  const resume = Boolean(options.resume);
+  if (resume) {
+    const at = path.resolve(options.worktree || worktreePathFor(project, branch));
+    const same = (p) => Boolean(p) && path.resolve(p).toLowerCase() === at.toLowerCase();
+    const holder = [branch, ownBranchFor(branch)].find((b) => same(worktreeHolding(project, b)));
+    if (holder && isDirectory(at)) {
+      result.worktree = at;
+      result.reused = true;
+      if (holder !== branch) {
+        result.localBranch = holder;
+        const user = worktreeHolding(project, branch);
+        if (user) result.heldBy = user;
+      }
+      result.warnings.push(`Took ${at}, the worktree of the stopped run, as it is.`);
+      describeWorktree(at, result);
+      result.installed = isDirectory(path.join(at, 'node_modules'));
+      // Its node_modules as the stopped run left it: the main checkout's link (fixpr-launch's
+      // `linked`), or a folder of its own.
+      const deps = lstatOf(path.join(at, 'node_modules'));
+      result.dependencies = { manager: null, linked: Boolean(deps && deps.isSymbolicLink()), reused: true, error: null };
+      // A link to a main checkout whose node_modules went in the meantime (the stopped run's
+      // removals) is as broken as at a first launch: stop, never install here.
+      const main = result.dependencies.linked ? mainModulesHealth(project) : null;
+      if (main && !main.ok) {
+        result.mainBroken = true;
+        result.warnings.push(`No dependencies for the gate: ${main.reason}: run \`${main.command}\` in ${project} first - never inside a worktree, whose node_modules is a link to it.`);
+      }
+      return result;
+    }
   }
 
   const held = worktreeHolding(project, branch);
   const { state, ahead, behind } = branchState(project, branch);
   let own = null;
+  // The run's own branch of a branch the user has checked out, holding the commit a stopped run
+  // made and never pushed: checked out again as it is (--resume=yes only).
+  let ownKept = false;
   if (held) {
     // Two working copies of one branch diverge silently, so the run's copy is a branch of its own.
     if (state === 'ahead' || state === 'diverged') {
@@ -557,11 +973,14 @@ function add(options) {
         return result;
       }
       if (refExists(project, `refs/heads/${own}`)) {
-        if (tryGit(project, ['merge-base', '--is-ancestor', own, `origin/${branch}`]) === null) {
+        const unpushed = tryGit(project, ['merge-base', '--is-ancestor', own, `origin/${branch}`]) === null;
+        if (unpushed && resume) {
+          ownKept = true;
+          result.warnings.push(`${own} holds the stopped run's commit(s) origin/${branch} does not have; checked out as it is.`);
+        } else if (unpushed) {
           result.errors.push(`${own} holds commits origin/${branch} does not have - an earlier run that could not push. Inspect it, then delete it (git branch -D ${own}).`);
           return result;
-        }
-        tryGit(project, ['branch', '-D', own]);
+        } else tryGit(project, ['branch', '-D', own]);
       }
       result.heldBy = held;
       result.localBranch = own;
@@ -577,7 +996,11 @@ function add(options) {
     result.errors.push(`Branch ${branch} has no origin/${branch}, so its fixes could never be pushed to the pull request. Push the branch first.`);
     return result;
   }
-  if (state === 'diverged') {
+  // A stopped run's commit rebased and never pushed: origin no longer matches it, and the landing
+  // pushes it with the lease pinned to where origin stood when the run began.
+  if (state === 'diverged' && resume) {
+    result.warnings.push(`${branch} and origin/${branch} have diverged (${ahead} local, ${behind} remote commit(s)): the stopped run's local branch is checked out as it is; only its landing pushes it, with the lease.`);
+  } else if (state === 'diverged') {
     result.errors.push(`Branch ${branch} and origin/${branch} have diverged (${ahead} local, ${behind} remote commit(s)). Reconcile them yourself - rebasing or merging on your behalf is not this skill's call.`);
     return result;
   }
@@ -596,7 +1019,9 @@ function add(options) {
       return result;
     }
     try {
-      fs.rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+      // The verdict refused any folder holding a link; removeTree unlinks before it deletes all
+      // the same, so a link made since cannot lead the delete out of the folder.
+      removeTree(worktree);
     } catch (err) {
       result.errors.push(`${worktree} is a leftover of an earlier run (${verdict.reason}) but could not be removed: ${err.message}. A process may still hold it - close it, or remove the folder by hand.`);
       return result;
@@ -613,7 +1038,7 @@ function add(options) {
   // origin. Every other state already has the branch, and `worktree add <path>
   // <branch>` moves it into the new checkout.
   const addArgs = own
-    ? ['worktree', 'add', worktree, '-b', own, `origin/${branch}`]
+    ? (ownKept ? ['worktree', 'add', worktree, own] : ['worktree', 'add', worktree, '-b', own, `origin/${branch}`])
     : state === 'remote-only'
       ? ['worktree', 'add', worktree, '-b', branch, `origin/${branch}`]
       : ['worktree', 'add', worktree, branch];
@@ -644,26 +1069,27 @@ function add(options) {
   if (state === 'ahead') {
     result.warnings.push(`${branch} carries ${ahead} commit(s) that origin does not have; they will be pushed along with the fixes.`);
   }
+  return result;
+}
 
+function bootstrapWorktree(options, project, result) {
+  const { worktree } = result;
   result.envFiles = copyEnvFiles(project, worktree);
   result.dohConfig = copyDohConfig(project, worktree);
-  // The brief names the rulebook or says there is none, so no agent spends its calls looking.
-  const rules = path.join(worktree, '.claude', 'doh', 'instructions');
-  result.rulebook = isDirectory(rules) ? rules : null;
-  // How the app is started for a look at a fix (`checks.json` "visual": command, url, backend,
-  // authFile) - the fix agent's visual check; null when the project describes none.
-  try {
-    const checks = JSON.parse(fs.readFileSync(path.join(worktree, '.claude', 'doh', 'checks.json'), 'utf8'));
-    result.visual = checks && checks.visual && typeof checks.visual.command === 'string' ? checks.visual : null;
-  } catch {
-    result.visual = null;
-  }
+  describeWorktree(worktree, result);
   if (options.bootstrap === false) {
     result.dependencies = { manager: null, error: null, skipped: true };
     return result;
   }
-  const deps = provideDependencies(project, worktree, { mode: options.deps || 'auto' });
+  // Whatever is changed now is the copies' (a tracked `.env.example`): only what changes during the
+  // dependency step is put back after it.
+  const before = new Set((trackedChanges(worktree) || []).map((c) => c.path));
+  const deps = (options.provide || provideDependencies)(project, worktree, { mode: options.deps || 'auto' });
   result.dependencies = deps;
+  const restored = restoreInstallArtefacts(worktree, before);
+  if (restored.length > 0) result.restoredArtefacts = restored;
+  if (deps.linkRefused) result.warnings.push(`node_modules was installed, not linked from the main checkout: ${deps.linkRefused}.`);
+  if (deps.replaced) result.warnings.push(`A stale node_modules ${deps.replaced} in the worktree was cleared (links unlinked, never followed) and the main checkout's linked in its place.`);
   result.installed = Boolean(deps.manager) && !deps.error;
   if (deps.mainBroken) {
     result.mainBroken = true;
@@ -696,6 +1122,11 @@ function remove(options) {
   // verification gate stopped from being committed. Asked first, so a refused
   // worktree keeps its linked node_modules for whoever inspects it.
   const refused = `git worktree remove refused ${worktree} - it still holds modified or untracked files. Inspect it, then remove it yourself once nothing there is worth keeping.`;
+  // What an install rewrote (husky's helpers, see installArtefacts) is no one's work: when it is
+  // ALL the worktree holds, it is put back, and the worktree goes without --force. Anything else
+  // and the tree is left exactly as it is, for the refusal below.
+  const discarded = discardInstallArtefacts(worktree, project);
+  if (discarded.length > 0) result.discardedArtefacts = discarded;
   const status = tryGit(worktree, ['status', '--porcelain']);
   if (status === null || status.trim()) {
     result.errors.push(refused);
@@ -704,8 +1135,25 @@ function remove(options) {
   const kept = keepReports(project, worktree, options.branch || path.basename(worktree));
   result.keptReportsDir = kept.dir;
   result.keptReports = kept.reports;
-  const mainModules = path.join(project, 'node_modules');
-  const before = entriesOf(mainModules);
+  // Read by the same health check as preflight.cjs and the link (mainModulesHealth).
+  const before = mainModulesHealth(project).entries;
+  // The main checkout's node_modules is watched across everything below: on 2026-11-19 it was
+  // gone at the end of a run whose worktrees, linked to it, had been removed several times, and
+  // nothing said when. Whether this remove took it or not, the next one would link nothing and
+  // every later worktree would install. `entriesOf` alone missed it: a folder that is gone
+  // answers null, and null was read as "nothing to compare".
+  const finish = () => {
+    const health = mainModulesHealth(project);
+    const after = health.entries;
+    if (before !== null && after === null) {
+      result.mainModulesLost = true;
+      result.errors.push(`The main checkout's node_modules disappeared while removing ${worktree}; run \`${health.command}\` there (${project}) before the next run.`);
+    } else if (before !== null && after !== null && after < before) {
+      result.mainModulesLost = true;
+      result.errors.push(`The main checkout's node_modules went from ${before} to ${after} entries while ${worktree} was removed. Run \`${health.command}\` in ${project} before the next run.`);
+    }
+    return result;
+  };
   result.unlinked = unlinkLinks(worktree).map((p) => path.relative(worktree, p));
   // Still a link after the unlink → git would walk into the main checkout's folder. Stop.
   const leftLink = ['node_modules'].map((n) => path.join(worktree, n)).find((p) => {
@@ -713,7 +1161,7 @@ function remove(options) {
   });
   if (leftLink) {
     result.errors.push(`${leftLink} is still a link after unlinking; nothing was removed, so the folder it points at is safe. Remove the link by hand (rmdir, never a recursive delete), then run remove again.`);
-    return result;
+    return finish();
   }
   let gitError = '';
   try {
@@ -735,14 +1183,11 @@ function remove(options) {
         : `git worktree remove reported "${gitError}"; the worktree is pruned, but its empty folder ${worktree} is still held by a process (a shell or test runner started in it). The next add of this branch removes it.`);
     } else {
       result.errors.push(`git worktree remove stopped at "${gitError}" with ${left} entries left in ${worktree}; nothing uncommitted was there (status was clean). A process may hold a file open - close it (editor, test watcher, terminal in that folder), then run remove again.`);
-      return result;
+      return finish();
     }
   }
-  const after = entriesOf(mainModules);
-  if (before !== null && after !== null && after < before) {
-    result.errors.push(`The main checkout's node_modules went from ${before} to ${after} entries while ${worktree} was removed. Run the install in ${project} before the next run.`);
-  }
   result.removed = true;
+  finish();
   // The run's own branch of a branch the user had checked out (add): gone once origin holds it.
   const own = options.branch ? ownBranchFor(options.branch) : null;
   if (own && refExists(project, `refs/heads/${own}`) && !worktreeHolding(project, own)) {
@@ -770,8 +1215,10 @@ function main() {
 module.exports = {
   parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
   detectPackageManager, installDependencies, installFailure, copyEnvFiles, copyLocalFiles, isLocalConfig,
-  linkDependencies, provideDependencies, copyDohConfig, keepReports, dependencyHealth,
+  linkDependencies, provideDependencies, copyDohConfig, keepReports, dependencyHealth, mainModulesHealth,
   add, remove, git, tryGit, removeEmptyDir, leftoverVerdict, ownBranchFor,
+  runBounded, removeTree, clearDependencyFolder, withRepoLock,
+  trackedChanges, installArtefacts, restoreInstallArtefacts, discardInstallArtefacts, ownChanges, knownArtefact,
 };
 
 if (require.main === module) main();

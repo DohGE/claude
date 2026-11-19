@@ -226,7 +226,7 @@ included: a brief from an earlier attempt carries the settings of that attempt.
 
 1. **Render by hand** (Bash tool), with every placeholder from the table below:
 
-       node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/<name>-agent.md" --out="<SESSION>/prompts/<name>.md" --set=ROOT=<…> --set=PROJECT=<…> --set=SESSION=<…> --set=TASK_ID=<…> --set=PORT=9999 --set=SKILL_DIR=<…> --set=LANGUAGE=<…> --set=EFFORT=<…>
+       node "<SKILL_DIR>/../../scripts/render-agent-prompt.cjs" --template="<SKILL_DIR>/references/<name>-agent.md" --out="<SESSION>/prompts/<name>.md" --set=ROOT=<…> --set=PROJECT=<…> --set=SESSION=<…> --set=TASK_ID=<…> --set=PORT=<PORT> --set=SKILL_DIR=<…> --set=LANGUAGE=<…> --set=EFFORT=<…>
 
    Some briefs take values of their own on top, each written as `--set=NAME=value` (quote the whole
    argument when the value has spaces):
@@ -518,10 +518,12 @@ step 9, or step 5 when the final review is off).
   ALWAYS pass `timeout: 320000` to the Bash tool for this call — the default 120 s tool timeout
   would kill the poll mid-wait. The poll returns instantly once the user answers; the long wait
   only spares empty polls. If curl cannot connect, the server died: re-run the launcher (state
-  reloads from `pipeline-state.json`) and continue on 9999 — it comes back on the same port or
-  not at all, which is exactly why every sub-agent's `{{PORT}}` stays valid across a restart and
-  the user's open tab keeps working. A launcher that fails here has something else on 9999: say
-  so and stop, rather than moving the run to a port the agents already spawned know nothing about.
+  reloads from `pipeline-state.json`) and read the port it prints. It prefers the port the run's
+  server last had, so it normally comes back on PORT, every sub-agent's `{{PORT}}` stays valid and
+  the user's open tab keeps working. When something else took that port meanwhile, it prints
+  another one: PORT is that one from then on - every brief rendered and every script run from
+  here passes it - and tell the user the stepper's new URL. An agent spawned before the restart
+  still carries the old port, so its progress lines no longer reach the stepper.
 - **Caps.** A request body over 25 MB is answered with `413 body over 25 MB`, which the page shows
   as a rejected send, and any single text field over its cap is stored cut, with a visible
   `[…ucięte…]` marker naming the cap it hit — 200 KB for a form field or a report, 8 KB for one line
@@ -654,14 +656,16 @@ never pays for the mockup protocol.
 4. Start the server (pick the script for the OS):
    - Windows: `powershell -NoProfile -File "<SKILL_DIR>/scripts/start-server.ps1" -SessionDir "<SESSION>" -ProjectDir "<PROJECT>" -Open`
    - POSIX: `bash "<SKILL_DIR>/scripts/start-server.sh" --session-dir "<SESSION>" --project-dir "<PROJECT>" --open`
-   - `PORT` is **9999**, always. stdout is `{"port":9999}` — read it to confirm the server came
-     up, not to learn a number. Tell the user the stepper is open at `http://127.0.0.1:9999/`.
-     The port is fixed because the browser remembers things per origin: the stepper's tab, the
-     agent model and effort from the last run, and the E2E credentials all hang off that one URL.
-   - The launcher exits non-zero when something else holds 9999 — usually another run the user
-     never shut down. Do NOT look for a free port and do NOT start the pipeline anyway: show the
-     launcher's message, tell the user to close the other stepper with its "Shut down server"
-     button, and stop your turn there.
+   - `PORT` is the number the launcher prints on stdout, `{"port":<n>}` — read it, never assume
+     it. The server prefers **9999**, because the browser remembers things per origin: the
+     stepper's tab, the agent model and effort from the last run, and the E2E credentials all
+     hang off that one URL. When another run (or another program) holds 9999, it takes the next
+     free port (10000, 10001, …) instead of failing. Tell the user the stepper is open at
+     `http://127.0.0.1:<PORT>/`, and on any port but 9999 add that this browser's remembered
+     settings and credentials stay with the 9999 origin, so this form starts without them.
+     PORT goes into every script call and every rendered brief of this run.
+   - The launcher exits non-zero only when the server cannot listen at all: show its message
+     and stop your turn there.
    - With the server up, start `node "<SKILL_DIR>/scripts/ensure-deps.cjs"` with
      `run_in_background: true`: the plugin's Playwright and Chromium install while the user fills
      in step 1, instead of at the first screenshot (a plugin upgrade arrives without
@@ -694,8 +698,8 @@ A run whose sessions were closed — terminals shut, the machine restarted — k
    with a fresh `--attach` session for each unfinished task that has no living orchestrator,
    except the first, which is this session's. It prints one JSON object:
    `{stamp, sessionDir, port, restarted, self, launched: [{taskId, launched, command, cwd, error?}], running: [{taskId, status}]}`.
-2. `error` → show it and stop your turn; `port 9999 is already in use` is another run's stepper,
-   closed from its "Shut down server" button (Setup point 4).
+2. `error` → show it and stop your turn. A taken port is no error: the server moves to the next
+   free one, and `port` is the one it bound (Setup point 4).
 3. Tell the user, in one short message, in the run's language (`language` of
    `/api/orchestrator`, point 1 of "Attach"): the stepper is at `http://127.0.0.1:<port>/`; each
    `launched` task with `launched: false` comes with its `command` to run in a terminal opened in

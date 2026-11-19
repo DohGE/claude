@@ -67,11 +67,13 @@ const commandStepNames = commandSteps.map((s) => s.step);
 const watchFlags = [
   { match: /\bvitest\b/, args: ['--run'] },
   { match: /\bjest\b/, args: ['--ci', '--watchAll=false'] },
-  { match: /\bng\s+test\b|\bkarma\b/, args: ['--watch=false'] },
+  // `ng.js test`: the local Angular CLI called through node, as the gate does when it derives a
+  // project's test command itself (angularCli below).
+  { match: /\bng(?:\.js)?\s+test\b|\bkarma\b/, args: ['--watch=false'] },
 ];
 
 function parseArgs(argv) {
-  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '', changedSince: '', resultFile: '', slots: null, cache: 'yes', keepGoing: false, tests: 'related', priority: defaultPriority };
+  const args = { root: '', outDir: '', only: [], command: null, timeoutMs: 0, env: {}, authFile: '', changedSince: '', resultFile: '', slots: null, cache: 'yes', keepGoing: false, tests: 'related', priority: defaultPriority, specs: null };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -92,13 +94,21 @@ function parseArgs(argv) {
     else if (m[1] === 'keep-going' && ['yes', 'no'].includes(m[2].trim())) args.keepGoing = m[2].trim() === 'yes';
     else if (m[1] === 'tests') args.tests = m[2].trim();
     else if (m[1] === 'priority' && /^\d+$/.test(m[2].trim())) args.priority = Number(m[2].trim());
+    else if (m[1] === 'specs') args.specs = m[2].split(',').map((s) => s.trim()).filter(Boolean);
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms, --changed-since, --result-file, --slots, --cache, --keep-going, --tests, --priority).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --root, --out-dir, --only, --command, --env, --auth-file, --timeout-ms, --changed-since, --result-file, --slots, --cache, --keep-going, --tests, --priority, --specs).`);
   }
   if (!['yes', 'no'].includes(args.cache)) throw new Error('--cache takes yes or no.');
   if (!['related', 'near'].includes(args.tests)) throw new Error('--tests takes related or near.');
+  // `--specs` runs the given spec files through the test step's related command, and nothing else.
+  if (args.specs !== null) {
+    if (args.specs.length === 0) throw new Error('--specs is empty.');
+    if (args.command !== null) throw new Error('--specs and --command exclude each other: --specs runs the related command of the gate.');
+    if (args.only.length === 0) args.only = ['test'];
+    if (args.only.length !== 1 || args.only[0] !== 'test') throw new Error('--specs runs the test step only (--only=test).');
+  }
   // One command line is one step's command. Without the step named, its log, its
   // label and its verdict would belong to no step at all.
   if (args.command !== null) {
@@ -626,7 +636,9 @@ function gateConfigOf(root, pkg, mainOf = mainCheckoutOf) {
     for (const spec of Array.isArray(value) ? value : [value]) {
       if (!spec || typeof spec.command !== 'string' || !spec.command.trim()) problems.push(`step "${name}" needs a "command" string (or false)`);
       else if (spec.slot !== undefined && typeof spec.slot !== 'boolean') problems.push(`step "${name}": "slot" takes true or false`);
-      else if (spec.files !== undefined) {
+      else if (spec.related !== undefined && (name !== 'test' || typeof spec.related !== 'string' || !/\{(pattern|specs)\}/.test(spec.related))) {
+        problems.push(name !== 'test' ? `step "${name}": "related" belongs to the test step only` : 'step "test": "related" needs a command string holding {pattern} or {specs}');
+      } else if (spec.files !== undefined) {
         try {
           new RegExp(spec.files);
         } catch {
@@ -845,6 +857,282 @@ function nearSpecsOf(root, changed) {
   return [...near].sort();
 }
 
+// --- Running a few specs: the related command -----------------------------------------------------
+//
+// The specs of a fix are run by the test step's `related` command (checks.json), or by the one the
+// gate derives for a project it detected (below). Every agent of 2026-11-18 rediscovered it alone:
+// `npx jest` did not resolve in a worktree whose node_modules is linked, plain jest lacked the
+// Angular setup ("Need to call TestBed.initTestEnvironment() first"), and the `+` of a
+// `+state/` folder broke `--test-path-pattern`, which takes a regular expression, not a path.
+
+const escapeRegex = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// One argument for the shell the command line runs in: cmd.exe on Windows, sh elsewhere. A path
+// holds no double quote on Windows, and inside double quotes cmd.exe takes `|`, `(` and `^` as text.
+function shellQuote(text) {
+  if (process.platform === 'win32') return `"${text}"`;
+  return `'${String(text).replace(/'/g, `'\\''`)}'`;
+}
+
+const posixPath = (p) => String(p).replace(/\\/g, '/');
+
+// The specs, repository-relative with forward slashes, as one regular expression: each path
+// escaped, several joined as alternatives. Jest turns `/` into the platform's separator itself.
+function specRegex(specs) {
+  const parts = specs.map((s) => escapeRegex(posixPath(s)));
+  return parts.length === 1 ? parts[0] : `(${parts.join('|')})`;
+}
+
+// Specs cut into groups whose command line stays under the limit (cmd.exe refuses past 8,191).
+function chunkSpecs(specs, fixedLength, limit = lineLimit) {
+  const groups = [];
+  let current = [];
+  let size = fixedLength;
+  for (const spec of specs) {
+    const cost = String(spec).length * 2 + 4;
+    if (current.length > 0 && size + cost > limit) {
+      groups.push(current);
+      current = [];
+      size = fixedLength;
+    }
+    current.push(spec);
+    size += cost;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+// A `related` template filled in: `{pattern}` becomes the specs as one quoted regular expression
+// (for `--testPathPattern`, `--test-path-pattern`), `{specs}` the quoted paths themselves. A
+// function (a command the gate derived) gets the specs and builds the line.
+function relatedLines(related, specs) {
+  const build = typeof related === 'function'
+    ? related
+    // A function replacement: an escaped `$` in a path must not read as `$&`.
+    : (group) => related.replace('{pattern}', () => shellQuote(specRegex(group))).replace('{specs}', () => group.map((s) => shellQuote(posixPath(s))).join(' '));
+  const fixed = typeof related === 'function' ? 120 : related.length;
+  return chunkSpecs(specs, fixed).map(build);
+}
+
+// --- Unit tests the project has without a gate config ---------------------------------------------
+//
+// A project with no `test:unit` or `test` script still has unit tests more often than not: an
+// Angular workspace keeps them as `ng test <project>` targets, a monorepo as `test:<name>` scripts.
+// The gate of 2026-11-18 found neither, ran `build` alone, and every fix agent of a stack of seven
+// reported green; CI then failed four of the seven on spec compile errors. So the test step looks
+// further before it says there is nothing to run:
+//   1. `test:unit`, else `test` (as before);
+//   2. every unit-test target of angular.json (`@angular-builders/jest:run`, karma, jest,
+//      unit-test, web-test-runner; never an e2e builder), run through the script that runs it
+//      when package.json has one (`test:<project>`, or any script whose text is `ng test <project>`),
+//      else through the local Angular CLI;
+//   3. every other `test:<name>` script whose name is a folder of the repository (`<name>`,
+//      `packages/<name>`, `apps/<name>`, `libs/<name>`, `projects/<name>`).
+// Each becomes one command of the test step, with `files` set to its project's folder: with
+// `--changed-since` the step runs the projects the change touched, and only those. A change to a
+// library project runs every project's tests (an app imports its libraries), and so does a change
+// to a workspace-wide file (package.json, angular.json, a root tsconfig or jest config). Other
+// `test:*` scripts (`test:ci`, `test:coverage`) cannot be placed and are not guessed at: the
+// warning names them, and `.claude/doh/checks.json` is where the project says what its tests are.
+
+const e2eLike = /cypress|playwright|protractor|e2e|puppeteer|webdriver|nightwatch|detox|storybook/i;
+// Builders whose single specs are picked by a regular expression over the path, and those that take
+// `--include=<spec>` (relative to the project's root).
+const patternBuilders = /^@angular-builders\/jest:/;
+const includeBuilders = /:(karma|jest|unit-test|web-test-runner)$/;
+const sharedTestFiles = '(?:package\\.json|angular\\.json|tsconfig[^/]*\\.json|jest\\.(?:config|preset)[^/]*|setup-jest[^/]*|karma\\.conf[^/]*)$';
+const scriptFolders = ['', 'packages', 'apps', 'libs', 'projects'];
+// npm init's placeholder `test` script fails on purpose; it is no test suite.
+const placeholderTest = /no test specified/i;
+
+// angular.json may hold comments (the CLI reads it as JSONC); strings are kept as they are.
+function readJsonc(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    try {
+      return JSON.parse(raw.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, str) => str || ''));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function angularTestProjects(root) {
+  const workspace = readJsonc(path.join(root, 'angular.json'));
+  if (!workspace || typeof workspace.projects !== 'object' || !workspace.projects) return [];
+  const out = [];
+  for (const [name, project] of Object.entries(workspace.projects)) {
+    if (!project || typeof project !== 'object') continue;
+    const target = (project.architect || project.targets || {}).test;
+    if (!target || typeof target.builder !== 'string' || e2eLike.test(target.builder)) continue;
+    out.push({
+      name,
+      root: posixPath(project.root || '').replace(/\/+$/, ''),
+      library: project.projectType === 'library',
+      builder: target.builder,
+      select: patternBuilders.test(target.builder) ? 'pattern' : includeBuilders.test(target.builder) ? 'include' : null,
+    });
+  }
+  return out;
+}
+
+// The local Angular CLI. Called through node when it is installed: `npx ng` did not resolve in a
+// worktree whose node_modules is linked from the main checkout (2026-11-18), and the file is there.
+function angularCli(root) {
+  return fs.existsSync(path.join(root, 'node_modules', '@angular', 'cli', 'bin', 'ng.js'))
+    ? 'node node_modules/@angular/cli/bin/ng.js'
+    : 'npx --no-install ng';
+}
+
+// How a script's runner takes single specs on its command line, after `--`: Jest as regular
+// expressions, Vitest as plain path filters. null when the runner is neither.
+function scriptRelated(packageManager, name, text) {
+  const run = `${packageManager} run ${name} --`;
+  if (/\bvitest\b/.test(text)) return (specs) => `${run} ${specs.map((s) => shellQuote(posixPath(s))).join(' ')}`;
+  if (/\bjest\b/.test(text) && !/\bng\s+test\b/.test(text)) return (specs) => `${run} ${specs.map((s) => shellQuote(escapeRegex(posixPath(s)))).join(' ')}`;
+  return null;
+}
+
+// The test step the gate derives without a config: `{ entries, source, unplaced }`, entries in the
+// shape of a checks.json test entry (`command`, `files`, `related`, and `label` for the messages).
+// null when the project's own `test:unit` / `test` script is the step.
+function detectTests(root, scripts, packageManager = 'npm') {
+  for (const name of ['test:unit', 'test']) {
+    if (typeof scripts[name] === 'string' && !placeholderTest.test(scripts[name])) return null;
+  }
+  const pm = packageManager || 'npm';
+  const testScripts = Object.keys(scripts).filter((name) => /^test:./.test(name) && typeof scripts[name] === 'string');
+  const placed = new Set();
+  const units = [];
+  const projects = angularTestProjects(root);
+  const cli = angularCli(root);
+  for (const project of projects) {
+    const runsIt = new RegExp(`\\bng\\s+test\\s+(?:--project[= ])?${escapeRegex(project.name)}(?![\\w-])`);
+    const script = typeof scripts[`test:${project.name}`] === 'string' && !e2eLike.test(scripts[`test:${project.name}`])
+      ? `test:${project.name}`
+      : testScripts.find((name) => runsIt.test(scripts[name]) && !e2eLike.test(name));
+    if (script) placed.add(script);
+    const ng = `${cli} test ${project.name}`;
+    let related = null;
+    if (project.select === 'pattern') related = (specs) => `${ng} --test-path-pattern=${shellQuote(specRegex(specs))}`;
+    else if (project.select === 'include') {
+      related = (specs) => `${ng} ${specs.map((s) => `--include=${shellQuote(path.posix.relative(project.root || '.', posixPath(s)) || posixPath(s))}`).join(' ')}`;
+    }
+    units.push({
+      label: `angular.json project ${project.name} (${project.builder})`,
+      command: script ? `${pm} run ${script}` : ng,
+      root: project.root, library: project.library, related,
+    });
+  }
+  for (const name of testScripts) {
+    if (placed.has(name) || e2eLike.test(name) || e2eLike.test(scripts[name])) continue;
+    const folder = name.slice('test:'.length);
+    const dir = scriptFolders.map((base) => (base ? `${base}/${folder}` : folder))
+      .find((rel) => !rel.includes('..') && fs.existsSync(path.join(root, rel)) && fs.statSync(path.join(root, rel)).isDirectory());
+    if (!dir) continue;
+    placed.add(name);
+    units.push({ label: `script ${name} (${dir}/)`, command: `${pm} run ${name}`, root: dir, library: false, related: scriptRelated(pm, name, scripts[name]) });
+  }
+  const unplaced = testScripts.filter((name) => !placed.has(name) && !e2eLike.test(name) && !e2eLike.test(scripts[name]));
+  // A project at the workspace root, or a library every app imports, makes every change relevant.
+  const libraries = units.filter((u) => u.library).map((u) => u.root);
+  const entries = units.map((unit) => {
+    const roots = [...new Set([unit.root, ...libraries])];
+    const files = roots.includes('') ? undefined : `^(?:${roots.map((r) => `${escapeRegex(r)}/`).join('|')}|${sharedTestFiles})`;
+    return { label: unit.label, command: unit.command, ...(files ? { files } : {}), ...(unit.related ? { related: unit.related } : {}) };
+  });
+  return { source: projects.length > 0 ? 'detected: angular.json and package.json' : 'detected: package.json', entries, unplaced };
+}
+
+// What the test step of a full pass would run, without running it: the gate config's test
+// commands, the project's `test:unit` / `test` script, or the detected ones. For the CI comparison.
+function testPlanOf(root) {
+  const pkg = readPackageJson(root);
+  const scripts = pkg.scripts || {};
+  const gate = gateConfigOf(root, pkg);
+  if (gate && !gate.error) {
+    const configured = gate.steps.test;
+    const entries = configured === undefined || configured === false ? [] : [].concat(configured);
+    return { source: gate.source, commands: entries.map((e) => e.command), scripts };
+  }
+  const pm = detectPackageManager(root) || 'npm';
+  const detected = detectTests(root, scripts, pm);
+  if (detected === null) {
+    const name = ['test:unit', 'test'].find((n) => typeof scripts[n] === 'string');
+    return { source: 'package.json', commands: [`${pm} run ${name}`], scripts };
+  }
+  return { source: detected.source, commands: detected.entries.map((e) => e.command), scripts, unplaced: detected.unplaced };
+}
+
+// --- What CI runs that the gate does not ------------------------------------------------------------
+//
+// The CI of a project is what finally judges a pull request. When it runs a test command the gate
+// has no counterpart for, every green gate of a run is green for a reason CI will not accept. A
+// cheap look, once per run: grep the CI files for a test command and compare it with the gate's.
+
+const ciFileNames = ['Jenkinsfile', '.gitlab-ci.yml', 'azure-pipelines.yml', 'bitbucket-pipelines.yml', '.circleci/config.yml', '.travis.yml'];
+const ciTestCommand = /\b(?:npm|pnpm|yarn)\s+(?:run\s+)?(test(?::[\w${}.-]+)?)(?=[\s'"`;)]|$)|\bng\s+test\b|\bnpx\s+(?:jest|vitest|karma|ng\s+test)\b|(?:^|[\s"'`])(?:jest|vitest)(?=\s|$)/;
+
+function ciFilesOf(root) {
+  const files = ciFileNames.filter((name) => fs.existsSync(path.join(root, name)));
+  for (const dir of ['.github/workflows']) {
+    try {
+      for (const name of fs.readdirSync(path.join(root, dir))) if (/\.ya?ml$/i.test(name)) files.push(`${dir}/${name}`);
+    } catch {
+      // no such folder
+    }
+  }
+  return files;
+}
+
+function ciTestGap(root) {
+  const found = [];
+  for (const file of ciFilesOf(root)) {
+    let text = '';
+    try {
+      text = fs.readFileSync(path.join(root, file), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split(/\r?\n/)) {
+      if (/^\s*(#|\/\/)/.test(line)) continue;
+      const m = ciTestCommand.exec(line);
+      if (m) found.push({ file, line: line.trim().slice(0, 160), script: m[1] || null });
+    }
+  }
+  if (found.length === 0) return null;
+  const plan = testPlanOf(root);
+  const gateText = plan.commands.join('\n');
+  const covered = (hit) => {
+    if (plan.commands.length === 0) return false;
+    // `npm run test:${PROJECT}` names no script the gate could compare with: any test command counts.
+    if (!hit.script || /[${}]/.test(hit.script)) return true;
+    if (new RegExp(`\\brun\\s+${escapeRegex(hit.script)}(?![\\w:-])`).test(gateText)) return true;
+    // The script CI calls, run by the gate another way: the same Angular project, or the same runner.
+    const text = plan.scripts[hit.script] || '';
+    const project = /\bng\s+test\s+(?:--project[= ])?([\w-]+)/.exec(text);
+    if (project) return new RegExp(`\\bng(?:\\.js)?\\s+test\\s+${escapeRegex(project[1])}(?![\\w-])`).test(gateText);
+    const runner = /\b(jest|vitest|karma|ng\s+test)\b/.exec(text);
+    return Boolean(runner && new RegExp(`\\b${runner[1].replace(/\s+/, '(?:\\.js)?\\s+')}\\b`).test(gateText));
+  };
+  const missing = found.filter((hit) => !covered(hit));
+  if (missing.length === 0) return null;
+  const first = missing[0];
+  const gateSays = plan.commands.length > 0 ? `the gate's test step runs ${plan.commands.map((c) => `\`${c}\``).join(', ')}` : 'the gate runs no unit test';
+  return {
+    ciFiles: [...new Set(found.map((f) => f.file))],
+    missing: missing.slice(0, 5),
+    warning: `CI runs a test command the gate does not: ${first.file}: \`${first.line}\`${missing.length > 1 ? ` (and ${missing.length - 1} more)` : ''}; ${gateSays} (${plan.source}). Name the commands CI runs in .claude/doh/checks.json ("steps": {"test": [{"command": "...", "files": "...", "related": "..."}]}) so the fix agents run them too.`,
+  };
+}
+
 // Written to a temporary name and renamed into place: an agent waiting for the file in slices
 // (wait-part.cjs) never reads half of it.
 function writeResultFile(file, result) {
@@ -859,7 +1147,8 @@ function writeResultFile(file, result) {
 // on a tree byte for byte the one already pushed. The verdict is kept in the repository's common
 // git dir (shared by every worktree), keyed by HEAD's tree, the --changed-since tree (it picks the
 // lint targets) and the gate config's own text. Only a clean worktree is keyed: an uncommitted
-// change is code no tree names. Only `green` is kept - a red verdict is always run again.
+// change is code no tree names. Only `green` (and `green-no-tests`) is kept - a red verdict is
+// always run again.
 function gitOut(root, args) {
   const res = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true });
   return res.status === 0 ? String(res.stdout || '').trim() : null;
@@ -885,10 +1174,13 @@ function gateCacheKey(root, options) {
   return { key, file: path.join(common, 'doh-gate-cache', `${key}.json`) };
 }
 
+// A tree with no unit test the gate knows of is as settled as a green one: same tree, same answer.
+const cacheable = ['green', 'green-no-tests'];
+
 function readGateCache(cache) {
   try {
     const hit = JSON.parse(fs.readFileSync(cache.file, 'utf8'));
-    return hit && hit.result && hit.result.gate === 'green' ? hit : null;
+    return hit && hit.result && cacheable.includes(hit.result.gate) ? hit : null;
   } catch {
     return null;
   }
@@ -909,11 +1201,11 @@ function runChecks(options) {
     return {
       ...hit.result,
       cached: { key: cache.key, savedAt: hit.savedAt },
-      warnings: [...(hit.result.warnings || []), `The gate was green on this same tree at ${hit.savedAt}; its verdict was reused (--cache=no runs it again).`],
+      warnings: [...(hit.result.warnings || []), `The gate was ${hit.result.gate} on this same tree at ${hit.savedAt}; its verdict was reused (--cache=no runs it again).`],
     };
   }
   const result = runChecksUncached(options);
-  if (cache && result.gate === 'green' && result.errors.length === 0) writeGateCache(cache, result);
+  if (cache && cacheable.includes(result.gate) && result.errors.length === 0) writeGateCache(cache, result);
   return result;
 }
 
@@ -990,17 +1282,35 @@ function runChecksUncached(options) {
   const slotCount = options.slots === 'auto'
     ? (gate && gate.maxParallel !== undefined ? gate.maxParallel : defaultSlots())
     : Number(options.slots) || 0;
+  // The test step of a project without a gate config, when its `test:unit` / `test` script is not
+  // it (detectTests), or when single specs are asked for (--specs) and the script's runner takes them.
+  const specs = Array.isArray(options.specs)
+    ? options.specs.map((s) => posixPath(path.isAbsolute(s) ? path.relative(root, s) : s).replace(/^\.\//, ''))
+    : null;
+  const testsWanted = !command && !commandStep && (only.length === 0 || only.includes('test'));
+  const detected = !gate && testsWanted ? detectTests(root, scripts, result.packageManager) : null;
+  let testGate = null;
+  if (detected && detected.entries.length > 0) {
+    testGate = { source: detected.source, steps: { test: detected.entries } };
+  } else if (!gate && testsWanted && specs && detected === null) {
+    const name = ['test:unit', 'test'].find((n) => typeof scripts[n] === 'string');
+    const related = scriptRelated(result.packageManager, name, scripts[name]);
+    testGate = { source: 'package.json', steps: { test: [{ label: `script ${name}`, command: `${result.packageManager} run ${name}`, ...(related ? { related } : {}) }] } };
+  }
   let changed = Array.isArray(options.changedFiles) ? options.changedFiles : null;
-  if (!changed && gate && options.changedSince) {
+  if (!changed && (gate || testGate) && options.changedSince) {
     changed = changedFilesOf(root, options.changedSince);
     // Every configured step would come back skipped - "nothing to run" for a pull request this
     // pass never looked at. Fetch the base, then run the gate again.
-    if (changed === null) {
+    if (changed === null && gate) {
       result.errors.push(`Could not list the files changed since ${options.changedSince} in ${root}: fetch it first (git -C "${root}" fetch origin <base>).`);
       return allSkipped('the changed files could not be listed');
     }
+    // Without a config only the detected test projects use the list: all of them run instead.
+    if (changed === null) result.warnings.push(`Could not list the files changed since ${options.changedSince}: the tests of every detected project run.`);
   }
   if (changed) result.changedFiles = changed.length;
+  if (testGate && testGate.source.startsWith('detected')) result.testSource = testGate.source;
 
   fs.mkdirSync(outDir, { recursive: true });
   if (only.length === 0) clearLogs(outDir);
@@ -1023,14 +1333,21 @@ function runChecksUncached(options) {
       result.steps.push(skippedStep(spec, 'typecheck is red: the tests and the build compile the same code - repair the typecheck and run the gate again (--keep-going=yes runs every step)', outDir));
       continue;
     }
-    if (gate) {
-      runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, slotOptions, tests: options.tests, timeoutMs: options.timeoutMs, result });
+    const stepGate = gate || (spec.step === 'test' ? testGate : null);
+    if (stepGate) {
+      runConfiguredStep(spec, stepGate, { root, outDir, run, env, changed, specs, scripts, slotCount, slotOptions, tests: options.tests, timeoutMs: options.timeoutMs, result });
       continue;
     }
-    const name = command ? null : spec.scripts.find((candidate) => typeof scripts[candidate] === 'string');
+    const name = command ? null : spec.scripts.find((candidate) => typeof scripts[candidate] === 'string' && !(spec.step === 'test' && placeholderTest.test(scripts[candidate])));
     if (!command && !name) {
       const spelled = spec.scripts.length > 1 ? `${spec.scripts[0]} (or ${spec.scripts.slice(1).join(', ')})` : spec.scripts[0];
-      result.steps.push(skippedStep(spec, `the project has no ${spelled} script`, outDir));
+      if (spec.step !== 'test') {
+        result.steps.push(skippedStep(spec, `the project has no ${spelled} script`, outDir));
+        continue;
+      }
+      // "no … script" stays in the words: implementNewFeature's briefs read it.
+      const unplaced = detected && detected.unplaced.length > 0 ? `; test scripts it cannot place: ${detected.unplaced.join(', ')}` : '';
+      result.steps.push({ ...skippedStep(spec, `the project has no ${spelled} script, no angular.json unit-test target and no test:<folder> script${unplaced}`, outDir), noTests: true });
       continue;
     }
 
@@ -1055,6 +1372,14 @@ function runChecksUncached(options) {
     });
   }
 
+  // No unit test ran because the project has none the gate knows of - not because the change
+  // touched none, or a pass left the step out. A gate that ran only the build is no green gate.
+  const testStep = result.steps.find((s) => s.step === 'test');
+  if (testStep && testStep.noTests) {
+    result.noTests = testStep.reason;
+    result.warnings.push(`No unit test ran: ${testStep.reason}. Name the project's test command in .claude/doh/checks.json ("steps": {"test": ...}) - until then the verdict says green-no-tests, never green.`);
+  }
+
   if (result.steps.some((s) => s.status === 'failed')) result.gate = 'red';
   // A `--only` pass never looked at every command, so "nothing failed here" is not the
   // answer "the gate is green". Saying green is the one answer this script must never give
@@ -1066,17 +1391,20 @@ function runChecksUncached(options) {
   else if (!commandStep && only.length > 0 && gateSteps.some((spec) => !only.includes(spec.step))) result.gate = 'partial';
   // A --tests=near pass ran the specs next to the change, not every test the change reaches.
   else if (!commandStep && options.tests === 'near' && result.steps.some((s) => s.step === 'test' && s.status === 'passed')) result.gate = 'partial';
-  else if (result.steps.some((s) => s.status === 'passed')) result.gate = 'green';
+  // Every command passed, and no unit test was among them: commit-worthy, said apart from green so
+  // the agent's report, the landing and the summary can say the tests never ran.
+  else if (result.steps.some((s) => s.status === 'passed')) result.gate = result.noTests ? 'green-no-tests' : 'green';
   else result.gate = 'skipped';
   return result;
 }
 
 // One gate step of a checks.json: each of its commands whose `files` the change touches, `{files}`
 // filled in, in one slot; the step fails with the first command that does.
-function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, scripts, slotCount, slotOptions = {}, tests = 'related', timeoutMs, result }) {
+// `specs` (--specs): the spec files to run alone, through each entry's `related` command.
+function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, specs = null, scripts, slotCount, slotOptions = {}, tests = 'related', timeoutMs, result }) {
   const configured = gate.steps[spec.step];
   if (configured === undefined) {
-    result.steps.push(skippedStep(spec, `not configured in ${gate.source}`, outDir));
+    result.steps.push({ ...skippedStep(spec, `not configured in ${gate.source}`, outDir), ...(spec.step === 'test' ? { noTests: true } : {}) });
     return;
   }
   if (configured === false) {
@@ -1086,16 +1414,29 @@ function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, script
   const entries = Array.isArray(configured) ? configured : [configured];
   // Lint takes a slot only when its entry asks for one; any other step unless every entry says no.
   const slotted = spec.step === 'lint' ? entries.some((e) => e.slot === true) : !entries.every((e) => e.slot === false);
-  const near = spec.step === 'test' && tests === 'near' && changed !== null;
-  const files = near ? nearSpecsOf(root, changed) : changed;
+  const single = spec.step === 'test' && Array.isArray(specs);
+  const near = !single && spec.step === 'test' && tests === 'near' && changed !== null;
+  const files = single ? specs : near ? nearSpecsOf(root, changed) : changed;
   const lines = [];
   const reasons = [];
   for (const entry of entries) {
     const pattern = entry.files === undefined ? null : new RegExp(entry.files);
     const picked = files === null ? null : files.filter((f) => !pattern || pattern.test(f));
     const needsFiles = entry.command.includes('{files}');
+    // A pass over a few specs runs the entry's related command over them, where it has one.
+    if ((single || near) && entry.related && picked.length > 0) {
+      for (const text of relatedLines(entry.related, picked)) lines.push({ text, timeoutMs: entry.timeoutMs });
+      continue;
+    }
+    if (single && !(needsFiles && picked.length > 0)) {
+      reasons.push(picked.length === 0
+        ? `no given spec ${entry.label ? `belongs to ${entry.label}` : `matches ${entry.files}`}`
+        : `${entry.label || `the test command \`${entry.command}\``} has no "related" command to run single specs`);
+      continue;
+    }
     if (picked !== null && picked.length === 0 && (pattern || needsFiles)) {
-      reasons.push(near ? 'no spec near the changed files (--tests=near)' : pattern ? `no changed file matches ${entry.files}` : 'no file changed');
+      reasons.push(near ? 'no spec near the changed files (--tests=near)'
+        : pattern ? `no changed file ${entry.label ? `belongs to ${entry.label}` : `matches ${entry.files}`}` : 'no file changed');
       continue;
     }
     if (needsFiles && picked === null) {
@@ -1240,7 +1581,8 @@ function main() {
 module.exports = {
   parseArgs, defaultRun, truncateLog, extractErrors, extraArgsFor, runChecks, exitCodeFor, gateSteps, reapTree,
   precommitCommandFor, jestMajorOf, gateConfigOf, changedFilesOf, expandFiles, acquireSlot, writeResultFile,
-  nearSpecsOf, ticketName,
+  nearSpecsOf, ticketName, detectTests, angularTestProjects, testPlanOf, ciTestGap, ciFilesOf, escapeRegex, specRegex,
+  relatedLines, renderLines,
 };
 
 if (require.main === module) main();

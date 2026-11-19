@@ -162,3 +162,24 @@ test('parseArgs reads --via and --no-reply', () => {
   assert.strictEqual(args.noReply, true);
   assert.throws(() => rt.parseArgs(['--threads=A', '--via=no-colon']), /--via/);
 });
+
+// A resolve run again after a 401 (fixpr-after.cjs --resolve-only): the threads an earlier try or
+// the user already closed are left alone, and a thread already carrying this commit's reply gets none.
+test('--skip-resolved leaves a closed thread alone and never posts a second reply naming the commit', (t) => {
+  const { dir, comments } = commentsFile(t, [{ id: 'A', path: 'src/a.ts' }, { id: 'B', path: 'src/a.ts' }, { id: 'C', path: 'src/a.ts' }]);
+  const calls = [];
+  const api = {
+    threadResolved: (project, id) => { calls.push(['state', id]); return { resolved: id === 'A', error: null }; },
+    threadHasReply: (project, id, prefix) => { calls.push(['has', id, prefix]); return { found: id === 'B' }; },
+    replyToThread: (project, id) => { calls.push(['reply', id]); return { replied: true, error: null }; },
+    resolveThread: (project, id) => { calls.push(['resolve', id]); return { resolved: true, error: null }; },
+  };
+  const result = rt.resolveAll({ project: '/p', threads: ['A', 'B', 'C'], comments, root: dir, commit: '0123456789abcdef', skipResolved: true }, api, () => {}, new Set(['src/a.ts']));
+  assert.deepStrictEqual(result.alreadyResolved, ['A']);
+  assert.deepStrictEqual(result.alreadyReplied, ['B']);
+  assert.deepStrictEqual(result.resolved, ['B', 'C']);
+  assert.deepStrictEqual(calls.filter((c) => c[0] === 'reply').map((c) => c[1]), ['C']);
+  assert.ok(!calls.some((c) => c[1] === 'A' && c[0] !== 'state'), 'nothing but the state is asked of a closed thread');
+  assert.strictEqual(calls.find((c) => c[0] === 'has')[2], 'Fixed in 0123456789ab');
+  assert.strictEqual(rt.parseArgs(['--threads=a', '--skip-resolved']).skipResolved, true);
+});

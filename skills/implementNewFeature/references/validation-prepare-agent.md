@@ -319,13 +319,17 @@ one message, shell commands that belong together in one call.
 3. Setup — the two install commands of the toolchain (skip what is installed), create
    `{{SESSION}}/e2e/` and `{{SESSION}}/validation/`. Then the extension gate. Progress 10.
 4. Project unit tests — the specs of what this task changed, never the whole suite here. The gate
-   knows the project's own commands when it has a `.claude/doh/checks.json`: run
+   knows the project's own commands when it has a `.claude/doh/checks.json`, and without one it
+   finds the per-project test scripts and the angular.json test targets itself: run
 
        node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=test --changed-since={{BASE}}
 
    and read the `test` step of its JSON. `passed` → nothing to read. `failed` → Read its
-   `errorsPath` and nothing else. `skipped` with "not configured" or "no … script" → the project
-   has no gate config: find the runner's own related-tests mode — `jest --findRelatedTests <the
+   `errorsPath` and nothing else. One spec or a few on their own: the same command with
+   `--specs=<spec>[,<spec>…]` in place of `--changed-since` - it runs them through the project's own
+   related command (the Angular CLI with an escaped `--test-path-pattern` for a jest-builder project),
+   never a hand-built `npx jest`. `skipped` with "not configured" or "no … script" → the project
+   has no test command the gate knows: find the runner's own related-tests mode — `jest --findRelatedTests <the
    changed source files>`, `vitest related <files>`, `ng test --include=<their specs>` — and run it
    as `--only=test --command="<the related-tests command>"`; a stack with a runner of its own
    (`python -m pytest -q`, `go test ./...`, `mvn -q test`, `dotnet test`) the same way. Never add

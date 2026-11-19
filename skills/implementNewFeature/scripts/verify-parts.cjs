@@ -28,7 +28,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { runChecks, gateSteps } = require('../../fixPr/scripts/checks.cjs');
-const { provideDependencies, copyEnvFiles, copyLocalFiles, copyDohConfig } = require('../../fixPr/scripts/worktree.cjs');
+const { provideDependencies, copyEnvFiles, copyLocalFiles, copyDohConfig, removeTree } = require('../../fixPr/scripts/worktree.cjs');
 const { unlinkLinks } = require('./remove-worktree.cjs');
 
 const STEPS = gateSteps.map((s) => s.step);
@@ -76,7 +76,8 @@ const readJson = (file) => {
 // the main checkout when the lockfile is the same one, installed otherwise) and the gitignored
 // local config. Detached, so the part's branch stays free for split-fixups to move.
 function checkoutPart({ root, project, dir, commit }, git) {
-  fs.rmSync(dir, { recursive: true, force: true });
+  // An earlier run's folder may still hold its node_modules link: unlinked first, never walked.
+  removeTree(dir);
   git(['worktree', 'prune']);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   const add = git(['worktree', 'add', '--detach', dir, commit]);
@@ -95,7 +96,7 @@ function removePart(dir, git) {
     unlinkLinks(dir);
   } catch { /* nothing linked */ }
   git(['worktree', 'remove', '--force', dir]);
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
   git(['worktree', 'prune']);
 }
 

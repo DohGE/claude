@@ -14,13 +14,22 @@
 // push). Every value goes to <checksDir>/brief-vars.json as well, which split-work.cjs renders the
 // workers' briefs from.
 //
-// Usage: node fixpr-launch.cjs --run=<fixpr-run-*.json> --branch=<branch> [--push=yes|no] [--language=<name>]
+// What the launch was given and made (`launch`: push, language, worktree, the branch it is worked
+// on, errors) is kept on the target in the run file: a run whose orchestrator died is resumed from
+// it (fixpr-resume.cjs), and --resume=yes there takes the worktree the stopped run left as it is.
+//
+// Usage: node fixpr-launch.cjs --run=<fixpr-run-*.json> --branch=<branch> [--push=yes|no] [--language=<name>] [--resume=yes|no]
 // Prints one JSON object: { branch, worktree, promptPath, visualBrief, landBrief, varsPath, installed,
-// heldBy, localBranch, mainBroken, warnings, errors }.
+// linked, heldBy, localBranch, mainBroken, reused, warnings, errors }.
+//
+// SKILL.md Step 3 runs it in the background, one call per target, so a slow launch (an install of
+// several minutes, bounded by worktree.cjs) never holds back the launches of the parts above it; the
+// git part of worktree.cjs takes a repository lock, the dependency step runs side by side.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { updateRunFile } = require('./run-file.cjs');
 
 const skillDir = path.resolve(__dirname, '..');
 const references = path.join(skillDir, 'references');
@@ -30,7 +39,7 @@ const briefNames = ['ROOT', 'BRANCH', 'BASE', 'PR_NUMBER', 'PR_URL', 'COMMENTS',
 const workersFrom = 12;
 
 function parseArgs(argv) {
-  const args = { run: '', branch: '', push: 'yes', language: 'English' };
+  const args = { run: '', branch: '', push: 'yes', language: 'English', resume: 'no' };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -39,11 +48,13 @@ function parseArgs(argv) {
     else if (m[1] === 'branch') args.branch = m[2];
     else if (m[1] === 'push') args.push = m[2];
     else if (m[1] === 'language') args.language = m[2];
+    else if (m[1] === 'resume') args.resume = m[2];
     else unknown.push(arg);
   }
-  if (unknown.length) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --run, --branch, --push, --language).`);
+  if (unknown.length) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --run, --branch, --push, --language, --resume).`);
   if (!args.run || !args.branch) throw new Error('--run and --branch are required.');
   if (!['yes', 'no'].includes(args.push)) throw new Error('--push takes yes or no.');
+  if (!['yes', 'no'].includes(args.resume)) throw new Error('--resume takes yes or no.');
   return args;
 }
 
@@ -69,22 +80,51 @@ function restoreCommands(root, restore) {
   return [...byFrom.entries()].map(([from, paths]) => `- \`git -C "${root}" checkout origin/${from} -- ${paths.join(' ')}\``).join('\n');
 }
 
+// The launch kept on its target, read again right before the write and under the run file's lock
+// (run-file.cjs): the launches of a run run side by side in the background, and the other scripts
+// write the same file.
+function recordLaunch(runFile, branch, out, options) {
+  try {
+    updateRunFile(runFile, (data) => {
+      const t = (data.targets || []).find((x) => x.branch === branch);
+      if (!t) return;
+      t.launch = {
+      at: new Date().toISOString(), push: options.push || 'yes', language: options.language || 'English', worktree: out.worktree || null,
+      ...(out.localBranch ? { localBranch: out.localBranch } : {}), ...(out.heldBy ? { heldBy: out.heldBy } : {}), ...(out.reused ? { reused: true } : {}),
+      // The reason travels with it: fixpr-summary.cjs puts it first, for the user to repair.
+      ...(out.mainBroken ? { mainBroken: out.warnings.find((w) => /^No dependencies for the gate/.test(w)) || true } : {}), errors: out.errors,
+      };
+    });
+  } catch (err) {
+    out.warnings.push(`Could not keep the launch of ${branch} in ${runFile}: ${(err && err.message) || err}`);
+  }
+}
+
 function launch(options, deps = {}) {
+  const out = launchTarget(options, deps);
+  recordLaunch(options.run, options.branch, out, options);
+  return out;
+}
+
+function launchTarget(options, deps = {}) {
   const run = deps.run || runScript;
   const runData = JSON.parse(fs.readFileSync(options.run, 'utf8'));
   const target = (runData.targets || []).find((t) => t.branch === options.branch);
   if (!target) throw new Error(`${options.branch} is not a target of ${options.run}.`);
   const project = runData.project || path.dirname(options.run);
   const out = { branch: target.branch, warnings: [], errors: [] };
-  const added = run(path.join(__dirname, 'worktree.cjs'), ['--action=add', `--branch=${target.branch}`, `--project=${project}`]) || {};
+  const added = run(path.join(__dirname, 'worktree.cjs'), ['--action=add', `--branch=${target.branch}`, `--project=${project}`, ...(options.resume === 'yes' ? ['--resume=yes'] : [])]) || {};
   out.warnings.push(...(added.warnings || []));
-  for (const key of ['heldBy', 'localBranch', 'mainBroken']) if (added[key]) out[key] = added[key];
+  for (const key of ['heldBy', 'localBranch', 'mainBroken', 'reused']) if (added[key]) out[key] = added[key];
   if ((added.errors || []).length > 0 || !added.worktree) {
     out.errors.push(...((added.errors || []).length ? added.errors : ['worktree.cjs made no worktree']));
     return out;
   }
   out.worktree = added.worktree;
   out.installed = Boolean(added.installed);
+  // The main checkout's node_modules linked in (no install ran); false names an install, whose
+  // reason is among the warnings.
+  out.linked = Boolean(added.dependencies && added.dependencies.linked);
   out.visual = Boolean(added.visual);
   if (added.mainBroken) return out;
   const stack = (runData.stacks || []).find((s) => s.includes(target.branch));

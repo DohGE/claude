@@ -44,3 +44,137 @@ test('the summary names every part, what it fixed and rejected, what to look at 
   }
   assert.match(text, /#102[^\n]*niepełna|luki/i, 'a gap in the comment check is said');
 });
+
+// 2026-11-18: the same file:line of part-3..7 printed five times per name, about 9 kB for one section.
+test('stackImpact reads one line per name: parts as ranges, short distinct paths, a cap that names the file', () => {
+  const long = 'libs/area/data-access/src/lib/+state/tests/area.store.spec.ts';
+  const usedIn = ['T-1-part-3', 'T-1-part-4', 'T-1-part-5', 'T-1-part-7'].flatMap((b) => [`${b}:${long}:12`, `${b}:libs/area/data-access/src/lib/+state/area.store.ts:12`]);
+  const { lines, prefix } = summary.impactLines([
+    { pr: '#1', resultFile: '/r/p1.md.result.json', symbol: 'oldName', change: 'removed', usedIn: [...usedIn, 'T-1-part-6:apps/x/src/area.store.ts:3'] },
+    { pr: '#2', resultFile: '/r/p2.md.result.json', symbol: 'oldName', change: 'removed', usedIn: ['T-1-part-6:apps/x/src/b.ts:9'] },
+  ]);
+  assert.strictEqual(prefix, 'T-1-');
+  assert.deepStrictEqual(lines, [
+    '- #1, #2 `oldName`: removed — używane w: area.store.spec.ts:12, +state/area.store.ts:12 (part-3..5, part-7); src/area.store.ts:3, b.ts:9 (part-6)',
+  ]);
+  const many = Array.from({ length: 9 }, (_, i) => `T-1-part-${i + 2}:src/f${i}.ts:1`);
+  const capped = summary.impactLines([{ pr: '#1', resultFile: '/r/p1.md.result.json', symbol: 's', change: 'removed', usedIn: many }], { uses: 6, names: 1 });
+  assert.match(capped.lines[0], /; \+3 więcej: \/r\/p1\.md\.result\.json$/);
+  const names = summary.impactLines([1, 2, 3].map((n) => ({ pr: `#${n}`, resultFile: `/r/p${n}.json`, symbol: `s${n}`, change: 'removed', usedIn: [] })), { uses: 6, names: 2 });
+  assert.strictEqual(names.lines[2], '- +1 kolejnych nazw: /r/p3.json');
+});
+
+test('partRanges and sharedPrefix keep a word in front of the number', () => {
+  assert.strictEqual(summary.partRanges(['part-7', 'part-3', 'part-4', 'part-5', 'main']), 'part-3..5, part-7, main');
+  assert.strictEqual(summary.sharedPrefix(['T-1-part-3', 'T-1-part-7']), 'T-1-');
+  assert.strictEqual(summary.sharedPrefix(['feature/a', 'feature/b']), 'feature/');
+  assert.strictEqual(summary.sharedPrefix(['alpha', 'beta']), '');
+});
+
+test('failed resolves and replies are counted from the grouped form, each error said once', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-'));
+  const err = 'GH_TOKEN was rejected; git credential was rejected too - Bad credentials';
+  const run = {
+    project: dir, stacks: [],
+    targets: [{
+      branch: 'a', pr: { number: 5, title: 't' }, reportPath: path.join(dir, 'a.md'), landing: 'rebase', stack: { parent: null },
+      outcome: { commit: 'c', pushed: true, resolve: { resolved: 1, unverified: [], failed: [{ error: err, count: 3, ids: ['T1', 'T2', 'T3'] }], replyFailed: [{ error: err, count: 4, ids: ['T1', 'T2', 'T3', 'T4'] }] } },
+    }],
+  };
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file, verify: 'no' });
+  assert.ok(text.includes(`- #5: rozwiązane wątki 1, nieudane: 3, odpowiedzi nieudane: 4 — ${err}`), text);
+});
+
+test('a held part whose landing moved nothing is said to be unchanged, not moved', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-noop-'));
+  const run = {
+    project: dir,
+    stacks: [['part-1', 'part-2']],
+    targets: [
+      { branch: 'part-2', pr: { number: 102, title: 'feat(X): part 2', url: 'u2' }, reportPath: path.join(dir, 'p2.md'), local: true, stack: { parent: 'part-1' }, landing: 'hold', landingResult: { status: 'noop', commit: 'c2' }, outcome: { commit: null, pushed: false } },
+    ],
+  };
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file }, { run: () => ({}) });
+  assert.match(text, /bez zmian: już siedziała na part-1/);
+});
+
+test('the summary shows the final state of threads resolved again (--resolve-only)', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-'));
+  const run = {
+    project: dir, stacks: [],
+    targets: [{
+      branch: 'b', pr: { number: 7, title: 't' }, reportPath: path.join(dir, 'b.md'), landing: 'rebase', stack: {},
+      outcome: { commit: 'c1', pushed: true, resolve: { resolved: 5, alreadyResolved: 2, failed: [{ id: 'X', error: 'HTTP 401: Bad credentials' }], unverified: [], replyFailed: [], resolveOnly: '2026-11-19T10:15:00.000Z' } },
+    }],
+  };
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file, verify: 'no' });
+  assert.match(text, /#7: rozwiązane wątki 5 \(w tym wcześniej: 2\), nieudane: 1 — HTTP 401: Bad credentials; ponowione 2026-11-19 10:15/);
+});
+
+// 2026-11-18: a gate with no unit test said green, and Jenkins failed four parts of seven.
+test('the summary says when no unit test ran, and what CI said per branch', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-ci-'));
+  const target = (n, extra) => ({
+    branch: `part-${n}`, pr: { number: 200 + n, title: `feat(X): part ${n}`, url: `u${n}` }, reportPath: path.join(dir, `p${n}.md`),
+    checksDir: path.join(dir, `c${n}`), stack: { parent: null }, landing: 'rebase',
+    outcome: { commit: `c${n}abcdef`, commitMessage: 'feat(X): CR', pushed: true, landedBy: 'agent' }, ...extra,
+  });
+  const run = { project: dir, stacks: [], targets: [target(1), target(2), target(3)] };
+  fs.writeFileSync(`${run.targets[0].reportPath}.result.json`, JSON.stringify({ type: 'result', gate: 'green-no-tests', verdicts: [] }));
+  const ciFile = (n, body) => {
+    fs.mkdirSync(path.join(dir, `c${n}`), { recursive: true });
+    fs.writeFileSync(path.join(dir, `c${n}`, 'ci-status.json'), JSON.stringify({ branch: `part-${n}`, sha: `c${n}abcdef00`, ...body }));
+  };
+  ciFile(1, { state: 'failure', failed: [{ name: 'jenkins/pr-merge', url: 'https://j/job/a/1/', lines: ["x.spec.ts:1:1 - error TS2304: Cannot find name 'a'.", 'Tests:  1 failed'] }] });
+  ciFile(2, { state: 'pending', pending: ['jenkins/pr-merge'] });
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file, verify: 'no' });
+  assert.match(text, /#201[^\n]*testy jednostkowe NIE uruchomione/);
+  assert.match(text, /### CI/);
+  assert.match(text, /#201 `c1abcdef0`: CI czerwone — jenkins\/pr-merge: https:\/\/j\/job\/a\/1\//);
+  assert.match(text, /error TS2304/);
+  assert.match(text, /#202 `c2abcdef0`: CI nadal trwa \(jenkins\/pr-merge\)/);
+  assert.ok(!/#203[^\n]*CI/.test(text), 'a branch whose CI nobody asked about says nothing');
+});
+
+// The five improvements report into one summary: a lost main node_modules first, a no-op landing,
+// a gate that ran no unit test, CI, threads closed again, and a commit built on a stopped agent's.
+test('one summary carries the lost node_modules, a no-op, green-no-tests, CI, a resolve run again and prior commits', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-all-'));
+  const lost = 'The main checkout\'s node_modules disappeared while removing /w/part-1; run `npm ci` there (/p) before the next run.';
+  const run = {
+    project: dir,
+    stacks: [['part-1', 'part-2']],
+    targets: [
+      {
+        branch: 'part-1', pr: { number: 1, title: 'feat(X): part 1' }, reportPath: path.join(dir, 'p1.md'), checksDir: path.join(dir, 'c1'), landing: 'keep-base', stack: { parent: null },
+        outcome: { commit: 'a1b2c3d4e5', pushed: true, mainModulesLost: lost, resolve: { resolved: 2, alreadyResolved: 1, failed: [], unverified: [], replyFailed: [], resolveOnly: '2026-11-19T11:00:00.000Z' } },
+      },
+      {
+        branch: 'part-2', pr: { number: 2, title: 'feat(X): part 2' }, reportPath: path.join(dir, 'p2.md'), landing: 'hold', stack: { parent: 'part-1' },
+        landingResult: { status: 'noop', commit: 'f00f00f00f', gate: null }, outcome: { commit: 'f00f00f00f', pushed: true },
+      },
+    ],
+  };
+  fs.writeFileSync(`${run.targets[0].reportPath}.result.json`, JSON.stringify({ type: 'result', gate: 'green-no-tests', priorCommits: ['0123456789abcdef feat(X): CR'], verdicts: [] }));
+  fs.mkdirSync(path.join(dir, 'c1'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'c1', 'ci-status.json'), JSON.stringify({ branch: 'part-1', sha: 'a1b2c3d4e5', state: 'success' }));
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file, verify: 'no' });
+  const at = (s) => text.indexOf(s);
+  assert.ok(at('### node_modules głównego checkoutu') > -1 && at('### node_modules głównego checkoutu') < at('### Kontrola komentarzy'), text);
+  assert.ok(text.includes(`- #1: ${lost}`));
+  assert.match(text, /bez zmian: już siedziała na part-1/);
+  assert.match(text, /#1[^\n]*testy jednostkowe NIE uruchomione/);
+  assert.match(text, /### CI\n- #1 `a1b2c3d4e`: CI zielone/);
+  assert.match(text, /#1: rozwiązane wątki 2 \(w tym wcześniej: 1\); ponowione 2026-11-19 11:00/);
+  assert.match(text, /#1: zbudowane na commicie przerwanego agenta: `012345678` feat\(X\): CR/);
+});

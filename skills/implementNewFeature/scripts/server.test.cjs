@@ -1373,26 +1373,69 @@ function spawnServer(t, dir, args) {
   };
 }
 
+// Zajmuje wolny port i zwraca go razem z serwerem, który go trzyma.
+async function squat(t, port = 0) {
+  const squatter = http.createServer((_q, r) => r.end());
+  await new Promise(r => squatter.listen(port, '127.0.0.1', r));
+  t.after(() => new Promise(r => squatter.close(() => r())));
+  return { squatter, port: squatter.address().port };
+}
+
+const portFree = port => new Promise(r => {
+  const probe = http.createServer();
+  probe.once('error', () => r(false));
+  probe.listen(port, '127.0.0.1', () => probe.close(() => r(true)));
+});
+
 test('bez --port serwer siada na 9999, bo tam użytkownik ma otwartą kartę', async t => {
+  // Żywy stepper użytkownika na tej maszynie trzyma 9999 - wtedy serwer słusznie idzie dalej.
+  if (!await portFree(DEFAULT_PORT)) return t.skip('9999 jest zajęty na tej maszynie');
   const srv = spawnServer(t, tmpDir());
   const info = await srv.info();
   assert.ok(info, 'server.json powstał: ' + srv.stderr());
   assert.strictEqual(info.port, DEFAULT_PORT);
 });
 
-test('zajęty 9999 to głośna awaria, nie ciche przeniesienie na inny port', async t => {
-  // Cicha zmiana portu jest gorsza niż brak startu: orkiestrator i wszystkie prompty
-  // sub-agentów niosą 9999, więc run wyglądałby na żywy, a panele stałyby martwe.
-  const squatter = http.createServer((_q, r) => r.end());
-  await new Promise(r => squatter.listen(DEFAULT_PORT, '127.0.0.1', r));
-  t.after(() => new Promise(r => squatter.close(r)));
+test('zajęty port preferowany: serwer siada na następnym wolnym, a server.json podaje ten prawdziwy', async t => {
+  // Drugi równoległy run nie może się wywrócić na zajętym porcie: dostaje kolejny, a launcher,
+  // resume-run.cjs i orkiestrator czytają go z server.json.
+  const { port } = await squat(t);
   const dir = tmpDir();
-  const srv = spawnServer(t, dir);
-  const code = await srv.exit();
-  assert.notStrictEqual(code, 0, 'proces kończy się błędem');
-  assert.match(srv.stderr(), /9999/, 'komunikat nazywa port, o który chodzi');
-  assert.ok(!fs.existsSync(path.join(dir, 'server.json')),
-    'nie zostaje server.json, który kłamałby o żywym serwerze');
+  const srv = spawnServer(t, dir, ['--port', String(port)]);
+  const info = await srv.info(8000);
+  assert.ok(info, 'server.json powstał: ' + srv.stderr());
+  assert.notStrictEqual(info.port, port, 'nie zajęty port');
+  assert.strictEqual(info.pid, srv.child.pid);
+  const res = await fetch(`http://127.0.0.1:${info.port}/api/state`);
+  assert.strictEqual(res.status, 200, 'serwer odpowiada na porcie z server.json');
+  assert.match(srv.stderr(), new RegExp(`port ${port} is already in use.*listens on ${info.port}`),
+    'log mówi, skąd i dokąd się przeniósł');
+});
+
+test('listenWithFallback: najpierw preferowany, potem kolejne, na końcu dowolny od systemu', async t => {
+  const { listenWithFallback } = require('./server.cjs');
+  const bind = async (preferred, opts) => {
+    const server = http.createServer();
+    t.after(() => new Promise(r => server.close(() => r())));
+    return listenWithFallback(server, preferred, { retries: 0, ...opts });
+  };
+  const a = await squat(t);
+  const got = await bind(a.port);
+  assert.ok(got > a.port && got <= a.port + 10, `następny port po ${a.port}, nie ${got}`);
+  // Zakres wyczerpany (span 0): system daje dowolny wolny port.
+  const b = await squat(t);
+  const any = await bind(b.port, { span: 0 });
+  assert.ok(any > 0 && any !== b.port);
+});
+
+test('listenWithFallback: port zwolniony w trakcie ponowień zostaje wzięty, bez przenosin', async t => {
+  // Poprzednik zabity przed chwilą trzyma jeszcze gniazdo - ponowienia to przeczekują.
+  const { listenWithFallback } = require('./server.cjs');
+  const { squatter, port } = await squat(t);
+  setTimeout(() => squatter.close(), 120);
+  const server = http.createServer();
+  t.after(() => new Promise(r => server.close(() => r())));
+  assert.strictEqual(await listenWithFallback(server, port, { retries: 20, retryMs: 50 }), port);
 });
 
 test('GET /api/state niesie klucz projektu, stały w obrębie jednego doh/', async t => {

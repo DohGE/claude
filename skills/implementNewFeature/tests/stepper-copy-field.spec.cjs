@@ -86,6 +86,52 @@ test('brama planu i brama makiet też mają przyciski kopiowania', async ({ page
   expect(await clipboard(page)).toBe('Szerszy przycisk');
 });
 
+// Formularz wysłany, a potem pipeline idzie dalej - jak w stepper-step1-revisit.spec.cjs.
+async function submitted(steps) {
+  await fetch(`${base}/api/answer`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ taskId: 't1', kind: 'step1', commitMessage: 'feat: test',
+      taskDescription: 'Zaproszenia', branch: 'feature/zaproszenia', authProvided: false })
+  });
+  await (await fetch(`${base}/api/answer?wait=1`)).json();
+  await state({ step: 1, status: 'completed' });
+  for (const body of steps) await state(body);
+}
+
+test('zamrożone pole po starcie implementacji nadal kopiuje', async ({ page }) => {
+  await submitted([{ step: 4, status: 'in_progress', activeStep: 4 }]);
+  await page.goto(base);
+  await page.click('.step[data-step="1"]');
+  await expect(page.locator('#task')).toBeDisabled();
+  const btn = page.locator('.copy-wrap:has(#task) button.copy');
+  await expect(btn).toBeEnabled();
+  await btn.click();
+  expect(await clipboard(page)).toBe('Zaproszenia');
+});
+
+test('zakończony task: pola tylko do odczytu, kopiowanie działa', async ({ page }) => {
+  await submitted([{ step: 4, status: 'completed' },
+    { step: 6, status: 'completed', activeStep: 6, summary: { finalStatus: 'Gotowe', changes: [], features: [] } }]);
+  await page.goto(base);
+  await page.click('.step[data-step="1"]');
+  await expect(page.locator('#branch')).toBeDisabled();
+  await page.click('.copy-wrap:has(#branch) button.copy');
+  expect(await clipboard(page)).toBe('feature/zaproszenia');
+});
+
+test('zablokowany panel (wysyłka w toku) nie blokuje kopiowania', async ({ page }) => {
+  await state({ step: 1, status: 'in_progress', activeStep: 1 });
+  await page.goto(base);
+  await page.fill('#task', 'Opis w trakcie wysyłki');
+  await page.evaluate(() => lockPanel('Uploading and submitting…', false));
+  await expect(page.locator('#task')).toBeDisabled();
+  await expect(page.locator('#next')).toBeDisabled();
+  const btn = page.locator('.copy-wrap:has(#task) button.copy');
+  await expect(btn).toBeEnabled();
+  await btn.click();
+  expect(await clipboard(page)).toBe('Opis w trakcie wysyłki');
+});
+
 test('ikona wraca do stanu wyjściowego po skopiowaniu', async ({ page }) => {
   await state({ step: 1, status: 'in_progress', activeStep: 1 });
   await page.goto(base);

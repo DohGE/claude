@@ -27,10 +27,19 @@ const OPTIONAL_STEPS = [3, 8];
 // `skipped` is a failed step the user chose to go on without (the failure gate's "Skip step"):
 // it keeps its report, and the pipeline continues at the step after it.
 const STATUSES = ['waiting', 'in_progress', 'completed', 'failed', 'skipped'];
-// One fixed port, so the stepper always lives at the same URL: the user can keep the
+// The preferred port, so the stepper usually lives at the same URL: the user can keep the
 // tab open across runs, and everything the browser remembers for that origin - the
-// agent settings, the E2E credentials - is still there on the next one.
+// agent settings, the E2E credentials - is still there on the next one. When another
+// run (or another program) holds it, the server takes the next free one (listenWithFallback).
 const DEFAULT_PORT = 9999;
+// A predecessor killed a moment ago can still hold the preferred port's socket: this many
+// retries, PORT_RETRY_MS apart, ride that out before the server moves on.
+const PORT_RETRIES = 10;
+const PORT_RETRY_MS = 200;
+// How many ports after the preferred one are tried before the OS is asked for any free one.
+const PORT_SPAN = 10;
+// Taken, or reserved: Windows answers EACCES for a port inside an excluded range.
+const PORT_TAKEN = new Set(['EADDRINUSE', 'EACCES']);
 const REFINEMENT_STEP = 2;
 const MOCKUP_STEP = 3;
 const MOCKOON_STEP = 7;
@@ -1805,38 +1814,64 @@ function main() {
   const app = createApp(path.resolve(sessionDir), { onShutdown: () => process.exit(0),
     project: get('--project'), launchOrchestrator, orphaned: args.includes('--orphaned') });
   // `--port 0` (the tests) still means "any free port"; everything else defaults to
-  // the fixed one.
+  // the preferred one.
   const arg = get('--port');
   const port = arg === undefined ? DEFAULT_PORT : parseInt(arg, 10) || 0;
-  const announce = () => {
-    const actual = app.server.address().port;
+  // server.json is the one record of the port actually bound: the launchers print it and open
+  // the browser on it, resume-run.cjs and the session hooks reconnect through it, and the
+  // orchestrator hands it to every sub-agent - so a move to another port reaches all of them.
+  const announce = actual => {
     fs.mkdirSync(path.resolve(sessionDir), { recursive: true });
     fs.writeFileSync(path.join(path.resolve(sessionDir), 'server.json'),
       JSON.stringify({ port: actual, pid: process.pid }));
     console.log(JSON.stringify({ port: actual }));
   };
-  // A predecessor killed a moment ago can still hold the socket, so a few retries
-  // ride that out. What must NOT happen is landing on another port: the orchestrator
-  // and every sub-agent prompt carry this number, so a silent move would leave a run
-  // that looks alive with panels that never update again. Say it and stop.
-  let left = 10;
-  app.server.on('error', e => {
-    if (e.code !== 'EADDRINUSE') throw e;
-    if (left-- > 0) {
-      // No callback here: 'listening' is registered once below, so a retry does not
-      // stack another one-time listener and warn about a leak in the log the user
-      // is about to read for the real reason.
-      setTimeout(() => app.server.listen(port, '127.0.0.1'), 200);
-      return;
+  listenWithFallback(app.server, port).then(actual => {
+    if (port && actual !== port) {
+      console.error(`port ${port} is already in use - another stepper (or another program) is on it; `
+        + `this stepper listens on ${actual} instead.`);
     }
-    console.error(`port ${port} is already in use - another stepper (or another program) `
-      + 'is on it. Close that run from its "Shut down server" button, or stop whatever '
-      + `holds ${port}, then start this one again.`);
+    announce(actual);
+  }, e => {
+    console.error(`the stepper could not listen: ${e.message}`);
     process.exit(1);
   });
-  app.server.once('listening', announce);
-  app.server.listen(port, '127.0.0.1');
 }
 
-module.exports = { createApp, initialState, taskState, nextStepOf, unskippable, MOCKUP_DIR, MOCKUP_TYPES, SCREENSHOT_DIR };
+// Listens on `preferred` when it can, else on the next free port after it, else on any port the
+// OS hands out; resolves with the port bound. Only the preferred port is retried: a predecessor
+// killed a moment ago can still hold its socket, while a port after it that is taken is simply
+// someone else's.
+function listenWithFallback(server, preferred, { retries = PORT_RETRIES, retryMs = PORT_RETRY_MS,
+  span = PORT_SPAN, host = '127.0.0.1' } = {}) {
+  const ports = preferred > 0
+    ? Array.from({ length: span + 1 }, (_, i) => preferred + i).filter(p => p < 65536) : [];
+  ports.push(0);
+  return new Promise((resolve, reject) => {
+    let at = 0;
+    let left = retries;
+    const attempt = () => server.listen(ports[at], host);
+    const onError = e => {
+      if (!PORT_TAKEN.has(e.code) || at >= ports.length - 1) {
+        server.off('listening', onListening);
+        server.off('error', onError);
+        return reject(e);
+      }
+      if (at === 0 && e.code === 'EADDRINUSE' && left-- > 0) return setTimeout(attempt, retryMs);
+      at += 1;
+      attempt();
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve(server.address().port);
+    };
+    // Registered once for every attempt, so a retry stacks no listener and warns of no leak.
+    server.on('error', onError);
+    server.once('listening', onListening);
+    attempt();
+  });
+}
+
+module.exports = { createApp, initialState, taskState, nextStepOf, unskippable, listenWithFallback,
+  MOCKUP_DIR, MOCKUP_TYPES, SCREENSHOT_DIR };
 if (require.main === module) main();

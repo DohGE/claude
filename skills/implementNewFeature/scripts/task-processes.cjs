@@ -33,8 +33,16 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
 const FILE = 'processes.json';
-// The stepper itself, which no task may stop.
+// The stepper itself, which no task may stop: its preferred port, and the one its server really
+// bound when that was taken - server.json of the session, two levels above a task's directory.
 const PROTECTED_PORTS = new Set([9999]);
+const stepperPort = (taskDir) => {
+  try {
+    return Number(JSON.parse(fs.readFileSync(path.join(taskDir, '..', '..', 'server.json'), 'utf8')).port) || 0;
+  } catch {
+    return 0;
+  }
+};
 const COMMANDS = ['register', 'start', 'wait', 'kill', 'cleanup'];
 // Under the 180 s after which the harness moves a foreground command to the background (and well
 // under the five minutes before the agent's prompt cache goes cold).
@@ -59,7 +67,7 @@ function parseArgs(argv) {
   }
   if (command !== 'kill' && !args.taskDir) throw new Error('--task-dir is required');
   if (command !== 'cleanup' && !(args.port > 0 && args.port < 65536)) throw new Error('--port=<n> is required');
-  if (PROTECTED_PORTS.has(args.port)) throw new Error(`port ${args.port} is the stepper's - never a task's process`);
+  if (PROTECTED_PORTS.has(args.port) || (args.taskDir && stepperPort(args.taskDir) === args.port)) throw new Error(`port ${args.port} is the stepper's - never a task's process`);
   if ((command === 'start' || command === 'kill') && !args.root) throw new Error('--root=<worktree> is required');
   if (command === 'start' && !args.line.trim()) throw new Error('--command="<line>" is required');
   if (!(args.timeoutMs > 0)) throw new Error('--timeout-ms must be a positive number');

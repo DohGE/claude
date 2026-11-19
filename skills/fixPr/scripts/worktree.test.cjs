@@ -51,8 +51,10 @@ test('branchState reads its counts through countOf, so a failed one is not in-sy
 test('parseArgs defaults, parses and refuses unknown flags', () => {
   assert.deepStrictEqual(
     wt.parseArgs(['--action=add', '--branch=feat/a', '--project=/tmp/x']),
-    { action: 'add', branch: 'feat/a', project: '/tmp/x', worktree: '', bootstrap: true, deps: 'auto' },
+    { action: 'add', branch: 'feat/a', project: '/tmp/x', worktree: '', bootstrap: true, deps: 'auto', resume: false },
   );
+  assert.strictEqual(wt.parseArgs(['--branch=a', '--resume=yes']).resume, true);
+  assert.throws(() => wt.parseArgs(['--branch=a', '--resume=maybe']), /Unknown argument/);
   assert.strictEqual(wt.parseArgs(['--branch=a', '--no-bootstrap']).bootstrap, false);
   assert.throws(() => wt.parseArgs(['--action=nuke', '--branch=a']), /Unknown --action/);
   assert.strictEqual(wt.parseArgs(['--branch=a', '--deps=install']).deps, 'install');
@@ -253,6 +255,63 @@ test('add refuses a folder that is still a registered worktree', (t) => {
   const again = wt.add({ project: dir, branch: 'feat', bootstrap: false });
   assert.match(again.errors[0], /already exists/);
   assert.ok(fs.existsSync(first.worktree));
+});
+
+// 2026-11-18: after the orchestrator died, its worktrees were still registered and every add
+// refused them; the next session re-created one by hand.
+test('add --resume takes the worktree of a stopped run as it is, uncommitted work and all', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const first = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  fs.writeFileSync(path.join(first.worktree, 'README.md'), 'half a fix\n');
+  const again = wt.add({ project: dir, branch: 'feat', bootstrap: false, resume: true });
+  assert.deepStrictEqual(again.errors, []);
+  assert.strictEqual(again.worktree, first.worktree);
+  assert.strictEqual(again.reused, true);
+  assert.strictEqual(fs.readFileSync(path.join(first.worktree, 'README.md'), 'utf8'), 'half a fix\n');
+  assert.deepStrictEqual([again.dependencies.linked, again.mainBroken], [false, undefined]);
+  // Linked to a main checkout whose node_modules went since: broken, as at a first launch.
+  const mainModules = path.join(dir, 'node_modules');
+  fs.mkdirSync(mainModules);
+  fs.symlinkSync(mainModules, path.join(first.worktree, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  fs.rmSync(mainModules, { recursive: true, force: true });
+  const lost = wt.add({ project: dir, branch: 'feat', bootstrap: false, resume: true });
+  assert.deepStrictEqual([lost.reused, lost.dependencies.linked, lost.mainBroken], [true, true, true]);
+  assert.match(lost.warnings.join(' '), /no node_modules: run `npm ci` in .+ first/);
+  try {
+    fs.unlinkSync(path.join(first.worktree, 'node_modules'));
+  } catch {
+    fs.rmdirSync(path.join(first.worktree, 'node_modules'));
+  }
+});
+
+test('add --resume makes a gone worktree again from the local branch holding the unpushed commit, rebased or not', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feat']);
+  commitFile(dir, 'a.txt', 'a\n', 'remote side');
+  fakeRemoteBranch(dir, 'feat', 'feat');
+  run(dir, ['reset', '-q', '--hard', 'main']);
+  commitFile(dir, 'b.txt', 'b\n', 'the stopped run\'s rebased commit');
+  const local = run(dir, ['rev-parse', 'HEAD']);
+  run(dir, ['checkout', '-q', 'main']);
+  const result = wt.add({ project: dir, branch: 'feat', bootstrap: false, resume: true });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(run(result.worktree, ['rev-parse', 'HEAD']), local);
+  assert.ok(result.warnings.some((w) => /diverged/.test(w) && /lease/.test(w)));
+});
+
+test('add --resume checks out the run\'s own branch of a checked-out branch with its unpushed commit', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'main');
+  const first = wt.add({ project: dir, branch: 'main', bootstrap: false });
+  commitFile(first.worktree, 'fix.txt', 'fix\n', 'CR');
+  const commit = run(first.worktree, ['rev-parse', 'HEAD']);
+  run(dir, ['worktree', 'remove', first.worktree]);
+  assert.match(wt.add({ project: dir, branch: 'main', bootstrap: false }).errors[0], /holds commits origin\/main does not have/);
+  const again = wt.add({ project: dir, branch: 'main', bootstrap: false, resume: true });
+  assert.deepStrictEqual(again.errors, []);
+  assert.strictEqual(again.localBranch, 'doh-fixpr/main');
+  assert.strictEqual(run(again.worktree, ['rev-parse', 'HEAD']), commit);
 });
 
 test('add names the project rulebook the worktree carries, or null', (t) => {
@@ -545,6 +604,27 @@ test('provideDependencies refuses to link a main node_modules that misses declar
   assert.deepStrictEqual(wt.dependencyHealth(path.join(project, 'nowhere')), { ok: true, missing: [], declared: 0 });
 });
 
+// 2026-11-18: the main checkout's node_modules was gone after installs ran next to (or through)
+// worktree links to it. A missing one is broken like an incomplete one: the run stops with the
+// command for the user's checkout, and no worktree installs in its place - whatever the lockfiles.
+test('provideDependencies in auto mode treats a missing main node_modules as mainBroken and never installs', (t) => {
+  const install = () => { throw new Error('must not install'); };
+  for (const [lockA, lockB] of [['{}\n', '{}\n'], ['{"a":1}\n', '{"a":2}\n']]) {
+    const { project, root } = depsDirs(t, lockA, lockB);
+    fs.rmSync(path.join(project, 'node_modules'), { recursive: true, force: true });
+    const deps = wt.provideDependencies(project, root, { install, isIgnored: () => true });
+    assert.deepStrictEqual([deps.linked, deps.mainBroken], [false, true]);
+    assert.match(deps.error, /the main checkout has no node_modules: run `npm ci` in .+ first - never inside a worktree/);
+    assert.ok(!fs.existsSync(path.join(root, 'node_modules')));
+    const health = wt.mainModulesHealth(project);
+    assert.deepStrictEqual([health.ok, health.state, health.entries, health.command], [false, 'missing', null, 'npm ci']);
+  }
+  // `--deps=install` is the explicit way to install anyway.
+  const asked = depsDirs(t, '{}\n', '{}\n');
+  fs.rmSync(path.join(asked.project, 'node_modules'), { recursive: true, force: true });
+  assert.strictEqual(wt.provideDependencies(asked.project, asked.root, { mode: 'install', install: () => ({ manager: 'npm', error: null }), isIgnored: () => true }).mainBroken, undefined);
+});
+
 // The rulebook and the gate config live in the gitignored `.claude/doh/`, which a worktree
 // checked out from HEAD does not have: the self-review of 2026-11-03 ran without the
 // project's naming rules.
@@ -585,4 +665,250 @@ test('remove keeps the self-review reports and unlinks a linked node_modules wit
   const kept = path.join(dir, '.claude', 'doh', 'feat', 'codeReview', 'runs', '2026-11-03-13-08-59', 'feat', 'raport.md');
   assert.deepStrictEqual(result.keptReports, [kept]);
   assert.strictEqual(fs.readFileSync(kept, 'utf8'), '# report');
+});
+
+const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+const isLink = (p) => {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+};
+
+// A folder that must survive whatever happens to a link pointing at it.
+function precious(t) {
+  const dir = fs.realpathSync.native(tempDir(t, 'fpc-precious-'));
+  fs.mkdirSync(path.join(dir, 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pkg', 'index.js'), 'module.exports = 1;\n');
+  return dir;
+}
+
+test('removeTree and clearDependencyFolder unlink a junction or symlink and never touch its target', (t) => {
+  const target = precious(t);
+  const tree = fs.realpathSync.native(tempDir(t, 'fpc-tree-'));
+  fs.mkdirSync(path.join(tree, 'deep', 'er'), { recursive: true });
+  fs.symlinkSync(target, path.join(tree, 'node_modules'), linkType);
+  fs.symlinkSync(target, path.join(tree, 'deep', 'er', 'node_modules'), linkType);
+  wt.removeTree(tree);
+  assert.ok(!fs.existsSync(tree));
+  assert.ok(fs.existsSync(path.join(target, 'pkg', 'index.js')), 'the linked folder keeps its files');
+
+  const root = fs.realpathSync.native(tempDir(t, 'fpc-clear-'));
+  fs.symlinkSync(target, path.join(root, 'node_modules'), linkType);
+  assert.deepStrictEqual(wt.clearDependencyFolder(path.join(root, 'node_modules')), { removed: 'link', error: null });
+  assert.ok(fs.existsSync(path.join(target, 'pkg', 'index.js')));
+  fs.mkdirSync(path.join(root, 'node_modules', '@scope'), { recursive: true });
+  fs.symlinkSync(target, path.join(root, 'node_modules', '@scope', 'linked'), linkType);
+  assert.deepStrictEqual(wt.clearDependencyFolder(path.join(root, 'node_modules'), { linksOnly: true }), { removed: null, error: null }, 'a real folder stays when only links are cleared');
+  assert.deepStrictEqual(wt.clearDependencyFolder(path.join(root, 'node_modules')), { removed: 'folder', error: null });
+  assert.ok(!fs.existsSync(path.join(root, 'node_modules')));
+  assert.ok(fs.existsSync(path.join(target, 'pkg', 'index.js')), 'a link inside the cleared folder was unlinked, not walked');
+});
+
+// 2026-11-18: one part of seven installed for ten minutes instead of linking, with no reason
+// recorded. A stale node_modules in the worktree was one of the ways there.
+test('provideDependencies links over a stale folder, a dangling link or a link elsewhere, and reuses its own link', (t) => {
+  const install = () => { throw new Error('must not install'); };
+  const stale = depsDirs(t, '{}\n', '{}\n');
+  const foreign = precious(t);
+  fs.mkdirSync(path.join(stale.root, 'node_modules', 'half-written'), { recursive: true });
+  fs.symlinkSync(foreign, path.join(stale.root, 'node_modules', 'half-written', 'inner'), linkType);
+  const deps = wt.provideDependencies(stale.project, stale.root, { install, isIgnored: () => true });
+  assert.deepStrictEqual(deps, { manager: 'npm', linked: true, error: null, replaced: 'folder' });
+  assert.ok(isLink(path.join(stale.root, 'node_modules')));
+  assert.ok(fs.existsSync(path.join(foreign, 'pkg', 'index.js')), 'a link inside the stale folder was not followed');
+
+  const again = wt.provideDependencies(stale.project, stale.root, { install, isIgnored: () => true });
+  assert.deepStrictEqual(again, { manager: 'npm', linked: true, error: null }, 'a second launch keeps the link it finds');
+
+  const elsewhere = depsDirs(t, '{}\n', '{}\n');
+  fs.symlinkSync(foreign, path.join(elsewhere.root, 'node_modules'), linkType);
+  assert.strictEqual(wt.provideDependencies(elsewhere.project, elsewhere.root, { install, isIgnored: () => true }).replaced, 'link');
+  assert.ok(fs.existsSync(path.join(elsewhere.root, 'node_modules', 'pkg', 'index.js')));
+  assert.ok(fs.existsSync(path.join(foreign, 'pkg', 'index.js')));
+
+  const dangling = depsDirs(t, '{}\n', '{}\n');
+  const gone = fs.realpathSync.native(tempDir(t, 'fpc-gone-'));
+  fs.symlinkSync(gone, path.join(dangling.root, 'node_modules'), linkType);
+  fs.rmdirSync(gone);
+  assert.strictEqual(wt.provideDependencies(dangling.project, dangling.root, { install, isIgnored: () => true }).linked, true);
+});
+
+test('provideDependencies says why it installed instead of linking', (t) => {
+  const differs = depsDirs(t, '{"a":1}\n', '{"a":2}\n');
+  const deps = wt.provideDependencies(differs.project, differs.root, { install: () => ({ manager: 'npm', error: null }), isIgnored: () => true });
+  assert.strictEqual(deps.linked, false);
+  assert.match(deps.linkRefused, /lockfile differs/);
+});
+
+// `npm ci` empties the node_modules it finds entry by entry; through a junction those entries are
+// the main checkout's (measured with npm 10 on Windows: the main checkout's folder was left empty).
+test('installDependencies never installs through a link: the link goes first, its target stays', (t) => {
+  const target = precious(t);
+  const root = fs.realpathSync.native(tempDir(t, 'fpc-install-'));
+  fs.writeFileSync(path.join(root, 'package-lock.json'), '{}\n');
+  fs.symlinkSync(target, path.join(root, 'node_modules'), linkType);
+  const calls = [];
+  const deps = wt.installDependencies(root, {
+    runner: (cmd, args, opts) => {
+      calls.push({ cmd, linkThere: isLink(path.join(root, 'node_modules')), cwd: opts.cwd });
+      return { status: 0, stdout: '', stderr: '', timedOut: false };
+    },
+  });
+  assert.deepStrictEqual(deps, { manager: 'npm', error: null });
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].linkThere, false);
+  assert.ok(fs.existsSync(path.join(target, 'pkg', 'index.js')));
+});
+
+test('a failed install is reported by its error, not by the deprecation warnings before it', () => {
+  const stderr = [
+    'npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory.',
+    'npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported',
+    'npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported',
+    'npm warn deprecated abab@2.0.6: Use your platform native atob() and btoa() methods instead',
+    'npm warn deprecated domexception@4.0.0: Use your platform native DOMException instead',
+    'npm warn deprecated q@1.5.1: You or someone you depend on is using Q',
+    'npm error code ENOTEMPTY',
+    'npm error syscall rmdir',
+    'npm error ENOTEMPTY: directory not empty, rmdir C:\\w\\node_modules\\@scope\\pkg',
+  ].join('\n');
+  const message = wt.installFailure({ stderr });
+  assert.match(message, /^npm error code ENOTEMPTY/);
+  assert.ok(!/deprecated/.test(message));
+  const timedOut = wt.installFailure({ stderr: 'npm warn deprecated q@1.5.1: …\n', timedOut: true, timeoutMs: 600000 });
+  assert.match(timedOut, /did not finish within 10 min/);
+  assert.ok(!/deprecated/.test(timedOut));
+});
+
+// execFileSync's own timeout killed the shell around npm's `.cmd` shim and left npm running: the
+// retry met it with ENOTEMPTY (2026-11-18). The bounded runner takes the whole tree down.
+test('runBounded reports the exit and output, and on its deadline kills every process the command started', (t) => {
+  const ok = wt.runBounded(process.execPath, ['-e', 'process.stderr.write("npm error code E1"); process.exit(3)'], { timeoutMs: 20000 });
+  assert.strictEqual(ok.status, 3);
+  assert.strictEqual(ok.timedOut, false);
+  assert.match(ok.stderr, /npm error code E1/);
+
+  const dir = fs.realpathSync.native(tempDir(t, 'fpc-bounded-'));
+  const late = path.join(dir, 'grandchild-was-here');
+  const grandchild = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(late)}, "x"), 2500)`;
+  const child = `require("child_process").spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore" }); setTimeout(() => {}, 30000)`;
+  const started = Date.now();
+  const res = wt.runBounded(process.execPath, ['-e', child], { timeoutMs: 800 });
+  assert.strictEqual(res.timedOut, true);
+  assert.ok(Date.now() - started < 15000, 'the deadline holds');
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3500);
+  assert.ok(!fs.existsSync(late), 'the process the command started was killed with it');
+});
+
+// A repository that tracks husky's generated helpers and checks out with CRLF: after `husky
+// install` they read "modified" in every worktree (2026-11-18), with the same content.
+function huskyRepo(t) {
+  const dir = makeRepo(t);
+  run(dir, ['config', 'core.autocrlf', 'true']);
+  commitFile(dir, '.gitattributes', '* text=auto\n', 'attributes');
+  commitFile(dir, '.husky/.gitignore', '_\n', 'husky');
+  // `.husky/.gitignore` holds `_`, so the helper is tracked only by force - as such repositories have it.
+  fs.mkdirSync(path.join(dir, '.husky', '_'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.husky', '_', 'husky.sh'), '#!/bin/sh\necho husky\n');
+  run(dir, ['add', '-f', '.husky/_/husky.sh']);
+  run(dir, ['commit', '-q', '-m', 'husky helper']);
+  commitFile(dir, 'tools/generated.txt', 'v1\n', 'generated');
+  fakeRemoteBranch(dir, 'feat');
+  return dir;
+}
+
+test('add puts back what the dependency step rewrote in tracked files, and records what it made of them', (t) => {
+  const dir = huskyRepo(t);
+  const provide = (project, root) => {
+    fs.writeFileSync(path.join(root, '.husky', '.gitignore'), '_\n');
+    fs.writeFileSync(path.join(root, 'tools', 'generated.txt'), 'v2 from prepare\n');
+    return { manager: 'npm', linked: false, error: null };
+  };
+  const added = wt.add({ project: dir, branch: 'feat', provide });
+  assert.deepStrictEqual(added.errors, []);
+  assert.deepStrictEqual([...added.restoredArtefacts].sort(), ['.husky/.gitignore', 'tools/generated.txt']);
+  assert.strictEqual(run(added.worktree, ['status', '--porcelain']), '', 'the worktree starts clean');
+
+  // The agent's gate reinstalls: the same rewrite is recognised by remove, which then needs no --force.
+  provide(dir, added.worktree);
+  assert.deepStrictEqual(wt.ownChanges(added.worktree), []);
+  const removed = wt.remove({ project: dir, branch: 'feat', worktree: added.worktree });
+  assert.deepStrictEqual(removed.errors, []);
+  assert.strictEqual(removed.removed, true);
+  assert.deepStrictEqual([...removed.discardedArtefacts].sort(), ['.husky/.gitignore', 'tools/generated.txt']);
+});
+
+test('remove discards a known install artefact that changed only its line endings, and no edit of anyone', (t) => {
+  const dir = huskyRepo(t);
+  const added = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  fs.writeFileSync(path.join(added.worktree, '.husky', '.gitignore'), '_\n');
+  fs.writeFileSync(path.join(added.worktree, '.husky', '_', 'husky.sh'), '#!/bin/sh\necho husky\n');
+  assert.match(run(added.worktree, ['status', '--porcelain']), /\.husky/, 'git reads them as modified');
+  assert.deepStrictEqual(wt.installArtefacts(added.worktree, dir).sort(), ['.husky/.gitignore', '.husky/_/husky.sh']);
+
+  // Next to real work, nothing is touched and remove refuses as before.
+  fs.writeFileSync(path.join(added.worktree, 'README.md'), '# edited by the fixer\n');
+  const refused = wt.remove({ project: dir, branch: 'feat', worktree: added.worktree });
+  assert.strictEqual(refused.removed, false);
+  assert.match(refused.errors[0], /still holds modified or untracked files/);
+  assert.strictEqual(fs.readFileSync(path.join(added.worktree, '.husky', '.gitignore'), 'utf8'), '_\n', 'the artefact is left as it was too');
+
+  run(added.worktree, ['checkout', '--', 'README.md']);
+  const removed = wt.remove({ project: dir, branch: 'feat', worktree: added.worktree });
+  assert.deepStrictEqual(removed.errors, []);
+  assert.strictEqual(removed.removed, true);
+});
+
+test('remove still refuses a real edit of a known artefact path, and of a recorded one', (t) => {
+  const dir = huskyRepo(t);
+  const provide = (project, root) => {
+    fs.writeFileSync(path.join(root, 'tools', 'generated.txt'), 'v2 from prepare\n');
+    return { manager: 'npm', linked: false, error: null };
+  };
+  const added = wt.add({ project: dir, branch: 'feat', provide });
+  fs.writeFileSync(path.join(added.worktree, '.husky', '_', 'husky.sh'), '#!/bin/sh\necho changed by hand\n');
+  fs.writeFileSync(path.join(added.worktree, 'tools', 'generated.txt'), 'v3 by hand\n');
+  assert.deepStrictEqual(wt.installArtefacts(added.worktree, dir), []);
+  const refused = wt.remove({ project: dir, branch: 'feat', worktree: added.worktree });
+  assert.strictEqual(refused.removed, false);
+  assert.strictEqual(fs.readFileSync(path.join(added.worktree, 'tools', 'generated.txt'), 'utf8'), 'v3 by hand\n');
+});
+
+// 2026-11-19: the main checkout's node_modules was gone at the end of a run, and no step said when.
+// Here it is a link into the worktree's ignored output, so removing the worktree takes it.
+test('remove says loudly when the main checkout\'s node_modules disappeared during it', (t) => {
+  const dir = makeRepo(t);
+  commitFile(dir, '.gitignore', '/node_modules\n/store/\n', 'ignore');
+  fakeRemoteBranch(dir, 'feat');
+  const added = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  fs.mkdirSync(path.join(added.worktree, 'store', 'pkg'), { recursive: true });
+  fs.symlinkSync(path.join(added.worktree, 'store'), path.join(dir, 'node_modules'), linkType);
+  const result = wt.remove({ project: dir, branch: 'feat', worktree: added.worktree });
+  assert.strictEqual(result.removed, true);
+  assert.strictEqual(result.mainModulesLost, true);
+  assert.match(result.errors[0], /The main checkout's node_modules disappeared while removing .+; run `npm ci` there/);
+});
+
+test('withRepoLock runs one caller at a time, takes over a stale lock, and releases its own', (t) => {
+  const dir = makeRepo(t);
+  const lock = path.join(dir, '.git', 'doh-worktree.lock');
+  assert.strictEqual(wt.withRepoLock(dir, () => fs.existsSync(lock)), true, 'held while the work runs');
+  assert.ok(!fs.existsSync(lock), 'and released after');
+  fs.mkdirSync(lock);
+  const answer = wt.withRepoLock(dir, () => 'ran', { waitMs: 0, wait: () => {} });
+  assert.strictEqual(answer, 'ran', 'a lock held past the wait does not block forever');
+  assert.ok(fs.existsSync(lock), 'and the lock it did not take is not its to remove');
+  const old = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(lock, old, old);
+  assert.strictEqual(wt.withRepoLock(dir, () => 'ran', { staleMs: 1000 }), 'ran');
+  assert.ok(!fs.existsSync(lock), 'a stale lock is taken over and then released');
+});
+
+test('linkDependencies never clears the main checkout\'s own node_modules as a stale folder in the way', (t) => {
+  const { project } = depsDirs(t, '{}\n', '{}\n');
+  const link = wt.linkDependencies(project, project, 'npm', () => true);
+  assert.deepStrictEqual(link, { linked: false, reason: 'the worktree is the main checkout itself' });
+  assert.ok(fs.existsSync(path.join(project, 'node_modules', 'pkg', 'index.js')));
 });
