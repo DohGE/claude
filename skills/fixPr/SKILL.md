@@ -175,18 +175,26 @@ Run (Bash):
 `--push` and `--language` otherwise come from the stopped run's launches.) It fetches, reads the
 files and git, makes again the worktree a landing needs, and prints `runPath` and one entry per
 target in `actions[]`: `action`, `reason`, `command`, sometimes `note` and `worktree`. Report each
-target in Polish (`part-2: land - part-1 już wylądował`); `--dry-run` stops here. Then, in
-`actions` order, run each `command` once, as the step it stands for:
+target in Polish (`part-2: land - part-1 już wylądował`); `--dry-run` stops here. An `errors[]`
+entry that names the main checkout's `node_modules` (lost by a removal, or found broken by a launch,
+before the run stopped) → stop here: tell the user, in Polish, to run the install it names in their
+checkout, then `--resume` again; run no command before that. Otherwise, in `actions` order, run each
+`command` once, as the step it stands for:
 
 - `spawn` - the agent never ended (no result file), or ended in error with work left in its
   worktree: the command is its launch (Step 3, its answer read as there; `--resume=yes` takes the
   worktree as it is), then spawn the agent as Step 4, with the `note` in the spawn prompt under a
   heading of its own. Its end is handled by Step 5.
-- `land` - a held part whose parent has landed, or a `keep-base` bottom whose commit was never
-  pushed (`--keep-base=yes`: it moves onto its base only when it no longer merges): background, and
-  its `status` as Step 5 point 2.
-- `push` - a commit landed and never pushed: `restack.cjs --action=push` with the commit and, once
-  the commit rewrote the branch, the lease pinned to where origin stood when the run began.
+- `land` - a held part whose parent has landed, or a commit made and never pushed that a worktree
+  (or the local branch the worktree is made again from) still holds: background, and its `status`
+  as Step 5 point 2. `land` checks that commit against its base or parent again - for a `rebase`
+  target it moves onto a base that moved since, for a `keep-base` bottom (`--keep-base=yes`) only
+  when it no longer merges - runs the gate on a move, and pushes with the lease. A part already in
+  place answers `noop`.
+- `push` - only for a commit no worktree or local branch holds any more (`land` moves HEAD, so it
+  cannot carry it): `restack.cjs --action=push` with that commit and, once the commit rewrote the
+  branch, the lease pinned to where origin stood when the run began. It checks no base: its
+  `reason` says why `land` could not apply.
 - `landing-agent` - a landing agent stopped in the middle of its rebase: the command renders its
   brief; spawn it as Step 5 point 2.
 - `after`, `resolve` (`fixpr-after.cjs --resolve-only=yes`: the threads alone, again), `cascade` -
@@ -247,8 +255,8 @@ Parse the JSON from stdout:
   user to start the run again once it is fixed. On 2026-11-18 none of these was checked: origin was
   unreachable from Claude's process (Git Credential Manager), every launch only warned "Could not
   fetch", and the first push failed 25 minutes in. An unreachable origin stops a run that pushes, a
-  missing identity any run that commits, a refused token a run that resolves threads, an incomplete
-  `node_modules` any run with a gate; under `--dry-run` all of them are warnings.
+  missing identity any run that commits, a refused token a run that resolves threads, a missing or
+  incomplete `node_modules` any run with a gate; under `--dry-run` all of them are warnings.
 - Report every other `errors[]` entry to the user immediately, in Polish. Each one names the branch it
   belongs to and drops only that branch.
 - Report every `warnings[]` entry, in Polish. A branch whose pull request has no open comments is a
@@ -322,11 +330,15 @@ workers' briefs are rendered from. Parse its JSON:
   defect.
 - `heldBy` → the branch is checked out by the user; it is worked on `doh-fixpr/<branch>` and pushed
   to `origin/<branch>`. The summary tells the user to `git pull --rebase` in that checkout.
-- `mainBroken: true` → the main checkout's `node_modules` misses packages its `package.json`
-  declares, so no worktree can have a gate. STOP the run: spawn no further agent, wait for the
-  launches still running, remove every worktree whose agent was not spawned
+- `mainBroken: true` → the main checkout has no `node_modules`, or it misses packages its
+  `package.json` declares, so no worktree can link it or have a gate. No worktree installs in its
+  place: an install next to (or through) a link to that folder is what emptied it on 2026-11-18.
+  STOP the run: spawn no further agent, wait for the launches still running, remove every worktree
+  whose agent was not spawned
   (`node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"`),
-  and tell the user, in Polish, to run `npm ci` in their checkout and start the run again.
+  and tell the user, in Polish, to run the install the warning names (`npm ci`, or their package
+  manager's) in their checkout and start the run again. The preflight (Step 2) already stops a run
+  on the same check; this catches a `node_modules` lost after it.
 - `linked: false` with a warning "node_modules was installed, not linked …" → the worktree
   installed instead of linking, and the warning says why; report it. An install that failed or was
   stopped at its time limit is a warning too: that agent skips its gate.
@@ -444,7 +456,8 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
    `errors[]` entry "The main checkout's node_modules disappeared while removing …" (or "went from
    N to M entries") → tell the user at once, in Polish, that their checkout's `node_modules` is gone
    and that they must run the install it names there; launch no further target and land no further
-   part until they have (every later worktree would install instead of linking). The same entry
+   part until they have (every later worktree would install instead of linking); fixpr-after.cjs
+   already held the next part's landing (`next.held`), and `--resume` names it again later. The same entry
    in a `restack.cjs` answer's `errors[]` stops its climb: the parts above wait. A
    `cascade` entry means open parts above that the run does not name sit on the old commit: move
    them, bottom-up, with no agent (background):
@@ -497,15 +510,20 @@ After every branch has landed (or stopped):
 
     node "<SKILL_DIR>/scripts/fixpr-summary.cjs" --run="<runPath>"
 
-It prints the summary from the run file and the result files: one row per pull request (commit,
-landing, push, fixed / rejected / without action), every rejected comment with its ground (the
+It prints the summary from the run file and the result files: first, when the main checkout's
+`node_modules` was lost during a removal or found broken by a launch, that section, with the install
+to run; then one row per pull request (commit, landing - `noop` reads "bez zmian" -, push, fixed /
+rejected / without action), every rejected comment with its ground (the
 part the user acts on), what was answered, the `--local` findings not fixed, the comment and thread
-check per branch, the self-review's report and counts, every `stackImpact`, the files nobody looked
+check per branch (each resolve or reply error once, with its count; a `--resolve-only` run again
+with its final state), the self-review's report and counts, every `stackImpact` (one line per
+name, parts as ranges, paths cut to their distinct tail), the files nobody looked
 at (`uiUnverified`), the visual checks, the gate per branch with every still-red step's log and
 every branch committed on `green-no-tests` (no unit test ran: never call it green), what CI said
 per pushed branch (Step 5b: green, red with its decisive lines, or still running), every
 stack bottom-first with each pair that does not sit on its parent (restack.cjs verify) and its
-command, and the checkouts to `git pull --rebase`. Your final message is that text as it is,
+command, the checkouts to `git pull --rebase`, and every commit a re-spawned agent built on
+(`priorCommits`). Your final message is that text as it is,
 followed only by what no file holds: errors and warnings of Steps 1-5 not reported yet, the lessons
 added in 5c with their files, the cascade's rows, and the note on a missing `visual` key.
 
@@ -540,4 +558,5 @@ the user has not been told about yet.
 | "The move went through but the gate is red - that is an error for the user" | A `gate-red` with `briefVars` is the landing agent's work in `adapt` mode: this part's code following what the parts below changed. |
 | "The preflight only failed on origin - the push is half an hour away, I will start the agents" | The push then fails half an hour in, after every agent's work (2026-11-18). The fix is one command the user runs now; the run starts again in a minute. |
 | "The session died mid-run; I will push the commits and close the threads by hand" | `--resume` reads every state from the run file and names each step with its command: the `keep-base` check, the lease and the thread step the hand push of 2026-11-18 skipped. |
+| "The resumed commit only needs its push - `land` is overkill" | An unpushed commit goes through `land` wherever a worktree holds it: its base may have moved since, and only `land` checks that before the lease push. `push` is for a commit nothing checks out any more. |
 | "I will write the summary myself, I have every reply" | `fixpr-summary.cjs` prints it from the files, rejected grounds and files to look at included; your final message is its text plus what no file holds. |

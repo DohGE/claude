@@ -19,8 +19,10 @@
 //                  `keep-base` bottom never pushed (land --keep-base=yes: it moves onto its base
 //                  only when it no longer merges, and pushes with the lease). The worktree is made
 //                  again first when it is gone (worktree.cjs --resume=yes).
-//   push           a commit made, landed and never pushed (restack.cjs push --commit, with the lease
-//                  pinned to where origin stood when the run began once the commit rewrote it).
+//   push           a commit made and never pushed that no worktree or local branch holds any more
+//                  (restack.cjs push --commit, with the lease pinned to where origin stood when the
+//                  run began once the commit rewrote it). Wherever a worktree can hold the commit, it
+//                  goes through `land` instead - see landOrPush.
 //   landing-agent  a landing that stopped in the middle of its conflict agent's rebase.
 //   after          the landing happened, fixpr-after.cjs did not run (threads, checks, worktree).
 //   resolve        landed and pushed, threads left open (a 401): fixpr-after.cjs --resolve-only.
@@ -115,6 +117,9 @@ function gitFacts(project, git = gitIn) {
     fastForward: (branch, sha) => git(project, ['merge-base', '--is-ancestor', `refs/remotes/origin/${branch}`, sha]).ok,
     sits: (parent, child) => git(project, ['merge-base', '--is-ancestor', `refs/remotes/origin/${parent}`, `refs/remotes/origin/${child}`]).ok,
     worktree: (dir) => isDir(dir),
+    // The commit a worktree, or the local branch a worktree is made again from, stands on.
+    head: (dir) => (isDir(dir) ? git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD']).out || null : null),
+    localHead: (branch) => [branch, `doh-fixpr/${branch}`].map((b) => git(project, ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`]).out).find(Boolean) || null,
     dirty: (dir) => isDir(dir) && git(dir, ['status', '--porcelain', '--untracked-files=no']).out !== '',
     ahead: (dir, branch) => (isDir(dir) ? Number(git(dir, ['rev-list', '--count', `refs/remotes/origin/${branch}..HEAD`]).out) || 0 : 0),
     inRebase: (dir) => {
@@ -141,6 +146,13 @@ function plan(runPath, options = {}, deps = {}) {
   const out = { runPath, actions: [], counts: {}, warnings: [], errors: [] };
   const names = [...new Set(targets.flatMap((t) => [t.branch, t.stack && t.stack.parent, t.pr && t.pr.base, ...((t.stack && t.stack.above) || [])].filter(Boolean)))];
   if (!facts.fetch(names)) out.warnings.push('Could not fetch every branch of the run; compared the refs the repository already has.');
+  // The stopped run lost the main checkout's node_modules (a removal, fixpr-after.cjs), or a launch
+  // found it broken: no landing and no launch until the user has installed it there again - the
+  // same health check worktree.cjs links by.
+  if (targets.some((t) => (t.outcome && t.outcome.mainModulesLost) || (t.launch && t.launch.mainBroken))) {
+    const health = (deps.mainModules || (() => require('./worktree.cjs').mainModulesHealth(project)))();
+    if (!health.ok) out.errors.push(`${health.reason}: run \`${health.command}\` in ${project} first, then --resume again. No launch or landing goes on before that.`);
+  }
   const byBranch = new Map(targets.map((t) => [t.branch, t]));
   const pushOf = (t) => options.push || (t.launch && t.launch.push) || 'yes';
   const languageOf = (t) => options.language || (t.launch && t.launch.language) || 'English';
@@ -204,6 +216,20 @@ function plan(runPath, options = {}, deps = {}) {
       action: 'land', reason: why,
       command: command('restack.cjs', [['action', 'land'], run, branchFlag, ['push', push], ['summary', 'yes'], ...extra]),
     });
+    // A commit made and never pushed goes out through `land`: it checks the commit against its base
+    // (or parent) again, moves it when the base moved since, runs the gate on a move, and pushes
+    // with the lease. The hand push of 2026-11-18 skipped exactly that and conflicted on GitHub.
+    // `land` works on the HEAD of the worktree, so it applies only where the worktree - or the local
+    // branch worktree.cjs --resume=yes makes it again from - stands on that commit. A commit nothing
+    // checks out any more (a landing's commit whose branch moved on, a worktree reset since) can
+    // only be pushed as it is: restack.cjs push --commit, the one case left for a bare push.
+    const landOrPush = (commit, why, extra = []) => {
+      if (!facts.hasCommit(commit)) return { action: 'manual', reason: `commit ${short(commit)} is no longer in the repository; ${why}` };
+      const at = hasWorktree ? facts.head(t.worktree) : facts.localHead(t.branch);
+      if (at && at !== commit) return pushAction(commit, `${why}; ${hasWorktree ? 'its worktree' : 'its local branch'} stands on ${short(at)}, not on it, so land (which moves HEAD) cannot carry it`);
+      if (!at) return pushAction(commit, `${why}; no worktree or local branch holds it, so land (which moves HEAD) cannot carry it`);
+      return landAction(why, extra);
+    };
     // A landing that stopped at a conflict, or at a red gate its agent was to adapt to.
     const resumeLanding = (parent) => {
       const remote = facts.tip(t.branch);
@@ -253,12 +279,13 @@ function plan(runPath, options = {}, deps = {}) {
         const parent = t.stack && t.stack.parent;
         const parentTarget = byBranch.get(parent);
         if (!(t.stack && t.stack.parentOutsideRun) && parentTarget && !landed(parentTarget)) return { action: 'wait', reason: `${parent} has not landed yet: a held part lands after it` };
-        if (landing && landing.status === 'landed') {
-          const onOrigin = landing.pushed || facts.onOrigin(landing.commit, t.branch);
-          if (!onOrigin && push === 'yes' && landing.commit) return pushAction(landing.commit, `its landing moved it to ${short(landing.commit)} and the push did not happen`);
+        // `noop`: the part already sat on its parent and origin had it - landed, nothing moved.
+        if (landing && (landing.status === 'landed' || landing.status === 'noop')) {
+          const onOrigin = landing.pushed || landing.status === 'noop' || facts.onOrigin(landing.commit, t.branch);
+          if (!onOrigin && push === 'yes' && landing.commit) return landOrPush(landing.commit, `its landing moved it to ${short(landing.commit)} and the push did not happen`);
           return { action: 'after', reason: `its landing ended (${short(landing.commit)}); fixpr-after.cjs did not run`, command: afterCmd(landing.commit, onOrigin) };
         }
-        if (landing && landing.status === 'push-rejected' && landing.commit) return pushAction(landing.commit, `its landing's push was refused (${(landing.errors || [])[0] || 'push-rejected'})`);
+        if (landing && landing.status === 'push-rejected' && landing.commit) return landOrPush(landing.commit, `its landing's push was refused (${(landing.errors || [])[0] || 'push-rejected'})`);
         if (landing && (landing.status === 'conflict' || (landing.status === 'gate-red' && landing.briefVars))) {
           const resumed = resumeLanding(parent);
           if (resumed) return resumed;
@@ -277,9 +304,9 @@ function plan(runPath, options = {}, deps = {}) {
         const resumed = resumeLanding(t.pr && t.pr.base);
         if (resumed) return resumed;
       }
-      if (landing && landing.status === 'push-rejected' && landing.commit) return pushAction(landing.commit, `its landing's push was refused (${(landing.errors || [])[0] || 'push-rejected'})`);
-      if (t.landing === 'keep-base') return landAction(`${short(commit)} was committed and never pushed: it moves onto ${t.pr.base} only if it no longer merges, and pushes with the lease`, [['keep-base', 'yes']]);
-      return pushAction(commit, `${short(commit)} was committed${result.rebased ? ' and rebased' : ''} and never pushed`);
+      if (landing && landing.status === 'push-rejected' && landing.commit) return landOrPush(landing.commit, `its landing's push was refused (${(landing.errors || [])[0] || 'push-rejected'})`, t.landing === 'keep-base' ? [['keep-base', 'yes']] : []);
+      if (t.landing === 'keep-base') return landOrPush(commit, `${short(commit)} was committed and never pushed: it moves onto ${t.pr.base} only if it no longer merges, and pushes with the lease`, [['keep-base', 'yes']]);
+      return landOrPush(commit, `${short(commit)} was committed${result.rebased ? ' and rebased' : ''} and never pushed: land checks it against ${t.pr.base} again and pushes with the lease`);
     }
 
     // 3. After fixpr-after.cjs: a push still owed, threads left open, parts above left behind.
@@ -287,8 +314,8 @@ function plan(runPath, options = {}, deps = {}) {
     const resolveCmd = command('fixpr-after.cjs', [run, branchFlag, ['resolve-only', 'yes'], reply === 'no' ? ['reply', 'no'] : null]);
     const isPushed = o.pushed || (o.commit && facts.onOrigin(o.commit, t.branch));
     if (o.committed && !isPushed && push === 'yes' && o.commit) {
-      if (t.landing === 'keep-base') return landAction(`${short(o.commit)} was never pushed: it moves onto ${t.pr.base} only if it no longer merges, and pushes with the lease`, [['keep-base', 'yes']]);
-      return pushAction(o.commit, `${short(o.commit)} was never pushed`);
+      if (t.landing === 'keep-base') return landOrPush(o.commit, `${short(o.commit)} was never pushed: it moves onto ${t.pr.base} only if it no longer merges, and pushes with the lease`, [['keep-base', 'yes']]);
+      return landOrPush(o.commit, `${short(o.commit)} was never pushed: land checks it against ${(t.stack && t.stack.parent) || t.pr.base} again and pushes with the lease`);
     }
     if (o.committed && isPushed && !o.pushed) {
       return { action: 'resolve', reason: `${short(o.commit)} is on origin now: the threads it fixed are closed and the outcome marked pushed`, command: resolveCmd };

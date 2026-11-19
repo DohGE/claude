@@ -161,7 +161,15 @@ self-review walk the project's own rules. A failed install is a warning, not a f
 the verification gate will be skipped.
 
 The link is the default whenever the lockfile matches and the main checkout's `node_modules` holds
-what its `package.json` declares. Whatever is in the worktree's way - a stale or dangling link, the
+what its `package.json` declares. In the default (`auto`) mode a main checkout with no
+`node_modules` at all is `mainBroken` whatever the lockfiles say, and one that misses declared
+packages is when the lockfile matches: the run stops with the install for the user's checkout ("run
+`npm ci` in <project>"), and no worktree installs in its place - an install next to or through a link
+to that folder is what emptied it on 2026-11-18. `--deps=install` is the explicit way to install in a
+worktree anyway. One health check (`mainModulesHealth`) answers for the preflight, the link and every
+remove alike.
+
+Whatever is in the worktree's way - a stale or dangling link, the
 half tree of a stopped install, an earlier run's folder - is cleared first, links unlinked and never
 followed, and the link made in its place (`replaced` in `dependencies`, and a warning). A link to the
 main checkout that is already there is kept. When `auto` still installs, the reason it could not
@@ -205,8 +213,9 @@ recursive delete walks into a junction and empties what it points at. Take a wor
 Every remove watches the main checkout's `node_modules`. When it existed before and is gone after
 (or holds fewer entries), the answer carries `mainModulesLost: true` and an error - "The main
 checkout's node_modules disappeared while removing <worktree>; run `npm ci` there" - which
-`fixpr-after.cjs` puts in its `errors[]` and `restack.cjs` turns into a stop of the climb (resumable
-with `--resume=yes` once the user has installed). On 2026-11-19 that folder was gone at the end of a
+`fixpr-after.cjs` puts in its `errors[]` and the target's `outcome.mainModulesLost` (the summary
+prints it first; the next part's landing is held, `next.held`), and `restack.cjs` turns into a stop
+of the climb (resumable with `--resume=yes` once the user has installed). On 2026-11-19 that folder was gone at the end of a
 run, and no step had said when. What a shell can do to it is guarded too (`bash-guard.cjs`): an
 install in a fix worktree (`npm ci`/`install`, `pnpm install`, `yarn`, …) and an `rm` of
 `node_modules/` are refused, because both go through the link into the main checkout's packages.
@@ -449,7 +458,9 @@ export each - no longer stop the move. `land` merges such a conflict itself: a J
 (both sides' new keys kept in place, a key both changed differently refused, and only a file that
 `JSON.stringify` reproduces byte for byte), any other file only where every conflicting hunk is two
 insertions with an empty base. It does so only when the gate runs after the move, which proves the
-merge; `autoResolved[]` names each file and how. On 2026-11-05 four restacks of DPXN-11967 stopped on
+merge: `--auto-resolve` follows `--gate` when it is not given, so `--gate=no` leaves every conflict
+to the agent unless `--auto-resolve=yes` says outright to merge unproved. `autoResolved[]` names each
+file and how. On 2026-11-05 four restacks of DPXN-11967 stopped on
 exactly these (`en.json`, `ButtonTooltip`), each spending a conflict agent.
 
 A conflict held in the import block of a JS/TS file is merged the same way (`how: imports`): per
@@ -495,16 +506,27 @@ command:
 | Action | When | Command |
 |---|---|---|
 | `spawn` | no result file, or an agent that ended in error with work in its worktree | `fixpr-launch.cjs --resume=yes` (the stopped run's worktree taken as it is), then the agent |
-| `land` | a held part whose parent has landed; a `keep-base` bottom whose commit was never pushed | `restack.cjs --action=land` (`--keep-base=yes`: onto its base only when it no longer merges), the worktree made again first when it is gone |
-| `push` | a commit landed and never pushed | `restack.cjs --action=push --commit=<sha>`, from the project when the worktree is gone, with the lease once the commit rewrote the branch |
+| `land` | a held part whose parent has landed; a commit made (or landed) and never pushed that a worktree or the local branch still holds - `rebase`, `keep-base` and held targets alike | `restack.cjs --action=land`: the commit checked against its base or parent again and moved when that moved (`--keep-base=yes`: onto its base only when it no longer merges), the gate on a move, the push with the lease; the worktree made again first when it is gone |
+| `push` | a commit never pushed that no worktree or local branch holds any more, so `land` (which moves HEAD) cannot carry it | `restack.cjs --action=push --commit=<sha>`, from the project, with the lease once the commit rewrote the branch - no base check, which its `reason` says |
 | `landing-agent` | a landing agent stopped in the middle of its rebase | its brief rendered again |
 | `after` | landed, `fixpr-after.cjs` never ran | `fixpr-after.cjs` with the landing's commit |
 | `resolve` | pushed, threads left open (a 401) or a push made after `fixpr-after.cjs` | `fixpr-after.cjs --resolve-only=yes` |
 | `cascade` | pushed under open parts the run does not name, still on the old commit | `restack.cjs --action=cascade` |
 | `wait` / `manual` / `done` | a parent not landed yet / nothing a script can do / nothing left | - |
 
-A held part still lands only after its parent. The orchestrator runs each command once and asks
-again until every target is done, waits on a running agent, or needs the user.
+A held part still lands only after its parent; a landing that answered `noop` counts as landed. A run
+whose main checkout lost its `node_modules` (`outcome.mainModulesLost`, or a launch's `mainBroken`)
+answers an `errors[]` entry with the install to run while that folder is still broken, and no command
+goes on before it. The orchestrator runs each command once and asks again until every target is done,
+waits on a running agent, or needs the user.
+
+A fix agent spawned again (`spawn`) on a worktree that already holds the stopped agent's commit builds
+on it: it never amends it and never resets it away, adds its own commit on top with the same message,
+and reports both (`priorCommits` in its result file, a line of the summary). The land brief moves both.
+
+The run file is written by several scripts at once - every launch runs in the background - so each
+write of a target's `launch`, `landingResult`, `pushResult` or `outcome` reads the file again and
+writes it under a lock folder next to it (`scripts/run-file.cjs`); none drops what another kept.
 
 `fixpr-after.cjs --resolve-only=yes` is the thread step alone, for a target that landed and pushed
 while its resolves failed: it works with the worktree gone (the commit is read from the main
@@ -575,7 +597,7 @@ Before a comment is read, the collector checks what the run will need from this 
 - `user.name` and `user.email` are set: without them a rebase stops as if it conflicted.
 - The GitHub token works: one call to the repository, naming the source used and any refused one.
 - The main checkout's `node_modules` exists and holds every declared package (worktree.cjs's
-  `dependencyHealth`, the same check as `mainBroken`).
+  `mainModulesHealth`, the same check as `mainBroken` and `mainModulesLost`).
 
 Which failures stop the run depends on what it will do: an unreachable origin with `--push=yes`, a
 missing identity whenever something is committed, a refused token when threads are resolved, broken
@@ -670,7 +692,7 @@ rule itself: editing its own settings is refused as self-modification.
 | `scripts/pr-comments.cjs` | argument parsing, the preflight (`--push`, `--dry-run`, `--preflight`), the commit prefix and `CR` message, the per-branch comment JSON, and identical per-branch warnings folded into one line |
 | `scripts/preflight.cjs` | before any worktree: origin reachable without a prompt, a git identity, a GitHub token GitHub accepts (and its source), a complete main `node_modules`; each failure with its fix |
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
-| `scripts/worktree.cjs` | branch-state refusals, worktree creation under a repository lock, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`; a stale `node_modules` cleared and linked over; a bounded install that never runs through a link; install artefacts in tracked files put back), removal (install artefacts discarded when they are all there is, links first, git's own reason on a refusal, a main `node_modules` that disappeared or shrank reported as `mainModulesLost`); `--resume=yes` takes a stopped run's worktree as it is, or makes it again from the local branch holding its unpushed commit |
+| `scripts/worktree.cjs` | branch-state refusals, worktree creation under a repository lock, bootstrap (a main `node_modules` that is gone or misses declared packages stops the run before any agent, never an install in its place: `mainBroken`, from `mainModulesHealth`; a stale `node_modules` cleared and linked over; a bounded install that never runs through a link; install artefacts in tracked files put back), removal (install artefacts discarded when they are all there is, links first, git's own reason on a refusal, a main `node_modules` that disappeared or shrank reported as `mainModulesLost`); `--resume=yes` takes a stopped run's worktree as it is, or makes it again from the local branch holding its unpushed commit |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice; `--skip-resolved` leaves the threads GitHub shows closed alone |
 | `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append and import-block conflicts merged, `noop` when nothing moves, a missing git identity or a wrong old tip an error, `--run` reads the part from the run file, `--pending-steps`, `--summary`), checks a stack (`verify`, `--run`), moves the parts above a changed one (`cascade`), moves a whole stack onto its base (`stack`, `plan` - /doh:restack) and pushes `HEAD` (or `--commit`) with retry (`push`); `land --keep-base=yes` moves a bottom only when it no longer merges; with `--run`, land and push keep their answer in the run file |
 | `scripts/symbol-uses.cjs` | where names are still used - in the worktree (a rename's leftovers) and in the parts stacked above (`--refs`) |
@@ -684,7 +706,8 @@ rule itself: editing its own settings is refused as self-modification.
 | `scripts/stack-preflight.cjs` | before the agents: every part of a stack that imports a file only a later part adds (`leaks`), and what each part restores verbatim first (`restore`), from git alone |
 | `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file; what it was given and made kept there (`launch`); run in the background, one per target (`linked` says whether `node_modules` is the main checkout's) |
 | `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`); identical resolve and reply failures as one `{ error, count, ids }` each; `--resolve-only=yes` runs the thread step alone again |
-| `scripts/fixpr-resume.cjs` | a stopped run's next step per target (`--resume`), from the run file, the result files and git |
+| `scripts/fixpr-resume.cjs` | a stopped run's next step per target (`--resume`), from the run file, the result files and git; an unpushed commit a worktree or branch holds goes through `land`, a bare `push` only for one nothing holds |
+| `scripts/run-file.cjs` | every write of a target's field into the run file, read again and written under a lock folder, so background launches and landings never drop each other's |
 | `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files, the stack check and what CI said (`ci-status.json`); `stackImpact` one line per name, parts as ranges (`part-3..7`), paths cut to their distinct tail, capped with "+N" naming the result file |
 | `scripts/ci-status.cjs` | after a push: the commit statuses and check runs of each pushed commit, waited on until none is pending (bounded by `--timeout-min`), a red Jenkins build's decisive console lines |
 | `scripts/split-work.cjs` | a fix agent's many items cut into groups of whole folders for `doh:pipeline-worker` agents (`references/fix-worker-agent.md`) |

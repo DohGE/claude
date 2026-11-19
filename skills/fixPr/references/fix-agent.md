@@ -77,6 +77,16 @@ the run of 2026-11-03. So:
 
 ## Step 1 — Read the work
 
+**A worktree that already holds a commit.** First run
+`git -C "{{ROOT}}" log --oneline origin/{{BRANCH}}..HEAD`. A commit it lists was made in this
+worktree before you were spawned: this branch's earlier fix agent was stopped (its run died and
+`/doh:fixPr --resume` launched you on the same worktree), or the branch carries a commit nobody has
+pushed yet. That commit is somebody's finished work and may be its only copy. Build on it: Read what
+it changed (`git -C "{{ROOT}}" show --stat HEAD`), count it when you give the items their verdicts, and
+make only what is still missing. Never `--amend` it, never `reset`, `rebase -i` or squash it away -
+your own changes become one new commit on top of it (Step 6), and the land brief moves both together.
+Report both (Step 6, point 6, and `priorCommits` in the result file).
+
 {{#if RESTORE!=none}}
 **First, before anything else: files the stack's split left out.** This part (or a part below it)
 imports files only a later part of the stack adds, so its gate cannot be green as it stands
@@ -543,11 +553,14 @@ screenshots and the cleanup.
 
    No body, no description, no trailer, no co-author line, no issue reference — the message is that one
    line and only that. One commit for the whole run: never a commit per comment, never one per check,
-   and never `--amend`.
+   and never `--amend`. The one exception to "one commit" is Step 1's: a commit the worktree already
+   held stays as it is, and yours goes on top of it with the same message - never folded into it.
    Nothing fixed at all — every verdict was `rejected` or `answered` and the gate was already green
    (or `green-no-tests`) or skipped — → that is a legitimate outcome, not a failure: skip the commit and the push, report
    `committed: false`, and say why in `summary`. If the tree is nonetheless dirty, name the files in
-   `summary` and leave them; you revert nothing.
+   `summary` and leave them; you revert nothing. With a commit the worktree already held (Step 1),
+   nothing left to change is not "nothing committed": report `committed: true` with that commit as
+   `commit`, and land it as point 4 says.
 4. Land the commit (`{{LANDING}}`): Read `{{LAND_BRIEF}}` and follow it - it says whether and how this
    branch is rebased and pushed{{#if LANDING=hold}} (held: neither){{/if}}.
 5. (The push is part of point 4's file.)
@@ -559,6 +572,7 @@ screenshots and the cleanup.
 
        ## Wynik
        - Commit: <sha + message | nie powstał: reason>
+       - Commit przerwanego agenta: <sha + message of each commit the worktree already held (Step 1) | —>
        - Rebase na {{BASE}}: <done | not needed | kept (keep-base) | held for the orchestrator | abandoned: reason>
        - Push: <done | done, force-with-lease after rebase | skipped (--no-push) | failed: reason>
 7. Write the full result object (below, "The result file") with the Write tool to
@@ -609,6 +623,9 @@ screenshots and the cleanup.
 {{/if}}
 - `visualChecks` (step 5b) holds each item you looked at:
   `{"item":"<verdict item>","route":"<url path>","assertions":["<what was asserted>"],"screenshot":"<png path>","result":"passed|failed|skipped","reason":"<for skipped>","mocked":<bool>}`; `[]` when the step did not run.
+- `priorCommits` lists, as `"<sha> <message>"`, every commit the worktree already held when you
+  started (Step 1), oldest first; `[]` when it held none. `commit` is your own commit on top of
+  them, or the newest of them when you added none.
 - `stackImpact` lists every name your commit removed, renamed or changed the signature of that a
   pull request stacked above still uses (step 3, point 4), each
   `{"symbol":"<old name>","change":"removed|renamed to <new>|signature: <what>","usedIn":["<branch>:<path>:<line>",…]}`;
@@ -618,7 +635,7 @@ screenshots and the cleanup.
 
 `{{REPORT}}.result.json` holds, for a run that ended (including one that legitimately committed nothing):
 
-    {"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"stackImpact":[{"symbol":"<name>","change":"<change>","usedIn":["<branch>:<path>:<line>",…]},…],"lessons":[{"rule":"<rule>","files":"<group>","example":"<example>","source":"PR #{{PR_NUMBER}}"},…],"visualChecks":[{"item":"<item>","route":"<route>","assertions":["<a>"],"screenshot":"<path>","result":"passed|failed|skipped","reason":"<reason>","mocked":<bool>},…],"checksFixed":["<label>",…],"gate":"<the last pass's verdict: green|green-no-tests|partial|skipped>","verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, that no unit test ran when the gate said green-no-tests, and anything the user must know>"}
+    {"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","priorCommits":["<sha> <message>",…],"rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"stackImpact":[{"symbol":"<name>","change":"<change>","usedIn":["<branch>:<path>:<line>",…]},…],"lessons":[{"rule":"<rule>","files":"<group>","example":"<example>","source":"PR #{{PR_NUMBER}}"},…],"visualChecks":[{"item":"<item>","route":"<route>","assertions":["<a>"],"screenshot":"<path>","result":"passed|failed|skipped","reason":"<reason>","mocked":<bool>},…],"checksFixed":["<label>",…],"gate":"<the last pass's verdict: green|green-no-tests|partial|skipped>","verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, that no unit test ran when the gate said green-no-tests, and anything the user must know>"}
 
 and for a gate still red after three passes, or any failure that left the work unfinished:
 

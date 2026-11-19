@@ -158,17 +158,22 @@ test('a keep-base bottom committed and never pushed lands through restack.cjs --
   assert.match(a.reason, /only if it no longer merges/);
 });
 
-test('a commit never pushed goes out through restack.cjs push: plainly on top of origin, with the lease once rewritten', (t) => {
+// 2026-11-18's hand push of a stopped run's commit skipped the base check and the lease. A `rebase`
+// target's unpushed commit goes through restack.cjs land, which checks it against its base again
+// and pushes with the lease; a bare push is left for a commit no worktree or branch holds any more.
+test('a commit never pushed lands through restack.cjs land while a worktree or branch holds it, and is pushed only when none does', (t) => {
   const w = world(t);
   const wt = worktree(w, 'solo');
   const cr = commit(wt, 'fix.txt', 'fix\n', 'CR');
   const file = runFile(w);
   result(file, 'solo', pushedResult(cr, { pushed: false }));
   let a = actionOf(plan(file), 'solo');
-  assert.strictEqual(a.action, 'push');
-  assert.ok(a.command.includes(`--commit="${cr}"`) && !a.command.includes('--lease'));
+  assert.strictEqual(a.action, 'land');
+  for (const piece of ['restack.cjs', '--action="land"', '--branch="solo"', '--push="yes"', '--summary="yes"']) assert.ok(a.command.includes(piece), piece);
+  assert.ok(!a.command.includes('--keep-base'), 'a rebase target moves onto its base whenever it does not sit on it');
+  assert.match(a.reason, /checks it against main again/);
 
-  // Rebased onto a newer main, then the run stopped; the worktree is gone too.
+  // Rebased onto a newer main, then the run stopped; the worktree is gone, its local branch is not.
   commit(w.project, 'main.txt', 'newer\n', 'main moved');
   git(w.project, 'push', '-q', 'origin', 'main');
   git(wt, 'fetch', '-q', 'origin');
@@ -177,7 +182,14 @@ test('a commit never pushed goes out through restack.cjs push: plainly on top of
   git(w.project, 'worktree', 'remove', wt);
   result(file, 'solo', pushedResult(rebased, { pushed: false, rebased: true }));
   a = actionOf(plan(file), 'solo');
+  assert.strictEqual(a.action, 'land', 'worktree.cjs --resume=yes makes the worktree again from the local branch that holds it');
+  assert.match(a.note, /--resume=yes/);
+
+  // The local branch moved on since: nothing checks the commit out, so it can only be pushed as it is.
+  git(w.project, 'branch', '-f', 'solo', w.tips.solo);
+  a = actionOf(plan(file), 'solo');
   assert.strictEqual(a.action, 'push');
+  assert.match(a.reason, /land \(which moves HEAD\) cannot carry it/);
   assert.ok(a.command.includes(`--commit="${rebased}"`) && a.command.includes(`--lease="${w.tips.solo}"`));
 
   // The same command, run: the commit is on origin, and the next pass hands it to fixpr-after.
@@ -208,6 +220,22 @@ test('a held part whose landing could not push is pushed with the lease; one tha
   a = actionOf(plan(file), 'part-2');
   assert.strictEqual(a.action, 'after');
   assert.ok(a.command.includes(`--commit="${w.tips['part-2']}"`) && a.command.includes('--pushed="yes"'));
+});
+
+test('a held part whose landing was a no-op gets fixpr-after; a lost main node_modules stops the resume', (t) => {
+  const w = world(t);
+  const parentDone = { outcome: { commit: w.tips['part-1'], committed: true, pushed: true, resolve: { resolved: 0, failed: [] } } };
+  const file = runFile(w, { 'part-1': parentDone, 'part-2': { landingResult: { status: 'noop', commit: w.tips['part-2'], reason: 'nothing to move' } } });
+  result(file, 'part-1', pushedResult(w.tips['part-1']));
+  result(file, 'part-2', pushedResult(w.tips['part-2'], { pushed: false, held: true }));
+  const a = actionOf(plan(file), 'part-2');
+  assert.strictEqual(a.action, 'after', 'a no-op landed: nothing moves again');
+  assert.ok(a.command.includes(`--commit="${w.tips['part-2']}"`) && a.command.includes('--pushed="yes"'));
+
+  const lost = runFile(w, { 'part-1': { outcome: { ...parentDone.outcome, mainModulesLost: 'The main checkout\'s node_modules disappeared while removing /w/part-1' } } });
+  const broken = { ok: false, state: 'missing', reason: 'the main checkout has no node_modules', command: 'npm ci' };
+  assert.match(plan(lost, {}, { mainModules: () => broken }).errors.join(' '), /no node_modules: run `npm ci` in .+ first/);
+  assert.deepStrictEqual(plan(lost, {}, { mainModules: () => ({ ok: true }) }).errors, []);
 });
 
 test('a landing stopped inside its conflict agent\'s rebase gets that agent again; one the agent pushed gets fixpr-after', (t) => {

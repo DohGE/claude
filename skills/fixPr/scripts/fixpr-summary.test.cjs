@@ -143,3 +143,38 @@ test('the summary says when no unit test ran, and what CI said per branch', (t) 
   assert.match(text, /#202 `c2abcdef0`: CI nadal trwa \(jenkins\/pr-merge\)/);
   assert.ok(!/#203[^\n]*CI/.test(text), 'a branch whose CI nobody asked about says nothing');
 });
+
+// The five improvements report into one summary: a lost main node_modules first, a no-op landing,
+// a gate that ran no unit test, CI, threads closed again, and a commit built on a stopped agent's.
+test('one summary carries the lost node_modules, a no-op, green-no-tests, CI, a resolve run again and prior commits', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-all-'));
+  const lost = 'The main checkout\'s node_modules disappeared while removing /w/part-1; run `npm ci` there (/p) before the next run.';
+  const run = {
+    project: dir,
+    stacks: [['part-1', 'part-2']],
+    targets: [
+      {
+        branch: 'part-1', pr: { number: 1, title: 'feat(X): part 1' }, reportPath: path.join(dir, 'p1.md'), checksDir: path.join(dir, 'c1'), landing: 'keep-base', stack: { parent: null },
+        outcome: { commit: 'a1b2c3d4e5', pushed: true, mainModulesLost: lost, resolve: { resolved: 2, alreadyResolved: 1, failed: [], unverified: [], replyFailed: [], resolveOnly: '2026-11-19T11:00:00.000Z' } },
+      },
+      {
+        branch: 'part-2', pr: { number: 2, title: 'feat(X): part 2' }, reportPath: path.join(dir, 'p2.md'), landing: 'hold', stack: { parent: 'part-1' },
+        landingResult: { status: 'noop', commit: 'f00f00f00f', gate: null }, outcome: { commit: 'f00f00f00f', pushed: true },
+      },
+    ],
+  };
+  fs.writeFileSync(`${run.targets[0].reportPath}.result.json`, JSON.stringify({ type: 'result', gate: 'green-no-tests', priorCommits: ['0123456789abcdef feat(X): CR'], verdicts: [] }));
+  fs.mkdirSync(path.join(dir, 'c1'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'c1', 'ci-status.json'), JSON.stringify({ branch: 'part-1', sha: 'a1b2c3d4e5', state: 'success' }));
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file, verify: 'no' });
+  const at = (s) => text.indexOf(s);
+  assert.ok(at('### node_modules głównego checkoutu') > -1 && at('### node_modules głównego checkoutu') < at('### Kontrola komentarzy'), text);
+  assert.ok(text.includes(`- #1: ${lost}`));
+  assert.match(text, /bez zmian: już siedziała na part-1/);
+  assert.match(text, /#1[^\n]*testy jednostkowe NIE uruchomione/);
+  assert.match(text, /### CI\n- #1 `a1b2c3d4e`: CI zielone/);
+  assert.match(text, /#1: rozwiązane wątki 2 \(w tym wcześniej: 1\); ponowione 2026-11-19 11:00/);
+  assert.match(text, /#1: zbudowane na commicie przerwanego agenta: `012345678` feat\(X\): CR/);
+});

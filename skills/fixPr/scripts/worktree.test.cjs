@@ -269,6 +269,20 @@ test('add --resume takes the worktree of a stopped run as it is, uncommitted wor
   assert.strictEqual(again.worktree, first.worktree);
   assert.strictEqual(again.reused, true);
   assert.strictEqual(fs.readFileSync(path.join(first.worktree, 'README.md'), 'utf8'), 'half a fix\n');
+  assert.deepStrictEqual([again.dependencies.linked, again.mainBroken], [false, undefined]);
+  // Linked to a main checkout whose node_modules went since: broken, as at a first launch.
+  const mainModules = path.join(dir, 'node_modules');
+  fs.mkdirSync(mainModules);
+  fs.symlinkSync(mainModules, path.join(first.worktree, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  fs.rmSync(mainModules, { recursive: true, force: true });
+  const lost = wt.add({ project: dir, branch: 'feat', bootstrap: false, resume: true });
+  assert.deepStrictEqual([lost.reused, lost.dependencies.linked, lost.mainBroken], [true, true, true]);
+  assert.match(lost.warnings.join(' '), /no node_modules: run `npm ci` in .+ first/);
+  try {
+    fs.unlinkSync(path.join(first.worktree, 'node_modules'));
+  } catch {
+    fs.rmdirSync(path.join(first.worktree, 'node_modules'));
+  }
 });
 
 test('add --resume makes a gone worktree again from the local branch holding the unpushed commit, rebased or not', (t) => {
@@ -588,6 +602,27 @@ test('provideDependencies refuses to link a main node_modules that misses declar
   assert.match(deps.error, /misses 2 of 3 declared packages \(@angular\/core, jest\): run `npm ci` in .+ first/);
   assert.ok(!fs.existsSync(path.join(root, 'node_modules')));
   assert.deepStrictEqual(wt.dependencyHealth(path.join(project, 'nowhere')), { ok: true, missing: [], declared: 0 });
+});
+
+// 2026-11-18: the main checkout's node_modules was gone after installs ran next to (or through)
+// worktree links to it. A missing one is broken like an incomplete one: the run stops with the
+// command for the user's checkout, and no worktree installs in its place - whatever the lockfiles.
+test('provideDependencies in auto mode treats a missing main node_modules as mainBroken and never installs', (t) => {
+  const install = () => { throw new Error('must not install'); };
+  for (const [lockA, lockB] of [['{}\n', '{}\n'], ['{"a":1}\n', '{"a":2}\n']]) {
+    const { project, root } = depsDirs(t, lockA, lockB);
+    fs.rmSync(path.join(project, 'node_modules'), { recursive: true, force: true });
+    const deps = wt.provideDependencies(project, root, { install, isIgnored: () => true });
+    assert.deepStrictEqual([deps.linked, deps.mainBroken], [false, true]);
+    assert.match(deps.error, /the main checkout has no node_modules: run `npm ci` in .+ first - never inside a worktree/);
+    assert.ok(!fs.existsSync(path.join(root, 'node_modules')));
+    const health = wt.mainModulesHealth(project);
+    assert.deepStrictEqual([health.ok, health.state, health.entries, health.command], [false, 'missing', null, 'npm ci']);
+  }
+  // `--deps=install` is the explicit way to install anyway.
+  const asked = depsDirs(t, '{}\n', '{}\n');
+  fs.rmSync(path.join(asked.project, 'node_modules'), { recursive: true, force: true });
+  assert.strictEqual(wt.provideDependencies(asked.project, asked.root, { mode: 'install', install: () => ({ manager: 'npm', error: null }), isIgnored: () => true }).mainBroken, undefined);
 });
 
 // The rulebook and the gate config live in the gitignored `.claude/doh/`, which a worktree

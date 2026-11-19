@@ -29,6 +29,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { updateRunFile } = require('./run-file.cjs');
 
 const skillDir = path.resolve(__dirname, '..');
 const references = path.join(skillDir, 'references');
@@ -79,19 +80,21 @@ function restoreCommands(root, restore) {
   return [...byFrom.entries()].map(([from, paths]) => `- \`git -C "${root}" checkout origin/${from} -- ${paths.join(' ')}\``).join('\n');
 }
 
-// The launch kept on its target, read again right before the write: the launches of a run follow
-// each other, and the other scripts write the same file.
+// The launch kept on its target, read again right before the write and under the run file's lock
+// (run-file.cjs): the launches of a run run side by side in the background, and the other scripts
+// write the same file.
 function recordLaunch(runFile, branch, out, options) {
   try {
-    const data = JSON.parse(fs.readFileSync(runFile, 'utf8'));
-    const t = (data.targets || []).find((x) => x.branch === branch);
-    if (!t) return;
-    t.launch = {
+    updateRunFile(runFile, (data) => {
+      const t = (data.targets || []).find((x) => x.branch === branch);
+      if (!t) return;
+      t.launch = {
       at: new Date().toISOString(), push: options.push || 'yes', language: options.language || 'English', worktree: out.worktree || null,
       ...(out.localBranch ? { localBranch: out.localBranch } : {}), ...(out.heldBy ? { heldBy: out.heldBy } : {}), ...(out.reused ? { reused: true } : {}),
-      ...(out.mainBroken ? { mainBroken: true } : {}), errors: out.errors,
-    };
-    fs.writeFileSync(runFile, `${JSON.stringify(data, null, 1)}\n`, 'utf8');
+      // The reason travels with it: fixpr-summary.cjs puts it first, for the user to repair.
+      ...(out.mainBroken ? { mainBroken: out.warnings.find((w) => /^No dependencies for the gate/.test(w)) || true } : {}), errors: out.errors,
+      };
+    });
   } catch (err) {
     out.warnings.push(`Could not keep the launch of ${branch} in ${runFile}: ${(err && err.message) || err}`);
   }

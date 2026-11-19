@@ -29,6 +29,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { runScript } = require('./fixpr-launch.cjs');
+const { updateRunFile } = require('./run-file.cjs');
 
 function parseArgs(argv) {
   const args = { run: '', branch: '', commit: '', pushed: '', reply: 'yes', keepWorktree: 'no', landNext: 'no', push: 'yes', resolveOnly: 'no' };
@@ -160,7 +161,10 @@ function after(options, deps = {}) {
     if ((removed.errors || []).length && !removed.removed) out.keptWorktree = { path: target.worktree, reason: removed.errors[0] };
     // The main checkout's node_modules gone or emptied during the remove: every later worktree
     // would install instead of linking, and the user's own checkout cannot build. Said as an error.
-    if (removed.mainModulesLost) out.errors.push(...(removed.errors || []));
+    if (removed.mainModulesLost) {
+      out.errors.push(...(removed.errors || []));
+      out.mainModulesLost = (removed.errors || [])[0] || 'the node_modules of the main checkout was lost';
+    }
   }
 
   // A new commit under the open parts above that no run names: they move after it (restack cascade).
@@ -170,6 +174,7 @@ function after(options, deps = {}) {
   target.outcome = {
     commit, commitMessage: (result && result.commitMessage) || null, committed, pushed, landedBy: options.commit ? 'landing' : 'agent', reply: options.reply === 'no' ? 'no' : 'yes',
     resolve: out.resolve, verify: out.verify, removed: out.removed, keptReports: out.keptReports, keptWorktree: out.keptWorktree || null,
+    ...(out.mainModulesLost ? { mainModulesLost: out.mainModulesLost } : {}),
   };
 
   // The next part of the stack, moved onto this one now that it has landed.
@@ -178,7 +183,11 @@ function after(options, deps = {}) {
     const child = (data.targets || []).find((t) => t.stack && t.stack.parent === target.branch && t.landing === 'hold');
     if (child) {
       const childResult = readJson(`${child.reportPath}.result.json`);
-      if (!childResult) out.next = { branch: child.branch, waiting: true };
+      // No landing on a main checkout whose node_modules is gone: its gate would run without
+      // dependencies, and the next worktree would install instead of linking. The user installs
+      // first; --resume (fixpr-resume.cjs) then names this landing again.
+      if (out.mainModulesLost) out.next = { branch: child.branch, held: true, reason: 'the node_modules of the main checkout was lost: install it there first' };
+      else if (!childResult) out.next = { branch: child.branch, waiting: true };
       else if (childResult.type === 'error') out.next = { branch: child.branch, agentError: true };
       else {
         const landed = run(scripts.restack, ['--action=land', `--run=${options.run}`, `--branch=${child.branch}`, `--push=${options.push || 'yes'}`, '--summary=yes', ...(childResult.committed ? ['--pending-steps=build'] : [])]) || {};
@@ -190,12 +199,12 @@ function after(options, deps = {}) {
   }
   // Read again right before the write: the landing above and the other targets' scripts write
   // the same file while this one runs (a launch of the resume, a parallel fixpr-after).
-  const fresh = JSON.parse(fs.readFileSync(options.run, 'utf8'));
-  for (const t of fresh.targets || []) {
-    if (t.branch === target.branch) t.outcome = target.outcome;
-    if (landedChild && t.branch === landedChild.branch) t.landingResult = landedChild.landingResult;
-  }
-  fs.writeFileSync(options.run, `${JSON.stringify(fresh, null, 1)}\n`, 'utf8');
+  updateRunFile(options.run, (fresh) => {
+    for (const t of fresh.targets || []) {
+      if (t.branch === target.branch) t.outcome = target.outcome;
+      if (landedChild && t.branch === landedChild.branch) t.landingResult = landedChild.landingResult;
+    }
+  });
   return out;
 }
 
@@ -240,10 +249,10 @@ function resolveOnly(options, deps = {}) {
   }
   // Read again right before the write: another target's fixpr-after may have written meanwhile. A
   // skip keeps the earlier answer, which says more.
-  const fresh = JSON.parse(fs.readFileSync(options.run, 'utf8'));
-  const t = (fresh.targets || []).find((x) => x.branch === target.branch);
-  t.outcome = { ...t.outcome, commit, pushed, resolve: out.resolve.skipped && t.outcome.resolve && !t.outcome.resolve.skipped ? t.outcome.resolve : out.resolve };
-  fs.writeFileSync(options.run, `${JSON.stringify(fresh, null, 1)}\n`, 'utf8');
+  updateRunFile(options.run, (fresh) => {
+    const t = (fresh.targets || []).find((x) => x.branch === target.branch);
+    t.outcome = { ...t.outcome, commit, pushed, resolve: out.resolve.skipped && t.outcome.resolve && !t.outcome.resolve.skipped ? t.outcome.resolve : out.resolve };
+  });
   return out;
 }
 

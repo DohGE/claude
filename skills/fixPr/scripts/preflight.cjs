@@ -30,7 +30,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const github = require('../../codeReview/scripts/github.cjs');
-const { dependencyHealth, detectPackageManager } = require('./worktree.cjs');
+const { mainModulesHealth } = require('./worktree.cjs');
 
 const originTimeoutMs = 20000;
 
@@ -138,21 +138,21 @@ function checkToken(project, { request = github.request, findToken = github.toke
 }
 
 // The main checkout's node_modules, which every worktree links: one missing, or missing packages
-// its package.json declares, means every worktree installs on its own or has no gate at all.
+// its package.json declares, would stop every worktree's launch (`mainBroken`) - read here by the
+// same health check worktree.cjs links and removes by (mainModulesHealth), once, before anything.
 function checkDeps(project) {
   if (!fs.existsSync(path.join(project, 'package.json'))) return { ok: true, skipped: 'no package.json' };
-  const manager = detectPackageManager(project) || 'npm';
-  const command = `\`${manager} ${manager === 'npm' ? 'ci' : 'install'}\` in ${project}`;
-  if (!fs.existsSync(path.join(project, 'node_modules'))) {
-    return { ok: false, error: 'the main checkout has no node_modules, so every worktree would install its own', fix: `run ${command}, then start again.` };
-  }
-  const health = dependencyHealth(project);
+  const health = mainModulesHealth(project);
   if (health.ok) return { ok: true, declared: health.declared };
+  const where = `\`${health.command}\` in ${project}`;
+  if (health.state === 'missing') {
+    return { ok: false, error: `${health.reason}, so no worktree can link it`, fix: `run ${where}, then start again.` };
+  }
   return {
     ok: false,
     missing: health.missing.length,
-    error: `the main checkout's node_modules misses ${health.missing.length} of ${health.declared} declared packages (${health.missing.slice(0, 3).join(', ')}${health.missing.length > 3 ? ', …' : ''})`,
-    fix: `run ${command} - never inside a worktree, whose node_modules is a link to it - then start again.`,
+    error: health.reason,
+    fix: `run ${where} - never inside a worktree, whose node_modules is a link to it - then start again.`,
   };
 }
 

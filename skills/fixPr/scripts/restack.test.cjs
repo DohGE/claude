@@ -295,6 +295,26 @@ test('land never merges a conflict by itself when no gate follows the move', (t)
   assert.deepStrictEqual(result.autoResolved, []);
 });
 
+// The CLI's default used to be --auto-resolve=yes whatever --gate said, so `--gate=no` merged an
+// append or an import block nobody proved. The default now follows the gate.
+test('--auto-resolve follows --gate unless it is given', () => {
+  const args = (...extra) => restack.parseArgs(['--action=land', '--worktree=/w', '--branch=b', '--parent=p', ...extra]).autoResolve;
+  assert.strictEqual(args(), 'yes');
+  assert.strictEqual(args('--gate=no'), 'no');
+  assert.strictEqual(args('--gate=no', '--auto-resolve=yes'), 'yes');
+  assert.strictEqual(args('--gate=yes', '--auto-resolve=no'), 'no');
+  const seen = [];
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2' },
+    worktree: { add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }), remove: () => ({ removed: true, warnings: [] }) },
+    land: (o) => { seen.push(o.autoResolve); return { status: 'landed', commit: `n-${o.branch}`, pushed: true, rebased: true }; },
+  };
+  restack.cascade({ project: process.cwd(), stack: ['p1', 'p2'], from: 'p1', gate: 'no' }, deps);
+  restack.cascade({ project: process.cwd(), stack: ['p1', 'p2'], from: 'p1', gate: 'yes' }, deps);
+  restack.cascade({ project: process.cwd(), stack: ['p1', 'p2'], from: 'p1', gate: 'no', autoResolve: 'yes' }, deps);
+  assert.deepStrictEqual(seen, ['no', 'yes', 'yes']);
+});
+
 test('pushWithRetry tries a transient failure again and never a rejection', () => {
   const answers = [
     { ok: false, err: 'remote: fatal error in commit_refs_rules', out: '' },

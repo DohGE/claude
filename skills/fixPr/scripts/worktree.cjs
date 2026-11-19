@@ -461,13 +461,37 @@ function dependencyHealth(project) {
   return { ok: missing.length === 0, missing, declared: names.length };
 }
 
-const entriesOf = (dir) => {
+// The install command a main checkout's node_modules is repaired with, for the messages below.
+const repairCommand = (manager) => `${manager || 'npm'} ${(manager || 'npm') === 'npm' ? 'ci' : 'install'}`;
+
+// The main checkout's node_modules as every check of it reads it - preflight.cjs before a run
+// (checkDeps), linkDependencies before a link (`mainBroken`), remove around a worktree's removal
+// (`mainModulesLost`) - so the three never disagree on what "broken" means. `state`: `ok`,
+// `missing` (no folder: nothing to link, and an install next to a link emptied it on 2026-11-18)
+// or `incomplete` (declared packages absent). `entries`: what the folder holds, null when gone.
+function mainModulesHealth(project, manager = detectPackageManager(project) || 'npm') {
+  const command = repairCommand(manager);
+  const entries = entriesOf(path.join(project, 'node_modules'));
+  if (entries === null) {
+    return { ok: false, state: 'missing', entries, missing: [], declared: 0, command, reason: 'the main checkout has no node_modules' };
+  }
+  const health = dependencyHealth(project);
+  if (!health.ok) {
+    return {
+      ok: false, state: 'incomplete', entries, missing: health.missing, declared: health.declared, command,
+      reason: `the main checkout's node_modules misses ${health.missing.length} of ${health.declared} declared packages (${health.missing.slice(0, 3).join(', ')}${health.missing.length > 3 ? ', …' : ''})`,
+    };
+  }
+  return { ok: true, state: 'ok', entries, missing: [], declared: health.declared, command, reason: null };
+}
+
+function entriesOf(dir) {
   try {
     return fs.readdirSync(dir).length;
   } catch {
     return null;
   }
-};
+}
 
 function linkDependencies(project, root, manager, isIgnored = (dir) => tryGit(dir, ['check-ignore', '-q', 'node_modules']) !== null) {
   const lock = lockfileOf[manager];
@@ -476,15 +500,17 @@ function linkDependencies(project, root, manager, isIgnored = (dir) => tryGit(di
   // The checkout itself is no worktree: its node_modules is the source, and clearing "what is in the
   // way" below would delete it.
   if (sameFolder(root, project)) return { linked: false, reason: 'the worktree is the main checkout itself' };
+  const main = mainModulesHealth(project, manager);
+  // A main checkout with no node_modules at all is broken too, whatever the lockfiles say: on
+  // 2026-11-18 it was emptied by an install that ran next to (or through) a worktree's link to it,
+  // so the one thing never to do then is an install inside a worktree. The user runs the install in
+  // their checkout once; every worktree then links it.
+  if (main.state === 'missing') {
+    return { linked: false, mainBroken: true, reason: `${main.reason}: run \`${main.command}\` in ${project} first - never inside a worktree, whose install would sit next to a link to it` };
+  }
   if (!lock || !sameText(path.join(project, lock), path.join(root, lock))) return { linked: false, reason: 'its lockfile differs from the main checkout' };
-  if (!isDirectory(source)) return { linked: false, reason: 'the main checkout has no node_modules' };
-  const health = dependencyHealth(project);
-  if (!health.ok) {
-    return {
-      linked: false,
-      mainBroken: true,
-      reason: `the main checkout's node_modules misses ${health.missing.length} of ${health.declared} declared packages (${health.missing.slice(0, 3).join(', ')}${health.missing.length > 3 ? ', …' : ''}): run \`${manager} ${manager === 'npm' ? 'ci' : 'install'}\` in ${project} first - never inside a worktree, whose node_modules is a link to it`,
-    };
+  if (!main.ok) {
+    return { linked: false, mainBroken: true, reason: `${main.reason}: run \`${main.command}\` in ${project} first - never inside a worktree, whose node_modules is a link to it` };
   }
   // What is already there. A link to the main checkout's folder is the result this call wants (a
   // second launch of the same worktree). Anything else - a dangling or foreign link, the half
@@ -913,6 +939,17 @@ function checkoutWorktree(options, project) {
       result.warnings.push(`Took ${at}, the worktree of the stopped run, as it is.`);
       describeWorktree(at, result);
       result.installed = isDirectory(path.join(at, 'node_modules'));
+      // Its node_modules as the stopped run left it: the main checkout's link (fixpr-launch's
+      // `linked`), or a folder of its own.
+      const deps = lstatOf(path.join(at, 'node_modules'));
+      result.dependencies = { manager: null, linked: Boolean(deps && deps.isSymbolicLink()), reused: true, error: null };
+      // A link to a main checkout whose node_modules went in the meantime (the stopped run's
+      // removals) is as broken as at a first launch: stop, never install here.
+      const main = result.dependencies.linked ? mainModulesHealth(project) : null;
+      if (main && !main.ok) {
+        result.mainBroken = true;
+        result.warnings.push(`No dependencies for the gate: ${main.reason}: run \`${main.command}\` in ${project} first - never inside a worktree, whose node_modules is a link to it.`);
+      }
       return result;
     }
   }
@@ -1098,22 +1135,22 @@ function remove(options) {
   const kept = keepReports(project, worktree, options.branch || path.basename(worktree));
   result.keptReportsDir = kept.dir;
   result.keptReports = kept.reports;
-  const mainModules = path.join(project, 'node_modules');
-  const before = entriesOf(mainModules);
+  // Read by the same health check as preflight.cjs and the link (mainModulesHealth).
+  const before = mainModulesHealth(project).entries;
   // The main checkout's node_modules is watched across everything below: on 2026-11-19 it was
   // gone at the end of a run whose worktrees, linked to it, had been removed several times, and
   // nothing said when. Whether this remove took it or not, the next one would link nothing and
   // every later worktree would install. `entriesOf` alone missed it: a folder that is gone
   // answers null, and null was read as "nothing to compare".
   const finish = () => {
-    const after = entriesOf(mainModules);
+    const health = mainModulesHealth(project);
+    const after = health.entries;
     if (before !== null && after === null) {
       result.mainModulesLost = true;
-      const manager = detectPackageManager(project) || 'npm';
-      result.errors.push(`The main checkout's node_modules disappeared while removing ${worktree}; run \`${manager} ${manager === 'npm' ? 'ci' : 'install'}\` there (${project}) before the next run.`);
+      result.errors.push(`The main checkout's node_modules disappeared while removing ${worktree}; run \`${health.command}\` there (${project}) before the next run.`);
     } else if (before !== null && after !== null && after < before) {
       result.mainModulesLost = true;
-      result.errors.push(`The main checkout's node_modules went from ${before} to ${after} entries while ${worktree} was removed. Run the install in ${project} before the next run.`);
+      result.errors.push(`The main checkout's node_modules went from ${before} to ${after} entries while ${worktree} was removed. Run \`${health.command}\` in ${project} before the next run.`);
     }
     return result;
   };
@@ -1178,7 +1215,7 @@ function main() {
 module.exports = {
   parseArgs, worktreePathFor, worktreesDirFor, worktreeHolding, branchState, refExists,
   detectPackageManager, installDependencies, installFailure, copyEnvFiles, copyLocalFiles, isLocalConfig,
-  linkDependencies, provideDependencies, copyDohConfig, keepReports, dependencyHealth,
+  linkDependencies, provideDependencies, copyDohConfig, keepReports, dependencyHealth, mainModulesHealth,
   add, remove, git, tryGit, removeEmptyDir, leftoverVerdict, ownBranchFor,
   runBounded, removeTree, clearDependencyFolder, withRepoLock,
   trackedChanges, installArtefacts, restoreInstallArtefacts, discardInstallArtefacts, ownChanges, knownArtefact,

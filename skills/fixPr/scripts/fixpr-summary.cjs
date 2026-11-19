@@ -201,6 +201,9 @@ function render(options, deps = {}) {
   const review = [];
   const notes = [];
   const local = [];
+  // The main checkout's node_modules lost during a worktree's removal (fixpr-after.cjs), or found
+  // broken by a launch (worktree.cjs mainBroken): the user's to repair before anything else runs.
+  const modules = [];
   for (const t of targets) {
     const r = readJson(`${t.reportPath}.result.json`) || {};
     const o = t.outcome || {};
@@ -240,9 +243,17 @@ function render(options, deps = {}) {
     } else if (o.resolve && o.resolve.skipped && /^not pushed/.test(o.resolve.skipped)) checks.push(`- ${pr}: wątki nie rozwiązane - commit nie jest na origin`);
     if (r.reviewReport || (o.keptReports || []).length) review.push(`- ${pr}: ${(o.keptReports || [])[0] || r.reviewReport} — naprawione ${r.reviewFindingsFixed || 0}, pozostawione ${r.reviewFindingsLeft || 0}`);
     if (t.heldBy) notes.push(`- ${pr}: gałąź była wybrana w \`${t.heldBy}\` — uruchom tam \`git pull --rebase\`.`);
+    if (o.mainModulesLost) modules.push(`- ${pr}: ${o.mainModulesLost}`);
+    else if (t.launch && t.launch.mainBroken) modules.push(`- ${pr}: ${typeof t.launch.mainBroken === 'string' ? t.launch.mainBroken : 'node_modules głównego checkoutu jest niekompletne lub go brak'}`);
+    // A fix agent spawned again (--resume) built on the stopped agent's commit: both are on the branch.
+    if ((r.priorCommits || []).length) {
+      const named = r.priorCommits.map((c) => String(c).match(/^(\S+)\s*(.*)$/) || [c, String(c), '']).map(([, sha, message]) => `\`${short(sha)}\`${message ? ` ${message}` : ''}`);
+      notes.push(`- ${pr}: zbudowane na commicie przerwanego agenta: ${named.join(', ')}`);
+    }
     if (o.keptWorktree) notes.push(`- ${pr}: worktree zostało: \`${o.keptWorktree.path}\` (${o.keptWorktree.reason}).`);
   }
   const section = (title, items) => (items.length ? ['', `### ${title}`, ...items] : []);
+  lines.push(...section('node_modules głównego checkoutu — napraw przed kolejnym uruchomieniem', modules));
   lines.push(...section('Odrzucone (do decyzji)', rejected));
   lines.push(...section('Bez akcji', answered));
   lines.push(...section('Findingi --local', local));

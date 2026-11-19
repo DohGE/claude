@@ -107,7 +107,9 @@ Strip the flags first, wherever they sit:
 - `--start=<part>` with `--parent-old-tip=<sha>` → start a climb at that part by hand. The script refuses
   a `<sha>` that part is not built on (not its ancestor), before any worktree.
 - `--dry-run` → Step 2 only.
-- `--no-push` → `PUSH=no`; `--no-gate` → `GATE=no` (say in the summary that nothing was built).
+- `--no-push` → `PUSH=no`; `--no-gate` → `GATE=no` (say in the summary that nothing was built). With
+  no gate the script merges no conflict itself either: append, JSON-key and import merges are proved
+  by the gate, so `--auto-resolve` follows `--gate`, and every conflict goes to the conflict agent.
 
 What remains is the stack, verbatim: one branch (the rest is read from GitHub) or the whole stack
 bottom-first, split on `;` or `,`. Nothing → stop and say, in Polish, that the skill needs a branch
@@ -119,7 +121,7 @@ bottom-first, split on `;` or `,`. Nothing → stop and say, in Polish, that the
 
 It runs the preflight first (`preflight.cjs`): `origin` answers `git ls-remote` without a prompt,
 `user.name`/`user.email` are set (every move is a rebase that commits), the GitHub token works, and,
-with `--gate=yes`, the main checkout's `node_modules` is complete. Its answer is `preflight`.
+with `--gate=yes`, the main checkout's `node_modules` is there and complete. Its answer is `preflight`.
 Under `--dry-run` pass `--push=no --gate=no`: an unreachable origin is then a warning, and the
 plan is still answered beside a failed check.
 `preflight.ok` false → stop here, before anything moves: report each `errors[]` entry that starts
@@ -152,7 +154,8 @@ gate already green on the same tree is reused). A bottom whose parent pull reque
 squash-merged into the base moves off that parent's last commit, never replaying it (`squashed`).
 Conflicts where both sides only appended (translation keys, enum members, exports), and conflicts
 held in an import block alone (`import { … } from '…'`: the base's names, minus what a side removed,
-plus what a side added), are merged by the script and proved by that gate (`autoResolved`: `json-keys`,
+plus what a side added), are merged by the script and proved by that gate - never without one:
+`--auto-resolve` follows `--gate` unless given (`autoResolved`: `json-keys`,
 `both-insertions`, `imports`). A part already on its parent and on origin moves nothing: `noop`. A
 climb first checks that git can write commits (`user.name`, `user.email`); without them it stops
 before any worktree, with an `errors` entry that names what is missing. The JSON:

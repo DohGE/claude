@@ -17,7 +17,9 @@
 // Usage:
 //   node restack.cjs --action=land --worktree=<dir> --branch=<part> --parent=<branch>
 //        [--parent-tip-at-start=<sha>] [--remote-tip-at-start=<sha>] [--checks-dir=<dir>]
-//        [--push=yes|no] [--gate=yes|no] [--auto-resolve=yes|no]
+//        [--push=yes|no] [--gate=yes|no] [--auto-resolve=yes|no] [--keep-base=yes|no]
+// --auto-resolve defaults to --gate: append, JSON-key and import conflicts are merged by the script
+// only where the gate then proves the merge; --gate=no --auto-resolve=yes merges them unproved.
 //   node restack.cjs --action=verify --project=<dir> --pairs="<parent>><child>[@<old tip>],..."
 //   node restack.cjs --action=push --worktree=<dir> --branch=<branch> [--lease=<sha>] [--commit=<sha>]
 //   node restack.cjs --action=cascade --project=<dir> --stack="<bottom>;<part>;..." --from=<part>
@@ -46,7 +48,7 @@ const checksScript = path.join(__dirname, 'checks.cjs');
 
 function parseArgs(argv) {
   const args = {
-    action: 'land', push: 'yes', gate: 'yes', autoResolve: 'yes', parentTipAtStart: '', remoteTipAtStart: '', checksDir: '', pairs: [],
+    action: 'land', push: 'yes', gate: 'yes', autoResolve: '', parentTipAtStart: '', remoteTipAtStart: '', checksDir: '', pairs: [],
     lease: '', stack: [], from: '', fromOldTip: '', run: '', summary: 'no', pendingSteps: [], start: '', parentOldTip: '', base: '', ontoBase: 'yes',
     resume: 'no', language: 'English', preflight: '', keepBase: 'no', commit: '',
   };
@@ -88,6 +90,9 @@ function parseArgs(argv) {
   // The environment check runs by default where a climb starts (plan, stack); a land or a cascade
   // runs inside a run that already passed it.
   if (!args.preflight) args.preflight = ['plan', 'stack'].includes(args.action) ? 'yes' : 'no';
+  // An append, JSON-key or import merge is proved by the gate after the move: without a gate it is
+  // left to the conflict agent, unless --auto-resolve=yes says outright to merge unproved.
+  if (!args.autoResolve) args.autoResolve = args.gate === 'no' ? 'no' : 'yes';
   // This script rewrites and pushes a branch: a mistyped flag stops it.
   if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base, --resume, --language, --preflight, --keep-base, --commit).`);
   if (!['land', 'verify', 'push', 'cascade', 'stack', 'plan'].includes(args.action)) throw new Error(`Unknown --action=${args.action} (expected land|verify|push|cascade|stack|plan).`);
@@ -216,11 +221,11 @@ function fillFromRun(args) {
 // what another script kept in the meantime stays.
 function recordInRun(file, branch, key, value) {
   try {
-    const run = readRun(file);
-    const t = run.targets.find((x) => x.branch === branch);
-    if (!t) return null;
-    t[key] = { ...value, at: new Date().toISOString() };
-    fs.writeFileSync(file, `${JSON.stringify(run, null, 1)}\n`, 'utf8');
+    // Under the run file's lock (run-file.cjs): the launches and fixpr-after.cjs write it too.
+    require('./run-file.cjs').updateRunFile(file, (run) => {
+      const t = (run.targets || []).find((x) => x.branch === branch);
+      if (t) t[key] = { ...value, at: new Date().toISOString() };
+    });
     return null;
   } catch (err) {
     return `Could not keep the ${key} of ${branch} in ${file}: ${(err && err.message) || err}`;
@@ -986,7 +991,9 @@ function land(options, { runGate = defaultGate } = {}) {
     result.status = 'noop';
     result.rebased = false;
     if (result.gate && result.gate.gate === 'skipped') result.gate = null;
-    result.reason = `${branch} already sits on origin/${parent} (${result.newParentTip.slice(0, 12)}) and origin has ${result.commit.slice(0, 12)}: nothing to move or push.`;
+    result.reason = keptBase
+      ? `${branch} keeps its base (it still merges into ${parent}) and origin has ${result.commit.slice(0, 12)}: nothing to move or push.`
+      : `${branch} already sits on origin/${parent} (${result.newParentTip.slice(0, 12)}) and origin has ${result.commit.slice(0, 12)}: nothing to move or push.`;
     return result;
   }
   if (options.push === 'no') {
@@ -1159,7 +1166,8 @@ function climb(options, deps = {}) {
         parentTipAtStart: parentTip,
         remoteTipAtStart: tips.get(branch) || '',
         checksDir: options.checksDir ? path.join(options.checksDir, branch) : '', push: options.push || 'yes', gate: options.gate || 'yes',
-        autoResolve: options.autoResolve || 'yes',
+        // Follows the gate when not given: a merge the gate does not prove goes to the agent.
+        autoResolve: options.autoResolve || (options.gate === 'no' ? 'no' : 'yes'),
         // Only the bottom moves onto the base the merged pull requests went into.
         mergedHeads: i === 0 ? options.mergedHeads || [] : [],
       });
