@@ -354,6 +354,37 @@ credential store, `.netrc`, the `gh` config file, then the `gh` CLI, in that ord
 required. The account needs write access to the repository; resolving another person's thread also needs
 write access, and a token without it produces a warning and leaves those threads open.
 
+A token GitHub refuses (401) is not the end of the list: the request is asked once more with the next
+source that holds a different token, and the one that works is kept for the rest of the process. A
+stale `GH_TOKEN` in the environment no longer hides a valid stored credential - on 2026-11-18 it failed
+26 resolves and replies of one run. The answer names the sources, never a token: `GH_TOKEN was
+rejected; used git credential`, or, when nothing works, `GH_TOKEN was rejected; git credential was
+rejected too`.
+
+## Preflight
+
+Before a comment is read, the collector checks what the run will need from this machine
+(`scripts/preflight.cjs`, also runnable alone):
+
+- `origin` answers `git ls-remote` without a prompt (`GIT_TERMINAL_PROMPT=0`, Git Credential Manager
+  non-interactive, 20 s timeout). A failure carries git's first line and its fix - for Git Credential
+  Manager's "Unable to persist credentials with the 'wincredman' credential store",
+  `git config --global credential.credentialStore dpapi` or one login from a normal terminal.
+- `user.name` and `user.email` are set: without them a rebase stops as if it conflicted.
+- The GitHub token works: one call to the repository, naming the source used and any refused one.
+- The main checkout's `node_modules` exists and holds every declared package (worktree.cjs's
+  `dependencyHealth`, the same check as `mainBroken`).
+
+Which failures stop the run depends on what it will do: an unreachable origin with `--push=yes`, a
+missing identity whenever something is committed, a refused token when threads are resolved, broken
+dependencies when a gate runs. `--dry-run=yes` turns every one into a warning. A stop comes before any
+worktree exists, with the fix in its text (`preflight.ok: false` in the collector's JSON). On
+2026-11-18 each of the four surfaced in the middle of a run instead: seven "Could not fetch" warnings
+and a push refused 25 minutes in, a "conflict" with no conflicting file, 26 failed resolves, a ten-minute
+install in one worktree. `restack.cjs --action=plan` and `--action=stack` run the same check
+(`--preflight=no` skips it); implementNewFeature's commit and pull request step can call `preflight()`.
+A fetch that still fails later says why (git's first line) instead of only that it failed.
+
 ## Lean mode
 
 The orchestrator and every fix agent run in the plugin's lean mode (caveman ultra).
@@ -410,7 +441,9 @@ Each agent proposes `lessons` - the general rule behind a fixed comment - and th
 them to the user after the run (`codeReview/scripts/pr-lessons.cjs`), into the project's
 `.claude/doh/local/pr-lessons-*.md` rules that every codeReview loads. Before the run, the collector
 warns about every branch with commits newer than its last codeReview
-(`codeReview/scripts/review-freshness.cjs`): reviewers saw that code, no review did.
+(`codeReview/scripts/review-freshness.cjs`): reviewers saw that code, no review did. A warning every
+branch gets alike ("no codeReview of this branch on record") is one line naming the branches, with
+`<branch>` where each one's name stood.
 
 ## Permissions
 
@@ -432,7 +465,8 @@ rule itself: editing its own settings is refused as self-modification.
 | `SKILL.md` | the orchestrator: arguments, collection, worktrees, dispatch, landing, summary |
 | `references/fix-agent.md` | the background agent's prompt: verdicts, fixes, gate, commit, push |
 | `scripts/pr-api.cjs` | GraphQL review threads and the resolve mutation, plus the two REST lists |
-| `scripts/pr-comments.cjs` | argument parsing, the commit prefix and `CR` message, and the per-branch comment JSON |
+| `scripts/pr-comments.cjs` | argument parsing, the preflight (`--push`, `--dry-run`, `--preflight`), the commit prefix and `CR` message, the per-branch comment JSON, and identical per-branch warnings folded into one line |
+| `scripts/preflight.cjs` | before any worktree: origin reachable without a prompt, a git identity, a GitHub token GitHub accepts (and its source), a complete main `node_modules`; each failure with its fix |
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
 | `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`), removal (links first, git's own reason on a refusal, the main `node_modules` counted before and after) |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice |
@@ -447,8 +481,8 @@ rule itself: editing its own settings is refused as self-modification.
 | `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled and only the `{{#if …}}` blocks of this agent kept (its landing, push, inputs), so the orchestrator hands the agent a path instead of carrying the brief twice; an absolute path with `..` in it is written the way it resolves |
 | `scripts/stack-preflight.cjs` | before the agents: every part of a stack that imports a file only a later part adds (`leaks`), and what each part restores verbatim first (`restore`), from git alone |
 | `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file |
-| `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`) |
-| `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files and the stack check |
+| `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`); identical resolve and reply failures as one `{ error, count, ids }` each |
+| `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files and the stack check; `stackImpact` one line per name, parts as ranges (`part-3..7`), paths cut to their distinct tail, capped with "+N" naming the result file |
 | `scripts/split-work.cjs` | a fix agent's many items cut into groups of whole folders for `doh:pipeline-worker` agents (`references/fix-worker-agent.md`) |
 | `scripts/bash-guard.cjs` | PreToolUse hook: a shell read of a fix worktree, or a `cd` into one that outlives its command, is refused with the tool to use |
 

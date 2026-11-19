@@ -58,8 +58,10 @@ function fakeFindPr(prs) {
 test('parseArgs parses the documented flags and refuses anything else', () => {
   assert.deepStrictEqual(
     pc.parseArgs(['--branches=a;b', '--project=/tmp/x']),
-    { branches: 'a;b', project: '/tmp/x', skillDir: '', replay: '', local: null, task: '' },
+    { branches: 'a;b', project: '/tmp/x', skillDir: '', replay: '', local: null, task: '', push: 'yes', dryRun: 'no', preflight: 'yes' },
   );
+  assert.strictEqual(pc.parseArgs(['--branches=a', '--push=no', '--dry-run=yes']).dryRun, 'yes');
+  assert.throws(() => pc.parseArgs(['--branches=a', '--push=maybe']), /--push takes yes or no/);
   assert.strictEqual(pc.parseArgs(['--branches=a', '--task= add … to the Load into label ']).task, 'add … to the Load into label');
   assert.throws(() => pc.parseArgs(['--branch=a']), /Unknown argument/);
   assert.throws(() => pc.parseArgs(['staged']), /Unknown argument/);
@@ -652,4 +654,66 @@ test('the screenshots and recordings of comments ride on the comment that holds 
   assert.strictEqual(payload.reviews[0].media[0].kind, 'video');
   assert.strictEqual(result.targets[0].counts.media, 2);
   assert.ok(result.warnings.some((w) => /feat\/a: one failed/.test(w)));
+});
+
+test('collect stops before reading a comment when the preflight finds what the run cannot get past', (t) => {
+  // 2026-11-18: origin was unreachable from Claude's process, every launch only warned, and the
+  // first push failed 25 minutes later. The preflight answer comes first, with its fix.
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-skill-'));
+  const asked = [];
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    preflight: { push: true, commit: true, resolve: true, gate: true },
+    runPreflight: (project, options) => {
+      asked.push(options);
+      return { ok: false, checks: { origin: { ok: false, error: 'E', fix: 'F' } }, errors: ['preflight origin: E - F'], warnings: [] };
+    },
+    api: { reviewThreads: () => { throw new Error('no comment is read after a failed preflight'); } },
+    findOpenPr: () => { throw new Error('no pull request is looked up after a failed preflight'); },
+  });
+  assert.deepStrictEqual(asked, [{ push: true, commit: true, resolve: true, gate: true }]);
+  assert.deepStrictEqual(result.targets, []);
+  assert.deepStrictEqual(result.errors, ['preflight origin: E - F']);
+  assert.strictEqual(result.preflight.ok, false);
+});
+
+test('collect carries a passed preflight and its token source', (t) => {
+  const dir = makeRepo(t);
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-skill-'));
+  const result = pc.collect({
+    project: dir,
+    branches: 'feat/a',
+    skillDir,
+    preflight: { push: true },
+    runPreflight: () => ({ ok: true, checks: { token: { ok: true, source: 'git credential' } }, errors: [], warnings: ['preflight token: GH_TOKEN was rejected; used git credential - unset or refresh GH_TOKEN; this run uses git credential.'] }),
+    api: fakeApi({ threads: [thread()] }),
+    findOpenPr: fakeFindPr({ 'feat/a': { number: 7, title: 'feat(X): t', url: 'u', base: 'main' } }),
+  });
+  assert.strictEqual(result.targets.length, 1);
+  assert.strictEqual(result.preflight.ok, true);
+  assert.strictEqual(result.tokenSource, 'git credential');
+  assert.match(result.warnings[0], /GH_TOKEN was rejected; used git credential/);
+});
+
+test('foldWarnings says once what every branch is told alike', () => {
+  const branches = ['x-part-1', 'x-part-2', 'x-part-10', 'other'];
+  const folded = pc.foldWarnings([
+    'x-part-1: no codeReview of this branch on record - reviewers see code no review read (/doh:codeReview x-part-1).',
+    'Something about the run.',
+    'x-part-2: no codeReview of this branch on record - reviewers see code no review read (/doh:codeReview x-part-2).',
+    'x-part-10: no codeReview of this branch on record - reviewers see code no review read (/doh:codeReview x-part-10).',
+    'other: 2 commit(s) and 3 file(s) newer than its last codeReview (2026-01-01) - reviewed by nobody yet (/doh:codeReview other --since-last).',
+    'x-part-1: pull request #7 has no open comments; this run will only bring its checks green.',
+  ], branches);
+  assert.deepStrictEqual(folded, [
+    'x-part-1, x-part-2, x-part-10: no codeReview of this branch on record - reviewers see code no review read (/doh:codeReview <branch>).',
+    'Something about the run.',
+    'other: 2 commit(s) and 3 file(s) newer than its last codeReview (2026-01-01) - reviewed by nobody yet (/doh:codeReview other --since-last).',
+    'x-part-1: pull request #7 has no open comments; this run will only bring its checks green.',
+  ]);
+  // A warning alone in its group keeps its own words.
+  assert.deepStrictEqual(pc.foldWarnings(['x-part-1: a (x-part-1).'], branches), ['x-part-1: a (x-part-1).']);
 });

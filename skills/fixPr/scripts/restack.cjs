@@ -42,7 +42,7 @@ function parseArgs(argv) {
   const args = {
     action: 'land', push: 'yes', gate: 'yes', autoResolve: 'yes', parentTipAtStart: '', remoteTipAtStart: '', checksDir: '', pairs: [],
     lease: '', stack: [], from: '', fromOldTip: '', run: '', summary: 'no', pendingSteps: [], start: '', parentOldTip: '', base: '', ontoBase: 'yes',
-    resume: 'no', language: 'English',
+    resume: 'no', language: 'English', preflight: '',
   };
   const unknown = [];
   for (const arg of argv) {
@@ -74,12 +74,16 @@ function parseArgs(argv) {
     else if (m[1] === 'onto-base') args.ontoBase = value;
     else if (m[1] === 'resume') args.resume = value;
     else if (m[1] === 'language') args.language = value;
+    else if (m[1] === 'preflight') args.preflight = value;
     else unknown.push(arg);
   }
+  // The environment check runs by default where a climb starts (plan, stack); a land or a cascade
+  // runs inside a run that already passed it.
+  if (!args.preflight) args.preflight = ['plan', 'stack'].includes(args.action) ? 'yes' : 'no';
   // This script rewrites and pushes a branch: a mistyped flag stops it.
-  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base, --resume, --language).`);
+  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base, --resume, --language, --preflight).`);
   if (!['land', 'verify', 'push', 'cascade', 'stack', 'plan'].includes(args.action)) throw new Error(`Unknown --action=${args.action} (expected land|verify|push|cascade|stack|plan).`);
-  if (![args.push, args.gate, args.autoResolve, args.summary, args.ontoBase, args.resume].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate, --auto-resolve, --summary, --onto-base and --resume take yes or no.');
+  if (![args.push, args.gate, args.autoResolve, args.summary, args.ontoBase, args.resume, args.preflight].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate, --auto-resolve, --summary, --onto-base, --resume and --preflight take yes or no.');
   if (args.resume === 'yes' && (args.start || args.parentOldTip)) throw new Error('--resume=yes reads where the climb stopped from its state file: give it without --start and --parent-old-tip.');
   if (args.run) fillFromRun(args);
   if (args.action === 'land' && (!args.worktree || !args.branch || !args.parent)) throw new Error('land needs --worktree, --branch and --parent (or --run and --branch).');
@@ -454,7 +458,10 @@ function land(options, { runGate = defaultGate } = {}) {
   // Where the branch stood on origin when the run began: the lease. The remote-tracking ref of
   // the worktree is that too, as long as nothing fetched the branch since the worktree was made.
   const lease = options.remoteTipAtStart || git(tree, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`]).out;
-  if (!git(tree, ['fetch', '--quiet', 'origin', parent]).ok) result.warnings.push(`Could not fetch origin/${parent}; moving onto the ref the repository already has.`);
+  // The reason travels with the warning: on 2026-11-18 it was a credential store git could not
+  // use from this process, and the bare "could not fetch" hid that until the push failed.
+  const fetched = git(tree, ['fetch', '--quiet', 'origin', parent], { GIT_TERMINAL_PROMPT: '0' });
+  if (!fetched.ok) result.warnings.push(`Could not fetch origin/${parent} (${firstLine(fetched.err) || 'no reason given'}); moving onto the ref the repository already has - preflight.cjs names the fix.`);
   const upstream = `origin/${parent}`;
   const now = git(tree, ['rev-parse', '--verify', '--quiet', upstream]);
   if (!now.ok) return fail(`${upstream} does not exist.`);
@@ -576,7 +583,8 @@ function verify(options) {
   const project = path.resolve(options.project);
   const result = { action: 'verify', ok: [], broken: [], warnings: [], errors: [] };
   const branches = [...new Set(options.pairs.flatMap((p) => [p.parent, p.child]))];
-  if (!git(project, ['fetch', '--quiet', 'origin', ...branches]).ok) result.warnings.push('Could not fetch every branch; compared the refs the repository already has.');
+  const fetched = git(project, ['fetch', '--quiet', 'origin', ...branches], { GIT_TERMINAL_PROMPT: '0' });
+  if (!fetched.ok) result.warnings.push(`Could not fetch every branch (${firstLine(fetched.err) || 'no reason given'}); compared the refs the repository already has.`);
   for (const { parent, child, oldTip } of options.pairs) {
     const name = `${parent}>${child}`;
     if (git(project, ['merge-base', '--is-ancestor', `origin/${parent}`, `origin/${child}`]).ok) {
@@ -747,10 +755,25 @@ function resolveStack(project, options, deps) {
 // sit on its parent now (verify).
 function plan(options, deps = {}) {
   const project = path.resolve(options.project);
+  const pre = preflightOf(project, options, deps);
   const { stack, base, prs, mergedHeads, warnings } = resolveStack(project, options, deps);
   const pairs = [...(base ? [{ parent: base, child: stack[0], oldTip: null }] : []), ...stack.slice(1).map((child, i) => ({ parent: stack[i], child, oldTip: null }))];
   const checked = (deps.verify || verify)({ project, pairs, mergedHeads });
-  return { action: 'plan', stack, base, prs, ok: checked.ok, broken: checked.broken, warnings: [...warnings, ...checked.warnings], errors: checked.errors };
+  return {
+    action: 'plan', stack, base, prs, ok: checked.ok, broken: checked.broken, ...(pre ? { preflight: pre.summary } : {}),
+    warnings: [...(pre ? pre.warnings : []), ...warnings, ...checked.warnings], errors: [...(pre ? pre.errors : []), ...checked.errors],
+  };
+}
+
+// --preflight=yes: what the climb will need from this machine (preflight.cjs), checked before any
+// part moves - origin reachable without a prompt (with --push=yes), a git identity for the rebase,
+// a complete node_modules for the gate (with --gate=yes). The plan carries it for /doh:restack's
+// Step 2; `stack` refuses to climb when it fails.
+function preflightOf(project, options, deps) {
+  if (options.preflight !== 'yes') return null;
+  const run = deps.preflight || require('./preflight.cjs').preflight;
+  const pre = run(project, { push: options.push !== 'no', commit: true, resolve: false, gate: options.gate !== 'no' });
+  return { summary: { ok: pre.ok, checks: pre.checks }, errors: pre.errors, warnings: pre.warnings };
 }
 
 // /doh:restack: the whole stack, bottom-up. With --onto-base=yes (the default) the bottom moves
@@ -798,7 +821,10 @@ function stackAction(options, deps = {}) {
   const project = path.resolve(options.project);
   const checksDir = options.checksDir ? path.resolve(options.checksDir) : path.join(project, '.claude', 'doh', 'restack-checks');
   const stateFile = path.join(checksDir, 'restack-state.json');
+  const pre = options.resume === 'yes' ? null : preflightOf(project, options, deps);
+  if (pre && !pre.summary.ok) return { action: 'stack', stack: options.stack, base: options.base || '', prs: {}, preflight: pre.summary, parts: [], waiting: [], warnings: pre.warnings, errors: pre.errors };
   const { stack, base, prs, mergedHeads, warnings } = resolveStack(project, options, deps);
+  if (pre) warnings.unshift(...pre.warnings);
   const head = { action: 'stack', stack, base, prs };
   const stop = (message) => ({ ...head, parts: [], waiting: [], warnings, errors: [message] });
   let startIndex;

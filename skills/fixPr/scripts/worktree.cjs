@@ -517,6 +517,18 @@ function copyLocalFiles(project, root, list = () => tryGit(project, ['ls-files',
   return copied;
 }
 
+// The pull request's branch from origin, never waiting on a prompt nobody can answer; the first
+// line git wrote is the reason a failure carries.
+function fetchBranch(project, branch) {
+  try {
+    git(project, ['fetch', 'origin', branch, '--quiet'], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    return { ok: true, reason: '' };
+  } catch (err) {
+    const text = String((err && (err.stderr || err.message)) || '');
+    return { ok: false, reason: text.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '' };
+  }
+}
+
 function add(options) {
   const project = path.resolve(options.project || process.cwd());
   // The git seam. It exists for the one failure this function has to clean up
@@ -537,8 +549,12 @@ function add(options) {
   }
   // The pull request's branch as GitHub has it is the only correct starting
   // point, and a repository that has not fetched in a week does not have it.
-  if (run(project, ['fetch', 'origin', branch, '--quiet']) === null) {
-    result.warnings.push(`Could not fetch origin/${branch}; working from the refs already in the repository.`);
+  // preflight.cjs has proven origin reachable before the run, so a failure here is rare - and its
+  // reason travels with it: on 2026-11-18 the bare "Could not fetch" came seven times while the
+  // cause (a credential store git could not use from this process) stayed hidden until the push.
+  const fetched = options.git ? { ok: run(project, ['fetch', 'origin', branch, '--quiet']) !== null, reason: '' } : fetchBranch(project, branch);
+  if (!fetched.ok) {
+    result.warnings.push(`Could not fetch origin/${branch}${fetched.reason ? ` (${fetched.reason})` : ''}; working from the refs already in the repository - preflight.cjs names the fix.`);
   }
 
   const held = worktreeHolding(project, branch);

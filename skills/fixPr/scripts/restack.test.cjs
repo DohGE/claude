@@ -549,3 +549,41 @@ test('plan names the stack, its base and every pair that is off, moving nothing'
   const out = restack.plan({ project: process.cwd(), stack: ['p2'] }, deps);
   assert.deepStrictEqual([out.stack, out.base, out.ok, out.broken.length, out.prs.p1.number], [['p1', 'p2'], 'main', ['main>p1'], 1, 1]);
 });
+
+test('plan and stack check the environment first; land and cascade do not', () => {
+  assert.strictEqual(restack.parseArgs(['--action=plan', '--project=/p', '--stack=a']).preflight, 'yes');
+  assert.strictEqual(restack.parseArgs(['--action=stack', '--project=/p', '--stack=a', '--preflight=no']).preflight, 'no');
+  assert.strictEqual(restack.parseArgs(['--action=cascade', '--project=/p', '--stack=a;b', '--from=a']).preflight, 'no');
+  assert.throws(() => restack.parseArgs(['--action=plan', '--project=/p', '--stack=a', '--preflight=later']), /yes or no/);
+});
+
+test('plan carries the preflight, and its errors, beside the pairs', () => {
+  const asked = [];
+  const deps = {
+    discover: () => ({ stack: ['p1', 'p2'], base: 'main', prs: {}, warnings: [] }),
+    verify: () => ({ ok: ['main>p1', 'p1>p2'], broken: [], warnings: [], errors: [] }),
+    preflight: (project, options) => {
+      asked.push(options);
+      return { ok: false, checks: { identity: { ok: false } }, errors: ['preflight identity: git has no user.email - fix'], warnings: [] };
+    },
+  };
+  const out = restack.plan({ project: process.cwd(), stack: ['p2'], push: 'no', gate: 'yes', preflight: 'yes' }, deps);
+  assert.deepStrictEqual(asked, [{ push: false, commit: true, resolve: false, gate: true }]);
+  assert.strictEqual(out.preflight.ok, false);
+  assert.deepStrictEqual(out.errors, ['preflight identity: git has no user.email - fix']);
+  assert.deepStrictEqual(out.ok, ['main>p1', 'p1>p2'], 'the plan itself is still answered');
+});
+
+test('stack refuses to climb when the preflight fails', () => {
+  // 2026-11-18: a missing git identity surfaced as a "conflict" with no conflicting file, after
+  // the first parts had already moved.
+  const deps = {
+    discover: () => { throw new Error('nothing is read from GitHub after a failed preflight'); },
+    worktree: { add: () => { throw new Error('no climb expected'); } },
+    preflight: () => ({ ok: false, checks: {}, errors: ['preflight origin: E - F'], warnings: [] }),
+  };
+  const out = restack.stackAction({ project: process.cwd(), stack: ['p1', 'p2'], push: 'yes', gate: 'yes', ontoBase: 'yes', preflight: 'yes' }, deps);
+  assert.deepStrictEqual(out.errors, ['preflight origin: E - F']);
+  assert.deepStrictEqual(out.parts, []);
+  assert.strictEqual(out.preflight.ok, false);
+});

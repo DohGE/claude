@@ -161,7 +161,9 @@ Without `--dry-run`, run (Bash, `run_in_background: true`) the `/doh:restack` cl
 
     node "<SKILL_DIR>/scripts/restack.cjs" --action=stack --project="<PROJECT>" --stack="<arguments verbatim>" --checks-dir="<PROJECT>/.claude/doh/restack-checks" --push=<yes|no>
 
-and handle its JSON exactly as `/doh:restack` Steps 3-4 say (`<SKILL_DIR>/../restack/SKILL.md`): a
+It runs the preflight first (as Step 2 describes it, without the token check's stop): a `preflight`
+with `ok: false` → stop the run before anything moved, and report its `errors[]` in Polish with their
+fixes. Otherwise handle its JSON exactly as `/doh:restack` Steps 3-4 say (`<SKILL_DIR>/../restack/SKILL.md`): a
 part in `conflict` gets the conflict agent, and the climb resumes above it. Only when every part
 `landed` go on to Step 2: the collector then reads the moved branches and their new tips. A part
 that did not land → stop the run, report it in Polish with its worktree, and say the fixes wait
@@ -171,7 +173,12 @@ for it.
 
 Run (Bash tool):
 
-    node "<SKILL_DIR>/scripts/pr-comments.cjs" --branches="<arguments verbatim>" --project="<PROJECT>" [--local="<LOCAL>"] [--task="<TASK>"]
+    node "<SKILL_DIR>/scripts/pr-comments.cjs" --branches="<arguments verbatim>" --project="<PROJECT>" --push=<yes|no> [--dry-run=yes] [--local="<LOCAL>"] [--task="<TASK>"]
+
+`--push=no` with `--no-push`, `--dry-run=yes` with `--dry-run`. Before it reads a comment it runs the
+preflight (`preflight.cjs`): `origin` answers without a prompt, `user.name`/`user.email` are set, the
+GitHub token works (a refused one falls through to the next token source), and the main checkout's
+`node_modules` is complete. Its answer is `preflight` (`ok`, `checks`).
 
 It also downloads the screenshots and recordings the comments hold (pr-media.cjs) next to the
 comments file, a recording turned into still frames, and drops all but the newest copy of a bot
@@ -191,10 +198,20 @@ naming the ids): its agent checks it still applies before it changes anything.
 
 Parse the JSON from stdout:
 
-- Report every `errors[]` entry to the user immediately, in Polish. Each one names the branch it
+- `preflight.ok` false → STOP the run here: no worktree, no agent. Report each `errors[]` entry (they
+  start with `preflight <check>:`) in Polish, with its fix - every command in it verbatim - and tell the
+  user to start the run again once it is fixed. On 2026-11-18 none of these was checked: origin was
+  unreachable from Claude's process (Git Credential Manager), every launch only warned "Could not
+  fetch", and the first push failed 25 minutes in. An unreachable origin stops a run that pushes, a
+  missing identity any run that commits, a refused token a run that resolves threads, an incomplete
+  `node_modules` any run with a gate; under `--dry-run` all of them are warnings.
+- Report every other `errors[]` entry to the user immediately, in Polish. Each one names the branch it
   belongs to and drops only that branch.
 - Report every `warnings[]` entry, in Polish. A branch whose pull request has no open comments is a
   warning about SCOPE, not a failure: that branch still runs, for its gate alone. Say it that way.
+  A warning several branches share comes once, naming them (`<branch>` stands for each one's name).
+  `preflight token: GH_TOKEN was rejected; used git credential` → the run goes on with the working
+  token; tell the user to unset or refresh the refused one.
 - `targets` empty → stop here, after reporting. Every branch was dropped by an error.
 
 `targets` come bottom-first: every part of a stack after the part it is based on. `stacks[]` lists
@@ -259,7 +276,10 @@ workers' briefs are rendered from. Parse its JSON:
   A run where no target has `visual` gets no visual check: say once, in the summary, that a
   `"visual"` key in `.claude/doh/checks.json` lets the agents look at their template fixes.
 - Report the other `warnings[]` — a leftover folder removed, an install that failed (that agent
-  skips its gate), the `.env*` files copied in.
+  skips its gate), the `.env*` files copied in. "Could not fetch origin/<branch> (<git's first
+  line>)" should not come after a passed preflight; when it does, report that reason - the network or
+  the credential store changed since - and note that the worktree starts from the refs already
+  fetched, so its push may be refused.
 
 A worktree whose lockfile is the main checkout's gets that checkout's `node_modules` linked in
 instead of an install, and only `worktree.cjs --action=remove` (fixpr-after.cjs calls it) takes such
@@ -346,7 +366,8 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
 3. **An agent that ended with `error`**: `fixpr-after.cjs --run="<runPath>" --branch="<branch>" --keep-worktree=yes`
    - it records the outcome and checks the comments; nothing is resolved, removed or landed above it.
 4. Read each `fixpr-after.cjs` answer: `verify.ok` false or `resolve.failed`/`unverified` go into the
-   summary (the script prints them); `keptWorktree` names a worktree left for the user. A
+   summary (the script prints them). `resolve.failed` and `resolve.replyFailed` hold one
+   `{ error, count, ids }` per distinct error: report each error once, with its count; `keptWorktree` names a worktree left for the user. A
    `cascade` entry means open parts above that the run does not name sit on the old commit: move
    them, bottom-up, with no agent (background):
 
@@ -417,4 +438,5 @@ the user has not been told about yet.
 | "I will render the brief with my own --set list, it is only 22 flags" | `fixpr-launch.cjs` reads every value from the run file. A hand-built list is 1.5k characters a call and one dropped value away from a refused render (2026-11-16). |
 | "part-1 removed a name part-3 uses - I will SendMessage part-3 now" | A held part cannot adapt before it sits on the new parent; three agents said so on 2026-11-16, and the message cut into a running gate. restack.cjs gives the landing agent every such change (`PARENT_CHANGES`). |
 | "The move went through but the gate is red - that is an error for the user" | A `gate-red` with `briefVars` is the landing agent's work in `adapt` mode: this part's code following what the parts below changed. |
+| "The preflight only failed on origin - the push is half an hour away, I will start the agents" | The push then fails half an hour in, after every agent's work (2026-11-18). The fix is one command the user runs now; the run starts again in a minute. |
 | "I will write the summary myself, I have every reply" | `fixpr-summary.cjs` prints it from the files, rejected grounds and files to look at included; your final message is its text plus what no file holds. |

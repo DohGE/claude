@@ -114,7 +114,19 @@ bottom-first, split on `;` or `,`. Nothing → stop and say, in Polish, that the
 
 ## Step 2 — The plan
 
-    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>]
+    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>] --push=<yes|no> --gate=<yes|no>
+
+It runs the preflight first (`preflight.cjs`): `origin` answers `git ls-remote` without a prompt,
+`user.name`/`user.email` are set (every move is a rebase that commits), the GitHub token works, and,
+with `--gate=yes`, the main checkout's `node_modules` is complete. Its answer is `preflight`.
+Under `--dry-run` pass `--push=no --gate=no`: an unreachable origin is then a warning, and the
+plan is still answered beside a failed check.
+`preflight.ok` false → stop here, before anything moves: report each `errors[]` entry that starts
+with `preflight` in Polish, with its fix - every command in it verbatim, e.g. `git config --global
+credential.credentialStore dpapi` or one login from a normal terminal for an origin Git Credential
+Manager cannot reach from this process - and tell the user to start again once it is fixed. On
+2026-11-18 a missing identity made a move stop as a "conflict" with no conflicting file, and an
+unreachable origin surfaced only as a refused push.
 
 Tell the user, in Polish, the stack bottom-first with its base (`master ← part-1 ← part-2 ← …`),
 the pull request number of each part (`prs`), which pairs already sit on each other (`ok`) and which
@@ -127,7 +139,10 @@ gives the stack and `--base` by hand. **`--dry-run` stops here.**
 
 Run (Bash, `run_in_background: true`):
 
-    node "<FIXPR>/scripts/restack.cjs" --action=stack --project="<PROJECT>" --stack="<stack>" [--base=<base>] --onto-base=<yes|no> --checks-dir="<PROJECT>/.claude/doh/restack-checks" --push=<yes|no> --gate=<yes|no> --language=<language of this conversation> [--resume=yes | --start=<part> --parent-old-tip=<sha>]
+    node "<FIXPR>/scripts/restack.cjs" --action=stack --project="<PROJECT>" --stack="<stack>" [--base=<base>] --onto-base=<yes|no> --checks-dir="<PROJECT>/.claude/doh/restack-checks" --push=<yes|no> --gate=<yes|no> --language=<language of this conversation> --preflight=<no after Step 2, yes otherwise> [--resume=yes | --start=<part> --parent-old-tip=<sha>]
+
+(Step 2 already ran the preflight; a climb started without it - `--start` by hand - runs it here and
+answers a failed one with `preflight` and its `errors`, moving nothing: stop as Step 2 says.)
 
 Each part gets a worktree (`worktree.cjs`: a branch the user has checked out is moved on
 `doh-fixpr/<branch>` and pushed to its pull request), is moved with `rebase --onto` - its own
@@ -182,7 +197,7 @@ Wait for its notification; never predict it. It ends with one JSON object:
 
 ## Step 5 — Check and summary (Polish)
 
-    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>]
+    node "<FIXPR>/scripts/restack.cjs" --action=plan --project="<PROJECT>" --stack="<stack>" [--base=<base>] --preflight=no
 
 `broken` must be empty now; any pair in it goes into the summary with its `command`.
 
