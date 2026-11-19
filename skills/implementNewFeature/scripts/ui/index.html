@@ -52,6 +52,9 @@
           transform:none; filter:none; }
   .tabs-bar .tab.selected { color:var(--text); border-color:var(--accent);
           background:rgba(124,140,248,.14); }
+  /* A task that waits for the user (needsUser) - selected or not, hovered or not. */
+  .tabs-bar .tab.attention, .tabs-bar .tab.attention:hover:not(:disabled) {
+          border-color:var(--warn); box-shadow:0 0 0 1px var(--warn); }
   .tabs-bar .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22ch; }
   .tabs-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--waiting); flex:none; }
   .tabs-bar .dot.in_progress { background:var(--accent); }
@@ -1111,7 +1114,7 @@ function renderTabs(state) {
     // Step 1 in_progress is just an unsubmitted form, so the pipeline has started
     // once the form was submitted — that is what closes the × for good.
     const closable = !t.step1Submitted && t.steps.slice(1).every(s => s.status === 'waiting');
-    return `<span class="tab${open ? ' selected' : ''}" role="tab"
+    return `<span class="tab${open ? ' selected' : ''}${needsUser(t) ? ' attention' : ''}" role="tab"
       aria-selected="${open}" tabindex="0" data-task="${esc(t.id)}">
       <span class="dot ${activeStepOf(t).status}"></span>
       <span class="label">${esc(tabLabel(t, i))}</span>
@@ -1152,7 +1155,7 @@ function renderTabs(state) {
 }
 
 const tabsSig = state => state.tasks.map((t, i) => [t.id, tabLabel(t, i),
-  activeStepOf(t).status, pending(t) ? '!' : '', t.step1Submitted ? 'S' : '',
+  activeStepOf(t).status, pending(t) ? '!' : '', needsUser(t) ? 'A' : '', t.step1Submitted ? 'S' : '',
   t.steps.slice(1).every(s => s.status === 'waiting') ? 'w' : '',
   t.id === activeTask ? '*' : ''].join(':')).join(',');
 
@@ -1291,6 +1294,11 @@ const gateOpen = gate => !!gate && !gate.answered;
 // agent the user stopped and has not yet told how to go on.
 const pending = task => !!(task.question || gateOpen(task.reviewSummary) || gateOpen(task.mockupReview))
   || task.steps.some(s => s.stopped);
+
+// Everything a task can wait on the user for, which its tab shows with a yellow border: what
+// `pending` covers, and a failed step whose Retry / Skip / Finish nobody has picked yet.
+const needsUser = task => pending(task)
+  || (activeStepOf(task).status === 'failed' && liveOf(task, activeStepOf(task)));
 
 // Whether this step is the one the pipeline is on — so its buttons answer something
 // and its composer reaches an agent. Step 7 is the exception on the summary test: its

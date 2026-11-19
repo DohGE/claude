@@ -99,6 +99,30 @@ test('zakładki przełączają widok i pokazują znacznik oczekiwania', async ({
   await expect(page.locator('#tabs .tab[data-task=t1] .dot.in_progress')).toBeVisible();
 });
 
+test('zakładka taska, który czeka na użytkownika, ma żółtą ramkę - także otwarta', async ({ page }) => {
+  const WARN = 'rgb(251, 191, 36)';
+  const tab = id => page.locator(`#tabs .tab[data-task=${id}]`);
+  await page.click('#createTask');
+  await expect(page.locator('#tabs .tab')).toHaveCount(2);
+  // Agent pracuje: zwykła ramka.
+  await state({ taskId: 't1', step: 2, status: 'in_progress', activeStep: 2 });
+  await expect(tab('t1')).not.toHaveClass(/attention/);
+  // Pytanie do użytkownika.
+  await state({ taskId: 't1', step: 2, question: { id: 'q1', text: 'Ile ról?' } });
+  await expect(tab('t1')).toHaveClass(/attention/);
+  await expect(tab('t1')).toHaveCSS('border-top-color', WARN);
+  // Krok padł i czeka na Retry / Skip / Finish - również na otwartej zakładce.
+  await state({ taskId: 't1', step: 2, status: 'failed', question: null, report: 'Agent padł' });
+  await page.click('#tabs .tab[data-task=t1]');
+  await expect(page.locator('#retry')).toBeVisible();
+  await expect(tab('t1')).toHaveClass(/selected/);
+  await expect(tab('t1')).toHaveCSS('border-top-color', WARN);
+  // Retry oddaje krok agentowi - ramka znika, a task bez czekania nigdy jej nie miał.
+  await page.click('#retry');
+  await expect(tab('t1')).not.toHaveClass(/attention/);
+  await expect(tab('t2')).not.toHaveClass(/attention/);
+});
+
 test('zakładki z branchami zaczynają się od lewej krawędzi, jak panel pod nimi', async ({ page }) => {
   await page.click('#createTask');
   await expect(page.locator('#tabs .tab')).toHaveCount(2);
