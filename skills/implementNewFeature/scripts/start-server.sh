@@ -3,9 +3,11 @@ set -euo pipefail
 SESSION_DIR=""
 OPEN=0
 ORPHANED=()
-# One fixed URL, so the browser tab and everything it remembers for that origin
-# survive a restart. The override exists for tooling that must not fight a live run.
-PORT=9999
+# One preferred URL, so the browser tab and everything it remembers for that origin
+# survive a restart. Not given, it is the port this session's server last had (a
+# restart keeps every sub-agent's port valid), else 9999; the server moves to the
+# next free port when the preferred one is taken. The override exists for tooling.
+PORT=""
 # Where the sessions of the tasks added from the stepper open (launch-orchestrator.cjs).
 PROJECT_DIR="$(pwd)"
 while [ $# -gt 0 ]; do
@@ -23,11 +25,12 @@ done
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$SESSION_DIR"
-# The old instance has to go first: it holds the port, and the new one refuses to
-# start anywhere else. Two servers would otherwise share this session's state file
-# while the user's open tab talks to the one the orchestrator no longer polls.
+# The old instance has to go first: it holds the port the new one prefers, and two
+# servers would otherwise share this session's state file while the user's open tab
+# talks to the one the orchestrator no longer polls.
 if [ -f "$SESSION_DIR/server.json" ]; then
-  PREV_PID=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).pid||0)}catch(e){console.log(0)}" "$SESSION_DIR/server.json")
+  read -r PREV_PID PREV_PORT < <(node -e "try{const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log((s.pid||0)+' '+(s.port||0))}catch(e){console.log('0 0')}" "$SESSION_DIR/server.json")
+  [ -n "$PORT" ] || [ "$PREV_PORT" = "0" ] || PORT="$PREV_PORT"
   # Only ever kill a process we can PROVE is this server. A clean shutdown removes
   # server.json, but a crash does not, and a pid the OS has since handed to something
   # else looks exactly like a live server from here - killing it blind takes down
@@ -51,11 +54,12 @@ if [ -f "$SESSION_DIR/server.json" ]; then
   fi
   rm -f "$SESSION_DIR/server.json"
 fi
+[ -n "$PORT" ] || PORT=9999
 nohup node "$SCRIPT_DIR/server.cjs" --session-dir "$SESSION_DIR" --port "$PORT" --project "$PROJECT_DIR" ${ORPHANED[@]+"${ORPHANED[@]}"} \
   > "$SESSION_DIR/server.log" 2>&1 &
 NODE_PID=$!
-# A taken port makes the server exit instead of moving, so waiting out the full
-# timeout would hide the one line that says what is on it.
+# A server that cannot listen at all exits, so waiting out the full timeout would
+# hide the one line that says why. server.json names the port it really bound.
 for _ in $(seq 1 75); do
   [ -f "$SESSION_DIR/server.json" ] && break
   if ! kill -0 "$NODE_PID" 2>/dev/null; then

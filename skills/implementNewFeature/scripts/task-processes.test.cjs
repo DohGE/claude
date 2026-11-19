@@ -44,6 +44,15 @@ test('the stepper\'s own port is never a task process', () => {
     'npm start -- --port 4317');
 });
 
+test('a stepper that moved off 9999 is protected on the port its server.json names', (t) => {
+  const session = taskDir(t);
+  const dir = path.join(session, 'tasks', 't1');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(session, 'server.json'), JSON.stringify({ port: 10000, pid: 1 }));
+  assert.throws(() => parseArgs(['register', `--task-dir=${dir}`, '--port=10000']), /stepper's/);
+  assert.strictEqual(parseArgs(['register', `--task-dir=${dir}`, '--port=10001']).port, 10001);
+});
+
 test('the listener table of each OS is read for that port only, IPv6 included', () => {
   const netstat = [
     '  TCP    [::1]:4317             [::]:0                 LISTENING       5150',
