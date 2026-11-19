@@ -908,7 +908,8 @@ function chunkSpecs(specs, fixedLength, limit = lineLimit) {
 function relatedLines(related, specs) {
   const build = typeof related === 'function'
     ? related
-    : (group) => related.replace('{pattern}', shellQuote(specRegex(group))).replace('{specs}', group.map((s) => shellQuote(posixPath(s))).join(' '));
+    // A function replacement: an escaped `$` in a path must not read as `$&`.
+    : (group) => related.replace('{pattern}', () => shellQuote(specRegex(group))).replace('{specs}', () => group.map((s) => shellQuote(posixPath(s))).join(' '));
   const fixed = typeof related === 'function' ? 120 : related.length;
   return chunkSpecs(specs, fixed).map(build);
 }

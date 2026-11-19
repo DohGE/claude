@@ -1226,6 +1226,7 @@ test('specRegex escapes what a regular expression would read', () => {
   assert.strictEqual(checks.specRegex(['x.ts', 'y.ts']), '(x\\.ts|y\\.ts)');
   assert.strictEqual(checks.specRegex(['a\\b.ts']), 'a/b\\.ts', 'a Windows path is matched with forward slashes');
   assert.ok(new RegExp(checks.specRegex(['a/+state/b.spec.ts'])).test('/repo/a/+state/b.spec.ts'));
+  assert.deepStrictEqual(checks.relatedLines('jest {pattern}', ['a$&b.spec.ts']), [`jest ${q('a\\$&b\\.spec\\.ts')}`], 'a $ in a path is no replacement pattern');
   const lines = checks.relatedLines('jest {pattern}', Array.from({ length: 400 }, (_, i) => `projects/app/src/feature-${i}/a-long-file-name-${i}.spec.ts`));
   assert.ok(lines.length > 1 && lines.every((l) => l.length < 8000), 'a long list runs as several commands');
 });
