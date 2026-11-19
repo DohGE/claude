@@ -158,6 +158,40 @@ project is copied to the same relative path, and so is the project's gitignored 
 self-review walk the project's own rules. A failed install is a warning, not a failure — it only means
 the verification gate will be skipped.
 
+The link is the default whenever the lockfile matches and the main checkout's `node_modules` holds
+what its `package.json` declares. Whatever is in the worktree's way - a stale or dangling link, the
+half tree of a stopped install, an earlier run's folder - is cleared first, links unlinked and never
+followed, and the link made in its place (`replaced` in `dependencies`, and a warning). A link to the
+main checkout that is already there is kept. When `auto` still installs, the reason it could not
+link travels with the answer (`dependencies.linkRefused`, and a warning): on 2026-11-18 one part of
+seven installed for ten minutes and nobody could tell why.
+
+An install never runs through a link: a `node_modules` link in the worktree is unlinked first, since
+`npm ci` empties the folder it finds entry by entry - through a junction, the main checkout's
+(measured with npm 10 on Windows). It is bounded: after 10 minutes the install is stopped with
+every process it started (`taskkill /T` on Windows, a process group elsewhere - a timeout that killed
+only the shell left npm writing on, and the retry met it with `ENOTEMPTY`), and its half tree is
+cleared. Its failure is reported by the first error lines of the package manager's output, never by
+the deprecation warnings before them, and a stopped install says so.
+
+What an install rewrites in tracked files never leaves a worktree dirty. husky's `prepare` rewrites
+`.husky/_/husky.sh` and `.husky/.gitignore`, and a repository that tracks them with CRLF checkouts
+finds them "modified" after every install - on 2026-11-18 that made `remove` refuse every worktree of
+a stack and a cascade stop at "already exists and is kept". `add` puts back every tracked file the
+dependency step changed (only an unstaged modification, only one that was not changed before the
+step) and records what the step made of it (path and content hash, in the worktree's private git
+dir). `HUSKY=0` was not the way: it covers husky alone and skips the hook helpers a commit there
+runs; `skip-worktree` would hide a real edit of the file from status and from the commit. `remove`
+recognises such leftovers - a file whose content is what the recorded install made of it, or a
+husky helper whose change is line endings only or equals the main checkout's copy - and discards
+them, but only when they are ALL the worktree holds; anything else still makes it refuse, and the
+tree is left exactly as it was.
+
+The `add` steps that write the repository (fetch, `worktree add`, the fast-forward) run under a lock
+in the shared git dir (`doh-worktree.lock`), so launches started side by side do not fail on git's
+own config and ref locks; the dependency step runs outside it. A lock older than five minutes is a
+crashed run's, and a wait longer than two minutes goes on without it.
+
 After a successful commit the worktree is removed. `git worktree remove` is called **without**
 `--force`, ever: git refuses a worktree holding modified or untracked files, and that refusal is the
 last guard against deleting work the verification gate stopped from being committed. Before it, the
@@ -165,6 +199,18 @@ self-review's reports (`.claude/doh/codeReview/runs/`, gitignored, so git would 
 `<project>/.claude/doh/<branch>/codeReview/runs/`, and every link in the tree is unlinked: git's
 recursive delete walks into a junction and empties what it points at. Take a worktree down with
 `worktree.cjs --action=remove`, never with `git worktree remove --force`.
+
+Every remove watches the main checkout's `node_modules`. When it existed before and is gone after
+(or holds fewer entries), the answer carries `mainModulesLost: true` and an error - "The main
+checkout's node_modules disappeared while removing <worktree>; run `npm ci` there" - which
+`fixpr-after.cjs` puts in its `errors[]` and `restack.cjs` turns into a stop of the climb (resumable
+with `--resume=yes` once the user has installed). On 2026-11-19 that folder was gone at the end of a
+run, and no step had said when. What a shell can do to it is guarded too (`bash-guard.cjs`): an
+install in a fix worktree (`npm ci`/`install`, `pnpm install`, `yarn`, …) and an `rm` of
+`node_modules/` are refused, because both go through the link into the main checkout's packages.
+Every recursive delete of a worktree folder (`add`'s leftover, implementNewFeature's
+`verify-parts.cjs`) unlinks the links in it first (`removeTree`); `fs.rmSync`, `rmdir /s` and git
+2.56 were measured not to follow a junction, `rm -rf <link>/` and npm were measured to.
 
 ## The gate
 
@@ -504,7 +550,7 @@ rule itself: editing its own settings is refused as self-modification.
 | `scripts/pr-comments.cjs` | argument parsing, the preflight (`--push`, `--dry-run`, `--preflight`), the commit prefix and `CR` message, the per-branch comment JSON, and identical per-branch warnings folded into one line |
 | `scripts/preflight.cjs` | before any worktree: origin reachable without a prompt, a git identity, a GitHub token GitHub accepts (and its source), a complete main `node_modules`; each failure with its fix |
 | `scripts/checks.cjs` | the gate: command discovery, non-interactive flags, timeouts, one log per step and an errors-only excerpt per failed one; implementNewFeature's agents run their unit tests and builds through it too |
-| `scripts/worktree.cjs` | branch-state refusals, worktree creation, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`), removal (links first, git's own reason on a refusal, the main `node_modules` counted before and after) |
+| `scripts/worktree.cjs` | branch-state refusals, worktree creation under a repository lock, bootstrap (a main `node_modules` missing declared packages stops the run before any agent: `mainBroken`; a stale `node_modules` cleared and linked over; a bounded install that never runs through a link; install artefacts in tracked files put back), removal (install artefacts discarded when they are all there is, links first, git's own reason on a refusal, a main `node_modules` that disappeared or shrank reported as `mainModulesLost`) |
 | `scripts/resolve-threads.cjs` | closes exactly the threads a run fixed, each after a reply naming the commit; a 5xx is retried and a reply that already landed is never posted twice |
 | `scripts/restack.cjs` | lands a held part of a stack onto its landed parent (`land`, append and import-block conflicts merged, `noop` when nothing moves, a missing git identity or a wrong old tip an error, `--run` reads the part from the run file, `--pending-steps`, `--summary`), checks a stack (`verify`, `--run`), moves the parts above a changed one (`cascade`), moves a whole stack onto its base (`stack`, `plan` - /doh:restack) and pushes `HEAD` with retry (`push`) |
 | `scripts/symbol-uses.cjs` | where names are still used - in the worktree (a rename's leftovers) and in the parts stacked above (`--refs`) |
@@ -516,11 +562,11 @@ rule itself: editing its own settings is refused as self-modification.
 | `test-key/` | the meter's fixture (`fixture/`, built by `make-fixture.cjs`), its key (`key.json`) and the reference fix (`solution/`) |
 | `../../scripts/render-agent-prompt.cjs` | renders `fix-agent.md` to `promptPath` with every `{{PLACEHOLDER}}` filled and only the `{{#if …}}` blocks of this agent kept (its landing, push, inputs), so the orchestrator hands the agent a path instead of carrying the brief twice; an absolute path with `..` in it is written the way it resolves |
 | `scripts/stack-preflight.cjs` | before the agents: every part of a stack that imports a file only a later part adds (`leaks`), and what each part restores verbatim first (`restore`), from git alone |
-| `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file |
+| `scripts/fixpr-launch.cjs` | one target ready for its agent: the worktree, the brief and its two step files (`fix-visual-agent.md`, `fix-land-agent.md`), every value read from the run file; run in the background, one per target (`linked` says whether `node_modules` is the main checkout's) |
 | `scripts/fixpr-after.cjs` | after a target lands: threads closed, every comment checked, the app stopped, the worktree down, the outcome kept in the run file, the next held part moved onto it (`--land-next=yes`); identical resolve and reply failures as one `{ error, count, ids }` each |
 | `scripts/fixpr-summary.cjs` | the closing summary in Polish, from the run file, the result files and the stack check; `stackImpact` one line per name, parts as ranges (`part-3..7`), paths cut to their distinct tail, capped with "+N" naming the result file |
 | `scripts/split-work.cjs` | a fix agent's many items cut into groups of whole folders for `doh:pipeline-worker` agents (`references/fix-worker-agent.md`) |
-| `scripts/bash-guard.cjs` | PreToolUse hook: a shell read of a fix worktree, or a `cd` into one that outlives its command, is refused with the tool to use |
+| `scripts/bash-guard.cjs` | PreToolUse hook: a shell read of a fix worktree, or a `cd` into one that outlives its command, is refused with the tool to use; so are a package-manager install there and an `rm` of `node_modules/`, which reach the main checkout's packages through the link |
 
 What changed in 0.35.0, measured on the five-part DPXN-12003 run of 2026-11-16 (94 min, 141M cache read):
 the gate stops after a red typecheck and runs only the specs near the change until its last pass

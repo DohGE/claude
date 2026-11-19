@@ -854,3 +854,36 @@ test('land merges a conflict of two parts that only changed one import block, an
   assert.ok(gateRan, 'the gate proves an automatic merge');
   assert.strictEqual(fs.readFileSync(path.join(s.tree, 'store.ts'), 'utf8').replace(/\r\n/g, '\n'), storeOf('Alpha', 'Beta', 'Delta'));
 });
+
+// 2026-11-19: the main checkout's node_modules was gone by the end of a climb, and no step said
+// when. Every part above would install instead of linking, so the climb stops, loudly, resumable.
+test('a climb stops at the part whose remove lost the main checkout\'s node_modules, and --resume goes on above it', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-lost-modules-'));
+  const lost = 'The main checkout\'s node_modules disappeared while removing /w/p1; run `npm ci` there (/p) before the next run.';
+  const landed = [];
+  let losing = true;
+  const deps = {
+    tips: { base: 'm0', p1: 't1', p2: 't2', p3: 't3' },
+    discover: () => ({ stack: ['p1', 'p2', 'p3'], base: 'base', prs: {}, warnings: [] }),
+    sits: () => true,
+    worktree: {
+      add: ({ branch }) => ({ worktree: `/w/${branch}`, errors: [] }),
+      remove: ({ branch }) => {
+        if (branch !== 'p1' || !losing) return { removed: true, warnings: [] };
+        losing = false;
+        return { removed: true, mainModulesLost: true, errors: [lost], warnings: [] };
+      },
+    },
+    land: ({ branch }) => { landed.push(branch); return { status: 'landed', commit: `n-${branch}`, pushed: true }; },
+  };
+  const options = { project: dir, stack: ['p1', 'p2', 'p3'], push: 'yes', gate: 'yes', ontoBase: 'yes', checksDir: path.join(dir, 'checks') };
+  const out = restack.stackAction(options, deps);
+  assert.deepStrictEqual(landed, ['p1']);
+  assert.deepStrictEqual(out.errors, [lost]);
+  assert.deepStrictEqual(out.waiting, ['p2', 'p3']);
+  assert.deepStrictEqual(out.parts[0].errors, [lost]);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'checks', 'restack-state.json'), 'utf8')).stopped, 'p1');
+  const resumed = restack.stackAction({ ...options, resume: 'yes' }, deps);
+  assert.deepStrictEqual(landed, ['p1', 'p2', 'p3']);
+  assert.deepStrictEqual(resumed.errors, []);
+});

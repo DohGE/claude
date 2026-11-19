@@ -52,3 +52,31 @@ test('the hook refuses with exit 2 and its reason, and lets anything else throug
   assert.strictEqual(run({ tool_name: 'Write', tool_input: { file_path: 'x' } }).status, 0);
   assert.strictEqual(spawnSync(process.execPath, [path.join(__dirname, 'bash-guard.cjs')], { input: 'not json', encoding: 'utf8' }).status, 0);
 });
+
+// The fix worktree's node_modules is a link to the main checkout's. Measured with npm 10 on
+// Windows: `npm ci` through it emptied the main checkout's folder, `npm install` pruned it. On
+// 2026-11-18 every worktree of a run showed an install's traces, and the main node_modules was gone.
+test('an install or an rm of node_modules/ in a fix worktree is refused; scripts and an rmdir of the link are not', () => {
+  for (const command of [
+    `(cd "${W}" && npm ci)`,
+    `npm --prefix "${W}" install`,
+    `(cd "${W}" && npm i -D jest)`,
+    `(cd "${W}" && yarn)`,
+    `(cd "${W}" && pnpm install --frozen-lockfile)`,
+    `rm -rf "${W}/node_modules/"`,
+    `rm -rf ${W}/node_modules/*`,
+  ]) {
+    const reason = guard.decide(command);
+    assert.ok(reason, command);
+    assert.match(reason, /main checkout/, command);
+  }
+  for (const command of [
+    `(cd "${W}" && npm run build)`,
+    `(cd "${W}" && npm test)`,
+    `(cd "${W}" && npx jest a.spec.ts)`,
+    `yarn --cwd "${W}" lint`,
+    `rmdir "${W}/node_modules"`,
+    `rm -f "${W}/src/a.ts"`,
+    'npm ci',
+  ]) assert.strictEqual(guard.decide(command), null, command);
+});

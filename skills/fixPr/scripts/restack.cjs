@@ -799,8 +799,11 @@ function land(options, { runGate = defaultGate } = {}) {
     }
   };
   if (!git(tree, ['rev-parse', '--git-dir']).ok) return fail(`Not a git worktree: ${tree}`);
-  // A tracked file the install touched (husky's line endings, 2026-11-03) is no reason to leave a
-  // part behind: the rebase stashes it and puts it back, and only commits are pushed.
+  // A tracked file an install rewrote (husky's line endings, 2026-11-03 and 2026-11-18) is no one's
+  // work: when it is all the worktree holds it is put back (worktree.cjs installArtefacts), and the
+  // part neither warns of uncommitted changes nor keeps its worktree for them. Anything else the
+  // rebase stashes and puts back, and only commits are pushed.
+  require('./worktree.cjs').discardInstallArtefacts(tree);
   if (git(tree, ['status', '--porcelain', '--untracked-files=no']).out) result.warnings.push(`${tree} holds uncommitted changes; they stay uncommitted (rebase --autostash).`);
 
   // Where the branch stood on origin when the run began: the lease. The remote-tracking ref of
@@ -1081,7 +1084,8 @@ function climb(options, deps = {}) {
     }
     const added = worktree.add({ project, branch });
     if (!added.worktree || (added.errors && added.errors.length) || added.mainBroken) {
-      if (added.mainBroken && added.worktree) worktree.remove({ project, branch });
+      const down = added.mainBroken && added.worktree ? worktree.remove({ project, branch }) : null;
+      if (down && down.mainModulesLost) result.errors.push(...(down.errors || []));
       result.parts.push({ branch, parent, status: 'error', oldTip: tips.get(branch) || null, errors: added.mainBroken ? added.warnings || ['the main checkout has no complete node_modules'] : added.errors || ['no worktree'] });
       result.waiting = stack.slice(i + 1);
       return result;
@@ -1104,12 +1108,23 @@ function climb(options, deps = {}) {
     // A no-op leaves nothing to resolve: its worktree goes like a landed part's.
     const keep = !['landed', 'noop'].includes(landed.status);
     const removed = keep ? null : worktree.remove({ project, branch });
+    // The main checkout's node_modules gone during that remove (2026-11-19: gone by the end of a
+    // climb, nobody knew when): every part above would install instead of linking, so the climb
+    // stops here, loudly, with the parts above waiting.
+    const lost = removed && removed.mainModulesLost ? removed.errors || [] : [];
     result.parts.push({
       branch, parent, status: landed.status, commit: landed.commit || null, oldTip: tips.get(branch) || null, pushed: Boolean(landed.pushed), rebased: Boolean(landed.rebased),
       autoResolved: landed.autoResolved || [], conflictFiles: landed.conflictFiles || [], oldParentTip: landed.oldParentTip || null, gate: landed.gate || null,
       squashed: landed.squashed || null, mode: landed.mode || null, briefVars: landed.briefVars || null, reason: landed.reason || null,
-      worktree: keep || (removed && !removed.removed) ? added.worktree : null, warnings: [...(added.warnings || []), ...(landed.warnings || []), ...((removed && removed.warnings) || [])], errors: landed.errors || [],
+      worktree: keep || (removed && !removed.removed) ? added.worktree : null, warnings: [...(added.warnings || []), ...(landed.warnings || []), ...((removed && removed.warnings) || [])], errors: [...(landed.errors || []), ...lost],
     });
+    if (lost.length > 0) {
+      result.errors.push(...lost);
+      result.waiting = stack.slice(i + 1);
+      // `--resume=yes` climbs on above this part once the main checkout is installed again.
+      result.stoppedAt = branch;
+      return result;
+    }
     if (keep) {
       result.waiting = stack.slice(i + 1);
       return result;
@@ -1259,6 +1274,7 @@ function stackAction(options, deps = {}) {
     if (!sits(parent, state.stopped)) return stop(`${state.stopped} does not sit on ${parent} yet: land it first (the conflict agent's push), then resume.`);
     const removed = (deps.worktree || require('./worktree.cjs')).remove({ project, branch: state.stopped });
     warnings.push(...((removed && removed.warnings) || []));
+    if (removed && removed.mainModulesLost) return { ...stop((removed.errors || [])[0]), resumedAfter: state.stopped };
     if (removed && removed.removed === false) warnings.push(`The worktree of ${state.stopped} was not taken down: ${((removed.errors || [])[0]) || 'see worktree.cjs'}.`);
     resumedAfter = state.stopped;
     startIndex = at + 1;
@@ -1281,7 +1297,7 @@ function stackAction(options, deps = {}) {
   }
   const previous = readState(stateFile);
   writeState(stateFile, {
-    stack, base, stopped: last && !['landed', 'noop'].includes(last.status) ? last.branch : null,
+    stack, base, stopped: result.stoppedAt || (last && !['landed', 'noop'].includes(last.status) ? last.branch : null),
     oldTips: { ...((previous && previous.oldTips) || {}), ...Object.fromEntries(result.parts.map((p) => [p.branch, p.oldTip])) },
     at: new Date().toISOString(),
   });

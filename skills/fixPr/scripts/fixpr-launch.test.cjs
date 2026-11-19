@@ -50,6 +50,7 @@ test('launch makes the worktree and renders the brief and its step files from th
   assert.deepStrictEqual(out.errors, []);
   assert.deepStrictEqual(calls[0].slice(0, 2), ['worktree.cjs', '--action=add']);
   assert.strictEqual(out.worktree, path.join(dir, 'wt-1'));
+  assert.strictEqual(out.linked, false, 'an install, not a link: its reason is among the warnings');
   const brief = fs.readFileSync(out.promptPath, 'utf8');
   for (const piece of ['part-1', '#101', 'Polish', 'src/mock.ts', '--priority=0', out.visualBrief, out.landBrief]) assert.ok(brief.includes(piece), piece);
   assert.ok(!/\{\{[A-Z_]+\}\}/.test(brief), 'no placeholder left');
@@ -61,8 +62,9 @@ test('launch makes the worktree and renders the brief and its step files from th
 
 test('a held part above the bottom gets its place in the slot queue, and a refused worktree renders nothing', (t) => {
   const { dir, file } = runFile(t);
-  const ok = launch.launch({ run: file, branch: 'part-2' }, { run: () => ({ worktree: path.join(dir, 'wt-2'), installed: true, errors: [] }) });
+  const ok = launch.launch({ run: file, branch: 'part-2' }, { run: () => ({ worktree: path.join(dir, 'wt-2'), installed: true, dependencies: { manager: 'npm', linked: true, error: null }, errors: [] }) });
   assert.ok(fs.readFileSync(ok.promptPath, 'utf8').includes('--priority=1'));
+  assert.strictEqual(ok.linked, true);
   const refused = launch.launch({ run: file, branch: 'part-2' }, { run: () => ({ errors: ['part-2 has diverged from origin/part-2'] }) });
   assert.deepStrictEqual(refused.errors, ['part-2 has diverged from origin/part-2']);
   assert.strictEqual(refused.promptPath, undefined);

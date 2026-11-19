@@ -245,11 +245,20 @@ the run goes on, and the agents meet the red gate themselves.
 
 ## Step 3 — Launch each branch: worktree and brief
 
-For each target, in `targets` order (the bottom of a stack first), launch it and spawn its agent
-(Step 4) right after - never every worktree first: on 2026-11-03 five worktrees made one after
-another held the first agent back nineteen minutes, and the bottom part of the stack started last.
+Start every target's launch in the background (Bash, `run_in_background: true`), one call each, in
+`targets` order (the bottom of a stack first), without waiting for any of them:
 
     node "<SKILL_DIR>/scripts/fixpr-launch.cjs" --run="<runPath>" --branch="<branch>" --push=<yes|no> --language=<language>
+
+A launch in the foreground blocks every launch after it: on 2026-11-18 one part's install ran past
+the 600 s tool timeout and held the launches of the three parts above it. The launches run side by
+side (worktree.cjs takes a repository lock for its git steps). Spawn each target's agent (Step 4)
+when its launch's completion notification arrives - the JSON below is the last line of that
+launch's output file - and only once every target before it in `targets` is spawned or out of the
+run: a launch that finishes
+early waits for the ones below it, so the spawns keep the bottom-first order. Never spawn an agent
+before its own launch has finished, and never wait for every launch before the first spawn: on
+2026-11-03 five worktrees made one after another held the first agent back nineteen minutes.
 
 `--push=no` when `--no-push` was passed; `<language>` is the language THIS conversation is held in,
 named plainly (`Polish`, `English`, …). It makes the worktree (worktree.cjs) and renders the brief
@@ -267,9 +276,13 @@ workers' briefs are rendered from. Parse its JSON:
 - `heldBy` → the branch is checked out by the user; it is worked on `doh-fixpr/<branch>` and pushed
   to `origin/<branch>`. The summary tells the user to `git pull --rebase` in that checkout.
 - `mainBroken: true` → the main checkout's `node_modules` misses packages its `package.json`
-  declares, so no worktree can have a gate. STOP the run before any agent: remove the worktrees made
-  so far (`node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"`),
+  declares, so no worktree can have a gate. STOP the run: spawn no further agent, wait for the
+  launches still running, remove every worktree whose agent was not spawned
+  (`node "<SKILL_DIR>/scripts/worktree.cjs" --action=remove --branch="<branch>" --project="<PROJECT>"`),
   and tell the user, in Polish, to run `npm ci` in their checkout and start the run again.
+- `linked: false` with a warning "node_modules was installed, not linked …" → the worktree
+  installed instead of linking, and the warning says why; report it. An install that failed or was
+  stopped at its time limit is a warning too: that agent skips its gate.
 - `visual: true` for the first time this run → start, in the background (Bash, `run_in_background: true`),
   once: `node "<SKILL_DIR>/../implementNewFeature/scripts/ensure-playwright.cjs"`. The agents' look
   at the running app needs it; on 2026-11-16 an agent installed it in the middle of its run.
@@ -284,13 +297,16 @@ workers' briefs are rendered from. Parse its JSON:
 A worktree whose lockfile is the main checkout's gets that checkout's `node_modules` linked in
 instead of an install, and only `worktree.cjs --action=remove` (fixpr-after.cjs calls it) takes such
 a worktree down: it unlinks first, where git's own recursive delete walks into the linked folder.
-You never delete a folder yourself, never pass `--force` to git, and never re-run a launch hoping for
-a different answer.
+You never delete a folder yourself, never run an install in a worktree (through the link it
+empties the main checkout's packages), never pass `--force` to git, and never re-run a launch
+hoping for a different answer. What an install rewrote in tracked files (husky's helpers) is put
+back by worktree.cjs itself; never `git checkout` it by hand.
 
 ## Step 4 — One background agent per branch
 
-Right after its launch: Agent tool, `subagent_type: "general-purpose"`, background. The prompt is
-short and points at the rendered brief — it never repeats it:
+When its launch's notification has arrived (Step 3, in `targets` order): Agent tool,
+`subagent_type: "general-purpose"`, background. The prompt is short and points at the rendered
+brief — it never repeats it:
 
     Your complete instructions are in the file <promptPath>. Read it in full with the Read tool
     before doing anything else, then follow it exactly. It is already resolved: every path,
@@ -300,9 +316,9 @@ short and points at the rendered brief — it never repeats it:
 
 Anything this particular run has to add — a note about a previous failure, something the user said
 after the fact — goes in that spawn prompt, under its own heading, after the pointer. It never goes
-into the rendered file. Spawn every agent before you wait for any of them: every fix agent opens with
-the same system prompt and tool definitions, and the first one, alone in its message, writes that
-prefix into the prompt cache for the others.
+into the rendered file. Spawn every agent as its launch lands, before you wait for any agent: every
+fix agent opens with the same system prompt and tool definitions, and the first one, alone in its
+message, writes that prefix into the prompt cache for the others.
 
 Then wait for the completion notifications and handle each branch as it lands. Never predict a
 result that has not arrived, and never summarise a branch whose agent is still running — if the user
@@ -373,7 +389,13 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
    - it records the outcome and checks the comments; nothing is resolved, removed or landed above it.
 4. Read each `fixpr-after.cjs` answer: `verify.ok` false or `resolve.failed`/`unverified` go into the
    summary (the script prints them). `resolve.failed` and `resolve.replyFailed` hold one
-   `{ error, count, ids }` per distinct error: report each error once, with its count; `keptWorktree` names a worktree left for the user. A
+   `{ error, count, ids }` per distinct error: report each error once, with its count; `keptWorktree`
+   names a worktree left for the user. An
+   `errors[]` entry "The main checkout's node_modules disappeared while removing …" (or "went from
+   N to M entries") → tell the user at once, in Polish, that their checkout's `node_modules` is gone
+   and that they must run the install it names there; launch no further target and land no further
+   part until they have (every later worktree would install instead of linking). The same entry
+   in a `restack.cjs` answer's `errors[]` stops its climb: the parts above wait. A
    `cascade` entry means open parts above that the run does not name sit on the old commit: move
    them, bottom-up, with no agent (background):
 
@@ -439,6 +461,8 @@ the user has not been told about yet.
 | "The agent is still running, I will summarise what it will probably find" | A result that has not arrived is not a result. Say it is still running. |
 | "part-4 finished first, I will land it now" | A held part lands after its parent, through `restack.cjs`. Landed earlier, it sits on a parent that is about to change. |
 | "A leftover fixpr-* folder blocks the branch, I will delete it" | `worktree.cjs add` clears a leftover that holds nothing of its own. One it keeps holds something - the error names it; the user decides. |
+| "A launch is usually quick, I will run it in the foreground" | An install can take ten minutes; in the foreground it hits the 600 s tool timeout and holds every launch after it (2026-11-18). Background, always; spawn on its notification. |
+| "The worktree's gate needs a package, I will `npm ci` there" | Through the linked `node_modules` an install empties the main checkout's packages. The package is missing in the main checkout: the user installs there. |
 | "The user's checkout is on that branch, so it is out" | Not any more: it is fixed on `doh-fixpr/<branch>` and pushed to the pull request. Only unpushed local commits keep it out. |
 | "I will write one script that rebases the whole stack" | `restack.cjs --action=stack` is that script (`/doh:restack`). A hand-made one that force-pushes was refused by the auto-mode classifier on 2026-11-06. |
 | "restack.cjs stopped at a conflict, I will resolve it myself" | The conflict agent resolves it, in the worktree, with the gate after it. You hold paths and verdicts, never a file's content. |

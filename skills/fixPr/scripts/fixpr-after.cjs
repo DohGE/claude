@@ -20,7 +20,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const { runScript } = require('./fixpr-launch.cjs');
 
 function parseArgs(argv) {
@@ -52,9 +51,11 @@ const readJson = (file) => {
   }
 };
 
+// Tracked changes that are someone's work: what an install rewrote (husky's helpers, worktree.cjs
+// installArtefacts) is not, and kept every worktree of 2026-11-18 as "it holds uncommitted work".
 const gitDirty = (worktree) => {
-  const res = spawnSync('git', ['-C', worktree, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8', windowsHide: true });
-  return res.status === 0 && String(res.stdout || '').trim() !== '';
+  const own = require('./worktree.cjs').ownChanges(worktree);
+  return own !== null && own.length > 0;
 };
 
 // `[{ id, error }]` → `[{ error, count, ids }]`, one entry per distinct error. On 2026-11-18 a
@@ -123,7 +124,10 @@ function after(options, deps = {}) {
     out.removed = Boolean(removed.removed);
     out.keptReports = removed.keptReports || [];
     out.warnings.push(...(removed.warnings || []));
-    if ((removed.errors || []).length) out.keptWorktree = { path: target.worktree, reason: removed.errors[0] };
+    if ((removed.errors || []).length && !removed.removed) out.keptWorktree = { path: target.worktree, reason: removed.errors[0] };
+    // The main checkout's node_modules gone or emptied during the remove: every later worktree
+    // would install instead of linking, and the user's own checkout cannot build. Said as an error.
+    if (removed.mainModulesLost) out.errors.push(...(removed.errors || []));
   }
 
   // A new commit under the open parts above that no run names: they move after it (restack cascade).

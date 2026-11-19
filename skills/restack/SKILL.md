@@ -164,7 +164,15 @@ before any worktree, with an `errors` entry that names what is missing. The JSON
   (`commits` of a squash-merged parent left out), `worktree` (kept only when it did not land),
   `agentPrompt` / `agentPromptErrors` (a conflict, or a red gate after a clean move: `mode: adapt`),
   `reason` (a `noop`: why nothing moved), `warnings`, `errors`;
-- `waiting[]` — the parts above a stop, untouched.
+- `waiting[]` — the parts above a stop, untouched;
+- `errors[]` at the top level — a stop that is not a part's own: above all "The main checkout's
+  node_modules disappeared while removing …" (or "went from N to M entries"), checked after every
+  part's worktree is taken down.
+
+Act on the top-level `errors[]` first: a lost main `node_modules` → stop, every part above it
+`waiting`. Tell the user, in Polish and as the first line, that their checkout's `node_modules` is
+gone and that they must run the install the error names in their checkout; after that, Step 3 again
+with `--resume=yes` climbs on above the last landed part. Never run the install yourself.
 
 Act on the LAST part:
 

@@ -98,3 +98,18 @@ test('identical resolve and reply failures come back once each, with their count
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepStrictEqual(saved.targets[0].outcome.resolve.failed, out.resolve.failed, 'the run file keeps every id');
 });
+
+// 2026-11-19: the main checkout's node_modules was gone at the end of a run, and no step said when.
+test('a remove that lost the main checkout\'s node_modules is an error of the landing, not a kept worktree', (t) => {
+  const { file } = setup(t);
+  const lost = 'The main checkout\'s node_modules disappeared while removing /w/part-1; run `npm ci` there (/p) before the next run.';
+  const run = fakeRun({
+    'verify-fix.cjs': () => ({ ok: true }),
+    'resolve-threads.cjs': () => ({ resolved: [] }),
+    'worktree.cjs': () => ({ removed: true, mainModulesLost: true, errors: [lost], warnings: [] }),
+  });
+  const out = after.after({ run: file, branch: 'part-1' }, { run, dirty: () => false });
+  assert.strictEqual(out.removed, true);
+  assert.strictEqual(out.keptWorktree, undefined);
+  assert.deepStrictEqual(out.errors, [lost]);
+});

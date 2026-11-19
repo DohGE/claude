@@ -69,7 +69,7 @@ the run of 2026-11-03. So:
   characters Windows refuses the command line ("The command line is too long"). Run
   `checks.cjs --only=test` (step 5); for one spec while you work, give jest that ONE path.
 - **`node_modules` is not yours.** It is a link to the main checkout's (`dependencies.linked`).
-  Never run `npm ci`, `npm install` or `yarn` here, never delete, `rmdir` or rename
+  Never run `npm ci`, `npm install` or `yarn` here (a hook refuses them), never delete, `rmdir` or rename
   `node_modules`: an install through the link empties the main checkout's packages for every
   worktree of every run. A gate that fails for a missing package (`Cannot find module`,
   `jest: not found`) is no repair of yours - end with the `error` JSON naming it, and the user

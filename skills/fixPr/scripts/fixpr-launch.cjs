@@ -16,7 +16,11 @@
 //
 // Usage: node fixpr-launch.cjs --run=<fixpr-run-*.json> --branch=<branch> [--push=yes|no] [--language=<name>]
 // Prints one JSON object: { branch, worktree, promptPath, visualBrief, landBrief, varsPath, installed,
-// heldBy, localBranch, mainBroken, warnings, errors }.
+// linked, heldBy, localBranch, mainBroken, warnings, errors }.
+//
+// SKILL.md Step 3 runs it in the background, one call per target, so a slow launch (an install of
+// several minutes, bounded by worktree.cjs) never holds back the launches of the parts above it; the
+// git part of worktree.cjs takes a repository lock, the dependency step runs side by side.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -85,6 +89,9 @@ function launch(options, deps = {}) {
   }
   out.worktree = added.worktree;
   out.installed = Boolean(added.installed);
+  // The main checkout's node_modules linked in (no install ran); false names an install, whose
+  // reason is among the warnings.
+  out.linked = Boolean(added.dependencies && added.dependencies.linked);
   out.visual = Boolean(added.visual);
   if (added.mainBroken) return out;
   const stack = (runData.stacks || []).find((s) => s.includes(target.branch));
