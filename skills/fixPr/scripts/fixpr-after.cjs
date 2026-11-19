@@ -14,7 +14,8 @@
 // Usage: node fixpr-after.cjs --run=<fixpr-run-*.json> --branch=<branch> [--commit=<sha>] [--pushed=yes|no]
 //        [--reply=yes|no] [--keep-worktree=yes|no] [--land-next=yes|no] [--push=yes|no]
 // Prints one JSON object: { branch, resolve, verify, removed, keptReports, keptWorktree, cascade,
-// next, warnings, errors }. `next` is the next part's landing (restack.cjs --summary=yes), or
+// next, warnings, errors }. `resolve.failed` and `resolve.replyFailed` hold one `{ error, count,
+// ids }` per distinct error. `next` is the next part's landing (restack.cjs --summary=yes), or
 // `{ branch, waiting: true }` while that part's agent still works.
 
 const fs = require('node:fs');
@@ -56,6 +57,24 @@ const gitDirty = (worktree) => {
   return res.status === 0 && String(res.stdout || '').trim() !== '';
 };
 
+// `[{ id, error }]` → `[{ error, count, ids }]`, one entry per distinct error. On 2026-11-18 a
+// refused token failed all 26 resolves and all 26 replies of one part with the same sentence, and
+// the answer repeated it 52 times; every id is still here, under the error it got.
+function groupFailures(list) {
+  const byError = new Map();
+  for (const f of list || []) {
+    const error = (f && f.error) || 'unknown failure';
+    if (!byError.has(error)) byError.set(error, { error, count: 0, ids: [] });
+    const g = byError.get(error);
+    g.count += 1;
+    g.ids.push(f && f.id);
+  }
+  return [...byError.values()];
+}
+
+// How many items a grouped (or a plain, older) failure list stands for.
+const failureCount = (list) => (list || []).reduce((n, f) => n + (f && typeof f.count === 'number' ? f.count : 1), 0);
+
 function after(options, deps = {}) {
   const run = deps.run || runScript;
   const dirty = deps.dirty || gitDirty;
@@ -79,7 +98,7 @@ function after(options, deps = {}) {
   else {
     const via = Object.entries(result.fixedVia || {}).map(([id, paths]) => `${id}:${[].concat(paths).join('|')}`).join(';');
     const res = run(scripts.resolve, [`--project=${project}`, `--threads=${ids.join(',')}`, `--comments=${target.commentsPath}`, `--root=${target.worktree}`, `--commit=${commit}`, ...(via ? [`--via=${via}`] : []), ...(options.reply === 'no' ? ['--no-reply'] : [])]) || {};
-    out.resolve = { resolved: (res.resolved || []).length, failed: res.failed || [], unverified: res.unverified || [], replyFailed: res.replyFailed || [] };
+    out.resolve = { resolved: (res.resolved || []).length, failed: groupFailures(res.failed), unverified: res.unverified || [], replyFailed: groupFailures(res.replyFailed) };
   }
 
   // Every item of the comments file held against the agent's verdicts.
@@ -145,6 +164,6 @@ function main() {
   process.exit(result.errors.length ? 1 : 0);
 }
 
-module.exports = { parseArgs, after };
+module.exports = { parseArgs, after, groupFailures, failureCount };
 
 if (require.main === module) main();

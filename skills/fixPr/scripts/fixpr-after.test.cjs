@@ -80,3 +80,21 @@ test('a worktree holding uncommitted work, or an agent that ended in error, keep
   assert.match(out.keptWorktree.reason, /uncommitted/);
   assert.throws(() => after.parseArgs(['--run=r', '--branch=b', '--lan-next=yes']), /Unknown argument/);
 });
+
+// 2026-11-18: one refused token, 26 threads, the same sentence 52 times in the orchestrator's answer.
+test('identical resolve and reply failures come back once each, with their count and ids', (t) => {
+  const { file } = setup(t, { child: false });
+  const err = 'Bad credentials - the GitHub token was rejected';
+  const run = fakeRun({
+    'resolve-threads.cjs': () => ({ resolved: [], failed: [{ id: 'T1', error: err }, { id: 'T2', error: err }], replyFailed: [{ id: 'T1', error: err }, { id: 'T2', error: 'HTTP 502' }], unverified: [] }),
+    'verify-fix.cjs': () => ({ ok: true }),
+    'worktree.cjs': () => ({ removed: true }),
+  });
+  const out = after.after({ run: file, branch: 'part-1', push: 'yes' }, { run, dirty: () => false });
+  assert.deepStrictEqual(out.resolve.failed, [{ error: err, count: 2, ids: ['T1', 'T2'] }]);
+  assert.deepStrictEqual(out.resolve.replyFailed, [{ error: err, count: 1, ids: ['T1'] }, { error: 'HTTP 502', count: 1, ids: ['T2'] }]);
+  assert.strictEqual(after.failureCount(out.resolve.replyFailed), 2);
+  assert.strictEqual(after.failureCount([{ id: 'x', error: 'old shape' }]), 1, 'a run file written before the grouping still counts');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual(saved.targets[0].outcome.resolve.failed, out.resolve.failed, 'the run file keeps every id');
+});
