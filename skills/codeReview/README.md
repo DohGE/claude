@@ -419,6 +419,8 @@ The token is looked up in this order, and the first hit wins:
 None of these can be conjured for a private repository that has never been authenticated from this machine: there, `GH_TOKEN` is the answer.
 The report says which of the two it is — a token was found and refused, or none was found at all — because a private repository answers an anonymous call with the same 404 it gives a token that cannot see it, and only one of those is fixed by setting `GH_TOKEN`.
 
+The first hit is not final when GitHub refuses it: a 401 is asked once more with the next source that holds a different token, and the one that works is kept for the rest of the process. A stale `GH_TOKEN` exported in the shell no longer hides a valid stored credential. The answer names the sources and never a token: `GH_TOKEN was rejected; used git credential`, or `GH_TOKEN was rejected; git credential was rejected too` when nothing works.
+
 The value is never logged and never passed on a command line: it reaches the request child on stdin. A repository whose remotes do not point at github.com is never asked and never warns.
 
 ## HTML report

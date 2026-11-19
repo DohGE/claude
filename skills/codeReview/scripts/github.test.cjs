@@ -531,3 +531,71 @@ test('postReview posts the review body to the pull request', (t) => {
   assert.strictEqual(seen[0].path, '/repos/DohGE/claude/pulls/12/reviews');
   assert.deepStrictEqual(seen[0].body, review);
 });
+
+// The token fallback, with a fake request layer: `transport` answers 401 for the tokens listed as
+// refused and 200 for any other, and records which token each call carried.
+function fakeLayer(refused) {
+  const used = [];
+  const transport = (payload) => {
+    used.push(payload.token);
+    return refused.includes(payload.token)
+      ? { ok: false, status: 401, text: '', json: { message: 'Bad credentials' }, error: 'Bad credentials - the GitHub token was rejected' }
+      : { ok: true, status: 200, text: '{}', json: {}, error: null };
+  };
+  return { used, transport };
+}
+const fakeSources = (values) => Object.entries(values).map(([name, value]) => ({ name, find: () => value }));
+
+test('request falls through to the next source when its token is refused, and keeps that one', () => {
+  // The run of 2026-11-18: a stale GH_TOKEN outranked a valid git credential, and 26 resolves
+  // and replies failed with 401 while the working token sat one source further down.
+  const { used, transport } = fakeLayer(['stale-env']);
+  const sources = fakeSources({ GH_TOKEN: 'stale-env', GITHUB_TOKEN: 'stale-env', 'git credential': 'good-stored' });
+  const cache = new Map();
+  const first = gh.request('/p', { path: '/repos/a/b' }, { transport, sources, cache });
+  assert.strictEqual(first.ok, true);
+  assert.strictEqual(first.tokenNote, 'GH_TOKEN was rejected; used git credential',
+    'GITHUB_TOKEN holds the same refused value, so it is skipped rather than asked');
+  assert.deepStrictEqual(used, ['stale-env', 'good-stored']);
+  assert.strictEqual(cache.get('/p').source, 'git credential');
+
+  const second = gh.request('/p', { path: '/repos/a/b/pulls' }, { transport, sources, cache });
+  assert.strictEqual(second.ok, true);
+  assert.deepStrictEqual(used, ['stale-env', 'good-stored', 'good-stored'], 'the working token is cached for the project');
+  assert.ok(!JSON.stringify([first, second]).includes('good-stored') && !JSON.stringify([first, second]).includes('stale-env'),
+    'neither answer carries a token value');
+});
+
+test('request names every refused source and never a token when no source works', () => {
+  const { used, transport } = fakeLayer(['stale-env', 'old-stored']);
+  const sources = fakeSources({ GH_TOKEN: 'stale-env', 'git credential': 'old-stored', '.netrc': null });
+  const cache = new Map();
+  const res = gh.request('/p', { path: '/x' }, { transport, sources, cache });
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.status, 401);
+  assert.match(res.error, /^GH_TOKEN was rejected; git credential was rejected too - Bad credentials/);
+  assert.deepStrictEqual(res.rejectedSources, ['GH_TOKEN', 'git credential']);
+  assert.ok(!res.error.includes('stale-env') && !res.error.includes('old-stored'), 'a token value never reaches a message');
+  // Retried once only, and not again on the next call: 26 threads must not cost 52 refusals.
+  gh.request('/p', { path: '/y' }, { transport, sources, cache });
+  assert.deepStrictEqual(used, ['stale-env', 'old-stored', 'stale-env']);
+});
+
+test('request reports a refused token plainly when no other source holds one', () => {
+  const { used, transport } = fakeLayer(['only']);
+  const res = gh.request('/p', { path: '/x' }, { transport, sources: fakeSources({ GH_TOKEN: 'only', 'git credential': 'only' }), cache: new Map() });
+  assert.strictEqual(res.ok, false);
+  assert.match(res.error, /^GH_TOKEN was rejected and no other token source holds a different token/);
+  assert.deepStrictEqual(used, ['only'], 'the same value under another name is not asked again');
+});
+
+test('request leaves a non-401 answer and an explicit token alone', () => {
+  const calls = [];
+  const transport = (payload) => { calls.push(payload.token); return { ok: false, status: 404, json: null, error: 'Not Found' }; };
+  const sources = fakeSources({ GH_TOKEN: 'a', 'git credential': 'b' });
+  assert.strictEqual(gh.request('/p', { path: '/x' }, { transport, sources, cache: new Map() }).status, 404);
+  assert.deepStrictEqual(calls, ['a'], 'a 404 is an answer about the repository, not about the token');
+  const refused = (payload) => { calls.push(payload.token); return { ok: false, status: 401, json: null, error: 'Bad credentials' }; };
+  assert.strictEqual(gh.request('/p', { path: '/x', token: 'given' }, { transport: refused, sources, cache: new Map() }).status, 401);
+  assert.deepStrictEqual(calls, ['a', 'given'], 'a token the caller chose is never swapped for another');
+});
