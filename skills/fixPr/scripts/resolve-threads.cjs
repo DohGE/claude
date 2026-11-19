@@ -17,7 +17,7 @@ const { execFileSync } = require('node:child_process');
 const prApi = require('./pr-api.cjs');
 
 function parseArgs(argv) {
-  const args = { project: process.cwd(), threads: [], dryRun: false, comments: null, root: null, commit: null, via: {}, noReply: false };
+  const args = { project: process.cwd(), threads: [], dryRun: false, comments: null, root: null, commit: null, via: {}, noReply: false, skipResolved: false };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--dry-run') {
@@ -26,6 +26,10 @@ function parseArgs(argv) {
     }
     if (arg === '--no-reply') {
       args.noReply = true;
+      continue;
+    }
+    if (arg === '--skip-resolved') {
+      args.skipResolved = true;
       continue;
     }
     const m = arg.match(/^--([a-z-]+)=([\s\S]*)$/);
@@ -39,7 +43,7 @@ function parseArgs(argv) {
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --project, --threads, --comments, --root, --commit, --via, --no-reply, --dry-run).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --project, --threads, --comments, --root, --commit, --via, --no-reply, --skip-resolved, --dry-run).`);
   }
   if (args.threads.length === 0) throw new Error('No threads given (expected --threads="<id>,<id>").');
   const proof = ['comments', 'root', 'commit'].filter((k) => args[k]);
@@ -132,7 +136,18 @@ function resolveAll(options, api = prApi, wait = pause, files = null) {
   const retry = (call, beforeRetry) => (api.withRetry || prApi.withRetry)(call, { wait, beforeRetry });
   const hasReply = (id, prefix) => (api.threadHasReply ? api.threadHasReply(project, id, prefix) : { found: false });
   result.alreadyReplied = [];
+  result.alreadyResolved = [];
   ids.forEach((id) => {
+    // --skip-resolved: a resolve run again (fixpr-after.cjs --resolve-only) leaves a thread GitHub
+    // already shows closed - by the earlier try or by the user - without a word. A thread whose
+    // state cannot be read is treated as open: its reply is still checked for before posting.
+    if (options.skipResolved && api.threadResolved) {
+      pace();
+      if (api.threadResolved(project, id).resolved === true) {
+        result.alreadyResolved.push(id);
+        return;
+      }
+    }
     if (reply) {
       const prefix = `Fixed in ${String(options.commit).slice(0, 12)}`;
       pace();

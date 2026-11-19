@@ -101,3 +101,18 @@ test('a held part whose landing moved nothing is said to be unchanged, not moved
   const text = summary.render({ run: file }, { run: () => ({}) });
   assert.match(text, /bez zmian: już siedziała na part-1/);
 });
+
+test('the summary shows the final state of threads resolved again (--resolve-only)', (t) => {
+  const dir = fs.realpathSync(tempDir(t, 'fpc-sum-'));
+  const run = {
+    project: dir, stacks: [],
+    targets: [{
+      branch: 'b', pr: { number: 7, title: 't' }, reportPath: path.join(dir, 'b.md'), landing: 'rebase', stack: {},
+      outcome: { commit: 'c1', pushed: true, resolve: { resolved: 5, alreadyResolved: 2, failed: [{ id: 'X', error: 'HTTP 401: Bad credentials' }], unverified: [], replyFailed: [], resolveOnly: '2026-11-19T10:15:00.000Z' } },
+    }],
+  };
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify(run));
+  const text = summary.render({ run: file, verify: 'no' });
+  assert.match(text, /#7: rozwiązane wątki 5 \(w tym wcześniej: 2\), nieudane: 1 — HTTP 401: Bad credentials; ponowione 2026-11-19 10:15/);
+});

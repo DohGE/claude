@@ -51,8 +51,10 @@ test('branchState reads its counts through countOf, so a failed one is not in-sy
 test('parseArgs defaults, parses and refuses unknown flags', () => {
   assert.deepStrictEqual(
     wt.parseArgs(['--action=add', '--branch=feat/a', '--project=/tmp/x']),
-    { action: 'add', branch: 'feat/a', project: '/tmp/x', worktree: '', bootstrap: true, deps: 'auto' },
+    { action: 'add', branch: 'feat/a', project: '/tmp/x', worktree: '', bootstrap: true, deps: 'auto', resume: false },
   );
+  assert.strictEqual(wt.parseArgs(['--branch=a', '--resume=yes']).resume, true);
+  assert.throws(() => wt.parseArgs(['--branch=a', '--resume=maybe']), /Unknown argument/);
   assert.strictEqual(wt.parseArgs(['--branch=a', '--no-bootstrap']).bootstrap, false);
   assert.throws(() => wt.parseArgs(['--action=nuke', '--branch=a']), /Unknown --action/);
   assert.strictEqual(wt.parseArgs(['--branch=a', '--deps=install']).deps, 'install');
@@ -253,6 +255,49 @@ test('add refuses a folder that is still a registered worktree', (t) => {
   const again = wt.add({ project: dir, branch: 'feat', bootstrap: false });
   assert.match(again.errors[0], /already exists/);
   assert.ok(fs.existsSync(first.worktree));
+});
+
+// 2026-11-18: after the orchestrator died, its worktrees were still registered and every add
+// refused them; the next session re-created one by hand.
+test('add --resume takes the worktree of a stopped run as it is, uncommitted work and all', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'feat');
+  const first = wt.add({ project: dir, branch: 'feat', bootstrap: false });
+  fs.writeFileSync(path.join(first.worktree, 'README.md'), 'half a fix\n');
+  const again = wt.add({ project: dir, branch: 'feat', bootstrap: false, resume: true });
+  assert.deepStrictEqual(again.errors, []);
+  assert.strictEqual(again.worktree, first.worktree);
+  assert.strictEqual(again.reused, true);
+  assert.strictEqual(fs.readFileSync(path.join(first.worktree, 'README.md'), 'utf8'), 'half a fix\n');
+});
+
+test('add --resume makes a gone worktree again from the local branch holding the unpushed commit, rebased or not', (t) => {
+  const dir = makeRepo(t);
+  run(dir, ['checkout', '-q', '-b', 'feat']);
+  commitFile(dir, 'a.txt', 'a\n', 'remote side');
+  fakeRemoteBranch(dir, 'feat', 'feat');
+  run(dir, ['reset', '-q', '--hard', 'main']);
+  commitFile(dir, 'b.txt', 'b\n', 'the stopped run\'s rebased commit');
+  const local = run(dir, ['rev-parse', 'HEAD']);
+  run(dir, ['checkout', '-q', 'main']);
+  const result = wt.add({ project: dir, branch: 'feat', bootstrap: false, resume: true });
+  assert.deepStrictEqual(result.errors, []);
+  assert.strictEqual(run(result.worktree, ['rev-parse', 'HEAD']), local);
+  assert.ok(result.warnings.some((w) => /diverged/.test(w) && /lease/.test(w)));
+});
+
+test('add --resume checks out the run\'s own branch of a checked-out branch with its unpushed commit', (t) => {
+  const dir = makeRepo(t);
+  fakeRemoteBranch(dir, 'main');
+  const first = wt.add({ project: dir, branch: 'main', bootstrap: false });
+  commitFile(first.worktree, 'fix.txt', 'fix\n', 'CR');
+  const commit = run(first.worktree, ['rev-parse', 'HEAD']);
+  run(dir, ['worktree', 'remove', first.worktree]);
+  assert.match(wt.add({ project: dir, branch: 'main', bootstrap: false }).errors[0], /holds commits origin\/main does not have/);
+  const again = wt.add({ project: dir, branch: 'main', bootstrap: false, resume: true });
+  assert.deepStrictEqual(again.errors, []);
+  assert.strictEqual(again.localBranch, 'doh-fixpr/main');
+  assert.strictEqual(run(again.worktree, ['rev-parse', 'HEAD']), commit);
 });
 
 test('add names the project rulebook the worktree carries, or null', (t) => {

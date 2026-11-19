@@ -323,3 +323,11 @@ test('a review bot is flagged on an inline thread, not only in the conversation'
   assert.ok(api.threadCommentsQuery.includes('author{login __typename}'));
 });
 
+
+test('threadResolved reads whether a thread is closed now, and names a read that failed', () => {
+  const send = sender(ok({ data: { node: { id: 'T1', isResolved: true } } }), ok({ data: { node: { id: 'T2', isResolved: false } } }), fail(401, 'HTTP 401: Bad credentials'));
+  assert.deepStrictEqual(api.threadResolved('/p', 'T1', send), { resolved: true, error: null });
+  assert.deepStrictEqual(api.threadResolved('/p', 'T2', send), { resolved: false, error: null });
+  assert.strictEqual(api.threadResolved('/p', 'T3', send).resolved, null);
+  assert.deepStrictEqual(send.calls[0].body.variables, { id: 'T1' });
+});

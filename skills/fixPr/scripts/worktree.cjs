@@ -23,7 +23,7 @@ const bootstrapTimeoutMs = 10 * 60 * 1000;
 const depsModes = ['auto', 'install', 'link'];
 
 function parseArgs(argv) {
-  const args = { action: 'add', branch: '', project: process.cwd(), worktree: '', bootstrap: true, deps: 'auto' };
+  const args = { action: 'add', branch: '', project: process.cwd(), worktree: '', bootstrap: true, deps: 'auto', resume: false };
   const unknown = [];
   for (const arg of argv) {
     if (arg === '--no-bootstrap') {
@@ -40,10 +40,11 @@ function parseArgs(argv) {
     else if (m[1] === 'project') args.project = m[2];
     else if (m[1] === 'worktree') args.worktree = m[2];
     else if (m[1] === 'deps') args.deps = m[2];
+    else if (m[1] === 'resume' && ['yes', 'no'].includes(m[2])) args.resume = m[2] === 'yes';
     else unknown.push(arg);
   }
   if (unknown.length > 0) {
-    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --branch, --project, --worktree, --deps, --no-bootstrap).`);
+    throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --branch, --project, --worktree, --deps, --resume=yes|no, --no-bootstrap).`);
   }
   if (!['add', 'remove'].includes(args.action)) {
     throw new Error(`Unknown --action=${args.action} (expected add|remove).`);
@@ -841,6 +842,21 @@ function withRepoLock(project, fn, { waitMs = 120000, staleMs = 300000, wait = s
   }
 }
 
+// What the brief says about a worktree: its rulebook (or that there is none, so no agent spends
+// its calls looking) and how the app is started for a look at a fix (`checks.json` "visual":
+// command, url, backend, authFile) - the fix agent's visual check; null when the project
+// describes none.
+function describeWorktree(worktree, result) {
+  const rules = path.join(worktree, '.claude', 'doh', 'instructions');
+  result.rulebook = isDirectory(rules) ? rules : null;
+  try {
+    const checks = JSON.parse(fs.readFileSync(path.join(worktree, '.claude', 'doh', 'checks.json'), 'utf8'));
+    result.visual = checks && checks.visual && typeof checks.visual.command === 'string' ? checks.visual : null;
+  } catch {
+    result.visual = null;
+  }
+}
+
 function add(options) {
   const project = path.resolve(options.project || process.cwd());
   const result = withRepoLock(project, () => checkoutWorktree(options, project), options.lock);
@@ -877,9 +893,36 @@ function checkoutWorktree(options, project) {
     result.warnings.push(`Could not fetch origin/${branch}${fetched.reason ? ` (${fetched.reason})` : ''}; working from the refs already in the repository - preflight.cjs names the fix.`);
   }
 
+  // --resume=yes (fixpr-resume.cjs): a run whose orchestrator died goes on where it stopped. The
+  // worktree it made, still registered for this branch or the run's own branch of it, is taken as
+  // it is - uncommitted work and all - instead of the refusal "a worktree git still has registered".
+  // On 2026-11-18 the orchestrator re-created one by hand after a crash.
+  const resume = Boolean(options.resume);
+  if (resume) {
+    const at = path.resolve(options.worktree || worktreePathFor(project, branch));
+    const same = (p) => Boolean(p) && path.resolve(p).toLowerCase() === at.toLowerCase();
+    const holder = [branch, ownBranchFor(branch)].find((b) => same(worktreeHolding(project, b)));
+    if (holder && isDirectory(at)) {
+      result.worktree = at;
+      result.reused = true;
+      if (holder !== branch) {
+        result.localBranch = holder;
+        const user = worktreeHolding(project, branch);
+        if (user) result.heldBy = user;
+      }
+      result.warnings.push(`Took ${at}, the worktree of the stopped run, as it is.`);
+      describeWorktree(at, result);
+      result.installed = isDirectory(path.join(at, 'node_modules'));
+      return result;
+    }
+  }
+
   const held = worktreeHolding(project, branch);
   const { state, ahead, behind } = branchState(project, branch);
   let own = null;
+  // The run's own branch of a branch the user has checked out, holding the commit a stopped run
+  // made and never pushed: checked out again as it is (--resume=yes only).
+  let ownKept = false;
   if (held) {
     // Two working copies of one branch diverge silently, so the run's copy is a branch of its own.
     if (state === 'ahead' || state === 'diverged') {
@@ -893,11 +936,14 @@ function checkoutWorktree(options, project) {
         return result;
       }
       if (refExists(project, `refs/heads/${own}`)) {
-        if (tryGit(project, ['merge-base', '--is-ancestor', own, `origin/${branch}`]) === null) {
+        const unpushed = tryGit(project, ['merge-base', '--is-ancestor', own, `origin/${branch}`]) === null;
+        if (unpushed && resume) {
+          ownKept = true;
+          result.warnings.push(`${own} holds the stopped run's commit(s) origin/${branch} does not have; checked out as it is.`);
+        } else if (unpushed) {
           result.errors.push(`${own} holds commits origin/${branch} does not have - an earlier run that could not push. Inspect it, then delete it (git branch -D ${own}).`);
           return result;
-        }
-        tryGit(project, ['branch', '-D', own]);
+        } else tryGit(project, ['branch', '-D', own]);
       }
       result.heldBy = held;
       result.localBranch = own;
@@ -913,7 +959,11 @@ function checkoutWorktree(options, project) {
     result.errors.push(`Branch ${branch} has no origin/${branch}, so its fixes could never be pushed to the pull request. Push the branch first.`);
     return result;
   }
-  if (state === 'diverged') {
+  // A stopped run's commit rebased and never pushed: origin no longer matches it, and the landing
+  // pushes it with the lease pinned to where origin stood when the run began.
+  if (state === 'diverged' && resume) {
+    result.warnings.push(`${branch} and origin/${branch} have diverged (${ahead} local, ${behind} remote commit(s)): the stopped run's local branch is checked out as it is; only its landing pushes it, with the lease.`);
+  } else if (state === 'diverged') {
     result.errors.push(`Branch ${branch} and origin/${branch} have diverged (${ahead} local, ${behind} remote commit(s)). Reconcile them yourself - rebasing or merging on your behalf is not this skill's call.`);
     return result;
   }
@@ -951,7 +1001,7 @@ function checkoutWorktree(options, project) {
   // origin. Every other state already has the branch, and `worktree add <path>
   // <branch>` moves it into the new checkout.
   const addArgs = own
-    ? ['worktree', 'add', worktree, '-b', own, `origin/${branch}`]
+    ? (ownKept ? ['worktree', 'add', worktree, own] : ['worktree', 'add', worktree, '-b', own, `origin/${branch}`])
     : state === 'remote-only'
       ? ['worktree', 'add', worktree, '-b', branch, `origin/${branch}`]
       : ['worktree', 'add', worktree, branch];
@@ -989,17 +1039,7 @@ function bootstrapWorktree(options, project, result) {
   const { worktree } = result;
   result.envFiles = copyEnvFiles(project, worktree);
   result.dohConfig = copyDohConfig(project, worktree);
-  // The brief names the rulebook or says there is none, so no agent spends its calls looking.
-  const rules = path.join(worktree, '.claude', 'doh', 'instructions');
-  result.rulebook = isDirectory(rules) ? rules : null;
-  // How the app is started for a look at a fix (`checks.json` "visual": command, url, backend,
-  // authFile) - the fix agent's visual check; null when the project describes none.
-  try {
-    const checks = JSON.parse(fs.readFileSync(path.join(worktree, '.claude', 'doh', 'checks.json'), 'utf8'));
-    result.visual = checks && checks.visual && typeof checks.visual.command === 'string' ? checks.visual : null;
-  } catch {
-    result.visual = null;
-  }
+  describeWorktree(worktree, result);
   if (options.bootstrap === false) {
     result.dependencies = { manager: null, error: null, skipped: true };
     return result;

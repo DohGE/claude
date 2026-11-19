@@ -1,7 +1,7 @@
 ---
 name: fixPr
 description: Use when the user wants one or more pull requests brought to a clean state - takes a list of branches separated by `;` or `,` like codeReview, fixes every UNRESOLVED review thread and the pull request conversation from the GitHub API AND every red command in the project's own lint/typecheck/unit-test/build gate, in a background sub-agent per branch inside its own git worktree, and lands one commit named after the pull request title, rebased onto the base - a stack of pull requests (each based on another one's branch) lands bottom-up, each part moved onto its landed parent; with --local=<ids> it fixes those findings of the branch's doh codeReview reports instead of the pull request comments
-argument-hint: "<branch>[;<branch>…] [--local=<id>[,<id>…]] [--task=\"<change>\"] [--restack] [--dry-run] [--no-push] [--no-reply] [--keep-worktree] [--project=<path>]"
+argument-hint: "<branch>[;<branch>…] [--local=<id>[,<id>…]] [--task=\"<change>\"] [--restack] [--resume[=<runPath>]] [--dry-run] [--no-push] [--no-reply] [--keep-worktree] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -120,6 +120,9 @@ Without that tool, re-read the file or re-run the command with narrower output.
   never copy a value, a sha or a verdict from one answer into another call by hand.
 - Every `restack.cjs` call that acts on a target takes `--run=<runPath>` and the branch: the worktree,
   parent, tips and checks folder come from the run file. You never copy shas by hand.
+- A run that stopped half way (the session died, the orchestrator was killed) goes on with
+  `--resume` (Step 1b), never by hand. On 2026-11-18 a hand push after a crash skipped the
+  `keep-base` check, and the bottom part conflicted with its base on GitHub.
 
 ## Step 1 — Parse the arguments
 
@@ -146,14 +149,55 @@ Without that tool, re-read the file or re-run the command with narrower output.
      branch list, with no flag ("…; additionally in part-1 add …"), is the same thing: pass it as
      `--task` for the branch it names, and run that branch alone when it is the only one the
      text names, beside the others.
+   - `--resume` or `--resume=<runPath>` → `RESUME=yes` (with that run file, or the project's newest):
+     go on with a run whose orchestrator stopped, from its files - Step 1b, instead of Steps 2-4.
+     It takes no branch list; `--no-push`, `--no-reply`, `--keep-worktree` and `--project` still
+     apply, `--dry-run` makes it name the steps only.
    - `--restack` → `RESTACK=yes`: before anything else, move the whole stack the named branches
      belong to onto the newest base, bottom-up (Step 2a). The fixes then land once, on code that is
      already current - on 2026-11-06 a fix run followed by "now rebase all 5" built every part four
      times and met every conflict twice.
 3. Everything REMAINING is the branch list, verbatim. The collector splits it on `,` and `;`.
-   No arguments at all → stop and say, in Polish, that the skill needs at least one branch name
-   (`/doh:fixPr feature/a;feature/b`). Never fall back to the current branch: a run that
-   guesses its own target commits to a branch nobody named.
+   No arguments at all (and no `--resume`) → stop and say, in Polish, that the skill needs at least
+   one branch name (`/doh:fixPr feature/a;feature/b`). Never fall back to the current branch: a run
+   that guesses its own target commits to a branch nobody named.
+
+## Step 1b — Resume a stopped run (`--resume` only)
+
+Everything a run needs to go on is on disk: the run file (`.claude/doh/fixpr-run-*.json`, with what
+each launch, landing, push and `fixpr-after.cjs` kept on its target) and each agent's result file.
+Run (Bash):
+
+    node "<SKILL_DIR>/scripts/fixpr-resume.cjs" --project="<PROJECT>" [--run="<runPath>"] [--push=no] [--reply=no] [--keep-worktree=yes] [--language=<language>] [--worktrees=no]
+
+(`--run` when the flag named a run file; `--push=no` with `--no-push`, `--reply=no` with
+`--no-reply`, `--keep-worktree=yes` with `--keep-worktree`, `--worktrees=no` with `--dry-run`;
+`--push` and `--language` otherwise come from the stopped run's launches.) It fetches, reads the
+files and git, makes again the worktree a landing needs, and prints `runPath` and one entry per
+target in `actions[]`: `action`, `reason`, `command`, sometimes `note` and `worktree`. Report each
+target in Polish (`part-2: land - part-1 już wylądował`); `--dry-run` stops here. Then, in
+`actions` order, run each `command` once, as the step it stands for:
+
+- `spawn` - the agent never ended (no result file), or ended in error with work left in its
+  worktree: the command is its launch (Step 3, its answer read as there; `--resume=yes` takes the
+  worktree as it is), then spawn the agent as Step 4, with the `note` in the spawn prompt under a
+  heading of its own. Its end is handled by Step 5.
+- `land` - a held part whose parent has landed, or a `keep-base` bottom whose commit was never
+  pushed (`--keep-base=yes`: it moves onto its base only when it no longer merges): background, and
+  its `status` as Step 5 point 2.
+- `push` - a commit landed and never pushed: `restack.cjs --action=push` with the commit and, once
+  the commit rewrote the branch, the lease pinned to where origin stood when the run began.
+- `landing-agent` - a landing agent stopped in the middle of its rebase: the command renders its
+  brief; spawn it as Step 5 point 2.
+- `after`, `resolve` (`fixpr-after.cjs --resolve-only=yes`: the threads alone, again), `cascade` -
+  background, the answer read as Step 5 point 4.
+- `wait` - a held part whose parent has not landed: nothing yet. `manual` - report the reason in
+  Polish; no script can act. `done` - nothing.
+
+Once the commands of a pass have answered (agents still running go on in Step 5), run the script
+again. A target whose action and reason come back unchanged after its command ran is not run
+again: report it with the reason (a push the remote refuses, a token GitHub still rejects). Every target `done`, `manual` or waiting on a running agent
+→ Step 5c and Step 6, with `--run` = `runPath`.
 
 ## Step 2a — Restack first (`--restack` only)
 
@@ -390,7 +434,10 @@ A stack lands bottom-up; a branch outside any stack lands when its agent ends.
 4. Read each `fixpr-after.cjs` answer: `verify.ok` false or `resolve.failed`/`unverified` go into the
    summary (the script prints them). `resolve.failed` and `resolve.replyFailed` hold one
    `{ error, count, ids }` per distinct error: report each error once, with its count; `keptWorktree`
-   names a worktree left for the user. An
+   names a worktree left for the user. A resolve that failed for the token (a 401 on every thread)
+   is run again, alone, once the token is fixed:
+   `node "<SKILL_DIR>/scripts/fixpr-after.cjs" --run="<runPath>" --branch="<branch>" --resolve-only=yes` -
+   it skips the threads already closed, posts no second reply, and works with the worktree gone. An
    `errors[]` entry "The main checkout's node_modules disappeared while removing …" (or "went from
    N to M entries") → tell the user at once, in Polish, that their checkout's `node_modules` is gone
    and that they must run the install it names there; launch no further target and land no further
@@ -471,4 +518,5 @@ the user has not been told about yet.
 | "part-1 removed a name part-3 uses - I will SendMessage part-3 now" | A held part cannot adapt before it sits on the new parent; three agents said so on 2026-11-16, and the message cut into a running gate. restack.cjs gives the landing agent every such change (`PARENT_CHANGES`). |
 | "The move went through but the gate is red - that is an error for the user" | A `gate-red` with `briefVars` is the landing agent's work in `adapt` mode: this part's code following what the parts below changed. |
 | "The preflight only failed on origin - the push is half an hour away, I will start the agents" | The push then fails half an hour in, after every agent's work (2026-11-18). The fix is one command the user runs now; the run starts again in a minute. |
+| "The session died mid-run; I will push the commits and close the threads by hand" | `--resume` reads every state from the run file and names each step with its command: the `keep-base` check, the lease and the thread step the hand push of 2026-11-18 skipped. |
 | "I will write the summary myself, I have every reply" | `fixpr-summary.cjs` prints it from the files, rejected grounds and files to look at included; your final message is its text plus what no file holds. |

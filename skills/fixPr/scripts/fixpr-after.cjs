@@ -11,19 +11,27 @@
 // the agent's `<reportPath>.result.json`; a held part landed by restack.cjs or a conflict agent
 // passes that landing's commit with --commit and --pushed.
 //
+// --resolve-only=yes runs the thread step alone again, for a target that landed and pushed but
+// whose threads stayed open (a 401 on every resolve and reply, 2026-11-18): it works with the
+// worktree gone (the commit is read from the main repository's object store, after a fetch),
+// skips the threads GitHub already shows resolved, posts no second reply naming the same commit,
+// and keeps the new state in the target's `outcome`, which fixpr-summary.cjs prints.
+//
 // Usage: node fixpr-after.cjs --run=<fixpr-run-*.json> --branch=<branch> [--commit=<sha>] [--pushed=yes|no]
-//        [--reply=yes|no] [--keep-worktree=yes|no] [--land-next=yes|no] [--push=yes|no]
+//        [--reply=yes|no] [--keep-worktree=yes|no] [--land-next=yes|no] [--push=yes|no] [--resolve-only=yes|no]
 // Prints one JSON object: { branch, resolve, verify, removed, keptReports, keptWorktree, cascade,
 // next, warnings, errors }. `resolve.failed` and `resolve.replyFailed` hold one `{ error, count,
 // ids }` per distinct error. `next` is the next part's landing (restack.cjs --summary=yes), or
-// `{ branch, waiting: true }` while that part's agent still works.
+// `{ branch, waiting: true }` while that part's agent still works. --resolve-only prints
+// { branch, resolveOnly, resolve, warnings, errors }.
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { runScript } = require('./fixpr-launch.cjs');
 
 function parseArgs(argv) {
-  const args = { run: '', branch: '', commit: '', pushed: '', reply: 'yes', keepWorktree: 'no', landNext: 'no', push: 'yes' };
+  const args = { run: '', branch: '', commit: '', pushed: '', reply: 'yes', keepWorktree: 'no', landNext: 'no', push: 'yes', resolveOnly: 'no' };
   const unknown = [];
   for (const arg of argv) {
     const m = arg.match(/^--([a-z-]+)=(.*)$/);
@@ -36,10 +44,12 @@ function parseArgs(argv) {
     else if (m[1] === 'keep-worktree') args.keepWorktree = m[2].trim();
     else if (m[1] === 'land-next') args.landNext = m[2].trim();
     else if (m[1] === 'push') args.push = m[2].trim();
+    else if (m[1] === 'resolve-only') args.resolveOnly = m[2].trim();
     else unknown.push(arg);
   }
-  if (unknown.length) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --run, --branch, --commit, --pushed, --reply, --keep-worktree, --land-next, --push).`);
+  if (unknown.length) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --run, --branch, --commit, --pushed, --reply, --keep-worktree, --land-next, --push, --resolve-only).`);
   if (!args.run || !args.branch) throw new Error('--run and --branch are required.');
+  if (!['yes', 'no'].includes(args.resolveOnly)) throw new Error('--resolve-only takes yes or no.');
   return args;
 }
 
@@ -49,6 +59,27 @@ const readJson = (file) => {
   } catch {
     return null;
   }
+};
+
+const git = (dir, args) => {
+  const res = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', windowsHide: true });
+  return { ok: res.status === 0, out: String(res.stdout || '').trim(), err: String(res.stderr || res.error || '').trim() };
+};
+
+const fetchFailed = (target) => `Could not fetch origin/${target.branch}; reading the commit from the objects the repository already has.`;
+
+// Where the commit is read for the threads' files: the worktree, or - once it is gone (removed
+// after the landing, or a crash) - the main checkout, whose object store every worktree shares.
+// The commit may have been pushed from another checkout since: fetch first.
+function threadRoot(target, project, runGit, warnings, fetched = false) {
+  if (target.worktree && fs.existsSync(target.worktree) && runGit(target.worktree, ['rev-parse', '--git-dir']).ok) return target.worktree;
+  if (!fetched && !runGit(project, ['fetch', '--quiet', 'origin', target.branch]).ok) warnings.push(fetchFailed(target));
+  return project;
+}
+
+const resolveArgs = (project, target, ids, result, root, commit, reply, extra = []) => {
+  const via = Object.entries((result && result.fixedVia) || {}).map(([id, paths]) => `${id}:${[].concat(paths).join('|')}`).join(';');
+  return [`--project=${project}`, `--threads=${ids.join(',')}`, `--comments=${target.commentsPath}`, `--root=${root}`, `--commit=${commit}`, ...(via ? [`--via=${via}`] : []), ...(reply === 'no' ? ['--no-reply'] : []), ...extra];
 };
 
 // Tracked changes that are someone's work: what an install rewrote (husky's helpers, worktree.cjs
@@ -77,8 +108,10 @@ function groupFailures(list) {
 const failureCount = (list) => (list || []).reduce((n, f) => n + (f && typeof f.count === 'number' ? f.count : 1), 0);
 
 function after(options, deps = {}) {
+  if (options.resolveOnly === 'yes') return resolveOnly(options, deps);
   const run = deps.run || runScript;
   const dirty = deps.dirty || gitDirty;
+  const runGit = deps.git || git;
   const scripts = { resolve: path.join(__dirname, 'resolve-threads.cjs'), verify: path.join(__dirname, 'verify-fix.cjs'), worktree: path.join(__dirname, 'worktree.cjs'), restack: path.join(__dirname, 'restack.cjs'), processes: path.join(__dirname, '..', '..', 'implementNewFeature', 'scripts', 'task-processes.cjs') };
   const data = JSON.parse(fs.readFileSync(options.run, 'utf8'));
   const target = (data.targets || []).find((t) => t.branch === options.branch);
@@ -97,9 +130,9 @@ function after(options, deps = {}) {
   else if (ids.length === 0) out.resolve = { skipped: 'no thread fixed' };
   else if (!committed || !pushed) out.resolve = { skipped: committed ? 'not pushed' : 'nothing committed' };
   else {
-    const via = Object.entries(result.fixedVia || {}).map(([id, paths]) => `${id}:${[].concat(paths).join('|')}`).join(';');
-    const res = run(scripts.resolve, [`--project=${project}`, `--threads=${ids.join(',')}`, `--comments=${target.commentsPath}`, `--root=${target.worktree}`, `--commit=${commit}`, ...(via ? [`--via=${via}`] : []), ...(options.reply === 'no' ? ['--no-reply'] : [])]) || {};
-    out.resolve = { resolved: (res.resolved || []).length, failed: groupFailures(res.failed), unverified: res.unverified || [], replyFailed: groupFailures(res.replyFailed) };
+    const root = threadRoot(target, project, runGit, out.warnings);
+    const res = run(scripts.resolve, resolveArgs(project, target, ids, result, root, commit, options.reply)) || {};
+    out.resolve = { resolved: (res.resolved || []).length, failed: groupFailures(res.failed), unverified: res.unverified || [], replyFailed: groupFailures(res.replyFailed), ...((res.errors || []).length ? { errors: res.errors } : {}) };
   }
 
   // Every item of the comments file held against the agent's verdicts.
@@ -135,11 +168,12 @@ function after(options, deps = {}) {
   if (pushed && above.length > 0) out.cascade = { stack: [target.branch, ...above].join(';'), from: target.branch, fromOldTip: target.remoteTipAtStart || null };
 
   target.outcome = {
-    commit, commitMessage: (result && result.commitMessage) || null, committed, pushed, landedBy: options.commit ? 'landing' : 'agent',
+    commit, commitMessage: (result && result.commitMessage) || null, committed, pushed, landedBy: options.commit ? 'landing' : 'agent', reply: options.reply === 'no' ? 'no' : 'yes',
     resolve: out.resolve, verify: out.verify, removed: out.removed, keptReports: out.keptReports, keptWorktree: out.keptWorktree || null,
   };
 
   // The next part of the stack, moved onto this one now that it has landed.
+  let landedChild = null;
   if (options.landNext === 'yes') {
     const child = (data.targets || []).find((t) => t.stack && t.stack.parent === target.branch && t.landing === 'hold');
     if (child) {
@@ -150,10 +184,66 @@ function after(options, deps = {}) {
         const landed = run(scripts.restack, ['--action=land', `--run=${options.run}`, `--branch=${child.branch}`, `--push=${options.push || 'yes'}`, '--summary=yes', ...(childResult.committed ? ['--pending-steps=build'] : [])]) || {};
         out.next = landed;
         child.landingResult = landed;
+        landedChild = child;
       }
     }
   }
-  fs.writeFileSync(options.run, `${JSON.stringify(data, null, 1)}\n`, 'utf8');
+  // Read again right before the write: the landing above and the other targets' scripts write
+  // the same file while this one runs (a launch of the resume, a parallel fixpr-after).
+  const fresh = JSON.parse(fs.readFileSync(options.run, 'utf8'));
+  for (const t of fresh.targets || []) {
+    if (t.branch === target.branch) t.outcome = target.outcome;
+    if (landedChild && t.branch === landedChild.branch) t.landingResult = landedChild.landingResult;
+  }
+  fs.writeFileSync(options.run, `${JSON.stringify(fresh, null, 1)}\n`, 'utf8');
+  return out;
+}
+
+// The thread step alone, again: for a target fixpr-after already handled whose threads stayed open.
+function resolveOnly(options, deps = {}) {
+  const run = deps.run || runScript;
+  const runGit = deps.git || git;
+  const data = JSON.parse(fs.readFileSync(options.run, 'utf8'));
+  const target = (data.targets || []).find((t) => t.branch === options.branch);
+  if (!target) throw new Error(`${options.branch} is not a target of ${options.run}.`);
+  const project = data.project || path.dirname(options.run);
+  const out = { branch: target.branch, resolveOnly: true, resolve: null, warnings: [], errors: [] };
+  const o = target.outcome;
+  if (!o) {
+    out.errors.push(`${target.branch} has no outcome in ${options.run} yet: run fixpr-after.cjs without --resolve-only first.`);
+    return out;
+  }
+  const result = readJson(`${target.reportPath}.result.json`);
+  const ids = (result && result.type === 'result' && result.fixedThreadIds) || [];
+  const commit = options.commit || o.commit || null;
+  const reply = options.reply === 'no' || o.reply === 'no' ? 'no' : 'yes';
+  // Pushed is what origin holds now, not what the run once wrote: a push made after the crash
+  // counts, and a commit origin does not have is never claimed as addressed.
+  let pushed = Boolean(o.pushed);
+  if (commit) {
+    if (!runGit(project, ['fetch', '--quiet', 'origin', target.branch]).ok) out.warnings.push(fetchFailed(target));
+    pushed = runGit(project, ['merge-base', '--is-ancestor', commit, `refs/remotes/origin/${target.branch}`]).ok;
+  }
+  if (target.local) out.resolve = { skipped: 'a --local run has no thread' };
+  else if (ids.length === 0) out.resolve = { skipped: 'no thread fixed' };
+  else if (!commit) out.resolve = { skipped: 'nothing committed' };
+  else if (!pushed) out.resolve = { skipped: `not pushed: origin/${target.branch} does not hold ${String(commit).slice(0, 12)}` };
+  else {
+    const root = threadRoot(target, project, runGit, out.warnings, true);
+    const res = run(path.join(__dirname, 'resolve-threads.cjs'), resolveArgs(project, target, ids, result, root, commit, reply, ['--skip-resolved'])) || {};
+    const already = (res.alreadyResolved || []).length;
+    out.resolve = {
+      resolved: (res.resolved || []).length + already, alreadyResolved: already, failed: groupFailures(res.failed), unverified: res.unverified || [],
+      replyFailed: groupFailures(res.replyFailed), ...((res.errors || []).length ? { errors: res.errors } : {}), resolveOnly: new Date().toISOString(),
+    };
+    out.warnings.push(...(res.errors || []));
+  }
+  // Read again right before the write: another target's fixpr-after may have written meanwhile. A
+  // skip keeps the earlier answer, which says more.
+  const fresh = JSON.parse(fs.readFileSync(options.run, 'utf8'));
+  const t = (fresh.targets || []).find((x) => x.branch === target.branch);
+  t.outcome = { ...t.outcome, commit, pushed, resolve: out.resolve.skipped && t.outcome.resolve && !t.outcome.resolve.skipped ? t.outcome.resolve : out.resolve };
+  fs.writeFileSync(options.run, `${JSON.stringify(fresh, null, 1)}\n`, 'utf8');
   return out;
 }
 
@@ -168,6 +258,6 @@ function main() {
   process.exit(result.errors.length ? 1 : 0);
 }
 
-module.exports = { parseArgs, after, groupFailures, failureCount };
+module.exports = { parseArgs, after, resolveOnly, threadRoot, groupFailures, failureCount };
 
 if (require.main === module) main();

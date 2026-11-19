@@ -887,3 +887,57 @@ test('a climb stops at the part whose remove lost the main checkout\'s node_modu
   assert.deepStrictEqual(landed, ['p1', 'p2', 'p3']);
   assert.deepStrictEqual(resumed.errors, []);
 });
+
+// --- Resuming a run whose orchestrator died (fixpr-resume.cjs) --------------------------------
+
+// The bottom of a stack (`keep-base`) whose commit a stopped run never pushed: 2026-11-18's hand
+// push skipped the check that it still merges into its base.
+test('land --keep-base leaves a bottom that still merges on its base, and moves one that does not', (t) => {
+  const s = stack(t);
+  const tree1 = path.join(path.dirname(s.tree), 'tree-part-1');
+  git(s.work, 'worktree', 'add', '-q', tree1, 'part-1');
+  const cr = commit(tree1, 'one.txt', 'part one, fixed\n', 'CR 1');
+  commit(s.work, 'main.txt', 'newer main\n', 'main moved');
+  git(s.work, 'push', '-q', 'origin', 'main');
+  const kept = restack.land({ worktree: tree1, branch: 'part-1', parent: 'main', remoteTipAtStart: s.tips.a1, gate: 'no', push: 'yes', keepBase: 'yes' });
+  assert.deepStrictEqual([kept.status, kept.keptBase, kept.rebased, kept.pushed, kept.lease], ['landed', true, false, true, null]);
+  assert.strictEqual(git(s.work, 'ls-remote', 'origin', 'refs/heads/part-1').split('\t')[0], cr);
+
+  // main now changes the line part-1's next commit changes: it no longer merges, so it moves.
+  fs.writeFileSync(path.join(s.work, 'shared.txt'), 'one\nTWO from main\nthree\n');
+  git(s.work, 'commit', '-q', '-am', 'main edits shared');
+  git(s.work, 'push', '-q', 'origin', 'main');
+  fs.writeFileSync(path.join(tree1, 'shared.txt'), 'one\nTWO from part 1\nthree\n');
+  git(tree1, 'commit', '-q', '-am', 'CR 1b');
+  const moved = restack.land({ worktree: tree1, branch: 'part-1', parent: 'main', remoteTipAtStart: cr, gate: 'no', push: 'yes', keepBase: 'yes', autoResolve: 'no' });
+  assert.strictEqual(moved.keptBase, undefined);
+  assert.strictEqual(moved.status, 'conflict');
+});
+
+test('land pushes with the lease a part an earlier landing moved but never pushed', (t) => {
+  const s = stack(t);
+  git(s.work, 'switch', '-q', 'part-1');
+  commit(s.work, 'one.txt', 'part one, fixed\n', 'CR 1');
+  git(s.work, 'push', '-q', 'origin', 'part-1');
+  const first = land(s, { push: 'no' });
+  assert.deepStrictEqual([first.status, first.rebased], ['landed', true]);
+  // The run stopped here. The landing again moves nothing, and its plain push would be refused.
+  const again = land(s);
+  assert.deepStrictEqual([again.status, again.rebased, again.pushed, again.lease], ['landed', false, true, s.tips.b1]);
+  assert.strictEqual(git(s.work, 'ls-remote', 'origin', 'refs/heads/part-2').split('\t')[0], first.commit);
+});
+
+test('push --run pushes a commit whose worktree is gone from the project, and keeps the answer in the run file', (t) => {
+  const s = stack(t);
+  git(s.work, 'worktree', 'remove', s.tree);
+  const dir = fs.realpathSync(tempDir(t, 'fpc-run-'));
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify({ project: s.work, targets: [{ branch: 'part-2', worktree: s.tree, remoteTipAtStart: s.tips.b1, stack: { parent: 'part-1' } }] }));
+  const res = require('node:child_process').spawnSync(process.execPath, [path.join(__dirname, 'restack.cjs'), '--action=push', `--run=${file}`, '--branch=part-2', `--commit=${s.tips.b2}`], { encoding: 'utf8' });
+  const out = JSON.parse(res.stdout.trim().split(/\r?\n/).pop());
+  assert.deepStrictEqual([out.pushed, out.commit, out.errors], [true, s.tips.b2, []]);
+  assert.strictEqual(git(s.work, 'ls-remote', 'origin', 'refs/heads/part-2').split('\t')[0], s.tips.b2);
+  const kept = JSON.parse(fs.readFileSync(file, 'utf8')).targets[0].pushResult;
+  assert.deepStrictEqual([kept.pushed, kept.commit, kept.lease], [true, s.tips.b2, null]);
+  assert.throws(() => restack.parseArgs(['--action=push', '--worktree=/w', '--branch=b', '--commit=not-a-sha']), /not a commit sha/);
+});

@@ -19,7 +19,7 @@
 //        [--parent-tip-at-start=<sha>] [--remote-tip-at-start=<sha>] [--checks-dir=<dir>]
 //        [--push=yes|no] [--gate=yes|no] [--auto-resolve=yes|no]
 //   node restack.cjs --action=verify --project=<dir> --pairs="<parent>><child>[@<old tip>],..."
-//   node restack.cjs --action=push --worktree=<dir> --branch=<branch> [--lease=<sha>]
+//   node restack.cjs --action=push --worktree=<dir> --branch=<branch> [--lease=<sha>] [--commit=<sha>]
 //   node restack.cjs --action=cascade --project=<dir> --stack="<bottom>;<part>;..." --from=<part>
 //        [--from-old-tip=<sha>] [--checks-dir=<dir>] [--push=yes|no] [--gate=yes|no]
 //   node restack.cjs --action=plan --project=<dir> --stack="<part>"|"<bottom>;…" [--base=<branch>]
@@ -29,6 +29,11 @@
 // land and verify also take --run=<fixpr-run-*.json> (pr-comments.cjs): a part's worktree,
 // parent, tips and checks folder come from there. --summary=yes prints the compact form.
 // --pending-steps=build: gate steps the fixing agent left to the landing (a held part's build).
+// --keep-base=yes (land): the bottom of a stack moves onto its base only when it no longer merges
+// into it - the fix agent's `keep-base` landing, for a commit a stopped run never pushed.
+// push --run=<file> --branch=<b>: from the worktree, or from the project when it is gone; --commit
+// pushes that commit instead of HEAD. land and push with --run keep their answer on the target in
+// the run file (`landingResult`, `pushResult`), which fixpr-resume.cjs reads.
 // Prints one JSON object. land: `status` is landed | noop | conflict | gate-red | push-rejected |
 // error. `noop`: nothing moved - the part already sat on its parent and origin already had it.
 
@@ -43,7 +48,7 @@ function parseArgs(argv) {
   const args = {
     action: 'land', push: 'yes', gate: 'yes', autoResolve: 'yes', parentTipAtStart: '', remoteTipAtStart: '', checksDir: '', pairs: [],
     lease: '', stack: [], from: '', fromOldTip: '', run: '', summary: 'no', pendingSteps: [], start: '', parentOldTip: '', base: '', ontoBase: 'yes',
-    resume: 'no', language: 'English', preflight: '',
+    resume: 'no', language: 'English', preflight: '', keepBase: 'no', commit: '',
   };
   const unknown = [];
   for (const arg of argv) {
@@ -76,15 +81,18 @@ function parseArgs(argv) {
     else if (m[1] === 'resume') args.resume = value;
     else if (m[1] === 'language') args.language = value;
     else if (m[1] === 'preflight') args.preflight = value;
+    else if (m[1] === 'keep-base') args.keepBase = value;
+    else if (m[1] === 'commit') args.commit = value;
     else unknown.push(arg);
   }
   // The environment check runs by default where a climb starts (plan, stack); a land or a cascade
   // runs inside a run that already passed it.
   if (!args.preflight) args.preflight = ['plan', 'stack'].includes(args.action) ? 'yes' : 'no';
   // This script rewrites and pushes a branch: a mistyped flag stops it.
-  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base, --resume, --language, --preflight).`);
+  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(', ')} (expected --action, --worktree, --branch, --parent, --parent-tip-at-start, --remote-tip-at-start, --checks-dir, --push, --gate, --auto-resolve, --project, --pairs, --lease, --stack, --from, --from-old-tip, --run, --summary, --pending-steps, --start, --parent-old-tip, --base, --onto-base, --resume, --language, --preflight, --keep-base, --commit).`);
   if (!['land', 'verify', 'push', 'cascade', 'stack', 'plan'].includes(args.action)) throw new Error(`Unknown --action=${args.action} (expected land|verify|push|cascade|stack|plan).`);
-  if (![args.push, args.gate, args.autoResolve, args.summary, args.ontoBase, args.resume, args.preflight].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate, --auto-resolve, --summary, --onto-base, --resume and --preflight take yes or no.');
+  if (![args.push, args.gate, args.autoResolve, args.summary, args.ontoBase, args.resume, args.preflight, args.keepBase].every((v) => ['yes', 'no'].includes(v))) throw new Error('--push, --gate, --auto-resolve, --summary, --onto-base, --resume, --preflight and --keep-base take yes or no.');
+  if (args.commit && !/^[0-9a-fA-F]{7,40}$/.test(args.commit)) throw new Error(`--commit=${args.commit} is not a commit sha.`);
   if (args.resume === 'yes' && (args.start || args.parentOldTip)) throw new Error('--resume=yes reads where the climb stopped from its state file: give it without --start and --parent-old-tip.');
   if (args.run) fillFromRun(args);
   if (args.action === 'land' && (!args.worktree || !args.branch || !args.parent)) throw new Error('land needs --worktree, --branch and --parent (or --run and --branch).');
@@ -194,6 +202,29 @@ function fillFromRun(args) {
     for (const key of ['worktree', 'parent', 'parentTipAtStart', 'remoteTipAtStart', 'checksDir', 'parentImpact']) if (!args[key]) args[key] = from[key];
   }
   if (args.action === 'verify' && args.pairs.length === 0) args.pairs = pairsFromRun(run);
+  // A push after a crash: the worktree may be gone, and the commit sits in the object store every
+  // worktree shares - the project pushes it as well (--commit).
+  if (args.action === 'push' && args.branch && !args.worktree) {
+    const t = run.targets.find((x) => x.branch === args.branch);
+    if (!t) throw new Error(`${args.branch} is not a target of the run file.`);
+    args.worktree = t.worktree && fs.existsSync(t.worktree) ? t.worktree : run.project || '';
+  }
+}
+
+// What a landing or a push of a run's target did, kept on that target in the run file: a run whose
+// orchestrator died is resumed from it (fixpr-resume.cjs). Read again right before the write, so
+// what another script kept in the meantime stays.
+function recordInRun(file, branch, key, value) {
+  try {
+    const run = readRun(file);
+    const t = run.targets.find((x) => x.branch === branch);
+    if (!t) return null;
+    t[key] = { ...value, at: new Date().toISOString() };
+    fs.writeFileSync(file, `${JSON.stringify(run, null, 1)}\n`, 'utf8');
+    return null;
+  } catch (err) {
+    return `Could not keep the ${key} of ${branch} in ${file}: ${(err && err.message) || err}`;
+  }
 }
 
 function parsePairs(text) {
@@ -829,7 +860,22 @@ function land(options, { runGate = defaultGate } = {}) {
     }
   }
 
-  if (!git(tree, ['merge-base', '--is-ancestor', upstream, 'HEAD']).ok) {
+  // keep-base: a rebase of the bottom rewrites every part above it, so it moves only when it no
+  // longer merges into its base (merge-tree exit 1); any other answer moves nothing either. On
+  // 2026-11-18 a commit pushed by hand after a crash skipped this check and conflicted on GitHub.
+  let keptBase = false;
+  if (options.keepBase === 'yes' && !git(tree, ['merge-base', '--is-ancestor', upstream, 'HEAD']).ok) {
+    const merged = spawnSync('git', ['-C', tree, 'merge-tree', '--write-tree', '--quiet', upstream, 'HEAD'], { encoding: 'utf8', windowsHide: true });
+    if (merged.status !== 1) {
+      keptBase = true;
+      result.keptBase = true;
+      result.warnings.push(merged.status === 0
+        ? `${branch} still merges cleanly into ${parent}: it keeps its base (keep-base).`
+        : `git merge-tree could not tell whether ${branch} merges into ${parent} (${firstLine(merged.stderr) || `exit ${merged.status}`}): it keeps its base.`);
+    }
+  }
+
+  if (!keptBase && !git(tree, ['merge-base', '--is-ancestor', upstream, 'HEAD']).ok) {
     // A move writes commits: without an identity git stops at the first pick (see checkIdentity).
     const noIdentity = checkIdentity(tree);
     if (noIdentity) return fail(noIdentity);
@@ -945,7 +991,11 @@ function land(options, { runGate = defaultGate } = {}) {
   // A rewritten branch replaces the remote one only where it still stands where the run began.
   // HEAD, not the local branch name: a branch the user has checked out is worked on a branch of
   // the run's own (worktree.cjs), and pushed to the pull request's branch all the same.
-  const pushArgs = result.rebased
+  // A branch an earlier landing already moved (its push refused, a crash before it) is as rewritten
+  // as one moved now: origin's tip is no ancestor of HEAD, and only the lease may replace it.
+  const rewritten = result.rebased || Boolean(remote && !git(tree, ['merge-base', '--is-ancestor', remote, 'HEAD']).ok);
+  result.lease = rewritten ? lease || null : null;
+  const pushArgs = rewritten
     ? (lease ? ['push', `--force-with-lease=${branch}:${lease}`, 'origin', `HEAD:refs/heads/${branch}`] : null)
     : ['push', 'origin', `HEAD:refs/heads/${branch}`];
   if (!pushArgs) return fail(`No remote tip to pin the lease to for ${branch}; push it yourself once checked.`);
@@ -996,12 +1046,17 @@ function verify(options) {
 // lease pinned to `--lease` after a rebase.
 function push(options, { pushRetry } = {}) {
   const tree = path.resolve(options.worktree);
-  const args = options.lease
-    ? ['push', `--force-with-lease=${options.branch}:${options.lease}`, 'origin', `HEAD:refs/heads/${options.branch}`]
-    : ['push', 'origin', `HEAD:refs/heads/${options.branch}`];
+  // --commit: the commit of a worktree that is gone, pushed from any checkout of the repository.
+  const source = options.commit || 'HEAD';
+  const commit = git(tree, ['rev-parse', '--verify', '--quiet', `${source}^{commit}`]).out || null;
+  const lease = options.lease || null;
+  if (!commit) return { action: 'push', branch: options.branch, pushed: false, commit: null, lease, attempts: 0, rejected: false, warnings: [], errors: [`${source} is no commit of ${tree}.`] };
+  const args = lease
+    ? ['push', `--force-with-lease=${options.branch}:${lease}`, 'origin', `${commit}:refs/heads/${options.branch}`]
+    : ['push', 'origin', `${commit}:refs/heads/${options.branch}`];
   const res = pushWithRetry(tree, args, pushRetry);
   const line = firstLine(String(res.err || '').split(/\r?\n/).find((l) => /rejected|stale|error|fatal/i.test(l)) || res.err);
-  return { action: 'push', branch: options.branch, pushed: res.ok, attempts: res.attempts, rejected: !res.ok && rejectedPush.test(res.err), warnings: [], errors: res.ok ? [] : [line || 'push failed'] };
+  return { action: 'push', branch: options.branch, pushed: res.ok, commit, lease, attempts: res.attempts, rejected: !res.ok && rejectedPush.test(res.err), warnings: [], errors: res.ok ? [] : [line || 'push failed'] };
 }
 
 // A change landed on one part AFTER the run - a follow-up the user asked for on part-1 - moves
@@ -1028,6 +1083,7 @@ function compactPart(p) {
     autoResolved: (p.autoResolved || []).map((r) => r.file || r), worktree: p.worktree || null,
     ...(p.squashed ? { squashed: p.squashed } : {}), ...(p.briefVars ? { briefVars: p.briefVars } : {}), ...(p.mode ? { mode: p.mode } : {}),
     ...(p.reason ? { reason: p.reason } : {}),
+    ...(p.lease ? { lease: p.lease } : {}), ...(p.keptBase ? { keptBase: true } : {}),
     warnings: p.warnings || [], errors: p.errors || [],
   };
 }
@@ -1317,7 +1373,14 @@ function main() {
         : args.action === 'cascade' ? cascade(args)
           : args.action === 'stack' ? stackAction(args)
             : args.action === 'plan' ? plan(args)
-            : args.summary === 'yes' ? compactLand(land(args)) : land(args);
+            : land(args);
+    if (args.run && args.branch && ['land', 'push'].includes(args.action)) {
+      const kept = args.action === 'land'
+        ? recordInRun(args.run, args.branch, 'landingResult', compactLand(result))
+        : recordInRun(args.run, args.branch, 'pushResult', { pushed: result.pushed, commit: result.commit, lease: result.lease, rejected: result.rejected, errors: result.errors });
+      if (kept) result.warnings.push(kept);
+    }
+    if (args.action === 'land' && args.summary === 'yes') result = compactLand(result);
   } catch (err) {
     result = { status: 'error', errors: [String((err && err.message) || err)], warnings: [] };
   }
@@ -1326,7 +1389,7 @@ function main() {
 }
 
 module.exports = {
-  parseArgs, parsePairs, land, verify, push, cascade, climb, stackAction, plan, discoverStack, compactPart, landOptionsFromRun, pairsFromRun, parentChangesOf, parentImpactOf,
+  parseArgs, parsePairs, recordInRun, land, verify, push, cascade, climb, stackAction, plan, discoverStack, compactPart, landOptionsFromRun, pairsFromRun, parentChangesOf, parentImpactOf,
   formatImpact, mergeJson3, mergeImports, autoResolve, pushWithRetry, squashedBoundary, briefVarsOf, checkIdentity, identityProblem, absent,
 };
 

@@ -202,12 +202,14 @@ function render(options, deps = {}) {
         : `- ${pr}: kontrola niepełna — luki: ${Object.entries(o.verify.gaps || {}).map(([k, n]) => `${k} ${n}`).join(', ') || o.verify.missing || 'brak wyniku'}`);
     }
     if (o.resolve && o.resolve.resolved !== undefined) {
-      // Grouped by fixpr-after.cjs: one `{ error, count, ids }` per distinct error; each error is said once.
-      const failed = failureCount(o.resolve.failed);
-      const replies = failureCount(o.resolve.replyFailed);
-      const errors = [...new Set([...(o.resolve.failed || []), ...(o.resolve.replyFailed || [])].map((f) => f && f.error).filter(Boolean))];
-      checks.push(`- ${pr}: rozwiązane wątki ${o.resolve.resolved}${(o.resolve.unverified || []).length ? `, otwarte (commit nie zmienia ich plików): ${o.resolve.unverified.length}` : ''}${failed ? `, nieudane: ${failed}` : ''}${replies ? `, odpowiedzi nieudane: ${replies}` : ''}${errors.length ? ` — ${errors.join('; ')}` : ''}`);
-    }
+      const rs = o.resolve;
+      // Grouped by fixpr-after.cjs: one `{ error, count, ids }` per distinct error; each error is said
+      // once. A resolve run again (fixpr-after.cjs --resolve-only) says so: the state is the final one.
+      const failed = failureCount(rs.failed);
+      const replies = failureCount(rs.replyFailed);
+      const errors = [...new Set([...(rs.failed || []), ...(rs.replyFailed || [])].map((f) => f && f.error).filter(Boolean))];
+      checks.push(`- ${pr}: rozwiązane wątki ${rs.resolved}${rs.alreadyResolved ? ` (w tym wcześniej: ${rs.alreadyResolved})` : ''}${(rs.unverified || []).length ? `, otwarte (commit nie zmienia ich plików): ${rs.unverified.length}` : ''}${failed ? `, nieudane: ${failed}` : ''}${replies ? `, odpowiedzi nieudane: ${replies}` : ''}${errors.length ? ` — ${errors.join('; ')}` : ''}${rs.resolveOnly ? `; ponowione ${String(rs.resolveOnly).slice(0, 16).replace('T', ' ')}` : ''}`);
+    } else if (o.resolve && o.resolve.skipped && /^not pushed/.test(o.resolve.skipped)) checks.push(`- ${pr}: wątki nie rozwiązane - commit nie jest na origin`);
     if (r.reviewReport || (o.keptReports || []).length) review.push(`- ${pr}: ${(o.keptReports || [])[0] || r.reviewReport} — naprawione ${r.reviewFindingsFixed || 0}, pozostawione ${r.reviewFindingsLeft || 0}`);
     if (t.heldBy) notes.push(`- ${pr}: gałąź była wybrana w \`${t.heldBy}\` — uruchom tam \`git pull --rebase\`.`);
     if (o.keptWorktree) notes.push(`- ${pr}: worktree zostało: \`${o.keptWorktree.path}\` (${o.keptWorktree.reason}).`);
