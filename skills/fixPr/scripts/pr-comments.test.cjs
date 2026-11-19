@@ -127,6 +127,24 @@ test('collect reports a branch with no open pull request and keeps going', (t) =
   assert.match(result.errors[0], /ghost: no OPEN pull request/);
 });
 
+// 2026-11-18: the gate ran `build` alone, Jenkins ran the specs and failed 4 parts of 7.
+test('collect warns once per run when CI runs a test command the gate does not', (t) => {
+  const dir = makeRepo(t);
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'ng build', 'test:web': 'ng test web' } }));
+  fs.writeFileSync(path.join(dir, 'Jenkinsfile'), 'sh "npm run test:${PROJECT}"\n');
+  const skillDir = fs.realpathSync(tempDir(t, 'fpc-skill-'));
+  const pr = (number) => ({ number, title: 'feat(X): t', url: 'u', base: 'main' });
+  const result = pc.collect({
+    project: dir, branches: 'feat/a;feat/b', skillDir, api: fakeApi({ threads: [thread()] }),
+    findOpenPr: fakeFindPr({ 'feat/a': pr(7), 'feat/b': pr(8) }), openChildren: () => [],
+  });
+  const ci = result.warnings.filter((w) => /CI runs a test command the gate does not/.test(w));
+  assert.strictEqual(ci.length, 1, result.warnings.join(' | '));
+  assert.match(ci[0], /Jenkinsfile/);
+  assert.match(ci[0], /checks\.json/);
+  assert.deepStrictEqual(result.ciTestGap.ciFiles, ['Jenkinsfile']);
+});
+
 // The whole point of going through GraphQL: a thread the reviewer already closed
 // is not work, and re-fixing it is the one behaviour the skill must never show.
 test('collect drops resolved threads but keeps the branch, which still has a gate to bring green', (t) => {

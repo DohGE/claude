@@ -374,6 +374,14 @@ test('land runs the steps the fixing agent left to it, and a red one stops the p
   );
   assert.deepStrictEqual(asked, [['build']]);
   assert.strictEqual(green.status, 'landed');
+  // Every command passed and the project has no unit test: the part lands, and says so.
+  const untested = restack.land(
+    { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'no', pendingSteps: ['build'] },
+    { runGate: () => ({ gate: 'green-no-tests', noTests: 'the project has no test script', steps: [{ label: 'build', status: 'passed' }] }) },
+  );
+  assert.strictEqual(untested.status, 'landed');
+  assert.deepStrictEqual([untested.gate.gate, untested.gate.noTests], ['green-no-tests', 'the project has no test script']);
+  assert.strictEqual(restack.compactPart(untested).gate, 'green-no-tests');
   const red = restack.land(
     { worktree: s.tree, branch: 'part-2', parent: 'part-1', parentTipAtStart: s.tips.a1, remoteTipAtStart: s.tips.b1, gate: 'yes', push: 'yes', pendingSteps: ['build'] },
     { runGate: () => ({ gate: 'red', steps: [{ label: 'build', status: 'failed', errorsPath: '/x/build.errors.log' }] }) },

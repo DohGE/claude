@@ -101,7 +101,11 @@ while it runs.
 
        node "{{SKILL_DIR}}/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{CHECKS_DIR}}" --changed-since="origin/{{PARENT}}" --result-file="{{CHECKS_DIR}}/gate-restack-<n>.json"
 
-   and wait for the result file. `green` or `skipped` → point 5. `red` → Read each failed step's
+   and wait for the result file. `green` or `skipped` → point 5. `green-no-tests` → point 5 too:
+   every command passed but no unit test ran (the project has none the gate knows, `noTests`) -
+   your `gate` says `green-no-tests` and your `summary` says the tests did not run. A spec of yours
+   alone: the same command with `--specs=<spec>[,<spec>…]` in place of `--changed-since` (it
+   escapes the path; never a hand-built `npx jest`). `red` → Read each failed step's
    `errorsPath` and repair what {{#if MODE=adapt}}the parts below changed under this branch: bring each use in line with
    their change (the list above, `{{PARENT_DIFF}}`; Grep `{{PARENT_DIFF_FULL}}` for a name an error
    quotes that the cut does not show), stage it by path and amend this branch's last
@@ -126,5 +130,5 @@ while it runs.
 Your final message IS one of these JSON objects - alone, no text before or after it (the plugin's
 SubagentStop hook sends a message with prose back once):
 
-- `{"type":"result","mode":"{{MODE}}","rebased":true,"pushed":<bool>,"commit":"<HEAD sha>","resolvedFiles":["<path>",…],"adapted":["<path>",…],"gate":"green|skipped","summary":"<in {{LANGUAGE}}: per file, what each side changed and how you combined them; what you adapted; the push>"}`
+- `{"type":"result","mode":"{{MODE}}","rebased":true,"pushed":<bool>,"commit":"<HEAD sha>","resolvedFiles":["<path>",…],"adapted":["<path>",…],"gate":"green|green-no-tests|skipped","summary":"<in {{LANGUAGE}}: per file, what each side changed and how you combined them; what you adapted; the push>"}`
 - `{"type":"error","report":"<in {{LANGUAGE}}: the file and why it could not be resolved, or the red step; the state of the worktree>","resolvedFiles":["<path>",…]}`

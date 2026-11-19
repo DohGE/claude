@@ -256,6 +256,9 @@ Parse the JSON from stdout:
   A warning several branches share comes once, naming them (`<branch>` stands for each one's name).
   `preflight token: GH_TOKEN was rejected; used git credential` → the run goes on with the working
   token; tell the user to unset or refresh the refused one.
+  A warning that CI runs a test command the gate does not (`ciTestGap`) comes once per run: say
+  that the agents' gate will not run those tests, and pass on its suggested
+  `.claude/doh/checks.json`. The run goes on.
 - `targets` empty → stop here, after reporting. Every branch was dropped by an error.
 
 `targets` come bottom-first: every part of a stack after the part it is based on. `stacks[]` lists
@@ -482,7 +485,8 @@ It prints the summary from the run file and the result files: one row per pull r
 landing, push, fixed / rejected / without action), every rejected comment with its ground (the
 part the user acts on), what was answered, the `--local` findings not fixed, the comment and thread
 check per branch, the self-review's report and counts, every `stackImpact`, the files nobody looked
-at (`uiUnverified`), the visual checks, the gate per branch with every still-red step's log, every
+at (`uiUnverified`), the visual checks, the gate per branch with every still-red step's log and
+every branch committed on `green-no-tests` (no unit test ran: never call it green), every
 stack bottom-first with each pair that does not sit on its parent (restack.cjs verify) and its
 command, and the checkouts to `git pull --rebase`. Your final message is that text as it is,
 followed only by what no file holds: errors and warnings of Steps 1-5 not reported yet, the lessons

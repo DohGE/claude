@@ -223,7 +223,8 @@ Then one summary, and nothing else:
 - one row per part: the pull request, `oldTip` → `commit` (short shas), how it moved (not at all:
   `noop`, with its `reason`; rebased with no conflict, off a squash-merged parent - `squashed.commits` left out - conflicts
   merged by the script - `autoResolved` - or by the conflict agent, with its `resolvedFiles`), the
-  gate verdict (reused when its warning says so), whether it was pushed;
+  gate verdict (reused when its warning says so; `green-no-tests` means every command passed and no
+  unit test ran - say so, never "green"), whether it was pushed;
 - every part that did not land, with why, its worktree and what the user can do;
 - `waiting` parts, left where they were;
 - every branch moved on `doh-fixpr/<branch>` because the user had it checked out (a warning of its

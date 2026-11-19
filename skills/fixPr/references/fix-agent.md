@@ -375,11 +375,16 @@ mock reaches - part-4's related tests took 494 s on a green tree (2026-11-16). S
 `partial`. The LAST pass leaves `--tests` out and runs every related test.
 
 Wait for `{{CHECKS_DIR}}/gate-<n>.json` with `wait-part.cjs --nonempty` (see Waiting); then Read
-that file. It holds ONE JSON object: `gate` (`green` / `red` / `partial` / `skipped`), `gateSource` and
-a `steps[]` entry per command with `step`, `label`, `command`, `status`, `reason`, `logPath`,
-`errorsPath` and `truncated`. Never assemble these commands yourself — the script is where the
-package manager, the non-interactive flags and the timeouts are decided, and a hand-built `npm test`
-is how a watcher gets left running.
+that file. It holds ONE JSON object: `gate` (`green` / `green-no-tests` / `red` / `partial` /
+`skipped`), `gateSource`, `testSource` (the test commands the gate found itself), `noTests` (why no
+unit test ran, when none did) and a `steps[]` entry per command with `step`, `label`, `command`,
+`status`, `reason`, `logPath`, `errorsPath` and `truncated`. Never assemble these commands yourself —
+the script is where the package manager, the non-interactive flags and the timeouts are decided, and
+a hand-built `npm test` is how a watcher gets left running.
+
+Without a gate config the test step is the project's `test:unit` or `test` script, else what the
+gate finds itself: each unit-test target of `angular.json` (through its `test:<project>` script when
+there is one) and each `test:<folder>` script, run for the projects your change touches.
 
 A project with `.claude/doh/checks.json` (or package.json `doh.checks`; `gateSource` names it) brings
 its own commands for the four steps, run on the files the pull request changes since
@@ -394,6 +399,12 @@ reading output: a `passed` step has nothing for you to read, and no output ever 
 - `gate: "skipped"` — the project has no `package.json`, so there was nothing to run. Record the
   reason and go to step 6. **A skipped gate is not a red one.**
 - `gate: "green"` — go to step 6.
+- `gate: "green-no-tests"` — every command passed, and NO unit test ran: the project has no test
+  command the gate knows (`noTests` says why). You may commit: go to step 6. But never call it green:
+  the `unit tests` line of `## Weryfikacja` says `skipped: <noTests>`, the result file's `gate` is
+  `green-no-tests`, and `summary` says first that no unit test ran and that a `test` step in
+  `.claude/doh/checks.json` would run them. On 2026-11-18 seven agents reported "green" on a gate
+  that ran only the build, and CI failed four of the seven pull requests on their specs.
 {{#if LANDING!=hold}}
 - `gate: "partial"` — a `--only` or `--tests=near` pass: nothing failed among the commands it RAN,
   and the rest were not looked at. It is not a green gate and not a licence to commit: run the full
@@ -401,7 +412,8 @@ reading output: a `passed` step has nothing for you to read, and no output ever 
 {{/if}}
 {{#if LANDING=hold}}
 - `gate: "partial"` of the LAST pass (no `--tests=near`) with every step `passed` or `skipped` — your
-  green gate (see above): go to step 6. A `partial` of a `--tests=near` pass → run the last pass.
+  green gate (see above): go to step 6. With `noTests` set it is your `green-no-tests` (the bullet
+  above: say so). A `partial` of a `--tests=near` pass → run the last pass.
 {{/if}}
 - `gate: "red"` — for each `failed` step, read its `errorsPath` with the Read tool and repair the CAUSE.
   That file is the failure lines alone, cut out of the output by the script: the failing tests, the
@@ -418,6 +430,13 @@ To re-run one command after a fix, add `--only=lint` (or `typecheck`, `test`, `b
 command, in the background with a result file of its own, to run just that one and leave the other
 logs untouched. Such a pass answers `partial`, never `green` — your LAST pass
 must be a full run{{#if LANDING=hold}} (for this held part: lint, typecheck and test together){{/if}}, because what you report as green has to be green together, not one step at a time.
+
+To run one spec or a few while you repair them, add `--specs=<spec>[,<spec>…]` (repository-relative
+paths) to the same command in place of `--changed-since`: the script runs them through the test
+step's `related` command - the project's own, or for an Angular jest-builder project
+`ng test <project> --test-path-pattern=<the path, regex-escaped>` through the local CLI. It answers
+`partial`. Never run `npx jest` or `ng test` by hand: a linked `node_modules` has no `npx jest`,
+plain jest lacks the Angular setup, and a `+` in a path breaks a hand-written pattern.
 
 `checksFixed` is the list of `label`s of the steps that were `failed` in your FIRST pass and `passed`
 in your LAST. A step that only went red in pass two because a fix of yours broke it is NOT in that
@@ -525,8 +544,8 @@ screenshots and the cleanup.
    No body, no description, no trailer, no co-author line, no issue reference — the message is that one
    line and only that. One commit for the whole run: never a commit per comment, never one per check,
    and never `--amend`.
-   Nothing fixed at all — every verdict was `rejected` or `answered` and the gate was already green or
-   skipped — → that is a legitimate outcome, not a failure: skip the commit and the push, report
+   Nothing fixed at all — every verdict was `rejected` or `answered` and the gate was already green
+   (or `green-no-tests`) or skipped — → that is a legitimate outcome, not a failure: skip the commit and the push, report
    `committed: false`, and say why in `summary`. If the tree is nonetheless dirty, name the files in
    `summary` and leave them; you revert nothing.
 4. Land the commit (`{{LANDING}}`): Read `{{LAND_BRIEF}}` and follow it - it says whether and how this
@@ -599,7 +618,7 @@ screenshots and the cleanup.
 
 `{{REPORT}}.result.json` holds, for a run that ended (including one that legitimately committed nothing):
 
-    {"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"stackImpact":[{"symbol":"<name>","change":"<change>","usedIn":["<branch>:<path>:<line>",…]},…],"lessons":[{"rule":"<rule>","files":"<group>","example":"<example>","source":"PR #{{PR_NUMBER}}"},…],"visualChecks":[{"item":"<item>","route":"<route>","assertions":["<a>"],"screenshot":"<path>","result":"passed|failed|skipped","reason":"<reason>","mocked":<bool>},…],"checksFixed":["<label>",…],"verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, and anything the user must know>"}
+    {"type":"result","committed":<bool>,"pushed":<bool>,"held":<bool>,"commit":"<sha|null>","commitMessage":"<the message you used, or null>","rebased":<bool>,"reviewReport":"<codeReview report path|null>","reviewFindingsFixed":<N>,"reviewFindingsLeft":<N>,"fixed":<N>,"rejected":<N>,"answered":<N>,"fixedThreadIds":["<id>",…],"fixedVia":{"<id>":["<path>",…]},"fixedFindingIds":["<id>",…],"verdicts":[{"item":"<item>","verdict":"<verdict>","ground":"<ground>","sawMedia":<bool>},…],"uiUnverified":[{"path":"<path>","item":"<item>"},…],"stackImpact":[{"symbol":"<name>","change":"<change>","usedIn":["<branch>:<path>:<line>",…]},…],"lessons":[{"rule":"<rule>","files":"<group>","example":"<example>","source":"PR #{{PR_NUMBER}}"},…],"visualChecks":[{"item":"<item>","route":"<route>","assertions":["<a>"],"screenshot":"<path>","result":"passed|failed|skipped","reason":"<reason>","mocked":<bool>},…],"checksFixed":["<label>",…],"gate":"<the last pass's verdict: green|green-no-tests|partial|skipped>","verification":[{"label":"<label>","command":"<cmd>","result":"passed|failed|skipped","detail":"<reason, or empty>","logPath":"<path|null>"}],"summary":"<in {{LANGUAGE}}: what you changed, every rejection with its ground, what you repaired in the gate, that no unit test ran when the gate said green-no-tests, and anything the user must know>"}
 
 and for a gate still red after three passes, or any failure that left the work unfinished:
 

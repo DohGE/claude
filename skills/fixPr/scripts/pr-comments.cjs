@@ -765,6 +765,20 @@ function collect(options) {
       // a review history that cannot be read is no reason to stop the fixes
     }
   }
+  // CI runs a test command the gate does not: every agent would report a green gate CI then
+  // refuses (2026-11-18: the gate ran `build` alone, Jenkins ran the specs and failed 4 of 7 parts).
+  // Once per run, from the project's own CI files; a cheap grep, never a reason to stop.
+  if (!replay && result.targets.length > 0) {
+    try {
+      const gap = (options.ciTestGap || require('./checks.cjs').ciTestGap)(project);
+      if (gap) {
+        result.ciTestGap = { ciFiles: gap.ciFiles, missing: gap.missing };
+        result.warnings.push(gap.warning);
+      }
+    } catch {
+      // a CI file that cannot be read is no reason to stop the fixes
+    }
+  }
   // A branch of the stack that could not be collected still moves: say where it sits.
   const collected = new Set(result.targets.map((t) => t.branch));
   for (const t of result.targets) {

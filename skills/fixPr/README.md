@@ -245,14 +245,90 @@ Gate steps of every run on the machine share `maxParallel` slots (default: a qua
 `DOH_CHECKS_SLOTS` or `--slots=` override it, `0` lifts the limit): five agents building at once made
 a grep over one translation file take two minutes. A step waits for a free slot (`slotWaitMs`).
 
-Without a config: whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
+### Single specs: `related`
+
+A test entry may carry `related`, the command that runs a few given specs. A fix and a landing agent
+run the specs of their change with it (`--tests=near` passes, and `checks.cjs --specs=<spec>,…`)
+instead of a whole project's suite:
+
+```json
+{
+  "steps": {
+    "test": [
+      {
+        "command": "npx ng test web",
+        "files": "^projects/(web|shared)/",
+        "related": "node node_modules/@angular/cli/bin/ng.js test web --test-path-pattern={pattern}"
+      },
+      {
+        "command": "npx jest --config packages/api/jest.config.js",
+        "files": "^packages/api/",
+        "related": "npx jest --config packages/api/jest.config.js {specs}"
+      }
+    ]
+  }
+}
+```
+
+`{pattern}` becomes the specs as one quoted regular expression, each path escaped (`+`, `(`, `.`
+and the rest) and several joined as `(a|b)` - what `--testPathPattern` and `--test-path-pattern` take.
+`{specs}` becomes the quoted paths themselves. A long list runs as several commands. An entry
+without `related` is not run for single specs; the step says so.
+
+    node scripts/checks.cjs --root=<worktree> --out-dir=<dir> --specs=projects/web/src/app/+state/tests/items.effects.spec.ts
+
+answers `partial`, like every pass over part of the tests.
+
+### Without a config
+
+Whatever the project's `package.json` actually has, in this order: `lint`, `typecheck` (or
 `type-check`), `test:unit` (else `test`), `build`. `test:unit` comes first because a project that has
 both usually keeps `test` for everything, an e2e suite included, and that suite cannot pass in a
 worktree with no backend. Missing scripts are `skipped`, not failures; so is the whole gate when
 there is no `package.json`, the dependency install failed, or there is no lockfile to install from.
+
+With neither `test:unit` nor `test` (npm's "no test specified" placeholder counts as none), the
+test step looks further before it gives up - a gate that ran only `build` once reported seven pull
+requests green that CI then failed on their specs:
+
+- every unit-test target of `angular.json` (`@angular-builders/jest:run`, karma, jest, unit-test,
+  web-test-runner; never an e2e builder), run through the script that runs it when there is one
+  (`test:<project>`, or any script whose text is `ng test <project>`), else through the local
+  Angular CLI (`node node_modules/@angular/cli/bin/ng.js`, which resolves where `npx` does not in a
+  worktree with a linked `node_modules`);
+- every other `test:<name>` script whose name is a folder (`<name>`, `packages/<name>`,
+  `apps/<name>`, `libs/<name>`, `projects/<name>`).
+
+Each runs for the files under its project's folder: with `--changed-since` only the projects the
+change touches run. A library project's change runs every project's tests (the apps import it), and
+so does a change to a workspace-wide file (`package.json`, `angular.json`, a root `tsconfig*.json`,
+jest or karma config). The single specs of such a project run as `ng test <project>
+--test-path-pattern=<escaped path>` (jest builder) or `--include=<path in the project>` (karma and
+the others), or after `--` of a `jest` / `vitest` script. Other `test:*` scripts (`test:ci`,
+`test:coverage`) are never guessed at: the skip reason names them. `testSource` in the result says
+the commands were detected.
+
+### Verdicts
+
 A skipped gate is never a red one. Neither is a `partial` one: a `--only=<step>` re-run reports
 `partial` however well that step went, because it never looked at the others — only a full pass can
 answer for the whole gate, and only a green full pass lets the run commit.
+
+`green-no-tests` is a full pass in which every command passed and no unit test ran, because the
+project has no test command the gate knows (no script, nothing detected, or a checks.json without a
+`test` step; one with `"test": false` turned them off on purpose and stays `green`). `noTests` says
+why, and a warning names `.claude/doh/checks.json`. The run may commit on it, like on `green`, but
+it is never reported as green: the fix agent's report and result (`gate`), the landing's `gate`
+and the summary all say the tests did not run. A change that touched no project with tests is
+plain `green`: the tests exist, and nothing of theirs changed.
+
+### CI
+
+The collector greps the project's CI files (`Jenkinsfile`, `.github/workflows/*.yml`,
+`.gitlab-ci.yml`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`) for a test command
+(`npm run test…`, `ng test`, `jest`, `vitest`, …) and warns once per run when the gate has no
+counterpart for it (`ciTestGap` in the collector's JSON), with the checks.json that would close the
+gap.
 
 **Every red command is the run's work** — whether the agent's own fixes broke it or it was already red
 when the run started. That is the change the rename is about: the gate used to be a guard that only

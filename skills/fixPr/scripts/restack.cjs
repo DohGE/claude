@@ -635,7 +635,12 @@ const gateSummary = (gate) => ({
   gate: gate.gate,
   steps: (gate.steps || []).map((s) => ({ label: s.label, status: s.status, reason: s.reason || '', errorsPath: s.errorsPath || null, logPath: s.logPath || null })),
   errors: gate.errors || [],
+  ...(gate.noTests ? { noTests: gate.noTests } : {}),
 });
+
+// The verdicts a landing pushes on. `green-no-tests`: every command passed and the project has no
+// unit test the gate knows of - the part lands, and its `gate` says the tests never ran.
+const landable = ['green', 'green-no-tests', 'skipped'];
 
 // The bottom of a stack whose parent pull request was squash-merged into the base still carries
 // that parent's commits, and nothing in the base's history names them: the merge-base is the base
@@ -962,7 +967,7 @@ function land(options, { runGate = defaultGate } = {}) {
   if (fullGate || (pending.length > 0 && options.gate !== 'no')) {
     const gate = runGate({ worktree: tree, checksDir, parent, only: fullGate ? [] : pending });
     result.gate = gateSummary(gate);
-    if (!['green', 'skipped', ...(fullGate ? [] : ['partial'])].includes(gate.gate) || (gate.steps || []).some((s) => s.status === 'failed')) {
+    if (![...landable, ...(fullGate ? [] : ['partial'])].includes(gate.gate) || (gate.steps || []).some((s) => s.status === 'failed')) {
       // `--keep`, not `--hard`: an uncommitted file the move did not touch stays as it was.
       if (!git(tree, ['reset', '--keep', before]).ok) result.warnings.push(`Could not take ${branch} back to ${before}; it holds the moved commits.`);
       result.status = 'gate-red';

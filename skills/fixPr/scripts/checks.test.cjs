@@ -85,10 +85,11 @@ test('a green gate is reused for the same commit tree, and run again once the tr
   commitAll(root, 'one');
   const run = fakeRunner();
   const first = checks.runChecks({ root, outDir: outDirFor(t), run, cache: true });
-  assert.strictEqual(first.gate, 'green');
+  // No test script: commit-worthy, never plain green - and as settled for one tree as green is.
+  assert.strictEqual(first.gate, 'green-no-tests');
   assert.strictEqual(run.calls.length, 2);
   const second = checks.runChecks({ root, outDir: outDirFor(t), run, cache: true });
-  assert.deepStrictEqual([second.gate, run.calls.length, Boolean(second.cached)], ['green', 2, true]);
+  assert.deepStrictEqual([second.gate, run.calls.length, Boolean(second.cached)], ['green-no-tests', 2, true]);
   assert.match(second.warnings.join(' '), /--cache=no/);
   fs.writeFileSync(path.join(root, 'a.txt'), 'x\n');
   const dirty = checks.runChecks({ root, outDir: outDirFor(t), run, cache: true });
@@ -139,7 +140,11 @@ test('a script the project does not have is skipped, never failed', (t) => {
     assert.strictEqual(stepNamed(result, step).status, 'skipped', step);
     assert.match(stepNamed(result, step).reason, /has no .* script/);
   }
-  assert.strictEqual(result.gate, 'green');
+  // Nothing failed, and no unit test ran: the verdict says so instead of green.
+  assert.strictEqual(result.gate, 'green-no-tests');
+  assert.match(result.noTests, /no test:unit \(or test\) script/);
+  assert.ok(result.warnings.some((w) => /No unit test ran/.test(w) && /checks\.json/.test(w)), result.warnings.join(' | '));
+  assert.strictEqual(checks.exitCodeFor(result), 0);
 });
 
 test('a project with no package.json skips the whole gate rather than failing it', (t) => {
@@ -1125,4 +1130,165 @@ test('lint takes no slot unless its checks.json entry asks for one', (t) => {
   assert.strictEqual(stepNamed(result, 'lint').status, 'passed');
   assert.throws(() => checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedFiles: ['a.ts'], slots: 1, slotsDir, slotSleep: refuse, only: ['typecheck'] }), /waited for a slot/);
   held.release();
+});
+
+// --- Tests without a gate config, single specs, CI ------------------------------------------------
+
+const q = (text) => (process.platform === 'win32' ? `"${text}"` : `'${text}'`);
+
+// An Angular workspace like the one of 2026-11-18: per-project test scripts, no `test` script, an
+// app and a library on the jest builder, and an e2e project that is never a unit test.
+function makeAngularWorkspace(t, { scripts, withCli = false } = {}) {
+  const root = makeProject(t, scripts || { build: 'ng build app', 'test:app': 'ng test app', 'test:shared': 'ng test shared', 'test:e2e': 'cypress run' });
+  fs.writeFileSync(path.join(root, 'angular.json'), `// the CLI reads this file as JSONC
+{
+  "projects": {
+    "app": { "root": "projects/app", "projectType": "application", "architect": { "test": { "builder": "@angular-builders/jest:run" } } },
+    "shared": { "root": "projects/shared", "projectType": "library", "architect": { "test": { "builder": "@angular-builders/jest:run" } } },
+    "legacy": { "root": "projects/legacy", "projectType": "application", "architect": { "test": { "builder": "@angular-devkit/build-angular:karma" } } },
+    "app-e2e": { "root": "projects/app-e2e", "architect": { "test": { "builder": "@cypress/schematic:cypress" } } }
+  }
+}
+`);
+  if (withCli) {
+    fs.mkdirSync(path.join(root, 'node_modules', '@angular', 'cli', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'node_modules', '@angular', 'cli', 'bin', 'ng.js'), '');
+  }
+  return root;
+}
+
+test('without a test script the gate runs the per-project tests of angular.json, through their scripts', (t) => {
+  const root = makeAngularWorkspace(t);
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run });
+  const tests = run.calls.filter((c) => c.options.step === 'test').map((c) => c.command);
+  assert.strictEqual(tests.length, 3, tests.join(' | '));
+  assert.match(tests[0], /^npm run test:app -- --watch=false$/);
+  assert.match(tests[1], /^npm run test:shared -- --watch=false$/);
+  // No script runs `legacy`: the local CLI does.
+  assert.match(tests[2], /^npx --no-install ng test legacy --watch=false$/);
+  assert.ok(!tests.some((c) => /e2e|cypress/.test(c)), 'an e2e target is never a unit test');
+  assert.strictEqual(result.gate, 'green');
+  assert.match(result.testSource, /angular\.json/);
+  assert.strictEqual(result.noTests, undefined);
+});
+
+test('a detected project runs only when the change touches it or a library it imports', (t) => {
+  const root = makeAngularWorkspace(t);
+  const testsFor = (changedFiles) => {
+    const run = fakeRunner();
+    const result = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles });
+    return { result, commands: run.calls.filter((c) => c.options.step === 'test').map((c) => c.command.replace(/( --)? --watch=false$/, '')) };
+  };
+  assert.deepStrictEqual(testsFor(['projects/app/src/a.ts']).commands, ['npm run test:app']);
+  assert.deepStrictEqual(testsFor(['projects/shared/src/b.ts']).commands, ['npm run test:app', 'npm run test:shared', 'npx --no-install ng test legacy'], 'a library change reaches every app');
+  assert.strictEqual(testsFor(['tsconfig.json']).commands.length, 3, 'a workspace-wide file reaches every project');
+  const docs = testsFor(['docs/readme.md']);
+  assert.deepStrictEqual(docs.commands, []);
+  assert.match(stepNamed(docs.result, 'test').reason, /no changed file belongs to angular\.json project app/);
+  assert.strictEqual(docs.result.gate, 'green', 'tests exist and the change reaches none: nothing is missing');
+});
+
+test('a near pass runs the jest-builder specs through the local CLI with an escaped path pattern', (t) => {
+  const root = makeAngularWorkspace(t, { withCli: true });
+  const source = 'projects/app/src/data-access/+state/items.effects.ts';
+  const spec = 'projects/app/src/data-access/+state/tests/items.effects.spec.ts';
+  for (const file of [source, spec]) {
+    fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), file === spec ? "import { x } from '../items.effects';\n" : 'export const x = 1;\n');
+  }
+  commitAll(root, 'one');
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: [source], tests: 'near' });
+  const tests = run.calls.filter((c) => c.options.step === 'test').map((c) => c.command);
+  assert.deepStrictEqual(tests, [`node node_modules/@angular/cli/bin/ng.js test app --test-path-pattern=${q('projects/app/src/data-access/\\+state/tests/items\\.effects\\.spec\\.ts')} --watch=false`]);
+  assert.strictEqual(result.gate, 'partial');
+});
+
+test('--specs runs the given specs alone, each through its own project', (t) => {
+  const root = makeAngularWorkspace(t);
+  const run = fakeRunner();
+  const args = checks.parseArgs([`--root=${root}`, '--out-dir=/x', '--specs=projects/app/src/a.spec.ts,projects/legacy/src/b (1).spec.ts']);
+  assert.deepStrictEqual(args.only, ['test']);
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, specs: args.specs, only: args.only });
+  assert.deepStrictEqual(run.calls.map((c) => c.command), [
+    `npx --no-install ng test app --test-path-pattern=${q('projects/app/src/a\\.spec\\.ts')} --watch=false`,
+    // karma takes --include, relative to the project's root
+    `npx --no-install ng test legacy --include=${q('src/b (1).spec.ts')} --watch=false`,
+  ]);
+  assert.strictEqual(result.gate, 'partial', 'a few specs are no verdict on the gate');
+  assert.throws(() => checks.parseArgs(['--root=/a', '--out-dir=/b', '--specs=a.spec.ts', '--only=lint']), /--specs runs the test step only/);
+  assert.throws(() => checks.parseArgs(['--root=/a', '--out-dir=/b', '--specs=a.spec.ts', '--only=test', '--command=x']), /exclude each other/);
+});
+
+test('specRegex escapes what a regular expression would read', () => {
+  assert.strictEqual(checks.specRegex(['a/+state/b(1).spec.ts']), 'a/\\+state/b\\(1\\)\\.spec\\.ts');
+  assert.strictEqual(checks.specRegex(['x.ts', 'y.ts']), '(x\\.ts|y\\.ts)');
+  assert.strictEqual(checks.specRegex(['a\\b.ts']), 'a/b\\.ts', 'a Windows path is matched with forward slashes');
+  assert.ok(new RegExp(checks.specRegex(['a/+state/b.spec.ts'])).test('/repo/a/+state/b.spec.ts'));
+  const lines = checks.relatedLines('jest {pattern}', Array.from({ length: 400 }, (_, i) => `projects/app/src/feature-${i}/a-long-file-name-${i}.spec.ts`));
+  assert.ok(lines.length > 1 && lines.every((l) => l.length < 8000), 'a long list runs as several commands');
+});
+
+test('a checks.json test entry runs its related command over single specs', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { test: [
+    { command: 'npx jest --config a/jest.config.ts', files: '^a/', related: 'npx jest --config a/jest.config.ts --testPathPattern {pattern}' },
+    { command: 'npx jest --config b/jest.config.ts', files: '^b/' },
+  ] } });
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, specs: ['a/+x.spec.ts', 'b/y.spec.ts'], only: ['test'] });
+  assert.deepStrictEqual(run.calls.map((c) => c.command.split(' --ci')[0]), [`npx jest --config a/jest.config.ts --testPathPattern ${q('a/\\+x\\.spec\\.ts')}`]);
+  assert.match(stepNamed(result, 'test').command, /testPathPattern/);
+  const bad = makeProject(t, {});
+  configure(bad, { steps: { test: { command: 'npx jest', related: 'npx jest one.spec.ts' }, lint: { command: 'x', related: 'y {specs}' } } });
+  const refused = checks.runChecks({ root: bad, outDir: outDirFor(t), run: fakeRunner() });
+  assert.match(refused.errors.join(' '), /"related" needs a command string holding \{pattern\} or \{specs\}/);
+  assert.match(refused.errors.join(' '), /"related" belongs to the test step only/);
+});
+
+test('a test:<folder> script runs for its folder; a test script nobody can place is named, never guessed', (t) => {
+  const root = makeProject(t, { build: 'tsc -b', 'test:api': 'jest -c api/jest.config.js', 'test:ci': 'jest --ci --coverage' });
+  fs.mkdirSync(path.join(root, 'packages', 'api'), { recursive: true });
+  const run = fakeRunner();
+  const result = checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: ['packages/api/src/a.ts'] });
+  assert.deepStrictEqual(run.calls.filter((c) => c.options.step === 'test').map((c) => c.command.split(' -- ')[0]), ['npm run test:api']);
+  assert.strictEqual(result.gate, 'green');
+  const single = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), specs: ['packages/api/src/a+b.spec.ts'], only: ['test'] });
+  assert.strictEqual(stepNamed(single, 'test').status, 'passed');
+  assert.ok(stepNamed(single, 'test').command.startsWith(`npm run test:api -- ${q('packages/api/src/a\\+b\\.spec\\.ts')}`), stepNamed(single, 'test').command);
+
+  const lone = makeProject(t, { build: 'tsc -b', 'test:ci': 'jest --ci --coverage', test: 'echo "Error: no test specified" && exit 1' });
+  const none = checks.runChecks({ root: lone, outDir: outDirFor(t), run: fakeRunner() });
+  assert.strictEqual(none.gate, 'green-no-tests');
+  assert.match(stepNamed(none, 'test').reason, /test scripts it cannot place: test:ci/);
+  assert.strictEqual(stepNamed(none, 'test').noTests, true);
+});
+
+test('a checks.json without a test step says green-no-tests; one that turns it off says green', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { build: { command: 'npx tsc -b' } } });
+  assert.strictEqual(checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner() }).gate, 'green-no-tests');
+  configure(root, { steps: { build: { command: 'npx tsc -b' }, test: false } });
+  assert.strictEqual(checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner() }).gate, 'green', 'a step the project turned off is its decision');
+});
+
+test('ciTestGap warns when CI runs a test command the gate does not', (t) => {
+  const root = makeProject(t, { build: 'ng build app', 'test:app': 'ng test app' });
+  fs.writeFileSync(path.join(root, 'Jenkinsfile'), "stage('Test') {\n  // npm run test:old\n  sh \"npm run test:${PROJECT}\"\n}\n");
+  const gap = checks.ciTestGap(root);
+  assert.ok(gap, 'no angular.json: test:app has no folder, so the gate runs no test');
+  assert.match(gap.warning, /Jenkinsfile: `sh "npm run test:\$\{PROJECT\}"`/);
+  assert.match(gap.warning, /the gate runs no unit test/);
+  assert.match(gap.warning, /\.claude\/doh\/checks\.json/);
+  fs.mkdirSync(path.join(root, 'app'));
+  assert.strictEqual(checks.ciTestGap(root), null, 'the gate runs test:app now');
+
+  const wf = makeProject(t, { test: 'jest', 'test:integration': 'jest -c int.config.js' });
+  fs.mkdirSync(path.join(wf, '.github', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(wf, '.github', 'workflows', 'ci.yml'), 'jobs:\n  t:\n    steps:\n      - run: npm test\n      - run: npm run test:integration\n');
+  const missing = checks.ciTestGap(wf);
+  assert.deepStrictEqual(missing.missing.map((m) => m.script), ['test:integration']);
+  assert.deepStrictEqual(missing.ciFiles, ['.github/workflows/ci.yml']);
+  assert.strictEqual(checks.ciTestGap(makeProject(t, { test: 'jest' })), null, 'no CI file, nothing to compare');
 });
