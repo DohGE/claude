@@ -1,0 +1,2639 @@
+{
+  "version": 1,
+  "items": {
+    "accessibility#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/alt-text",
+          "level": "points"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/elements-content",
+          "level": "points"
+        }
+      ]
+    },
+    "accessibility#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/table-scope",
+          "level": "points"
+        }
+      ]
+    },
+    "accessibility#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/label-has-associated-control",
+          "level": "points"
+        }
+      ]
+    },
+    "accessibility#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/mouse-events-have-key-events",
+          "level": "points"
+        }
+      ]
+    },
+    "accessibility#11": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/click-events-have-key-events",
+          "level": "points"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/interactive-supports-focus",
+          "level": "points"
+        }
+      ]
+    },
+    "accessibility#12": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/no-positive-tabindex",
+          "level": "decides"
+        }
+      ]
+    },
+    "accessibility#13": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "scss-outline-none",
+          "level": "points",
+          "note": "a :focus-visible replacement may exist."
+        }
+      ]
+    },
+    "accessibility#27": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/valid-aria",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/role-has-required-aria",
+          "level": "points"
+        }
+      ]
+    },
+    "app-config#1": [
+      {
+        "engine": "builtin",
+        "check": "app-config-bootstrap",
+        "level": "decides",
+        "files": [
+          "**/main.ts",
+          "**/app.config.ts",
+          "**/app.module.ts"
+        ],
+        "note": "platformBrowserDynamic() or @NgModule({ bootstrap })."
+      }
+    ],
+    "app-config#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "app-config-with-fetch",
+          "level": "decides",
+          "note": "withFetch only; interceptor style is walked, withNoXsrfProtection is security#9."
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='withNoXsrfProtection']",
+          "message": "withNoXsrfProtection() is forbidden",
+          "level": "decides"
+        }
+      ]
+    },
+    "app-config#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "app-config-input-binding",
+          "level": "decides",
+          "note": "withComponentInputBinding only; eager imports stay walked."
+        }
+      ]
+    },
+    "app-config#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "app-config-runtime-checks",
+          "level": "decides",
+          "note": "five flags `: true`; strictActionWithinNgZone vs zoneless stays walked."
+        }
+      ]
+    },
+    "app-config#6": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='provideStore'][arguments.0.properties.length>0], CallExpression[callee.name='provideEffects'][arguments.0.elements.length>0]",
+          "message": "feature slice registered in the root store",
+          "level": "decides"
+        }
+      ]
+    },
+    "app-config#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='provideAnimations']",
+          "message": "provideAnimations() - use provideAnimationsAsync()",
+          "level": "decides"
+        }
+      ]
+    },
+    "app-config#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "MemberExpression[object.name='process'][property.name='env']",
+          "message": "process.env read",
+          "level": "decides"
+        }
+      ]
+    },
+    "architecture#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/store-not-root",
+          "level": "decides",
+          "note": "Only signalStore({ providedIn: root }); facade/effects providedIn and provider placement stay walked."
+        },
+        {
+          "engine": "eslint",
+          "selector": "Decorator[expression.callee.name='Injectable'] Property[key.name='providedIn']",
+          "message": "facade/effects with providedIn",
+          "level": "decides",
+          "files": [
+            "**/*.facade.ts",
+            "**/*.effects.ts"
+          ]
+        }
+      ]
+    },
+    "architecture#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.actions$|\\.selectors$/]",
+          "message": "component imports actions/selectors",
+          "level": "decides",
+          "files": "**/*.component.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name='Store']",
+          "message": "NgRx Store injected into a component",
+          "level": "decides",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "architecture#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "barrel-forbidden",
+          "level": "decides",
+          "files": [
+            "**/index.ts"
+          ],
+          "note": "creating a barrel only; imports through one stay walked (architecture#7 partial). Library entry recognised by package.json/ng-package.json/project.json/public-api sibling, lib src/index.ts, or a tsconfig path naming it. null on a partial tree."
+        }
+      ]
+    },
+    "best-practices#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/no-explicit-any",
+          "level": "decides"
+        }
+      ]
+    },
+    "best-practices#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/no-explicit-standalone",
+          "level": "decides",
+          "note": "The \"no new NgModule\" half stays walked."
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-standalone",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "Decorator[expression.callee.name='NgModule']",
+          "message": "NgModule declared - no new NgModules",
+          "level": "points"
+        }
+      ]
+    },
+    "best-practices#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-signals",
+          "options": [
+            {
+              "preferReadonlySignalProperties": false,
+              "preferQuerySignals": false,
+              "preferInputSignals": true
+            }
+          ],
+          "level": "decides",
+          "note": "only the @Input() half; readonly is component#7, queries are not in the item"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-output-emitter-ref",
+          "level": "decides"
+        }
+      ]
+    },
+    "best-practices#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/no-output-on-prefix",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/no-output-native",
+          "level": "decides"
+        }
+      ]
+    },
+    "best-practices#15": [
+      {
+        "engine": "eslint",
+        "selector": "Decorator[expression.callee.name=/^Host(Binding|Listener)$/]",
+        "message": "@HostBinding/@HostListener - use the host: {} object",
+        "level": "decides"
+      }
+    ],
+    "best-practices#19": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/prefer-ngsrc",
+          "level": "points",
+          "note": "static images only; base64 skipped by the rule"
+        }
+      ]
+    },
+    "best-practices#21": [
+      {
+        "engine": "eslint",
+        "selector": "CallExpression[callee.property.name='subscribe'] > :matches(ArrowFunctionExpression, FunctionExpression, ObjectExpression) CallExpression[callee.property.name='subscribe']",
+        "message": "subscribe() inside subscribe()",
+        "level": "decides"
+      }
+    ],
+    "best-practices#22": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/ban-ts-comment",
+          "options": [
+            {
+              "ts-ignore": "allow-with-description",
+              "ts-expect-error": "allow-with-description",
+              "ts-nocheck": true,
+              "ts-check": false,
+              "minimumDescriptionLength": 3
+            }
+          ],
+          "level": "decides",
+          "note": "ts directives without a description; eslint-disable justifications and scope stay walked"
+        }
+      ]
+    },
+    "best-practices#24": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-inject",
+          "level": "decides"
+        }
+      ]
+    },
+    "best-practices#25": [
+      {
+        "engine": "eslint",
+        "selector": "ImportDeclaration[source.value='rxjs/operators']",
+        "message": "import from 'rxjs', not 'rxjs/operators'",
+        "level": "decides"
+      }
+    ],
+    "code-quality#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/no-unused-vars",
+          "options": [
+            {
+              "args": "after-used",
+              "argsIgnorePattern": "^_",
+              "caughtErrors": "none",
+              "ignoreRestSiblings": true
+            }
+          ],
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "rule": "no-unreachable",
+          "level": "decides"
+        }
+      ]
+    },
+    "code-quality#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "no-else-return",
+          "options": [
+            {
+              "allowElseIf": true
+            }
+          ],
+          "level": "decides"
+        }
+      ]
+    },
+    "code-quality#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/no-empty-lifecycle-method",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/no-useless-constructor",
+          "level": "decides"
+        }
+      ]
+    },
+    "component-styles#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "scss-hard-coded-color",
+          "level": "decides",
+          "note": "hex / numeric rgb-hsl / named colour; dark-mode counterpart stays walked. Variable definitions in theme/palette/variables/tokens files skipped."
+        }
+      ]
+    },
+    "component-styles#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "scss-ng-deep",
+          "level": "decides",
+          "note": "the :host wrapper only; \"nothing else reaches it\" stays walked."
+        }
+      ]
+    },
+    "component-styles#8": [
+      {
+        "engine": "builtin",
+        "check": "scss-kebab-names",
+        "level": "decides"
+      }
+    ],
+    "component-styles#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "scss-nesting-depth",
+          "level": "decides",
+          "note": "nesting depth > 3 (wrappers, :host and &-suffix blocks not counted); BEM-in-BEM nesting and long single selectors stay walked."
+        }
+      ]
+    },
+    "component-styles#11": [
+      {
+        "engine": "builtin",
+        "check": "scss-import",
+        "level": "decides"
+      }
+    ],
+    "component-template#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/prefer-control-flow",
+          "level": "decides"
+        }
+      ]
+    },
+    "component-template#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/template-for-track",
+          "level": "points",
+          "note": "`track item` is a defect only on object collections (primitives are fine) and `track $index` is allowed for static lists - both need judgement, so both point."
+        }
+      ]
+    },
+    "component-template#5": [
+      {
+        "engine": "eslint",
+        "rule": "doh/template-switch-default",
+        "level": "decides",
+        "note": "A @switch with no @default case."
+      }
+    ],
+    "component-template#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/no-inline-styles",
+          "options": [
+            {
+              "allowNgStyle": false,
+              "allowBindToStyle": true
+            }
+          ],
+          "level": "decides",
+          "note": "style=\"\" and ngStyle; [style.x] for runtime values and ngClass stay walked"
+        }
+      ]
+    },
+    "component-template#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/template-hard-coded-text",
+          "level": "points",
+          "note": "Brand names, units, symbols and dev-only text are legit hard-coded text; i18n#11 also covers TS code."
+        }
+      ]
+    },
+    "component-template#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/template-inner-html",
+          "level": "decides",
+          "note": "Checks only the sink side; component-template#10 also asks that HTML translations use [innerHTML] instead of interpolation, which needs the translation file (partial there; security#2 can be partial:false)."
+        }
+      ]
+    },
+    "component-template#11": [
+      {
+        "engine": "eslint",
+        "rule": "doh/template-method-call",
+        "level": "decides",
+        "note": "Only implicit-receiver calls of names the sibling .ts declares as methods (regex read); unknown names and a missing .ts report nothing. Also checks @if/@for/@switch/@let expressions. Use points if a false hit shows up."
+      }
+    ],
+    "component-template#12": [
+      {
+        "engine": "eslint",
+        "rule": "doh/template-event-single-call",
+        "level": "decides",
+        "note": "Handler must be one call of an implicit-receiver name; two-way [(x)] handlers skipped."
+      }
+    ],
+    "component-template#13": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/template-data-test",
+          "level": "decides",
+          "note": "Presence only on native button/a/input/select/textarea; the naming convention and component-selector half stay walked."
+        }
+      ]
+    },
+    "component-template#14": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/prefer-static-string-properties",
+          "level": "points",
+          "note": "inputs colliding with global HTML attributes (title, ...) keep the binding"
+        }
+      ]
+    },
+    "component-template#18": [
+      {
+        "engine": "eslint",
+        "rule": "doh/template-disabled-with-form-control",
+        "level": "decides",
+        "note": "Bound [disabled] (property binding, not [attr.disabled]) beside formControl/formControlName/formGroupName."
+      }
+    ],
+    "component-template#19": [
+      {
+        "engine": "eslint",
+        "rule": "@angular-eslint/template/prefer-self-closing-tags",
+        "level": "decides"
+      }
+    ],
+    "component-template#20": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/template/prefer-contextual-for-variables",
+          "level": "points",
+          "note": "aliases are allowed where a nested block shadows them"
+        }
+      ]
+    },
+    "component-template#21": [
+      {
+        "engine": "eslint",
+        "rule": "@angular-eslint/template/button-has-type",
+        "level": "decides"
+      }
+    ],
+    "component-unit-test#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "MemberExpression[object.property.name='debugElement'][property.name=/^(query|queryAll)$/], CallExpression[callee.property.name=/^querySelector(All)?$/]",
+          "message": "DOM query in a component spec",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "component-unit-test#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='mock'][arguments.0.name='FormBuilder'], Property[key.name='provide'][value.name='FormBuilder']",
+          "message": "FormBuilder mocked?",
+          "level": "points",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "component#1": [
+      {
+        "engine": "eslint",
+        "rule": "@angular-eslint/prefer-on-push-component-change-detection",
+        "level": "decides"
+      }
+    ],
+    "component#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='@angular/common'] > ImportSpecifier[imported.name=/^(CommonModule|NgIf|NgFor|NgForOf|NgSwitch|NgSwitchCase|NgSwitchDefault|NgClass|NgStyle)$/]",
+          "message": "CommonModule / NgIf / NgFor / NgSwitch / NgClass / NgStyle imported into a component",
+          "level": "decides",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "component#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/inject-private-readonly",
+          "level": "decides",
+          "note": "All inject() fields incl. token injections (MAT_DIALOG_DATA): component#5 and feature-component#17 agree on private readonly _name. The descriptive-name half stays walked."
+        }
+      ]
+    },
+    "component#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/readonly-signals",
+          "level": "decides",
+          "note": "Enum/const alias fields not checked."
+        }
+      ]
+    },
+    "component#12": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/effect-in-constructor",
+          "level": "decides",
+          "note": "Only the placement half (field initializer / ngOnInit); the allowed purposes and the constructor contents stay walked."
+        }
+      ]
+    },
+    "component#14": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='group'][callee.object.property.name!='nonNullable']",
+          "message": "form group not built with _fb.nonNullable.group",
+          "level": "points",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "component#17": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='effect'] CallExpression[callee.property.name=/^(patchValue|setValue)$/]:not(:has(Property[key.name='emitEvent']))",
+          "message": "patchValue/setValue in an effect without { emitEvent: false }",
+          "level": "points",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "component#19": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='takeUntil'], NewExpression[callee.name='Subscription'], TSTypeReference[typeName.name='Subscription'], CallExpression[callee.property.name='unsubscribe']",
+          "message": "manual subscription teardown",
+          "level": "points",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "component#20": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='onDestroy']",
+          "message": "DestroyRef.onDestroy - a flush-on-exit belongs in ngOnDestroy",
+          "level": "points",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "component#25": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSAsExpression[expression.type='TSAsExpression']",
+          "message": "double cast",
+          "level": "points",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "component#27": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/component-max-inline-declarations",
+          "options": [
+            {
+              "template": 0,
+              "styles": 0,
+              "animations": 100000
+            }
+          ],
+          "level": "decides"
+        }
+      ]
+    },
+    "components-folder#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "component-folder-contents",
+          "level": "decides",
+          "files": [
+            "**/components-*/{feature,ui}/**"
+          ],
+          "note": "partial for #4: \"a folder another component shares\" is not checked."
+        }
+      ]
+    },
+    "components-folder#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "barrel-forbidden",
+          "level": "decides",
+          "files": [
+            "**/index.ts"
+          ],
+          "note": "creating a barrel only; imports through one stay walked (architecture#7 partial). Library entry recognised by package.json/ng-package.json/project.json/public-api sibling, lib src/index.ts, or a tsconfig path naming it. null on a partial tree."
+        }
+      ]
+    },
+    "components-folder#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "component-folder-contents",
+          "level": "decides",
+          "files": [
+            "**/components-*/{feature,ui}/**"
+          ],
+          "note": "partial for #4: \"a folder another component shares\" is not checked."
+        }
+      ]
+    },
+    "directives#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Decorator[expression.callee.name=/^Host(Binding|Listener)$/]",
+          "message": "@HostBinding/@HostListener - use the host: {} object",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-signals",
+          "options": [
+            {
+              "preferReadonlySignalProperties": false,
+              "preferQuerySignals": false,
+              "preferInputSignals": true
+            }
+          ],
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-output-emitter-ref",
+          "level": "decides"
+        }
+      ]
+    },
+    "directives#6": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name=/^(Store|\\w*Facade|\\w+Store)$/]",
+          "message": "store/facade injected into a directive",
+          "level": "decides",
+          "files": "**/*.directive.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/(^|\\/)data-access\\/services\\//]",
+          "message": "directive imports an HTTP service",
+          "level": "decides",
+          "files": "**/*.directive.ts"
+        }
+      ]
+    },
+    "directives#8": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "spec-exists",
+          "level": "decides",
+          "files": [
+            "**/*.{util,pipe,guard,directive,interceptor}.ts"
+          ],
+          "note": "existence only; what the spec covers stays walked. Map it on the source file kinds (util, pipe, guard, directive, interceptor), the items sit on the spec kinds. null on a partial tree."
+        }
+      ]
+    },
+    "feature-component#1": [
+      {
+        "engine": "builtin",
+        "check": "component-naming",
+        "level": "decides",
+        "files": [
+          "**/components-*/{feature,ui}/**/*.component.{ts,html,scss}"
+        ],
+        "note": "folder, file, class, selector suffix; the app prefix of the selector is not checked."
+      }
+    ],
+    "feature-component#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.actions$|\\.selectors$/]",
+          "message": "feature component imports actions/selectors",
+          "level": "decides",
+          "files": "**/components-*/feature/**/*.component.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/(^|\\/)data-access\\/services\\//]",
+          "message": "feature component imports an HTTP service",
+          "level": "decides",
+          "files": "**/components-*/feature/**/*.component.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name='Store'], CallExpression[callee.property.name='dispatch']",
+          "message": "NgRx Store / dispatch in a feature component",
+          "level": "decides",
+          "files": "**/components-*/feature/**/*.component.ts"
+        }
+      ]
+    },
+    "feature-component#13": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='onDestroy']",
+          "message": "DestroyRef.onDestroy - flush in ngOnDestroy",
+          "level": "points",
+          "files": "**/components-*/feature/**/*.component.ts"
+        }
+      ]
+    },
+    "feature-component#16": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Decorator[expression.callee.name='Component'] Property[key.name='providers'] Identifier[name=/Facade$/]",
+          "message": "facade in @Component.providers",
+          "level": "decides",
+          "files": "**/components-*/feature/**/*.component.ts"
+        }
+      ]
+    },
+    "feature-component#17": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/dialog-data-private",
+          "level": "decides",
+          "note": "Exposing only the named values (not the whole object) stays walked."
+        }
+      ]
+    },
+    "general#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSAsExpression[expression.type='TSAsExpression']",
+          "message": "double cast - only when a single assertion is rejected",
+          "level": "points"
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSAsExpression[typeAnnotation.type='TSNeverKeyword']",
+          "message": "as never",
+          "level": "points"
+        }
+      ]
+    },
+    "general#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "VariableDeclarator > Identifier > TSTypeAnnotation > TSIndexedAccessType, PropertyDefinition > TSTypeAnnotation > TSIndexedAccessType",
+          "message": "indexed-access type annotation - use the named type",
+          "level": "points"
+        }
+      ]
+    },
+    "general#12": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "config-weakened",
+          "level": "points",
+          "files": [
+            "**/tsconfig*.json",
+            "**/.eslintrc*",
+            "**/eslint.config.*",
+            "**/angular.json"
+          ],
+          "note": "flags to false / removed true, rules off, new exclude/ignores entries; an exclude may be legitimate (generated code), hence points."
+        }
+      ]
+    },
+    "general#16": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/naming-convention",
+          "options": [
+            {
+              "selector": "memberLike",
+              "modifiers": [
+                "private"
+              ],
+              "format": null,
+              "leadingUnderscore": "require"
+            }
+          ],
+          "level": "decides",
+          "excludeFiles": [
+            "**/*.spec.ts"
+          ],
+          "note": "TS private class members only; signal-store _ props stay walked"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/member-ordering",
+          "options": [
+            {
+              "default": {
+                "memberTypes": [
+                  [
+                    "signature",
+                    "call-signature",
+                    "field",
+                    "static-initialization",
+                    "constructor",
+                    "accessor",
+                    "get",
+                    "set",
+                    "public-method",
+                    "protected-method"
+                  ],
+                  [
+                    "private-method",
+                    "#private-method"
+                  ]
+                ]
+              }
+            }
+          ],
+          "level": "decides",
+          "excludeFiles": [
+            "**/*.spec.ts"
+          ],
+          "note": "private methods last only"
+        }
+      ]
+    },
+    "general#19": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "no-duplicate-imports",
+          "options": [
+            {
+              "allowSeparateTypeImports": true
+            }
+          ],
+          "level": "decides",
+          "note": "a separate `import type` line stays walked"
+        }
+      ]
+    },
+    "guards#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "guard-file-location",
+          "level": "decides",
+          "note": "folder and suffix; functional guard shape stays walked."
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSClassImplements[expression.name=/^(CanActivate|CanActivateChild|CanDeactivate|CanMatch|CanLoad)$/]",
+          "message": "class guard",
+          "level": "decides",
+          "files": "**/*.guard.ts"
+        }
+      ]
+    },
+    "guards#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSClassImplements[expression.name=/^(CanActivate|CanActivateChild|CanDeactivate|CanMatch|CanLoad|Resolve)$/]",
+          "message": "class-based route API",
+          "level": "decides"
+        }
+      ]
+    },
+    "guards#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-inject",
+          "level": "decides"
+        }
+      ]
+    },
+    "guards#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name='Store']",
+          "message": "NgRx Store injected into a guard",
+          "level": "decides",
+          "files": "**/*.guard.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/(^|\\/)data-access\\/services\\//]",
+          "message": "guard imports an HTTP service",
+          "level": "decides",
+          "files": "**/*.guard.ts"
+        }
+      ]
+    },
+    "guards#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "spec-exists",
+          "level": "decides",
+          "files": [
+            "**/*.{util,pipe,guard,directive,interceptor}.ts"
+          ],
+          "note": "existence only; what the spec covers stays walked. Map it on the source file kinds (util, pipe, guard, directive, interceptor), the items sit on the spec kinds. null on a partial tree."
+        }
+      ]
+    },
+    "http-service#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "service-file-location",
+          "level": "points",
+          "note": "points: app-wide HTTP services (app/shared/services, a shared api library) have no area to live in; folder only; file name = area and class name stay walked."
+        }
+      ]
+    },
+    "http-service#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Literal[value=/^(\\/|https?:\\/\\/|localhost)/], TemplateLiteral[quasis.0.value.raw=/^(\\/|https?:\\/\\/|localhost)/]",
+          "message": "endpoint path with a leading slash or a host",
+          "level": "points",
+          "files": "**/data-access/services/**/*.service.ts"
+        }
+      ]
+    },
+    "http-service#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-inject",
+          "level": "points",
+          "note": "legacy constructor injection is tolerated"
+        },
+        {
+          "engine": "eslint",
+          "selector": "PropertyDefinition[value.callee.name='inject'][value.arguments.0.name='HttpClient'][key.name!='_http']",
+          "message": "HttpClient field is not named _http",
+          "level": "decides",
+          "files": "**/data-access/services/**/*.service.ts"
+        }
+      ]
+    },
+    "http-service#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name=/^(pipe|subscribe)$/]",
+          "message": "pipe()/subscribe() in an HTTP service - only the envelope unwrap is tolerated",
+          "level": "points",
+          "files": "**/data-access/services/**/*.service.ts"
+        }
+      ]
+    },
+    "http-service#12": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name=/^(firstValueFrom|lastValueFrom|forkJoin)$/]",
+          "message": "firstValueFrom/lastValueFrom/forkJoin in an HTTP service",
+          "level": "decides",
+          "files": "**/data-access/services/**/*.service.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name=/^(Store|\\w*Facade|\\w+Store)$/]",
+          "message": "store/facade injected into an HTTP service",
+          "level": "decides",
+          "files": "**/data-access/services/**/*.service.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "MemberExpression[object.name='console']",
+          "message": "logging in an HTTP service",
+          "level": "decides",
+          "files": "**/data-access/services/**/*.service.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSInterfaceDeclaration",
+          "message": "local interface in an HTTP service",
+          "level": "decides",
+          "files": "**/data-access/services/**/*.service.ts"
+        }
+      ]
+    },
+    "http-service#14": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "spec-forbidden",
+          "level": "points",
+          "note": "a service that transforms data may keep its spec"
+        }
+      ]
+    },
+    "i18n#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "i18n-key-shape",
+          "level": "points",
+          "note": "both page roots, non-camelCase leaf, on added keys. Legacy keys may legitimately be snake_case in a project."
+        }
+      ]
+    },
+    "i18n#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "i18n-leaf-suffix",
+          "level": "points",
+          "note": "AriaLabel copying a visible label, abbreviated suffixes."
+        }
+      ]
+    },
+    "i18n#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "i18n-value-style",
+          "level": "points",
+          "note": "trailing period on labels/single-sentence tooltips, `{{ x }}` spacing. \"labels\" vs messages is guessed from the key."
+        }
+      ]
+    },
+    "i18n#11": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/template-hard-coded-text",
+          "level": "points",
+          "note": "Brand names, units, symbols and dev-only text are legit hard-coded text; i18n#11 also covers TS code."
+        }
+      ]
+    },
+    "i18n#12": [
+      {
+        "engine": "builtin",
+        "check": "spec-forbidden",
+        "level": "decides",
+        "note": "fires on the spec file of kind routes-spec / i18n-spec. http-service#14 (data-access-service-spec): level points, partial - a service that transforms data may keep its spec."
+      }
+    ],
+    "interceptors#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSClassImplements[expression.name='HttpInterceptor'], Identifier[name='HTTP_INTERCEPTORS']",
+          "message": "class interceptor / HTTP_INTERCEPTORS",
+          "level": "decides"
+        }
+      ]
+    },
+    "interceptors#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "interceptor-location",
+          "level": "points",
+          "note": "the app-level location is a project convention; fires only on paths clearly inside an area."
+        }
+      ]
+    },
+    "interceptors#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@angular-eslint/prefer-inject",
+          "level": "decides"
+        }
+      ]
+    },
+    "interceptors#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "spec-exists",
+          "level": "decides",
+          "files": [
+            "**/*.{util,pipe,guard,directive,interceptor}.ts"
+          ],
+          "note": "existence only; what the spec covers stays walked. Map it on the source file kinds (util, pipe, guard, directive, interceptor), the items sit on the spec kinds. null on a partial tree."
+        }
+      ]
+    },
+    "models#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "models-file-suffix",
+          "level": "decides",
+          "files": [
+            "**/models/**/*.ts"
+          ],
+          "note": "suffix per folder; what belongs in models/ stays walked."
+        }
+      ]
+    },
+    "models#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "models-declarative",
+          "level": "decides",
+          "files": [
+            "**/models/**/*.ts"
+          ],
+          "note": "top-level function/class/arrow-const and, in .const.ts, interface/type/enum; IIFE or computed consts stay walked."
+        }
+      ]
+    },
+    "models#6": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "models-declarative",
+          "level": "decides",
+          "files": [
+            "**/models/**/*.ts"
+          ],
+          "note": "top-level function/class/arrow-const and, in .const.ts, interface/type/enum; IIFE or computed consts stay walked."
+        }
+      ]
+    },
+    "models#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "models-barrel-shape",
+          "level": "decides",
+          "files": [
+            "**/models/index.ts"
+          ],
+          "note": "only `export *` lines, lists every model file; section order and consumer imports stay walked. null on a partial tree."
+        }
+      ]
+    },
+    "models#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Identifier[name=/^dto|Dto|DTO/]",
+          "message": "Dto vocabulary",
+          "level": "points"
+        }
+      ]
+    },
+    "models#12": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "VariableDeclarator[id.name=/[iI]nitialState$/]:not([id.typeAnnotation])",
+          "message": "initial state not typed with the state interface",
+          "level": "decides",
+          "files": "**/models/consts/**/*.ts"
+        }
+      ]
+    },
+    "models#20": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSEnumMember:not([initializer.raw=/^['\"]/])",
+          "message": "enum member without a string value",
+          "level": "decides",
+          "files": "**/models/**/*.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSEnumMember[id.name=/^[A-Z]|_/]",
+          "message": "enum key not camelCase",
+          "level": "decides",
+          "files": "**/models/**/*.ts"
+        }
+      ]
+    },
+    "models#23": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSPropertySignature[optional=true]",
+          "message": "? field in a state interface - use | null",
+          "level": "decides",
+          "files": "**/models/interfaces/**/*-state.interface.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSPropertySignature[readonly=true]",
+          "message": "readonly on a model field",
+          "level": "decides",
+          "files": "**/models/interfaces/**/*.ts"
+        }
+      ]
+    },
+    "models#25": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Program > ExportNamedDeclaration > VariableDeclaration > VariableDeclarator[id.type='Identifier'][id.name!=/^[a-z][a-zA-Z0-9]*$/]",
+          "message": "const not camelCase",
+          "level": "decides",
+          "files": "**/models/**/*.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": ":matches(TSInterfaceDeclaration, TSTypeAliasDeclaration, TSEnumDeclaration)[id.name=/(Interface|Util)$|^[a-z]/]",
+          "message": "type name not PascalCase or with an Interface/Util suffix",
+          "level": "decides",
+          "files": "**/models/**/*.ts"
+        }
+      ]
+    },
+    "ngrx-actions#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "state-file-location",
+          "level": "decides",
+          "note": "location half only (ngrx-selectors#1 is location only, so it may be non-partial)."
+        }
+      ]
+    },
+    "ngrx-actions#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/action-event-name",
+          "level": "decides",
+          "messageIds": [
+            "notSentence"
+          ],
+          "note": "notSentence: lower-case start, camelCase/underscored first word. suffixCase: capitalised Success/Fail (the item wants lower-case). The source name and the trio completeness stay walked."
+        }
+      ]
+    },
+    "ngrx-actions#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/action-event-name",
+          "level": "decides",
+          "messageIds": [
+            "suffixCase"
+          ],
+          "note": "notSentence: lower-case start, camelCase/underscored first word. suffixCase: capitalised Success/Fail (the item wants lower-case). The source name and the trio completeness stay walked."
+        }
+      ]
+    },
+    "ngrx-actions#4": [
+      {
+        "engine": "eslint",
+        "rule": "doh/action-fail-props",
+        "level": "decides",
+        "note": "Extra props beside a required `error: HttpErrorResponse` are allowed."
+      }
+    ],
+    "ngrx-actions#5": [
+      {
+        "engine": "eslint",
+        "selector": "CallExpression[callee.name='props'] > TSTypeParameterInstantiation > TSTypeLiteral[members.length=0]",
+        "message": "props<{}>() - use emptyProps()",
+        "level": "decides",
+        "files": "**/*.actions.ts"
+      }
+    ],
+    "ngrx-actions#11": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.reducer$|\\.selectors$|\\.effects$|\\.facade$|\\.component$|(^|\\/)data-access\\/services\\//]",
+          "message": "forbidden import in actions",
+          "level": "decides",
+          "files": "**/*.actions.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.service$/]",
+          "message": "service imported - forbidden when it is an HTTP service",
+          "level": "points",
+          "files": "**/*.actions.ts"
+        }
+      ]
+    },
+    "ngrx-effects-unit-test#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name=/^(fakeAsync|tick|flush)$/]",
+          "message": "fakeAsync/tick/flush in an effects spec",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression:matches([callee.name=/^(it|test)$/], [callee.callee.object.name=/^(it|test)$/][callee.callee.property.name='each']) > :matches(ArrowFunctionExpression, FunctionExpression) > Identifier[name='done']:not([typeAnnotation])",
+          "message": "untyped done callback",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "ngrx-effects#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "state-file-location",
+          "level": "decides",
+          "note": "location half only (ngrx-selectors#1 is location only, so it may be non-partial)."
+        },
+        {
+          "engine": "eslint",
+          "selector": "Decorator[expression.callee.name='Injectable'] Property[key.name='providedIn']",
+          "message": "effects with providedIn",
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        }
+      ]
+    },
+    "ngrx-effects#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "PropertyDefinition[value.callee.name='createEffect'][key.name!=/\\$$/]",
+          "message": "effect field without the $ suffix",
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "PropertyDefinition[value.callee.name='inject'][value.arguments.0.name='Actions'][key.name!='_actions$']",
+          "message": "the action stream is not _actions$",
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        },
+        {
+          "engine": "eslint",
+          "rule": "doh/inject-private-readonly",
+          "level": "decides",
+          "files": "**/*.effects.ts",
+          "messageIds": [
+            "notPrivateReadonly",
+            "badName"
+          ]
+        }
+      ]
+    },
+    "ngrx-effects#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "rxjs-x/no-unsafe-catch",
+          "level": "points",
+          "files": "**/*.effects.ts",
+          "needsTypes": true
+        }
+      ]
+    },
+    "ngrx-effects#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='catchError'] Identifier[name=/^(EMPTY|NEVER)$/]",
+          "message": "catchError ends in EMPTY/NEVER - return of(failAction)",
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        }
+      ]
+    },
+    "ngrx-effects#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "rxjs-x/no-unsafe-switchmap",
+          "level": "points",
+          "files": "**/*.effects.ts",
+          "note": "command vs read needs judgement"
+        }
+      ]
+    },
+    "ngrx-effects#8": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@ngrx/prefer-concat-latest-from",
+          "options": [
+            {
+              "strict": true
+            }
+          ],
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        }
+      ]
+    },
+    "ngrx-effects#13": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name=/^(timer|interval)$/] > Literal.arguments:nth-child(2)",
+          "message": "hard-coded polling interval",
+          "level": "points",
+          "files": "**/*.effects.ts"
+        }
+      ]
+    },
+    "ngrx-effects#22": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@ngrx/no-dispatch-in-effects",
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name=/Facade$/]",
+          "message": "facade injected into effects",
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='subscribe']",
+          "message": "manual subscribe() in effects",
+          "level": "decides",
+          "files": "**/*.effects.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.object.name='Date'][callee.property.name='now'], CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          "message": "Date.now()/Math.random() - forbidden in success payloads",
+          "level": "points",
+          "files": "**/*.effects.ts"
+        }
+      ]
+    },
+    "ngrx-facade-unit-test#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='describe'] CallExpression[callee.name='describe']",
+          "message": "nested describe in a facade spec",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "ngrx-facade-unit-test#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='toHaveBeenCalled'][callee.object.arguments.0.property.name='dispatch']",
+          "message": "bare toHaveBeenCalled() on dispatch",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "ngrx-facade-unit-test#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "MemberExpression[object.name='expect'][property.name=/^(objectContaining|any)$/]",
+          "message": "expect.objectContaining/expect.any in a facade spec",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "ngrx-facade#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "state-file-location",
+          "level": "decides",
+          "note": "location half only (ngrx-selectors#1 is location only, so it may be non-partial)."
+        },
+        {
+          "engine": "eslint",
+          "selector": "Decorator[expression.callee.name='Injectable'] Property[key.name='providedIn']",
+          "message": "facade with providedIn",
+          "level": "decides",
+          "files": "**/*.facade.ts"
+        }
+      ]
+    },
+    "ngrx-facade#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "PropertyDefinition[value.callee.name='inject'][value.arguments.0.name='Store'][key.name!='_store']",
+          "message": "the store field is not _store",
+          "level": "decides",
+          "files": "**/*.facade.ts"
+        }
+      ]
+    },
+    "ngrx-facade#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/facade-select-signal-name",
+          "level": "decides",
+          "note": "Name match only; the \"only consumed selectors\" half stays walked."
+        }
+      ]
+    },
+    "ngrx-facade#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/facade-single-dispatch",
+          "level": "decides",
+          "note": "Methods containing a dispatch, not returning a value (ngrx-facade#6 wait-helper methods return an Observable and are skipped). Verb naming and argument shape stay walked."
+        }
+      ]
+    },
+    "ngrx-facade#8": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='computed']",
+          "message": "computed() in a facade",
+          "level": "decides",
+          "files": "**/*.facade.ts"
+        }
+      ]
+    },
+    "ngrx-reducer-unit-test#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='@angular/core/testing'] > ImportSpecifier[imported.name=/^(TestBed)$/]",
+          "message": "TestBed in a reducer spec",
+          "level": "decides",
+          "files": "**/*.reducer.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='ng-mocks']",
+          "message": "ng-mocks in a reducer spec",
+          "level": "decides",
+          "files": "**/*.reducer.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='@ngrx/store/testing']",
+          "message": "MockStore in a reducer spec",
+          "level": "decides",
+          "files": "**/*.reducer.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSAsExpression[expression.type='ObjectExpression'][expression.properties.length=0]",
+          "message": "{} as X",
+          "level": "points",
+          "files": "**/*.reducer.spec.ts"
+        }
+      ]
+    },
+    "ngrx-reducer#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "state-file-location",
+          "level": "decides",
+          "note": "location half only (ngrx-selectors#1 is location only, so it may be non-partial)."
+        }
+      ]
+    },
+    "ngrx-reducer#2": [
+      {
+        "engine": "eslint",
+        "rule": "@ngrx/on-function-explicit-return-type",
+        "level": "decides",
+        "files": "**/*.reducer.ts"
+      }
+    ],
+    "ngrx-reducer#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.object.name='Date'][callee.property.name='now'], CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          "message": "Date.now()/Math.random() in a reducer",
+          "level": "decides",
+          "files": "**/*.reducer.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "Identifier[name=/^(localStorage|sessionStorage)$/]",
+          "message": "storage access in a reducer",
+          "level": "decides",
+          "files": "**/*.reducer.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name=/^(push|splice|pop|shift|unshift)$/]",
+          "message": "array mutation call - fine only on a fresh local copy",
+          "level": "points",
+          "files": "**/*.reducer.ts"
+        }
+      ]
+    },
+    "ngrx-reducer#13": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "SwitchStatement",
+          "message": "switch in a reducer",
+          "level": "points",
+          "files": "**/*.reducer.ts"
+        }
+      ]
+    },
+    "ngrx-reducer#14": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='on'] SpreadElement[argument.name=/[iI]nitialState$/]",
+          "message": "...initialState spread in a handler",
+          "level": "points",
+          "files": "**/*.reducer.ts"
+        }
+      ]
+    },
+    "ngrx-reducer#16": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSAsExpression > TSAnyKeyword",
+          "message": "as any in a reducer",
+          "level": "decides",
+          "files": "**/*.reducer.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": ":matches(ForStatement, ForOfStatement, ForInStatement, WhileStatement, DoWhileStatement)",
+          "message": "loop in a reducer - use map/filter/reduce",
+          "level": "decides",
+          "files": "**/*.reducer.ts"
+        }
+      ]
+    },
+    "ngrx-reducer#18": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.selectors$|\\.effects$|\\.facade$|(^|\\/)data-access\\/services\\/|\\.component$|\\.store$/]",
+          "message": "forbidden import in a reducer",
+          "level": "decides",
+          "files": "**/*.reducer.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.service$/]",
+          "message": "service imported - forbidden when it is an HTTP service",
+          "level": "points",
+          "files": "**/*.reducer.ts"
+        }
+      ]
+    },
+    "ngrx-selectors-unit-test#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='@angular/core/testing'] > ImportSpecifier[imported.name=/^(TestBed)$/]",
+          "message": "TestBed in a selectors spec - use .projector()",
+          "level": "decides",
+          "files": "**/*.selectors.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='ng-mocks']",
+          "message": "ng-mocks in a selectors spec - use .projector()",
+          "level": "decides",
+          "files": "**/*.selectors.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='@ngrx/store/testing']",
+          "message": "MockStore in a selectors spec - use .projector()",
+          "level": "decides",
+          "files": "**/*.selectors.spec.ts"
+        }
+      ]
+    },
+    "ngrx-selectors#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "state-file-location",
+          "level": "decides",
+          "note": "location half only (ngrx-selectors#1 is location only, so it may be non-partial)."
+        }
+      ]
+    },
+    "ngrx-selectors#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@ngrx/prefix-selectors-with-select",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "Program > ExportNamedDeclaration > VariableDeclaration > VariableDeclarator[id.name=/^select/]",
+          "message": "selector exported on its own - export it through a query object",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        }
+      ]
+    },
+    "ngrx-selectors#6": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.object.name='Date'][callee.property.name='now'], CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          "message": "Date.now()/Math.random() in a selector",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "MemberExpression[object.name='console']",
+          "message": "logging in a selector",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        }
+      ]
+    },
+    "ngrx-selectors#16": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.actions$|\\.effects$|\\.facade$|\\.reducer$|\\.component$|(^|\\/)data-access\\/services\\//]",
+          "message": "forbidden import in selectors",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/\\.service$/]",
+          "message": "service imported - forbidden when it is an HTTP service",
+          "level": "points",
+          "files": "**/*.selectors.ts"
+        }
+      ]
+    },
+    "ngrx-selectors#17": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ExportNamedDeclaration > VariableDeclaration > VariableDeclarator > CallExpression.init[callee.name='createFeatureSelector']",
+          "message": "exported feature selector - keep it local",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        }
+      ]
+    },
+    "ngrx-selectors#18": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='createFeatureSelector']:not([typeArguments])",
+          "message": "createFeatureSelector without the state generic",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='createFeatureSelector'][arguments.0.type='Literal']",
+          "message": "feature key written as a string",
+          "level": "decides",
+          "files": "**/*.selectors.ts"
+        }
+      ]
+    },
+    "performance#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "MethodDefinition[key.name=/^(ngDoCheck|ngAfterViewChecked|ngAfterContentChecked)$/]",
+          "message": "per-change-detection lifecycle hook",
+          "level": "decides"
+        }
+      ]
+    },
+    "pipes#2": [
+      {
+        "engine": "eslint",
+        "rule": "@angular-eslint/no-pipe-impure",
+        "level": "decides"
+      }
+    ],
+    "pipes#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/no-explicit-any",
+          "level": "points",
+          "files": "**/*.pipe.ts",
+          "note": "any anywhere in the pipe file; the item is about transform"
+        }
+      ]
+    },
+    "pipes#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name=/^(Store|\\w*Facade|\\w+Store)$/]",
+          "message": "store/facade injected into a pipe",
+          "level": "decides",
+          "files": "**/*.pipe.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/(^|\\/)data-access\\/services\\//]",
+          "message": "pipe imports an HTTP service",
+          "level": "decides",
+          "files": "**/*.pipe.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "MemberExpression[object.name='console']",
+          "message": "logging in a pipe",
+          "level": "decides",
+          "files": "**/*.pipe.ts"
+        }
+      ]
+    },
+    "pipes#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "spec-exists",
+          "level": "decides",
+          "files": [
+            "**/*.{util,pipe,guard,directive,interceptor}.ts"
+          ],
+          "note": "existence only; what the spec covers stays walked. Map it on the source file kinds (util, pipe, guard, directive, interceptor), the items sit on the spec kinds. null on a partial tree."
+        }
+      ]
+    },
+    "routes#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Property[key.name='component']",
+          "message": "eager component in a route - use loadComponent",
+          "level": "decides",
+          "files": "**/*.routes.ts"
+        }
+      ]
+    },
+    "routes#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Property[key.name=/^(providers|canActivate|canActivateChild|canMatch)$/]",
+          "message": "providers/guards in a simple-page routes file",
+          "level": "points",
+          "files": "**/shared/routes/*.routes.ts"
+        }
+      ]
+    },
+    "routes#10": [
+      {
+        "engine": "builtin",
+        "check": "spec-forbidden",
+        "level": "decides",
+        "note": "fires on the spec file of kind routes-spec / i18n-spec. http-service#14 (data-access-service-spec): level points, partial - a service that transforms data may keep its spec."
+      }
+    ],
+    "security#2": [
+      {
+        "engine": "eslint",
+        "rule": "doh/template-inner-html",
+        "level": "decides",
+        "note": "Checks only the sink side; component-template#10 also asks that HTML translations use [innerHTML] instead of interpolation, which needs the translation file (partial there; security#2 can be partial:false)."
+      }
+    ],
+    "security#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "AssignmentExpression[left.property.name=/^(innerHTML|outerHTML)$/]",
+          "message": "innerHTML/outerHTML written directly",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='insertAdjacentHTML']",
+          "message": "insertAdjacentHTML",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.object.name='document'][callee.property.name=/^write(ln)?$/]",
+          "message": "document.write",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='createElement'][arguments.0.value=/^(script|iframe)$/i]",
+          "message": "manual <script>/<iframe> creation",
+          "level": "decides"
+        }
+      ]
+    },
+    "security#6": [
+      {
+        "engine": "eslint",
+        "rule": "doh/template-blank-rel",
+        "level": "decides",
+        "note": "Static target=\"_blank\"; a bound [rel] is not judged."
+      }
+    ],
+    "security#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='withNoXsrfProtection']",
+          "message": "withNoXsrfProtection() is forbidden",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "Property[key.name='withCredentials'][value.value=true], Property[key.name='credentials'][value.value='include']",
+          "message": "credentials sent cross-origin - only for a reviewed, documented case",
+          "level": "points"
+        }
+      ]
+    },
+    "signal-store#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "state-file-location",
+          "level": "decides",
+          "note": "location half only (ngrx-selectors#1 is location only, so it may be non-partial)."
+        },
+        {
+          "engine": "eslint",
+          "selector": "ExportNamedDeclaration > VariableDeclaration > VariableDeclarator[init.callee.name='signalStore'][id.name!=/^[A-Z][A-Za-z0-9]*Store$/]",
+          "message": "signal store not named <Name>Store",
+          "level": "decides",
+          "files": "**/*.store.ts"
+        }
+      ]
+    },
+    "signal-store#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name='HttpClient']",
+          "message": "HttpClient injected into a store",
+          "level": "decides",
+          "files": "**/*.store.ts"
+        }
+      ]
+    },
+    "signal-store#5": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "@ngrx/prefer-protected-state",
+          "level": "decides",
+          "files": "**/*.store.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='patchState']",
+          "message": "patchState outside the store - call a store method",
+          "level": "decides",
+          "files": "**/*.component.ts"
+        }
+      ]
+    },
+    "signal-store#6": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='subscribe']",
+          "message": "bare subscribe() in a store",
+          "level": "decides",
+          "files": "**/*.store.ts"
+        }
+      ]
+    },
+    "signal-store#8": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "Property[key.name='error'] > ArrowFunctionExpression[body.type='BlockStatement'][body.body.length=0]",
+          "message": "empty error callback",
+          "level": "decides",
+          "files": "**/*.store.ts"
+        }
+      ]
+    },
+    "signal-store#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "rule": "doh/store-not-root",
+          "level": "decides",
+          "note": "Only signalStore({ providedIn: root }); facade/effects providedIn and provider placement stay walked."
+        }
+      ]
+    },
+    "state-interface#2": [
+      {
+        "engine": "eslint",
+        "selector": "TSPropertySignature[optional=true]",
+        "message": "? field in a state interface - use | null",
+        "level": "decides",
+        "files": "**/models/interfaces/**/*-state.interface.ts"
+      }
+    ],
+    "state-interface#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSPropertySignature[readonly=true]",
+          "message": "readonly on a state field",
+          "level": "decides",
+          "files": "**/models/interfaces/**/*-state.interface.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSMethodSignature, TSPropertySignature > TSTypeAnnotation > TSFunctionType",
+          "message": "function in a state interface",
+          "level": "decides",
+          "files": "**/models/interfaces/**/*-state.interface.ts"
+        }
+      ]
+    },
+    "ui-component#1": [
+      {
+        "engine": "builtin",
+        "check": "component-naming",
+        "level": "decides",
+        "files": [
+          "**/components-*/{feature,ui}/**/*.component.{ts,html,scss}"
+        ],
+        "note": "folder, file, class, selector suffix; the app prefix of the selector is not checked."
+      }
+    ],
+    "ui-component#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='inject'][arguments.0.name=/^(Store|\\w*Facade)$/]",
+          "message": "store/facade injected into a ui component",
+          "level": "decides",
+          "files": "**/components-*/ui/**/*.component.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value=/(^|\\/)data-access\\/services\\//]",
+          "message": "ui component imports an HTTP service",
+          "level": "decides",
+          "files": "**/components-*/ui/**/*.component.ts"
+        }
+      ]
+    },
+    "unit-tests#1": [
+      {
+        "engine": "builtin",
+        "check": "spec-location",
+        "level": "decides",
+        "files": [
+          "**/*.spec.ts",
+          "**/*.snap"
+        ],
+        "note": "e2e specs skipped."
+      }
+    ],
+    "unit-tests#3": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='beforeEach'] CallExpression[callee.name='MockRender']",
+          "message": "MockRender in beforeEach",
+          "level": "points",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "unit-tests#7": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "VariableDeclarator[id.name=/Mock$/] > TSAsExpression.init",
+          "message": "mock cast with as - use satisfies",
+          "level": "points",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "unit-tests#8": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.object.name=/^(it|describe|test)$/][callee.property.name='each'][arguments.0.type!='ArrayExpression']",
+          "message": "it.each dataset not written inline",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "unit-tests#9": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.name='describe'][arguments.0.value=/^[a-z]+\\s/]",
+          "message": "describe phrase starting lower-case",
+          "level": "points",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "unit-tests#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression:matches([callee.name=/^(it|test)$/], [callee.callee.object.name=/^(it|test)$/][callee.callee.property.name='each'])[arguments.0.type='Literal'][arguments.0.value!=/^should\\b/]",
+          "message": "it() title does not start with should",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression:matches([callee.name=/^(it|test)$/], [callee.callee.object.name=/^(it|test)$/][callee.callee.property.name='each'])[arguments.0.type='TemplateLiteral'][arguments.0.quasis.0.value.raw!=/^should\\b/]",
+          "message": "it() title does not start with should",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "unit-tests#13": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name=/^(toBeTruthy|toBeDefined)$/]",
+          "message": "existence-only assertion?",
+          "level": "points",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "unit-tests#15": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='toHaveBeenCalledWith'][arguments.length=0]",
+          "message": "empty toHaveBeenCalledWith()",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name=/^(toHaveBeenCalled|toHaveBeenCalledTimes)$/][callee.object.type='CallExpression']",
+          "message": "bare toHaveBeenCalled - assert the arguments if any",
+          "level": "points",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "unit-tests#22": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "TSAsExpression[expression.type='TSAsExpression']",
+          "message": "double cast (as unknown as / as undefined as never)",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "TSAsExpression[typeAnnotation.type='TSNeverKeyword']",
+          "message": "as never",
+          "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "selector": "VariableDeclarator > Identifier > TSTypeAnnotation > TSIndexedAccessType, PropertyDefinition > TSTypeAnnotation > TSIndexedAccessType",
+          "message": "indexed-access type annotation",
+          "level": "points"
+        }
+      ]
+    },
+    "unit-tests#28": [
+      {
+        "engine": "eslint",
+        "selector": "CallExpression:matches([callee.name=/^(it|test)$/], [callee.callee.object.name=/^(it|test)$/][callee.callee.property.name='each']) > :matches(ArrowFunctionExpression, FunctionExpression) > Identifier[name='done']:not([typeAnnotation])",
+        "message": "untyped done callback",
+        "level": "decides",
+        "files": "**/*.spec.ts"
+      }
+    ],
+    "unit-tests#30": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.property.name='toHaveBeenCalledWith'][arguments.length=0]",
+          "message": "empty toHaveBeenCalledWith()",
+          "level": "decides",
+          "files": "**/*.spec.ts"
+        }
+      ]
+    },
+    "util-guard-unit-test#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='@angular/core/testing'] > ImportSpecifier[imported.name=/^(TestBed)$/]",
+          "message": "TestBed in a util spec",
+          "level": "decides",
+          "files": "**/shared/utils/**/*.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='ng-mocks']",
+          "message": "ng-mocks in a util spec",
+          "level": "decides",
+          "files": "**/shared/utils/**/*.spec.ts"
+        },
+        {
+          "engine": "eslint",
+          "selector": "ImportDeclaration[source.value='@ngrx/store/testing']",
+          "message": "MockStore in a util spec",
+          "level": "decides",
+          "files": "**/shared/utils/**/*.spec.ts"
+        }
+      ]
+    },
+    "utils#1": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "util-file-name",
+          "level": "decides",
+          "files": [
+            "**/shared/utils/**/*.ts"
+          ],
+          "note": "suffix only; the verb vocabulary is judgement."
+        }
+      ]
+    },
+    "utils#2": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "ExportDefaultDeclaration",
+          "message": "default export in a util",
+          "level": "decides",
+          "files": "**/shared/utils/**/*.ts",
+          "excludeFiles": [
+            "**/*.spec.ts"
+          ]
+        },
+        {
+          "engine": "eslint",
+          "selector": "ExportNamedDeclaration > :matches(VariableDeclaration, ClassDeclaration)",
+          "message": "util export that is not an export function",
+          "level": "decides",
+          "files": "**/shared/utils/**/*.ts",
+          "excludeFiles": [
+            "**/*.spec.ts"
+          ]
+        },
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/explicit-module-boundary-types",
+          "level": "decides",
+          "files": "**/shared/utils/**/*.ts",
+          "excludeFiles": [
+            "**/*.spec.ts"
+          ]
+        }
+      ]
+    },
+    "utils#4": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "eslint",
+          "selector": "CallExpression[callee.object.name='Date'][callee.property.name='now'], CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          "message": "Date.now()/Math.random() in a util - pass it as an argument",
+          "level": "decides",
+          "files": "**/shared/utils/**/*.ts",
+          "excludeFiles": [
+            "**/*.spec.ts"
+          ]
+        }
+      ]
+    },
+    "utils#10": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "barrel-forbidden",
+          "level": "decides",
+          "files": [
+            "**/index.ts"
+          ],
+          "note": "creating a barrel only; imports through one stay walked (architecture#7 partial). Library entry recognised by package.json/ng-package.json/project.json/public-api sibling, lib src/index.ts, or a tsconfig path naming it. null on a partial tree."
+        }
+      ]
+    },
+    "utils#11": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "builtin",
+          "check": "spec-exists",
+          "level": "decides",
+          "files": [
+            "**/*.{util,pipe,guard,directive,interceptor}.ts"
+          ],
+          "note": "existence only; what the spec covers stays walked. Map it on the source file kinds (util, pipe, guard, directive, interceptor), the items sit on the spec kinds. null on a partial tree."
+        }
+      ]
+    }
+  }
+}

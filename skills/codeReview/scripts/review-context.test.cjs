@@ -2564,3 +2564,31 @@ test('runWorkflow: a run of bigRunWindows windows or more takes eight lanes, a s
   assert.strictEqual(lanesOf(bigRunWindows, 4), 4);
   assert.strictEqual(lanesOf(3, 0), 3);
 });
+
+test('static checks: off with --no-static and with an empty map, a runner throw is a warning, a sibling is materialized', () => {
+  assert.strictEqual(rc.parseArgs(['--no-static']).static, false);
+  const instruction = (extras) => ({ id: 'component', extras: new Map(extras) });
+  const mapped = new Map([['component', instruction([[1, { static: { partial: false, entries: [{ engine: 'eslint', rule: 'r', level: 'decides' }] } }]])]]);
+  const planCatalog = [{ plan: [{ id: 'component', numbers: [1, 2] }] }];
+  const files = [{ path: 'src/a.component.html', status: 'M', plan: 0, changedLines: '3-4' }, { path: 'src/gone.ts', status: 'D', plan: 0 }];
+  const texts = new Map([['src/a.component.html', '<p></p>\n'], ['src/a.component.ts', 'export class A {}\n']]);
+  let seen = null;
+  const runner = (input) => {
+    seen = { ...input, onDisk: fs.readdirSync(path.join(input.sourceRoot, 'src')).sort() };
+    return { version: 1, engines: { eslint: { available: true } }, skipped: [], files: { 'src/a.component.html': { decided: ['component#1'], clean: {}, hits: [] } } };
+  };
+  const base = { project: '/p', files, planCatalog, texts, fromWorkTree: false, runner };
+  assert.deepStrictEqual(rc.staticStage({ ...base, instructions: mapped, enabled: false }), {});
+  assert.deepStrictEqual(rc.staticStage({ ...base, instructions: new Map([['component', instruction([[1, {}]])]]) }), {});
+  assert.strictEqual(seen, null, 'the runner never ran');
+  const ran = rc.staticStage({ ...base, instructions: mapped });
+  assert.deepStrictEqual(seen.files, [{ path: 'src/a.component.html', kind: '0' }]);
+  assert.deepStrictEqual(seen.kindItems, { 0: ['component#1', 'component#2'] });
+  assert.deepStrictEqual(seen.changedLines, { 'src/a.component.html': [[3, 4]] });
+  assert.deepStrictEqual(seen.onDisk, ['a.component.html', 'a.component.ts'], 'the template\'s class is written beside it');
+  assert.strictEqual(fs.existsSync(seen.sourceRoot), false, 'the snapshot folder is removed');
+  assert.match(ran.line, /^Kontrole statyczne: 1 pozycji plików rozstrzygnął linter, 0 trafień w zmienionych liniach \(/);
+  const thrown = rc.staticStage({ ...base, instructions: mapped, runner: () => { throw new Error('boom'); } });
+  assert.deepStrictEqual(Object.keys(thrown), ['warning']);
+  assert.match(thrown.warning, /Kontrole statyczne nie ruszyły \(boom\)/);
+});

@@ -1,7 +1,7 @@
 ---
 name: codeReview
 description: Use when the user wants an instruction-driven code review of git changes (current branch vs its base, staged files, a list of branches, or every file under a folder) - checks every changed file against the instruction checklist of its file kind and writes one concise Polish report per branch (interactive HTML by default, Markdown with --only-md; the walked checklists stay in it only with --with-checklist; --light skips the rules of severity low and leaves Low findings and code snippets out) with severity, real line numbers, violated rule and expected result
-argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--with-checklist] [--since-last] [--learn-from-prs=<n>] [--walker-model=<model|inherit>] [--walker-effort=<low|medium|high|xhigh|max|inherit>] [--parallel=<n>] [--decisions=<file>] [--inline-under=<lines>] [--project=<path>]"
+argument-hint: "[staged | folder <path> | <branch>[,<branch>…]] [--only-md] [--light] [--no-static] [--with-checklist] [--since-last] [--learn-from-prs=<n>] [--walker-model=<model|inherit>] [--walker-effort=<low|medium|high|xhigh|max|inherit>] [--parallel=<n>] [--decisions=<file>] [--inline-under=<lines>] [--project=<path>]"
 hooks:
   PreToolUse:
     - hooks:
@@ -159,6 +159,7 @@ After a compaction, the hook names what of them to read again.
    - `--light` → pass it through to the context script (`target.light`).
      Every checklist leaves out the items whose fixed severity is low (the item's own `severity`, else its instruction's), so the review walks every other rule.
      The renderer cuts every ⚪ **Low** finding from the finished report, and the HTML page shows no code snippet.
+   - `--no-static` → pass it through to the context script: no static checks, every checklist item is walked.
    - `--walker-model=<model>` → pass it through to the context script (`walker.model`, `cross.model`): the `model` every window walker and the cross-file agent are spawned with (Step 3, Windows), e.g. `opus`.
      Without it a window walks on `sonnet` and the cross-file agent inherits this session's model; `inherit` makes the walkers inherit it too. A window made only of files whose kind declares a `walker` setting (the models kinds: `sonnet`, effort `medium`) is spawned with that one instead.
    - `--walker-effort=<low|medium|high|xhigh|max>` → pass it through to the context script (`walker.effort`, `cross.effort`): the `effort` every walker is spawned with (Step 3, Windows).
@@ -204,7 +205,7 @@ After a compaction, the hook names what of them to read again.
      INSIDE `PROJECT`; the script refuses one that climbs out of it and points you at `--project`
      instead, which is how you review a folder of another repository.
    - anything else → `--mode=branches --branches="<arguments verbatim>"` (the script splits on `,` and `;`)
-4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--light] [--walker-model=<model>] [--walker-effort=<effort>] [--parallel=<n>] [--decisions=<file>] [--inline-under=<lines>]`
+4. Run (Bash tool): `node "<SKILL_DIR>/scripts/review-context.cjs" --mode=<mode> [--branches="..."] [--path="..."] --output=<OUTPUT> --project="<PROJECT>" [--since-last] [--with-checklist] [--light] [--no-static] [--walker-model=<model>] [--walker-effort=<effort>] [--parallel=<n>] [--decisions=<file>] [--inline-under=<lines>]`
    `--branches` goes with `--mode=branches` and `--path` with `--mode=folder` — folder mode fails
    with `No folder given` if the path is left off this line.
 5. Parse the JSON from stdout — the part of the context the review uses:
@@ -218,7 +219,7 @@ After a compaction, the hook names what of them to read again.
      every target and the run's summary), and per target `files` and `windows`
      (counts), `parallel`, `start` (a target walked here), `crossInline`, `snapshotDir`, `revision`, `commands.assemble` (only in a context without `commands.assembleAll`),
      `reportPath`, `htmlReportPath`, `workDir`, `crossBundlePath`, `crossBriefPath`, `gapsBriefPath`, `baseBranch`,
-     `baseSource`, `prNumber`, `stackTip` (a stacked target's last later part) and `stackTipRevision` (its commit: before calling a symbol unused, a target walked here asks it, `references/walk.md` Step 3), `decisionsPath` (top level, with `--decisions`), `resume`, `skipped` (a count) — are in this summary: do not Read the file, whose
+     `baseSource`, `prNumber`, `stackTip` (a stacked target's last later part) and `stackTipRevision` (its commit: before calling a symbol unused, a target walked here asks it, `references/walk.md` Step 3), `decisionsPath` (top level, with `--decisions`), `resume`, `skipped` (a count), `staticPath` and `static` (the static checks' `static.json` - the items a linter settled, closed or printed as `STATYCZNA` in the bundles - and its one-line summary; absent with `--no-static` or no map) — are in this summary: do not Read the file, whose
      60–75 kB would stay in your context until the first compaction. Read it (Read tool, never
      `cat`) only for a key the summary lacks (`instructionsCatalog`, `checklistPlans`, a target's list of
      `files` or of `windows`).

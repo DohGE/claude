@@ -670,3 +670,44 @@ test('a modified file closes too the items whose subject only its untouched line
   const whole = b.bindFile({ plan, instructions, filePath: 'x.html', text: '<p>one</p>\n' });
   assert.deepStrictEqual([whole.closed, whole.closedUntouched], [['a11y#1', 'a11y#2'], undefined], 'an added file: absent from the file');
 });
+
+test('static checks: a settled item closes, a decides hit is STATYCZNA, a points hit a SONDA, clean rules print, a fact keeps it open', () => {
+  const instructions = new Map([
+    ['c', instruction('c', ['OnPush.', 'Control flow.', 'Switch default.', 'Mixed.', 'Second.'], { 5: { secondQuestion: 'Which?' } })],
+  ]);
+  const plan = [{ id: 'c', numbers: [1, 2, 3, 4, 5] }];
+  const staticFile = {
+    decided: ['c#1', 'c#2', 'c#3', 'c#5'],
+    clean: { 'c#4': ['no-console'] },
+    hits: [
+      { address: 'c#2', level: 'decides', line: 7, endLine: 9, rule: '@angular-eslint/template/prefer-control-flow', message: 'Use @if', inChange: true },
+      { address: 'c#3', level: 'points', line: 4, endLine: 4, rule: 'doh/template-switch-default', message: 'no default', inChange: true },
+      { address: 'c#1', level: 'decides', line: 2, endLine: 2, rule: 'x', message: 'outside the change', inChange: false },
+    ],
+  };
+  const bound = rb.bindFile({ plan, instructions, filePath: 'src/x.component.html', text: '<p></p>\n', staticFile });
+  assert.deepStrictEqual(bound.closed, ['c#1'], 'a hit outside the change does not keep it open; a second question does');
+  assert.deepStrictEqual(bound.closedStatic, ['c#1']);
+  assert.deepStrictEqual(bound.items['c#2'].static, [{ line: 7, endLine: 9, rule: '@angular-eslint/template/prefer-control-flow', message: 'Use @if' }]);
+  assert.deepStrictEqual(bound.items['c#3'].probes, [{ line: 4, text: 'doh/template-switch-default - no default' }]);
+  assert.deepStrictEqual(bound.staticClean, { 'c#4': ['no-console'] });
+  const withFact = rb.bindFile({ plan, instructions: new Map([['c', instruction('c', ['a', 'b', 'c', 'd', 'e'], { 1: { facts: ['k'] } })]]), filePath: 'src/x.component.html', text: '', staticFile, facts: [{ kind: 'k', lines: [3], text: 't' }] });
+  assert.deepStrictEqual(withFact.closedStatic, ['c#5'], 'a fact binds c#1: it stays the walker\'s');
+  const file = { path: 'src/x.component.html', status: 'M', changedLines: '1-9', checklistTotal: 5, contentPath: 'w/x.html', diffPath: null };
+  const bundle = rb.renderBundle({ file, kind: { name: 'template', role: 'Template.', notes: [], plan }, instructions, bound, partPath: 'r/raport.part01.md' });
+  assert.ok(bundle.includes('- zamknięte przez skrypt (statyczna: czysto; linie dopisze hook): c#1'), bundle);
+  assert.ok(bundle.includes('  - STATYCZNA L7-L9: @angular-eslint/template/prefer-control-flow - Use @if'));
+  assert.ok(bundle.includes('  - SONDA L4: doh/template-switch-default - no default'));
+  assert.ok(bundle.includes('  - statyczna: czysto - no-console'));
+  assert.ok(bundle.includes('`STATYCZNA` to werdykt narzędzia'));
+  assert.ok(bundle.includes('[x] c#2 — … (L7)'), 'the skeleton names the hit line');
+});
+
+test('static lines past the cap end with a count', () => {
+  const instructions = new Map([['c', instruction('c', ['One.'])]]);
+  const hits = Array.from({ length: 11 }, (_, i) => ({ address: 'c#1', level: 'decides', line: i + 1, endLine: i + 1, rule: 'r', message: 'm', inChange: true }));
+  const bound = rb.bindFile({ plan: [{ id: 'c', numbers: [1] }], instructions, filePath: 'a.ts', text: '', staticFile: { decided: ['c#1'], clean: {}, hits } });
+  const lines = rb.renderBinding(bound.items['c#1']);
+  assert.strictEqual(lines.length, 9);
+  assert.strictEqual(lines[8], '  - … i 3 kolejnych');
+});

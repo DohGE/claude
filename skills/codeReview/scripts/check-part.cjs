@@ -51,6 +51,9 @@ const noOccurrence = 'brak wystąpień';
 // - What an OK says when a FAKT of its bundle does not break its item, and the answer to the
 //   bundle's second question (review-bundle.cjs prints the question with the same words).
 const factNotApplicable = 'fakt nie dotyczy:';
+// - The evidence of an item a static check settled (review-bundle.cjs staticClean): an absence too.
+const staticClean = bundle.staticClean;
+const isAbsence = (text) => { const t = String(text).toLowerCase(); return t.includes(noOccurrence) || t.includes(staticClean); };
 const secondAnswer = bundle.linePrefix.second;
 // - The three things a NIEZWERYFIKOWANE may lack: a tool that was not run, a file outside the
 //   review, data only the running application has.
@@ -500,7 +503,7 @@ function checkTickLine(line, gates, count, finder = null, ctx = {}) {
       ? whole.replace(new RegExp(reAddress.source, 'gi'), (address) => (handoff.has(address.toLowerCase()) ? ' ' : address)).trim()
       : whole;
     const deferred = inner.match(reAddress);
-    const absent = inner.toLowerCase().includes(noOccurrence);
+    const absent = isAbsence(inner);
     const numbered = /(^|[^\p{L}\p{N}])L?\d+/u.test(inner);
     const elsewhere = inner && !deferred ? fileNamedIn(inner) : null;
     const items = line.numbers ? line.numbers.length : 1;
@@ -571,7 +574,7 @@ function checkBinding(at, word, after, bound) {
   const kinds = [...new Set(strong.map((fact) => fact.kind))].join(', ');
   const problems = [];
   if (word === 'OK') {
-    if (pointed.length && after.toLowerCase().includes(noOccurrence)) {
+    if (pointed.length && isAbsence(after)) {
       problems.push(`${at}: "${noOccurrence}", a paczka pliku wskazuje ${named(pointed)} - przedmiot pozycji jest w pliku, więc werdykt to NARUSZENIE albo OK z tymi liniami.`);
     } else if (unanswered.length) {
       problems.push(`${at}: OK nie odpowiada na ${named(unanswered)} z paczki pliku (FAKT, WSKAZÓWKA, SONDA) - dowód wymienia każdą z tych linii i mówi, czemu jej kod nie łamie pozycji; linia, która łamie, to NARUSZENIE.`);
@@ -590,6 +593,18 @@ function checkBinding(at, word, after, bound) {
     }
   }
   return problems;
+}
+
+// An item with `decides` hits of a static check (review-bundle.cjs bindFile `static`): the tool
+// settled it on those lines, so a reason cannot overrule it - a wrong hit is fixed in the map.
+function checkStatic(at, word, after, hits) {
+  const named = hits.map((hit) => `L${hit.line} (${hit.rule})`).join(', ');
+  if (word !== 'NARUSZENIE') {
+    return [`${at}: ${bundle.staticPrefix} ${named} - narzędzie rozstrzygnęło tę pozycję: werdykt to NARUSZENIE (${hits.map((hit) => `L${hit.line}`).join(', ')}) ze znaleziskiem; ${word} jest odrzucane, a "${factNotApplicable}" tu nie działa (błędne trafienie poprawia się w static-map.json).`];
+  }
+  const cited = violationLines(after);
+  const missed = hits.filter((hit) => !cited.some((k) => k >= hit.line && k <= Math.max(hit.line, hit.endLine || hit.line)));
+  return missed.length ? [`${at}: NARUSZENIE nie wskazuje ${missed.map((hit) => `L${hit.line} (${hit.rule})`).join(', ')} z linii ${bundle.staticPrefix} paczki - linie trafień stoją w nawiasie i w polu Linia znaleziska.`] : [];
 }
 
 // facts.json of the target (review-bundle.cjs factsDocument). Missing or unreadable, a part is
@@ -745,6 +760,10 @@ function checkFilePart(context, target, number, digits, scan, report, options) {
     }
     if (!wordsById.has(line.id)) wordsById.set(line.id, new Set());
     wordsById.get(line.id).add(verdict.word);
+    // A STATYCZNA line is a tool's verdict: NARUSZENIE citing its lines, nothing else.
+    for (const a of line.numbers.map((k) => `${line.id}#${k}`)) {
+      if (bound[a] && (bound[a].static || []).length) problems.push(...checkStatic(a, verdict.word, verdict.after, bound[a].static));
+    }
     // What the bundle showed an item is answered on the item's own line.
     if (verdict.word !== 'OK' && verdict.word !== 'NIEZWERYFIKOWANE') continue;
     const answering = line.numbers.map((k) => `${line.id}#${k}`)
@@ -2139,7 +2158,7 @@ function fillPart(context, target, partPath, text, facts) {
   for (const line of scan.lines) {
     const verdict = verdictOfLine(line);
     if (!verdict || !line.numbers || line.numbers.length < 2) continue;
-    const absence = verdict.word === 'BRAMKA' || (verdict.word === 'OK' && /^\(\s*brak wystąpień[^)]*\)\s*$/i.test(verdict.after));
+    const absence = verdict.word === 'BRAMKA' || (verdict.word === 'OK' && /^\(\s*(?:brak wystąpień|statyczna: czysto)[^)]*\)\s*$/i.test(verdict.after));
     const kept = line.numbers.filter((k) => plan.has(`${line.id}#${k}`));
     if (!absence || kept.length === line.numbers.length || kept.length === 0) continue;
     const at = line.lineNo - 1;
@@ -2165,12 +2184,15 @@ function fillPart(context, target, partPath, text, facts) {
         continue;
       }
       const untouched = new Set((facts && facts.files[file.path] && facts.files[file.path].closedUntouched) || []);
-      const kinds = [numbers.filter((k) => !untouched.has(`${id}#${k}`)), numbers.filter((k) => untouched.has(`${id}#${k}`))];
+      const settled = new Set((facts && facts.files[file.path] && facts.files[file.path].closedStatic) || []);
+      const evidence = [bundle.closedEvidence, bundle.closedUntouchedEvidence, bundle.closedStaticEvidence];
+      const groupOf = (k) => (settled.has(`${id}#${k}`) ? 2 : untouched.has(`${id}#${k}`) ? 1 : 0);
+      const kinds = [0, 1, 2].map((j) => numbers.filter((k) => groupOf(k) === j));
       kinds.forEach((group, j) => {
-        if (group.length) closedLines.push(`${indent}[x] ${id}#${rulebook.formatItemSpec(group).replace(/,/g, ',#')} — OK (${j ? bundle.closedUntouchedEvidence : bundle.closedEvidence})`);
+        if (group.length) closedLines.push(`${indent}[x] ${id}#${rulebook.formatItemSpec(group).replace(/,/g, ',#')} — OK (${evidence[j]})`);
       });
     }
-    fixes.push(`${compact(closed)}: dopisane pozycje zamknięte przez skrypt (przedmiotu brak w pliku)`);
+    fixes.push(`${compact(closed)}: dopisane pozycje zamknięte przez skrypt (przedmiotu brak w pliku albo ${staticClean})`);
   }
   const missing = [...plan].filter((address) => prepared[address] && !covered.has(address));
   // The verdicts the read hook carried from an earlier part of the stack (stack-carry.cjs) and the

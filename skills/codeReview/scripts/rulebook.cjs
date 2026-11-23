@@ -621,7 +621,9 @@ function absorbInstruction(defs, instruction, where, warnings) {
 // instruction a project kind restates overrides, for every kind, only what it restates: its
 // name, gate, findings, preamble, size or scope, and the texts of the item numbers it lists.
 // `localDir` (`.claude/doh/local/`) adds the project's Markdown rules on top of both.
-function loadRulebook(dirs, { localDir = null } = {}) {
+// `staticMaps`: the static-map files (or map objects), lowest priority first; default: one
+// beside each layer of `dirs` (defaultStaticMaps).
+function loadRulebook(dirs, { localDir = null, staticMaps = undefined } = {}) {
   const warnings = [];
   const kindsByName = new Map();
   const layerDefs = [];
@@ -791,7 +793,9 @@ function loadRulebook(dirs, { localDir = null } = {}) {
       }
     }
   }
-  return { kinds: [...kindsByName.values()], instructions, warnings };
+  const kinds = [...kindsByName.values()];
+  applyStaticMap(loadStaticMap(staticMaps === undefined ? defaultStaticMaps(dirs) : staticMaps, warnings), instructions, kinds, warnings);
+  return { kinds, instructions, warnings };
 }
 
 // An instruction's validated `appliesTo` and `appliesWhen` as tests, null when it has neither.
@@ -909,7 +913,211 @@ function renderNumbered(instruction, numbers) {
   return `${lines.join('\n')}\n`;
 }
 
+// ---- Static checks: the map (references/static.md "The map") ----
+
+const staticEngines = ['eslint', 'stylelint', 'builtin'];
+const staticLevels = ['decides', 'points'];
+const staticEntryKeys = ['engine', 'rule', 'selector', 'restrictedImport', 'message', 'check', 'level', 'options', 'files', 'excludeFiles', 'needsTypes', 'note', 'messageIds'];
+
+// The map files a rulebook layer brings: `<layer>/../static/static-map.json`, so the skill's
+// `instructions/` finds `static/static-map.json` beside it and a project's
+// `.claude/doh/instructions/` finds `.claude/doh/static/static-map.json` - no caller changes.
+function defaultStaticMaps(dirs) {
+  return (Array.isArray(dirs) ? dirs : [dirs]).map((dir) => (dir ? path.join(dir, '..', 'static', 'static-map.json') : null));
+}
+
+const isGlobList = (v) => (typeof v === 'string' && v.trim() !== '') || (Array.isArray(v) && v.length > 0 && v.every((g) => typeof g === 'string' && g.trim() !== ''));
+const nonEmptyText = (v) => typeof v === 'string' && v.trim() !== '';
+
+// One entry checked against the contract's shapes: the reason it is refused, or null. A typo
+// must warn - an entry that binds nothing would leave the item walked with nobody noticing.
+function staticEntryProblem(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return 'is not an object';
+  const unknown = Object.keys(entry).filter((key) => !staticEntryKeys.includes(key));
+  if (unknown.length > 0) return `has unknown key(s) ${unknown.join(', ')}`;
+  if (!staticEngines.includes(entry.engine)) return `"engine" ${JSON.stringify(entry.engine)} is not one of ${staticEngines.join(', ')}`;
+  if (!staticLevels.includes(entry.level)) return `"level" ${JSON.stringify(entry.level)} is not one of ${staticLevels.join(', ')}`;
+  const has = (key) => entry[key] !== undefined;
+  if (entry.engine === 'eslint') {
+    const shapes = ['rule', 'selector', 'restrictedImport'].filter(has);
+    if (shapes.length !== 1) return 'needs exactly one of "rule", "selector" + "message", "restrictedImport" + "message"';
+    if (has('check')) return '"check" belongs to builtin entries';
+    if (has('rule') && !nonEmptyText(entry.rule)) return '"rule" is not a text';
+    if (has('rule') && has('message')) return '"message" belongs to selector / restrictedImport entries';
+    if (has('selector') && !nonEmptyText(entry.selector)) return '"selector" is not a text';
+    if (has('restrictedImport')) {
+      const ri = entry.restrictedImport;
+      if (!ri || typeof ri !== 'object' || Array.isArray(ri) || (ri.group === undefined) === (ri.name === undefined)) return '"restrictedImport" needs exactly one of "group" or "name"';
+      if (ri.group !== undefined && !isGlobList(ri.group)) return '"restrictedImport" "group" is not a list of patterns';
+      if (ri.name !== undefined && !nonEmptyText(ri.name)) return '"restrictedImport" "name" is not a text';
+    }
+    if (!has('rule') && !nonEmptyText(entry.message)) return '"message" is missing';
+    if (has('messageIds') && !has('rule')) return '"messageIds" belongs to "rule" entries';
+    if (has('messageIds') && !(Array.isArray(entry.messageIds) && entry.messageIds.length > 0 && entry.messageIds.every(nonEmptyText))) return '"messageIds" is not a list of non-empty texts';
+  } else if (entry.engine === 'stylelint') {
+    if (!nonEmptyText(entry.rule)) return 'needs a "rule"';
+    if (['selector', 'restrictedImport', 'message', 'check'].some(has)) return 'stylelint entries take only "rule" and "options"';
+  } else {
+    if (!nonEmptyText(entry.check)) return 'needs a "check"';
+    if (['rule', 'selector', 'restrictedImport', 'message', 'options'].some(has)) return 'builtin entries take only "check"';
+  }
+  if (entry.engine !== 'eslint' && has('messageIds')) return '"messageIds" belongs to eslint rule entries';
+  if (has('files') && !isGlobList(entry.files)) return '"files" is not a glob or a list of globs';
+  if (has('excludeFiles') && !isGlobList(entry.excludeFiles)) return '"excludeFiles" is not a glob or a list of globs';
+  if (has('needsTypes') && typeof entry.needsTypes !== 'boolean') return '"needsTypes" is not true or false';
+  if (has('note') && typeof entry.note !== 'string') return '"note" is not a text';
+  return null;
+}
+
+// An item's value - the entries, or `{ partial, entries }` - as `{ partial, entries }` holding
+// only the valid entries; null when none is left.
+function normalizeStaticValue(value, address, where, warnings) {
+  let partial = false;
+  let list = value;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const extra = Object.keys(value).filter((key) => key !== 'partial' && key !== 'entries');
+    if (extra.length > 0) warnings.push(`${where}: ${address} has unknown key(s) ${extra.join(', ')} - ignored.`);
+    if (value.partial !== undefined && typeof value.partial !== 'boolean') warnings.push(`${where}: ${address} "partial" ${JSON.stringify(value.partial)} is not true or false - taken as false.`);
+    partial = value.partial === true;
+    list = value.entries;
+  }
+  if (!Array.isArray(list)) {
+    warnings.push(`${where}: ${address} is neither a list of entries nor { partial, entries } - ignored.`);
+    return null;
+  }
+  const entries = [];
+  list.forEach((entry, i) => {
+    const problem = staticEntryProblem(entry);
+    if (problem) warnings.push(`${where}: ${address} static entry ${i + 1} ${problem} - ignored.`);
+    else entries.push(entry);
+  });
+  return entries.length > 0 ? { partial, entries } : null;
+}
+
+// The layered map: address -> { value, where }. A later map naming an address replaces the
+// earlier entry whole, and `[]` removes it. A missing file is no map, not a defect.
+function loadStaticMap(maps, warnings = []) {
+  const merged = new Map();
+  for (const source of maps || []) {
+    if (!source) continue;
+    let raw = source;
+    let where = 'static map';
+    if (typeof source === 'string') {
+      where = source;
+      if (!fs.existsSync(source)) continue;
+      try {
+        raw = JSON.parse(fs.readFileSync(source, 'utf8'));
+      } catch (err) {
+        warnings.push(`${where}: not valid JSON (${(err && err.message) || err}) - skipped.`);
+        continue;
+      }
+    }
+    if (!raw || typeof raw !== 'object' || !raw.items || typeof raw.items !== 'object' || Array.isArray(raw.items)) {
+      warnings.push(`${where}: no "items" object - skipped.`);
+      continue;
+    }
+    if (raw.version !== undefined && raw.version !== 1) warnings.push(`${where}: version ${JSON.stringify(raw.version)} is not 1 - read as version 1.`);
+    for (const [address, value] of Object.entries(raw.items)) {
+      if (!reItemId.test(address)) {
+        warnings.push(`${where}: "${address}" is not an <id>#<n> address - ignored.`);
+        continue;
+      }
+      if (Array.isArray(value) && value.length === 0) {
+        merged.delete(address);
+        continue;
+      }
+      const normalized = normalizeStaticValue(value, address, where, warnings);
+      if (normalized) merged.set(address, { value: normalized, where });
+    }
+  }
+  return merged;
+}
+
+// Puts `static` on the merged extras of every item the map names. Done after the layers are
+// merged, so it never feeds the "extras differ between kinds" check: one map, one value.
+function applyStaticMap(staticMap, instructions, kinds, warnings) {
+  const planned = new Set();
+  for (const kind of kinds) for (const step of kind.plan) for (const n of step.numbers) planned.add(`${step.id}#${n}`);
+  for (const [address, { value, where }] of staticMap) {
+    const [, id, number] = address.match(reItemId);
+    const n = Number(number);
+    const instruction = instructions.get(id);
+    if (!planned.has(address) || !instruction || !instruction.items.has(n)) {
+      warnings.push(`${where}: ${address} is an item no kind's plan holds - ignored.`);
+      continue;
+    }
+    const extra = instruction.extras.get(n) || {};
+    if (extra.unverified) {
+      warnings.push(`${where}: ${address} is marked "unverified" - no tool can settle it, its static entries are ignored.`);
+      continue;
+    }
+    instruction.extras.set(n, { ...extra, static: value });
+  }
+}
+
+// `pattern` as a regular expression over a project-relative forward-slash path: `**` any
+// folders (or none), `*` and `?` within one segment, `{a,b}` alternatives. Four operators
+// do not earn a dependency.
+const globCache = new Map();
+function globRegex(pattern) {
+  let re = globCache.get(pattern);
+  if (re) return re;
+  let out = '';
+  let depth = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*' && pattern[i + 1] === '*') {
+      const atStart = i === 0 || pattern[i - 1] === '/';
+      i++;
+      if (atStart && pattern[i + 1] === '/') {
+        out += '(?:[^/]*/)*';
+        i++;
+      } else out += '.*';
+    } else if (c === '*') out += '[^/]*';
+    else if (c === '?') out += '[^/]';
+    else if (c === '{') {
+      out += '(?:';
+      depth++;
+    } else if (c === '}' && depth > 0) {
+      out += ')';
+      depth--;
+    } else if (c === ',' && depth > 0) out += '|';
+    else out += c.replace(/[.+^$()|[\]\\{}]/g, '\\$&');
+  }
+  re = new RegExp(`^${out}$`, 'u');
+  globCache.set(pattern, re);
+  return re;
+}
+
+function globMatch(pattern, relPath) {
+  return globRegex(String(pattern)).test(String(relPath).replace(/\\/g, '/').replace(/^\.\//, ''));
+}
+
+// The contract's default when an entry has no `files`: the engine's language.
+function defaultLanguageMatch(entry, relPath) {
+  const ext = path.extname(relPath).toLowerCase();
+  if (entry.engine === 'builtin') return true;
+  if (entry.engine === 'stylelint') return ['.scss', '.css', '.less'].includes(ext);
+  const template = typeof entry.rule === 'string' && (entry.rule.startsWith('@angular-eslint/template/') || entry.rule.startsWith('doh/template-'));
+  return ext === (template ? '.html' : '.ts');
+}
+
+// The entries of an item's `static` that apply to the file at `path`. `kind` is accepted for
+// the callers' symmetry; the map is one value in every kind, so it filters nothing.
+// eslint-disable-next-line no-unused-vars
+function staticEntriesFor(extra, { path: relPath, kind } = {}) {
+  const value = extra && extra.static;
+  if (!value || !Array.isArray(value.entries)) return [];
+  const normalized = String(relPath || '').replace(/\\/g, '/');
+  const any = (globs) => (Array.isArray(globs) ? globs : [globs]).some((g) => globMatch(g, normalized));
+  return value.entries.filter((entry) => {
+    if (entry.files !== undefined ? !any(entry.files) : !defaultLanguageMatch(entry, normalized)) return false;
+    return entry.excludeFiles === undefined || !any(entry.excludeFiles);
+  });
+}
+
 module.exports = {
+  staticEngines, staticLevels, loadStaticMap, staticEntriesFor, globMatch, defaultStaticMaps,
   reInstructionId, formatItemSpec, expandAlternations, compilePattern, loadRulebook, matchKind, renderNumbered,
   severityLevels, severityRank, unverifiedReasons, fixedSeverity, lightRulebook,
   contentGates, walkerEfforts, loadLocalInstructions, parseLocalMarkdown, appliesTo, planOf, subjectAbsent, reSpecFile,

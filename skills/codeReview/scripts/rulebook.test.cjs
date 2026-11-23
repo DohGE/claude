@@ -512,3 +512,115 @@ test('a local rule names the subject of an item or of a whole heading, which clo
   assert.deepStrictEqual(parsed.entry.items.map((i) => i.subject), ['label|title', 'chart'], 'an item\'s own subject wins over its heading\'s');
   assert.deepStrictEqual(parsed.problems, ['section-subject "Nowhere: x" names no heading of this rule\'s checklist - ignored.']);
 });
+
+// Static map: one layer of kinds plus maps passed explicitly, so the skill's real map never leaks in.
+function staticRules(t, maps, extras = {}) {
+  const dir = writeLayer(tempDir(t, 'rb-static-'), [kind('util', '<name>.util.ts', [instructionWith('code-quality', ['One.', 'Two.', 'Three.'], extras)])]);
+  return rulebook.loadRulebook([dir], { staticMaps: maps });
+}
+const onPush = { engine: 'eslint', rule: '@angular-eslint/prefer-on-push-component-change-detection', level: 'decides' };
+
+test('a missing static map binds nothing and warns nothing, also by default beside the layer', (t) => {
+  const rules = staticRules(t, [path.join(tempDir(t, 'rb-none-'), 'static-map.json')]);
+  assert.deepStrictEqual(rules.warnings, []);
+  assert.strictEqual(rules.instructions.get('code-quality').extras.has(1), false);
+  const root = tempDir(t, 'rb-def-');
+  fs.mkdirSync(path.join(root, 'instructions'));
+  fs.mkdirSync(path.join(root, 'static'));
+  writeLayer(path.join(root, 'instructions'), [kind('util', '<name>.util.ts', [instruction('code-quality', ['One.'])])]);
+  fs.writeFileSync(path.join(root, 'static', 'static-map.json'), JSON.stringify({ version: 1, items: { 'code-quality#1': [onPush] } }));
+  const found = rulebook.loadRulebook([path.join(root, 'instructions')]);
+  assert.deepStrictEqual(found.instructions.get('code-quality').extras.get(1).static, { partial: false, entries: [onPush] });
+});
+
+test('a static value is a list of entries or { partial, entries }, both normalized', (t) => {
+  const sel = { engine: 'eslint', selector: 'CallExpression', message: 'no', level: 'points' };
+  const rules = staticRules(t, [{ items: { 'code-quality#1': [onPush], 'code-quality#2': { partial: true, entries: [sel] } } }], { 1: { facts: ['export-unused'] } });
+  const extras = rules.instructions.get('code-quality').extras;
+  assert.deepStrictEqual(extras.get(1), { facts: ['export-unused'], static: { partial: false, entries: [onPush] } });
+  assert.deepStrictEqual(extras.get(2).static, { partial: true, entries: [sel] });
+  assert.deepStrictEqual(rules.warnings, []);
+});
+
+test('every invalid static entry warns and is dropped, the valid ones stay', (t) => {
+  const bad = [
+    { engine: 'tslint', rule: 'x', level: 'decides' },
+    { engine: 'eslint', rule: 'x', level: 'maybe' },
+    { engine: 'eslint', level: 'decides' },
+    { engine: 'eslint', rule: 'x', selector: 'Y', message: 'm', level: 'decides' },
+    { engine: 'eslint', selector: 'Y', level: 'decides' },
+    { engine: 'eslint', restrictedImport: { group: ['a'], name: 'b' }, message: 'm', level: 'decides' },
+    { engine: 'stylelint', level: 'decides' },
+    { engine: 'builtin', level: 'points' },
+    { engine: 'eslint', rule: 'x', level: 'decides', rules: 'typo' },
+    { engine: 'eslint', rule: 'x', level: 'decides', files: 7 },
+    { engine: 'eslint', rule: 'x', level: 'decides', needsTypes: 'yes' },
+    { engine: 'eslint', rule: 'x', level: 'decides', messageIds: [] },
+    { engine: 'eslint', selector: 'Y', message: 'm', level: 'decides', messageIds: ['a'] },
+    { engine: 'stylelint', rule: 'x', level: 'decides', messageIds: ['a'] },
+  ];
+  const good = [{ engine: 'stylelint', rule: 'color-no-hex', options: true, level: 'points' }, { engine: 'builtin', check: 'c', level: 'decides', note: 'n' },
+    { engine: 'eslint', restrictedImport: { name: 'rxjs/operators' }, message: 'm', level: 'decides', files: '**/*.ts', needsTypes: true }, { engine: 'eslint', rule: 'r', messageIds: ['trackItem'], level: 'decides' }];
+  const rules = staticRules(t, [{ items: { 'code-quality#1': [...bad, ...good], 'code-quality#2': [bad[0]] } }]);
+  const extras = rules.instructions.get('code-quality').extras;
+  assert.deepStrictEqual(extras.get(1).static.entries, good);
+  assert.strictEqual(extras.has(2), false);
+  assert.strictEqual(rules.warnings.length, bad.length + 1, rules.warnings.join('\n'));
+  assert.match(rules.warnings.join('\n'), /code-quality#1 static entry 9 has unknown key\(s\) rules - ignored/);
+});
+
+test('a static address no plan holds, a bad address or an unverified item warns and binds nothing', (t) => {
+  const rules = staticRules(t, [{ items: { 'code-quality#9': [onPush], 'nope#1': [onPush], 'bad address': [onPush], 'code-quality#3': [onPush] } }],
+    { 3: { unverified: 'narzędzie: a green spec run' } });
+  const text = rules.warnings.join('\n');
+  assert.strictEqual(rules.warnings.length, 4, text);
+  assert.match(text, /code-quality#9 is an item no kind's plan holds/);
+  assert.match(text, /nope#1 is an item no kind's plan holds/);
+  assert.match(text, /"bad address" is not an <id>#<n> address/);
+  assert.match(text, /code-quality#3 is marked "unverified"/);
+  assert.strictEqual(rules.instructions.get('code-quality').extras.get(3).static, undefined);
+});
+
+test('a project static map replaces an item\'s entries, and [] removes them', (t) => {
+  const style = { engine: 'stylelint', rule: 'r', level: 'points' };
+  const dir = tempDir(t, 'rb-maps-');
+  const project = path.join(dir, 'project.json');
+  fs.writeFileSync(project, JSON.stringify({ items: { 'code-quality#1': [style], 'code-quality#2': [] } }));
+  const rules = staticRules(t, [{ items: { 'code-quality#1': [onPush], 'code-quality#2': [onPush] } }, project]);
+  const extras = rules.instructions.get('code-quality').extras;
+  assert.deepStrictEqual(extras.get(1).static.entries, [style]);
+  assert.strictEqual(extras.has(2), false);
+});
+
+test('static never makes two kinds\' extras differ', (t) => {
+  const dir = writeLayer(tempDir(t, 'rb-two-'), [kind('a', '<name>.a.ts', [instruction('code-quality', ['One.'])]), kind('b', '<name>.b.ts', [instruction('code-quality', ['One.'])])]);
+  const rules = rulebook.loadRulebook([dir], { staticMaps: [{ items: { 'code-quality#1': [onPush] } }] });
+  assert.deepStrictEqual(rules.warnings, []);
+});
+
+test('staticEntriesFor applies files, excludeFiles and the default language of each engine', () => {
+  const ts = { engine: 'eslint', rule: 'no-x', level: 'decides' };
+  const tpl = { engine: 'eslint', rule: '@angular-eslint/template/no-any', level: 'decides' };
+  const own = { engine: 'eslint', rule: 'doh/template-thing', level: 'points' };
+  const sel = { engine: 'eslint', selector: 'X', message: 'm', level: 'points' };
+  const css = { engine: 'stylelint', rule: 'r', level: 'points' };
+  const any = { engine: 'builtin', check: 'c', level: 'decides' };
+  const scoped = { engine: 'eslint', rule: 'r', level: 'decides', files: ['src/**/*.{ts,html}'], excludeFiles: '**/*.spec.ts' };
+  const extra = { static: { partial: false, entries: [ts, tpl, own, sel, css, any, scoped] } };
+  const of = (p) => rulebook.staticEntriesFor(extra, { path: p, kind: 'k' });
+  assert.deepStrictEqual(of('src/a.ts'), [ts, sel, any, scoped]);
+  assert.deepStrictEqual(of('src/a.html'), [tpl, own, any, scoped]);
+  assert.deepStrictEqual(of('lib/a.scss'), [css, any]);
+  assert.deepStrictEqual(of('src/a.spec.ts'), [ts, sel, any]);
+  assert.deepStrictEqual(of('README.md'), [any]);
+  assert.deepStrictEqual(rulebook.staticEntriesFor({}, { path: 'a.ts' }), []);
+  assert.deepStrictEqual(rulebook.staticEntriesFor(null, { path: 'a.ts' }), []);
+});
+
+test('globMatch: **, *, ?, {a,b}, project-relative forward-slash paths', () => {
+  const yes = [['**/*.ts', 'a.ts'], ['**/*.ts', 'src/app/a.ts'], ['src/**', 'src/a/b.ts'], ['src/**/x.ts', 'src/x.ts'], ['*.ts', 'a.ts'],
+    ['a?.ts', 'ab.ts'], ['**/*.{scss,css}', 'x/y.css'], ['src/*.ts', 'src\\a.ts'], ['**/*.effects.ts', './s/a.effects.ts'], ['a+b.ts', 'a+b.ts']];
+  const no = [['*.ts', 'src/a.ts'], ['a?.ts', 'a.ts'], ['**/*.ts', 'a.tsx'], ['src/**/x.ts', 'lib/x.ts'], ['**/*.{scss,css}', 'y.less'], ['a.ts', 'aXts']];
+  for (const [p, f] of yes) assert.strictEqual(rulebook.globMatch(p, f), true, `${p} ~ ${f}`);
+  for (const [p, f] of no) assert.strictEqual(rulebook.globMatch(p, f), false, `${p} !~ ${f}`);
+});

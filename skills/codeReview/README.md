@@ -23,6 +23,7 @@ Reporting scope is narrower than coverage: only violations carried by the lines 
 | `/codeReview [target] --project=<path>` | any of the above, but against the repository at `<path>` instead of the current directory |
 | `/codeReview [target] --walker-model=<model>` | any of the above, but every window walker and the cross-file agent are spawned on that model (e.g. `opus`); without it a window walks on `sonnet` at effort `medium` and the cross-file agent inherits this session's, and `inherit` gives the walkers the session's too; a window of light kinds keeps its own setting (see [Token cost](#token-cost)) |
 | `/codeReview [target] --walker-effort=<low\|medium\|high\|xhigh\|max>` | any of the above, but every walker is spawned with that effort |
+| `/codeReview [target] --no-static` | any of the above, but no static checks run: every checklist item is walked (see [Static checks](#static-checks)) |
 | `/codeReview [target] --parallel=<n>` | any of the above, but `n` windows (1-8, default 6, and 8 for a run of 40 windows or more) are walked at once, over all the targets of the run |
 
 A branch list is split on `,` and `;`. Git allows both characters inside a ref name, so a branch
@@ -200,6 +201,8 @@ An item may carry twelve more keys, each checked when the rulebook loads, so a t
 - `companion` — items of a template's class file whose finding, about the same names, is this template item's defect seen from the class: the assembly folds the template's finding into the class's (`component-template#8` with `feature-component#4` and `best-practices#12`: an `async` pipe on the stream the class re-exports).
 - `okEvidence` — what an OK of the item cites (`pierwsza linia każdej funkcji`), printed under it as `dowód OK:`, for the items whose OK most often cited the whole file and was refused.
 - `severityInSpec` — the fixed severity of the item's findings in a spec file, over `severity`: `code-quality#1` and `#2` (duplication, High) are Medium there - 4 of the 6 High findings of a five-target run were copied tests.
+
+A thirteenth key, `static`, is not written in the kind files: `rulebook.cjs` puts it on every item `static/static-map.json` names, in every kind (see [Static checks](#static-checks)). Each entry is a linter rule or a script check with a level: `decides` makes the tool's answer the item's verdict, `points` only names a line the verdict must answer, and an item marked `partial` has more in its text than its entries check, so the script never closes it.
 
 A kind may set `"readChanged": true`: its files are data whose walk reads only the lines the diff changed, with a margin (see [Token cost](#token-cost)); `i18n-source` and `i18n-locale` do. A locale file is the translation team's, so any line its diff touches is the finding (i18n#1) - reading all 180 kB of `es.json` for seven renamed keys put each locale file in a window of its own (2026-11-03). A `.snap` file is the `jest-snapshot` kind: two items on `sonnet`/`low` - where it lies, and whether it changed together with its spec or the code beside it (a `snapshot-without-change` hint) - instead of a full walk against the universal points.
 
@@ -566,6 +569,25 @@ That is intentional but worth knowing — those modes review code the PR diff ne
 
 Nothing the pull request already discusses is posted again. Before posting, the script reads the PR's review threads (resolved ones included) and its review and conversation bodies, and skips a finding that sits on the same file within five lines of a thread and says the same thing (one backticked identifier in common, or most of its words), or whose text an earlier post already carried. The skipped ones are listed with their thread; `--no-dedupe` posts everything.
 
+## Static checks
+
+Some checklist items are settled by a linter, not by judgement: whether a component uses `OnPush`, whether a forbidden call appears. An item a tool settles costs no walk and gets the same answer every run, so Step 1 runs those tools after the facts and before the bundles. The contract is `references/static.md`; the code is `scripts/static-checks.cjs` (the runner), `scripts/static-builtin.cjs` (29 checks no linter rule expresses) and `static/eslint-plugin-doh.cjs` (the plugin's own 19 ESLint rules, loaded as `doh/`).
+
+`static/static-map.json` names the items and their entries: it covers 185 of the 504 checklist items - 26 the script closes outright, 117 partly (`partial`: the clean half is printed as `statyczna: czysto - <rules>` and the walker skips it) and 42 as pointers only. It holds 209 ESLint entries, about 175 of them `no-restricted-syntax` selectors, and 44 builtin checks. A `decides` item with no hit on a changed line is closed by the script (`OK (statyczna: czysto - zamknięte przez skrypt)`); a hit on a changed line is printed under the item as `STATYCZNA L<n>: <rule> - <message>` and the part check accepts only `NARUSZENIE` there. On a 51-file target the stage decided 57 file items and added 6.6 s to a 53 s Step 1; a 300-file calibration run took 40 s.
+
+The engines are the reviewed project's own: ESLint, its parsers and plugins are resolved from the project's `node_modules`, and nothing is installed or downloaded. A project without ESLint, or a rule its installed plugin does not have, only means the item is walked as before. The project's own ESLint config is not loaded: only mapped rules run, so the result does not depend on what the project turned on.
+
+A project adds or overrides entries in `.claude/doh/static/static-map.json` (same format, beside `.claude/doh/instructions/`): an address there replaces the plugin's entries for that item, and `[]` removes them. `--no-static` turns the stage off for a run.
+
+The same rules can run before the review: `node scripts/static-checks.cjs --emit-config=<path> --project=<dir>` writes them as a standalone flat config the project imports into its own `eslint.config.mjs` (IDE, pre-commit, CI), with a copy of `eslint-plugin-doh.cjs` beside it.
+
+The limits:
+
+- Type-aware rules are not run: a reviewed revision is a set of files, not a full checked-out tree a type checker can read.
+- The runner supports stylelint, but no shipped entry uses it and that path is untested.
+- Only hits on changed lines count; the review reports nothing on lines the diff left alone.
+- Inline `eslint-disable` comments are honoured: a suppression is the author's stated decision, and `best-practices#22` reviews the comment itself.
+
 ## What reviewers already said
 
 The DPXN-11967 stack of 2026-11-06 collected 24 review threads after its review; 9 sat on code the review never read, and four named rules the rulebook already held. Four parts close that gap:
@@ -577,5 +599,6 @@ The DPXN-11967 stack of 2026-11-06 collected 24 review threads after its review;
 
 The rulebook gained `feature-component#17` (dialog data), `i18n#13` (a nullable value in user text), `unit-tests#30` (a blocked path asserts the action did not happen), `ngrx-reducer#19` (dead state) and `component#28` (a shared component's behaviour change is opt-in); `ngrx-effects#7` now keeps `switchMap` to reads.
 
-Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/rulebook.test.cjs skills/codeReview/scripts/repo-facts.test.cjs skills/codeReview/scripts/review-bundle.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/check-part.test.cjs skills/codeReview/scripts/review-hooks.test.cjs skills/codeReview/scripts/score-review.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs skills/codeReview/scripts/duplication-scan.test.cjs skills/codeReview/scripts/mechanical.test.cjs skills/codeReview/scripts/review-windows.test.cjs`
+Tests: `node --test skills/codeReview/scripts/review-context.test.cjs skills/codeReview/scripts/rulebook.test.cjs skills/codeReview/scripts/repo-facts.test.cjs skills/codeReview/scripts/review-bundle.test.cjs skills/codeReview/scripts/render-report.test.cjs skills/codeReview/scripts/check-part.test.cjs skills/codeReview/scripts/review-hooks.test.cjs skills/codeReview/scripts/score-review.test.cjs skills/codeReview/scripts/post-pr-comments.test.cjs skills/codeReview/scripts/github.test.cjs skills/codeReview/scripts/duplication-scan.test.cjs skills/codeReview/scripts/mechanical.test.cjs skills/codeReview/scripts/review-windows.test.cjs skills/codeReview/scripts/static-checks.test.cjs skills/codeReview/scripts/static-builtin.test.cjs skills/codeReview/static/eslint-plugin-doh.test.cjs skills/codeReview/static/static-map.test.cjs`
 (paths are listed explicitly because PowerShell does not expand globs for native commands).
+The tests that run ESLint itself need a project that has it: they run only with `DOH_STATIC_TEST_PROJECT=<a project with node_modules/eslint>` and are skipped otherwise.
