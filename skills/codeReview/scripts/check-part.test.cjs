@@ -1032,6 +1032,9 @@ test('findContextFor reads the context the report folder names before it searche
   fs.mkdirSync(other, { recursive: true });
   const decoy = path.join(other, '.review-context-branch.json');
   fs.writeFileSync(decoy, JSON.stringify({ ...f.context, decoy: true }));
+  // Written in the same tick as the fixture's context, the decoy can share its mtime and lose the tie.
+  const newer = new Date(fs.statSync(f.contextPath).mtimeMs + 60000);
+  fs.utimesSync(decoy, newer, newer);
   assert.strictEqual(cp.findContextFor(f.part(1)).context.decoy, true);
   fs.writeFileSync(path.join(f.branchDir, '.review-context-path'), `${f.contextPath}\n`);
   const found = cp.findContextFor(f.part(1));

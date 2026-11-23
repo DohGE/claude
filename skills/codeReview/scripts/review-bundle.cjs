@@ -33,6 +33,9 @@ const closedUntouchedEvidence = 'brak wystąpień w zmienionych liniach - zamkni
 // prefix of a `decides` hit, a tool's verdict the walker cannot overrule.
 const staticClean = 'statyczna: czysto';
 const closedStaticEvidence = `${staticClean} - zamknięte przez skrypt`;
+// A partial item whose every applicable `decides` entry ran clean prints only the rest of its text
+// (static-map.json `rest`); its clean line then ends with this note.
+const staticRestNote = 'powyżej tylko reszta reguły';
 const staticPrefix = 'STATYCZNA';
 // Static lines printed under one item; the rest is a count.
 const staticLineCap = 8;
@@ -238,12 +241,16 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
   const closedStatic = [];
   const decided = new Set((staticFile && !staticFile.error && staticFile.decided) || []);
   const staticClean = {};
+  const staticRest = [];
   for (const { step, instruction } of steps) {
     for (const n of step.numbers) {
       const address = `${step.id}#${n}`;
       const extra = instruction.extras.get(n);
       const clean = staticFile && staticFile.clean && staticFile.clean[address];
-      if (clean && clean.length && !staticHit.has(address)) staticClean[address] = clean;
+      if (clean && clean.length && !staticHit.has(address)) {
+        staticClean[address] = clean;
+        if (rulebook.staticRestFor(extra, { path: filePath, clean })) staticRest.push(address);
+      }
       if (!decided.has(address) || closed.includes(address) || items[address] || staticHit.has(address) || (extra && extra.unverified)) continue;
       closed.push(address);
       closedStatic.push(address);
@@ -256,6 +263,7 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
     ...(closedUntouched.length > 0 ? { closedUntouched } : {}),
     ...(closedStatic.length > 0 ? { closedStatic } : {}),
     ...(Object.keys(staticClean).length > 0 ? { staticClean } : {}),
+    ...(staticRest.length > 0 ? { staticRest } : {}),
   };
 }
 
@@ -415,6 +423,7 @@ function renderWriteRules({ file, kind, instructions, bound, lineCount }) {
   }
   if (Object.values(bound.items).some((b) => (b.static || []).length)) out.push(`- \`${staticPrefix}\` to werdykt narzędzia: pozycja dostaje \`NARUSZENIE\` z tymi liniami, nigdy OK.`);
   if (bound.staticClean) out.push(`- \`${staticClean} - <reguły>\` pod pozycją: te reguły narzędzie sprawdziło w zmienionych liniach - tej części pozycji nie przechodzisz.`);
+  if (bound.staticRest) out.push(`- \`${staticClean} - <reguły> (${staticRestNote})\`: pozycja ma wypisaną tylko resztę reguły, której narzędzie nie rozstrzyga - przechodzisz tylko ją; werdykt i znalezisko należą do całej pozycji.`);
   if (extras.some((extra) => extra.unverified)) out.push('- Gotowy werdykt dopisuje hook, gdy linii brak; OK takiej pozycji jest odrzucane.');
   if ((bound.closed || []).length > 0) {
     out.push(`- Pozycje zamknięte przez skrypt dopisuje hook jako \`OK (${closedEvidence})\`: nie piszesz ich linii. Gdy mimo to widzisz w pliku ich przedmiot, daj pozycji własną linię z werdyktem - Twoja linia wygrywa.`);
@@ -627,9 +636,10 @@ function renderBundle({
     for (const n of step.numbers) {
       const address = `${step.id}#${n}`;
       if (closed.has(address) || ready.includes(n)) continue;
-      out.push(`- ${address}: ${instruction.items.get(n)}`);
+      const rest = (bound.staticRest || []).includes(address) ? ((instruction.extras.get(n) || {}).static || {}).rest : null;
+      out.push(`- ${address}: ${rest || instruction.items.get(n)}`);
       out.push(...renderBinding(bound.items[address]));
-      if (bound.staticClean && bound.staticClean[address]) out.push(`  - ${staticClean} - ${bound.staticClean[address].join(', ')}`);
+      if (bound.staticClean && bound.staticClean[address]) out.push(`  - ${staticClean} - ${bound.staticClean[address].join(', ')}${rest ? ` (${staticRestNote})` : ''}`);
       out.push(...renderItemRules(instruction, address, instruction.extras.get(n), inPlan, spec));
     }
     out.push('');
@@ -1167,7 +1177,7 @@ function factsDocument({ files, factRoot = '', partial = false, rules = null }) 
 }
 
 module.exports = {
-  linePrefix, itemPrefix, closedEvidence, closedUntouchedEvidence, staticClean, closedStaticEvidence, staticPrefix, staticLineCap, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
+  linePrefix, itemPrefix, closedEvidence, closedUntouchedEvidence, staticClean, closedStaticEvidence, staticRestNote, staticPrefix, staticLineCap, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
   reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, outputCost, walkOutput, crossOutput, crossInScope, windowReplies, windowBriefName, skillDir,
   crossBriefName, crossReplies, questionsOpen, questionIds, crossQuestions, walkRulesPath, bundleCaps,
   bindFile, renderBinding, renderBundle, renderCrossBundle, renderCrossBrief, renderRulebookNotes, factsDocument, fitBundle, renderSkeleton,

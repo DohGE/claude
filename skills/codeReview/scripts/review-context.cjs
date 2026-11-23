@@ -113,6 +113,9 @@ function parseArgs(argv) {
     if (arg === '--light') { args.light = true; continue; }
     // No static checks (references/static.md): every item is walked.
     if (arg === '--no-static') { args.static = false; continue; }
+    // The type-aware entries of the static checks run too (working tree only; a run of its own,
+    // about 40 s on an Angular workspace before the first file) - off unless asked for.
+    if (arg === '--static-types') { args.staticTypes = true; continue; }
     // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), always;
     // `--dedup-items` is the old opt-in, kept so a caller that still passes it works.
     if (arg === '--dedup-items') { args.dedupItems = true; continue; }
@@ -504,7 +507,7 @@ function rangesOfChangedLines(text) {
 // `files`: the target's files (with `plan` indexing `planCatalog`); `mechanical`: the paths the
 // script found mechanical; `texts`: the reviewed revision's texts by path (Map); `fromWorkTree`:
 // the reviewed revision is the project's working tree, so the engines read it in place.
-function staticStage({ project, files, planCatalog, instructions, mechanical = new Set(), texts, patches = new Map(), fromWorkTree, enabled = true, runner = staticChecks.run, timeoutMs = 120000 }) {
+function staticStage({ project, files, planCatalog, instructions, mechanical = new Set(), texts, patches = new Map(), fromWorkTree, typed = false, enabled = true, runner = staticChecks.run, timeoutMs = 120000 }) {
   if (!enabled) return {};
   const map = staticMapOf(instructions);
   if (Object.keys(map.items).length === 0) return {};
@@ -544,8 +547,10 @@ function staticStage({ project, files, planCatalog, instructions, mechanical = n
       kindItems,
       changedLines,
       sourceRoot,
-      // No tsconfig: a snapshot holds the reviewed files, not the tree a type-aware rule needs.
-      tsconfig: undefined,
+      // Type-aware rules only when asked for (`--static-types`: their run costs tens of seconds)
+      // and only on the working tree: a snapshot holds the reviewed files, not the tree
+      // (tsconfigs, the rest of the sources) a type-aware rule needs.
+      typed: Boolean(typed && fromWorkTree),
       timeoutMs,
       texts,
       patches: Object.fromEntries(patches),
@@ -1867,7 +1872,7 @@ function buildContext(options) {
     // settles closes, what it hits binds (review-bundle.cjs bindFile).
     const ran = staticStage({
       project, files: target.files, planCatalog, instructions: rules.instructions, mechanical: new Set(mechanicalOf.keys()),
-      texts: universe.files, patches, fromWorkTree: !blobs, enabled: options.static !== false, runner: options.staticRunner,
+      texts: universe.files, patches, fromWorkTree: !blobs, typed: options.staticTypes === true, enabled: options.static !== false, runner: options.staticRunner,
     });
     const staticDoc = ran.doc || null;
     if (ran.warning) result.warnings.push(`[${target.branch}] ${ran.warning}`);
@@ -2787,6 +2792,6 @@ function writeContext(context) {
   };
 }
 
-module.exports = { foldWarnings, bigRunWindows, contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, laterPartsOf, briefSettingsOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext, staticStage, staticMapOf };
+module.exports = { foldWarnings, bigRunWindows, contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, laterPartsOf, briefSettingsOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext, staticStage, staticMapOf, reportedText };
 
 if (require.main === module) main();

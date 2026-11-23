@@ -592,6 +592,42 @@ test('a project static map replaces an item\'s entries, and [] removes them', (t
   assert.strictEqual(extras.has(2), false);
 });
 
+test('a partial item carries its "rest", checked against the item text; the project map may set it too', (t) => {
+  const dir = writeLayer(tempDir(t, 'rb-rest-'), [kind('util', '<name>.util.ts', [instruction('code-quality', ['No any, and every export names its return type.', 'Short.', 'Third item text.', 'Fourth item text.'])])]);
+  const rest = 'Every export names its return type.';
+  const rules = rulebook.loadRulebook([dir], { staticMaps: [{ items: {
+    'code-quality#1': { partial: true, rest: ` ${rest} `, entries: [onPush] },
+    'code-quality#2': { partial: true, rest: 'Longer than the item.', entries: [onPush] },
+    'code-quality#3': { partial: false, rest: 'Third.', entries: [onPush] },
+    'code-quality#4': { partial: true, rest: '  ', entries: [onPush] },
+  } }] });
+  const extras = rules.instructions.get('code-quality').extras;
+  assert.deepStrictEqual(extras.get(1).static, { partial: true, rest, entries: [onPush] });
+  for (const n of [2, 3, 4]) assert.strictEqual(extras.get(n).static.rest, undefined, `code-quality#${n}`);
+  const text = rules.warnings.join('\n');
+  assert.strictEqual(rules.warnings.length, 3, text);
+  assert.match(text, /code-quality#2 "rest" is not shorter than the item's text - ignored/);
+  assert.match(text, /code-quality#3 "rest" on an item that is not partial - ignored/);
+  assert.match(text, /code-quality#4 "rest" is not a non-empty string - ignored/);
+  const project = path.join(tempDir(t, 'rb-rest-p-'), 'static-map.json');
+  fs.writeFileSync(project, JSON.stringify({ items: { 'code-quality#1': { partial: true, rest: 'No any.', entries: [onPush] } } }));
+  const layered = rulebook.loadRulebook([dir], { staticMaps: [{ items: { 'code-quality#1': { partial: true, rest, entries: [onPush] } } }, project] });
+  assert.strictEqual(layered.instructions.get('code-quality').extras.get(1).static.rest, 'No any.');
+});
+
+test('staticRestFor gives the rest only when every applicable decides entry is clean', () => {
+  const sel = { engine: 'eslint', selector: 'X', message: 'm', level: 'decides', files: '**/*.facade.ts' };
+  const any = { engine: 'eslint', rule: '@typescript-eslint/no-explicit-any', level: 'decides' };
+  const point = { engine: 'eslint', rule: 'p', level: 'points' };
+  const extra = { static: { partial: true, rest: 'R.', entries: [any, sel, point] } };
+  assert.strictEqual(rulebook.staticRestFor(extra, { path: 'a/b.util.ts', clean: ['@typescript-eslint/no-explicit-any'] }), 'R.', 'the facade-only entry does not apply');
+  assert.strictEqual(rulebook.staticRestFor(extra, { path: 'a/b.facade.ts', clean: ['@typescript-eslint/no-explicit-any', 'p'] }), null, 'the selector did not run clean');
+  assert.strictEqual(rulebook.staticRestFor(extra, { path: 'a/b.facade.ts', clean: ['@typescript-eslint/no-explicit-any', 'no-restricted-syntax'] }), 'R.');
+  assert.strictEqual(rulebook.staticRestFor(extra, { path: 'a/b.html', clean: ['p'] }), null, 'no decides entry applies');
+  assert.strictEqual(rulebook.staticRestFor(extra, { path: 'a/b.util.ts' }), null, 'no clean list');
+  assert.strictEqual(rulebook.staticRestFor({ static: { partial: true, entries: [any] } }, { path: 'a.ts', clean: ['@typescript-eslint/no-explicit-any'] }), null, 'no rest');
+});
+
 test('static never makes two kinds\' extras differ', (t) => {
   const dir = writeLayer(tempDir(t, 'rb-two-'), [kind('a', '<name>.a.ts', [instruction('code-quality', ['One.'])]), kind('b', '<name>.b.ts', [instruction('code-quality', ['One.'])])]);
   const rules = rulebook.loadRulebook([dir], { staticMaps: [{ items: { 'code-quality#1': [onPush] } }] });

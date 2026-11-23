@@ -167,6 +167,10 @@ authoritative.
    `passed` or `skipped` (no such gate) → done. `failed` → fix every error its `errorsPath` lists,
    `git add -A`, run it again. Never report "lint clean" from a lint you ran another way: a lint
    run from the wrong folder answers "file ignored", which reads like a pass.
+   Then the review's static checks, when the project opted in (`"static"` in its checks.json):
+   `node "{{SKILL_DIR}}/../fixPr/scripts/checks.cjs" --root="{{ROOT}}" --out-dir="{{SESSION}}/checks" --only=static --changed-since={{BASE}}`.
+   `skipped` → done. `failed` → every line of its `errorsPath` is a violation step 6 of the review
+   would report: fix the code (never an `eslint-disable`) and run it again.
 
 ## Rules
 

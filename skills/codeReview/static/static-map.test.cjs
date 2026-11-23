@@ -26,8 +26,13 @@ test('the map parses and has the contract shape', () => {
   for (const [address, value] of Object.entries(map.items)) {
     assert.match(address, /^[a-z0-9-]+#\d+$/, address);
     if (!Array.isArray(value)) {
-      assert.deepStrictEqual(Object.keys(value).sort(), ['entries', 'partial'], address);
+      assert.deepStrictEqual(Object.keys(value).filter((key) => key !== 'rest').sort(), ['entries', 'partial'], address);
       assert.strictEqual(typeof value.partial, 'boolean', address);
+      if (value.rest !== undefined) {
+        assert.strictEqual(value.partial, true, `${address} has a rest but is not partial`);
+        assert.ok(typeof value.rest === 'string' && value.rest.trim() === value.rest && value.rest.length > 0, `${address} rest is not a trimmed non-empty string`);
+        assert.ok(value.entries.some((e) => e.level === 'decides'), `${address} has a rest but no decides entry`);
+      }
     }
     assert.ok(entriesOf(value).length > 0, `${address} has no entries`);
   }
@@ -37,6 +42,17 @@ test('loadRulebook takes the map with no static warning', () => {
   const rules = rulebook.loadRulebook([instructionsDir]);
   const warnings = rules.warnings.filter((w) => /static/i.test(w));
   assert.deepStrictEqual(warnings, []);
+});
+
+test('every rest is shorter than its item text, and loadRulebook keeps it', () => {
+  const rules = rulebook.loadRulebook([instructionsDir]);
+  for (const [address, value] of Object.entries(map.items)) {
+    if (Array.isArray(value) || value.rest === undefined) continue;
+    const [id, n] = address.split('#');
+    const instruction = rules.instructions.get(id);
+    assert.ok(value.rest.length < instruction.items.get(Number(n)).length, `${address} rest is not shorter than the item`);
+    assert.strictEqual(instruction.extras.get(Number(n)).static.rest, value.rest, address);
+  }
 });
 
 test('an item with a points entry, or with no decides entry, is partial', () => {

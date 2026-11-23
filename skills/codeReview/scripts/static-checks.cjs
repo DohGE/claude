@@ -123,7 +123,9 @@ function planFor({ files, map, kindItems }) {
 
 // `available`: { core: Set|array of core rule names, plugins: { prefix: { module, rules: [...] } | null },
 // parsers: { ts: bool, html: bool } }. Groups [{ files: [patterns], ignores?, entries }] -> config text.
-function buildOverlay(groups, { available, pluginDohPath, tsconfig, projectRoot, sourceRoot, header, portable = false }) {
+// `typed`: the parserOptions that give the TS parser type information (`{ projectService: true }`
+// or `{ project: ... }`), or null - then a `needsTypes` entry is skipped.
+function buildOverlay(groups, { available, pluginDohPath, typed, projectRoot, sourceRoot, header, portable = false }) {
   const core = new Set(available.core || []);
   const plugins = available.plugins || {};
   const parsers = available.parsers || { ts: true, html: true };
@@ -149,7 +151,7 @@ function buildOverlay(groups, { available, pluginDohPath, tsconfig, projectRoot,
     const importPatterns = [];
     for (const e of g.entries) {
       const { entry } = e;
-      if (entry.needsTypes && !tsconfig) { skip(g, e, 'needs type information'); continue; }
+      if (entry.needsTypes && !typed) { skip(g, e, 'needs type information'); continue; }
       if (entry.selector || entry.restrictedImport) {
         const prefix = `[doh:${e.address}] `;
         if (entry.selector) selectors.push({ selector: entry.selector, message: prefix + (entry.message || entry.selector) });
@@ -200,7 +202,7 @@ function buildOverlay(groups, { available, pluginDohPath, tsconfig, projectRoot,
   lines.push('export default [');
   lines.push("  { linterOptions: { reportUnusedDisableDirectives: 'off' } },");
   if (parsers.ts) {
-    const po = tsconfig ? `, parserOptions: { project: [${JSON.stringify(toPosix(tsconfig))}], tsconfigRootDir: ${JSON.stringify(toPosix(sourceRoot || projectRoot || '.'))} }` : '';
+    const po = typed ? `, parserOptions: ${JSON.stringify({ ...typed, tsconfigRootDir: toPosix(sourceRoot || projectRoot || '.') })}` : '';
     lines.push(`  { files: ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'], languageOptions: { parser: require('@typescript-eslint/parser')${po} } },`);
   }
   if (parsers.html) lines.push("  { files: ['**/*.html', '**/*.htm'], languageOptions: { parser: require('@angular-eslint/template-parser') } },");
@@ -214,7 +216,9 @@ function buildOverlay(groups, { available, pluginDohPath, tsconfig, projectRoot,
 
 // One config object per distinct set of entries, with explicit path lists, so each rule runs only
 // where its entries apply. Returns { text, skipped: [{ id, address, engine, rule, reason, paths }] }.
-function overlayConfig({ plan, available, pluginDohPath = defaultPluginDohPath, tsconfig, projectRoot, sourceRoot }) {
+// `typed` as in buildOverlay; `tsconfig` (a path) is the older spelling of `{ project: [tsconfig] }`.
+function overlayConfig({ plan, available, pluginDohPath = defaultPluginDohPath, typed, tsconfig, projectRoot, sourceRoot }) {
+  if (!typed && tsconfig) typed = { project: [toPosix(tsconfig)] };
   const parsers = (available && available.parsers) || { ts: true, html: true };
   const groups = new Map();
   const pre = [];
@@ -229,7 +233,7 @@ function overlayConfig({ plan, available, pluginDohPath = defaultPluginDohPath, 
     groups.get(key).files.push(f.path);
     groups.get(key).paths.push(f.path);
   }
-  const out = buildOverlay([...groups.values()], { available: available || {}, pluginDohPath, tsconfig, projectRoot, sourceRoot });
+  const out = buildOverlay([...groups.values()], { available: available || {}, pluginDohPath, typed, projectRoot, sourceRoot });
   return { text: out.text, skipped: [...pre, ...out.skipped] };
 }
 
@@ -363,20 +367,46 @@ function chunks(paths, budget) {
   return out;
 }
 
-// Runs a linter's CLI per chunk of files; -> { results } or { error }.
-function runCli(bin, args, paths, { cwd, timeoutMs }) {
+// Runs a linter's CLI per chunk of files; -> { results } or { error }. `timeoutMs` bounds the whole
+// call, not one chunk. `okStatus`: the exit codes that mean "linted" (ESLint 0/1; stylelint 0/2).
+// The JSON array is read from stdout, else from stderr (stylelint 16+ prints its formatter there).
+function runCli(bin, args, paths, { cwd, timeoutMs, okStatus = [0, 1] }) {
   const results = [];
   const fixed = [process.execPath, bin, ...args].join(' ').length;
+  const deadline = Date.now() + timeoutMs;
+  const parse = (s) => { try { const j = JSON.parse(String(s || '').trim()); return Array.isArray(j) ? j : null; } catch { return null; } };
   for (const part of chunks(paths, Math.max(500, maxCommandChars - fixed))) {
-    const r = spawnSync(process.execPath, [bin, ...args, ...part], { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, windowsHide: true });
-    if (r.error) return { error: String(r.error.message).slice(0, 300) };
-    let json = null;
-    try { json = JSON.parse(r.stdout || ''); } catch { /* reported below */ }
-    if (r.status > 1 || !Array.isArray(json)) return { error: String(r.stderr || r.stdout || `exit ${r.status}`).slice(0, 300) };
+    const left = deadline - Date.now();
+    if (left <= 0) return { error: `timed out after ${Math.round(timeoutMs / 1000)} s` };
+    const r = spawnSync(process.execPath, [bin, ...args, ...part], { cwd, encoding: 'utf8', timeout: left, maxBuffer: 256 * 1024 * 1024, windowsHide: true });
+    if (r.error) return { error: /ETIMEDOUT/.test(r.error.code || r.error.message) ? `timed out after ${Math.round(timeoutMs / 1000)} s` : String(r.error.message).slice(0, 300) };
+    const json = parse(r.stdout) || parse(r.stderr);
+    if (!okStatus.includes(r.status) || !json) return { error: String(r.stderr || r.stdout || `exit ${r.status}`).slice(0, 300) };
     results.push(...json);
   }
   return { results };
 }
+
+const majorOf = (v) => Number(String(v || '').split('.')[0]) || 0;
+function packageVersion(projectRoot, name) {
+  try { return JSON.parse(fs.readFileSync(path.join(projectRoot, 'node_modules', ...name.split('/'), 'package.json'), 'utf8')).version || null; } catch { return null; }
+}
+
+// The parserOptions that give `@typescript-eslint/parser` types for the files under `sourceRoot`,
+// -> { typed } or { reason }. v8+: the project service (each file finds its own tsconfig, the way
+// the editor does); v6/v7: `project: true` (the nearest tsconfig.json); older: the root tsconfig.json.
+function typedParserOptions({ projectRoot, sourceRoot, tsconfig }) {
+  if (tsconfig) return { typed: { project: [toPosix(tsconfig)] } };
+  const version = packageVersion(projectRoot, '@typescript-eslint/parser');
+  if (!version) return { reason: 'needs type information: @typescript-eslint/parser not installed' };
+  if (majorOf(version) >= 8) return { typed: { projectService: true }, version };
+  if (majorOf(version) >= 6) return { typed: { project: true }, version };
+  const root = path.join(sourceRoot, 'tsconfig.json');
+  return fs.existsSync(root) ? { typed: { project: [toPosix(root)] }, version } : { reason: 'needs type information: no tsconfig.json found' };
+}
+
+// A stylelint warning's text ends with " (<rule>)"; the hit keeps the words only.
+const stripRuleSuffix = (text, rule) => String(text || '').replace(new RegExp(` \\(${String(rule).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\)$`), '');
 
 function markNotRun(plan, skipped) {
   for (const s of skipped) {
@@ -399,8 +429,30 @@ function publicSkipped(skipped) {
   return [...seen.values()];
 }
 
+// One ESLint invocation over `subPlan` (its entries only): overlay in the project's cache folder,
+// removed afterwards. -> { results, skipped } or { error, skipped }.
+function eslintPass({ subPlan, available, pluginDohPath, typed, projectRoot, sourceRoot, eslintBin, timeoutMs, tag }) {
+  const overlay = overlayConfig({ plan: subPlan, available, pluginDohPath, typed, projectRoot, sourceRoot });
+  const paths = [...new Set(subPlan.filter((f) => f.entries.length).map((f) => f.path))];
+  if (!paths.length) return { results: [], skipped: overlay.skipped };
+  const cacheDir = path.join(projectRoot, 'node_modules', '.cache', 'doh-static');
+  const overlayPath = path.join(cacheDir, `overlay-${tag}-${process.pid}-${Date.now()}.mjs`);
+  try {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(overlayPath, overlay.text);
+    const r = runCli(eslintBin, ['--no-config-lookup', '-c', overlayPath, '--format', 'json', '--no-error-on-unmatched-pattern', '--no-warn-ignored'], paths, { cwd: sourceRoot, timeoutMs });
+    return { ...r, skipped: overlay.skipped };
+  } finally {
+    try { fs.rmSync(overlayPath, { force: true }); } catch { /* best effort */ }
+  }
+}
+
+// `typed`: true = type-aware entries run (the caller vouches that `sourceRoot` is a complete tree
+// with its tsconfigs and node_modules); `tsconfig` (a path) = the same with that one tsconfig.
+// Type-aware entries run in an ESLint invocation of their own, bounded by `typedTimeoutMs`:
+// whatever happens there only skips them, never the other entries.
 function run({
-  projectRoot, files, map, kindItems, changedLines = {}, sourceRoot, tsconfig, timeoutMs = 120000,
+  projectRoot, files, map, kindItems, changedLines = {}, sourceRoot, tsconfig, typed = false, timeoutMs = 120000, typedTimeoutMs = 240000,
   builtin, texts, patches = {}, pluginDohPath = defaultPluginDohPath,
 }) {
   projectRoot = path.resolve(projectRoot);
@@ -411,6 +463,7 @@ function run({
   const results = [];
   const of = (engine) => plan.flatMap((f) => f.entries.filter((e) => e.entry.engine === engine).map((e) => ({ f, e })));
   const notRunAll = (list, reason, engine) => { for (const { f, e } of list) skipped.push({ id: e.id, address: e.address, engine, rule: entryLabel(e.entry), reason, paths: [f.path] }); };
+  const subPlan = (keep) => plan.map((f) => ({ path: f.path, kind: f.kind, entries: f.entries.filter(keep) }));
 
   // ESLint
   const eslintBin = path.join(projectRoot, 'node_modules', 'eslint', 'bin', 'eslint.js');
@@ -419,54 +472,93 @@ function run({
     engines.eslint = { available: false, reason: 'not installed' };
     notRunAll(eslintEntries, 'eslint not installed', 'eslint');
   } else {
-    let version = null;
-    try { version = JSON.parse(fs.readFileSync(path.join(projectRoot, 'node_modules', 'eslint', 'package.json'), 'utf8')).version; } catch { /* unknown */ }
-    engines.eslint = { available: true, version };
+    engines.eslint = { available: true, version: packageVersion(projectRoot, 'eslint') };
     if (eslintEntries.length) {
       const prefixes = new Set(eslintEntries.map(({ e }) => (e.entry.rule ? rulePrefix(e.entry.rule) : '')).filter(Boolean));
       prefixes.add('@typescript-eslint');
       const available = detectAvailable(projectRoot, prefixes, pluginDohPath);
-      const overlay = overlayConfig({ plan, available, pluginDohPath, tsconfig, projectRoot, sourceRoot });
-      skipped.push(...overlay.skipped);
-      const cacheDir = path.join(projectRoot, 'node_modules', '.cache', 'doh-static');
-      const overlayPath = path.join(cacheDir, `overlay-${process.pid}-${Date.now()}.mjs`);
-      const paths = [...new Set(eslintEntries.map(({ f }) => f.path))];
-      try {
-        fs.mkdirSync(cacheDir, { recursive: true });
-        fs.writeFileSync(overlayPath, overlay.text);
-        const r = runCli(eslintBin, ['--no-config-lookup', '-c', overlayPath, '--format', 'json', '--no-error-on-unmatched-pattern', '--no-warn-ignored'], paths, { cwd: sourceRoot, timeoutMs });
-        if (r.error) { engines.eslint.error = r.error; notRunAll(eslintEntries, 'eslint failed', 'eslint'); } else results.push(...r.results);
-      } finally {
-        try { fs.rmSync(overlayPath, { force: true }); } catch { /* best effort */ }
+      const common = { available, pluginDohPath, projectRoot, sourceRoot, eslintBin };
+      const isTyped = (e) => e.entry.engine === 'eslint' && Boolean(e.entry.needsTypes);
+      const plain = eslintPass({ ...common, subPlan: subPlan((e) => e.entry.engine === 'eslint' && !isTyped(e)), typed: null, timeoutMs, tag: 'u' });
+      skipped.push(...plain.skipped);
+      if (plain.error) { engines.eslint.error = plain.error; notRunAll(eslintEntries.filter(({ e }) => !isTyped(e)), 'eslint failed', 'eslint'); } else results.push(...plain.results);
+
+      const typedList = eslintEntries.filter(({ e }) => isTyped(e));
+      if (typedList.length) {
+        const opts = typed || tsconfig ? typedParserOptions({ projectRoot, sourceRoot, tsconfig }) : { reason: 'needs type information' };
+        if (!opts.typed) notRunAll(typedList, opts.reason, 'eslint');
+        else {
+          const started = Date.now();
+          const t = eslintPass({ ...common, subPlan: subPlan(isTyped), typed: opts.typed, timeoutMs: typedTimeoutMs, tag: 't' });
+          skipped.push(...t.skipped);
+          engines.eslint.typed = { mode: opts.typed.projectService ? 'projectService' : 'project', ms: Date.now() - started };
+          if (t.error) { engines.eslint.typed.error = t.error; notRunAll(typedList, `type-aware eslint failed: ${t.error.slice(0, 120)}`, 'eslint'); } else {
+            // A file the type-aware parse failed on (no tsconfig includes it...) loses only its
+            // type-aware entries; the untyped run's verdict on it stands.
+            for (const r of t.results) {
+              const fatal = (r.messages || []).find((m) => m.fatal);
+              const rel = toPosix(path.relative(sourceRoot, r.filePath || ''));
+              if (!fatal) {
+                // A rule that says it needs `strictNullChecks` (no-unnecessary-condition...) judges
+                // nothing on a file whose tsconfig lacks it: its words there are no verdict.
+                const blind = new Set((r.messages || []).filter((m) => /requires the `strictNullChecks` compiler option/.test(m.message || '')).map((m) => m.ruleId));
+                if (blind.size) notRunAll(typedList.filter(({ f, e }) => f.path === rel && blind.has(e.entry.rule)), 'type-aware rule needs strictNullChecks', 'eslint');
+                results.push({ ...r, messages: (r.messages || []).filter((m) => !blind.has(m.ruleId)) });
+                continue;
+              }
+              const why = /not found by the project service|not included in|was not found in any of the provided project/i.test(fatal.message || '') ? 'the file is in no tsconfig' : String(fatal.message || '').slice(0, 120);
+              notRunAll(typedList.filter(({ f }) => f.path === rel), `type-aware parse failed: ${why}`, 'eslint');
+            }
+          }
+        }
       }
     }
   }
 
-  // stylelint: one config for all style files (kept small); mapMessages binds by rule per file.
+  // stylelint: one config for all style files (a rule has one setting per run); mapMessages binds
+  // by rule per file. `.scss` needs postcss-scss: without it a `.scss` file's entries are skipped.
   const styleEntries = of('stylelint');
-  const stylelintBin = path.join(projectRoot, 'node_modules', 'stylelint', 'bin', 'stylelint.mjs');
-  if (!fs.existsSync(stylelintBin)) {
+  const stylelintBin = ['stylelint.mjs', 'stylelint.js'].map((b) => path.join(projectRoot, 'node_modules', 'stylelint', 'bin', b)).find((b) => fs.existsSync(b));
+  if (!stylelintBin) {
     engines.stylelint = { available: false, reason: 'not installed' };
     notRunAll(styleEntries, 'stylelint not installed', 'stylelint');
   } else {
-    engines.stylelint = { available: true };
-    if (styleEntries.length) {
-      const rules = {};
-      for (const { f, e } of styleEntries) {
-        const v = e.entry.options === undefined ? true : e.entry.options;
-        if (rules[e.entry.rule] !== undefined && JSON.stringify(rules[e.entry.rule]) !== JSON.stringify(v)) skipped.push({ id: e.id, address: e.address, engine: 'stylelint', rule: e.entry.rule, reason: 'rule already configured with other options', paths: [f.path] });
-        else rules[e.entry.rule] = v;
-      }
+    engines.stylelint = { available: true, version: packageVersion(projectRoot, 'stylelint') };
+    let scssSyntax = null;
+    try { scssSyntax = toPosix(createRequire(path.join(projectRoot, 'package.json')).resolve('postcss-scss')); } catch { /* not installed */ }
+    const owners = [];
+    const rules = {};
+    for (const x of styleEntries) {
+      const v = x.e.entry.options === undefined ? true : x.e.entry.options;
+      if (/\.scss$/i.test(x.f.path) && !scssSyntax) notRunAll([x], 'postcss-scss not installed (needed for .scss)', 'stylelint');
+      else if (rules[x.e.entry.rule] !== undefined && JSON.stringify(rules[x.e.entry.rule]) !== JSON.stringify(v)) notRunAll([x], 'rule already configured with other options', 'stylelint');
+      else { rules[x.e.entry.rule] = v; owners.push(x); }
+    }
+    if (owners.length) {
       const config = { rules };
-      if (fs.existsSync(path.join(projectRoot, 'node_modules', 'postcss-scss'))) config.customSyntax = 'postcss-scss';
+      if (scssSyntax) config.overrides = [{ files: ['**/*.scss'], customSyntax: scssSyntax }];
       const cacheDir = path.join(projectRoot, 'node_modules', '.cache', 'doh-static');
       const cfgPath = path.join(cacheDir, `stylelint-${process.pid}-${Date.now()}.json`);
       try {
         fs.mkdirSync(cacheDir, { recursive: true });
         fs.writeFileSync(cfgPath, JSON.stringify(config));
-        const r = runCli(stylelintBin, ['--formatter', 'json', '--config', cfgPath, '--allow-empty-input'], [...new Set(styleEntries.map(({ f }) => f.path))], { cwd: sourceRoot, timeoutMs });
-        if (r.error) { engines.stylelint.error = r.error; notRunAll(styleEntries, 'stylelint failed', 'stylelint'); } else {
-          for (const s of r.results) results.push({ filePath: s.source, messages: (s.warnings || []).map((w) => ({ ruleId: w.rule, line: w.line, endLine: w.endLine, message: w.text, fatal: w.rule === 'CssSyntaxError' })) });
+        // Exit 2 = problems found (0 = none); the json formatter writes to stdout (15) or stderr (16+).
+        const r = runCli(stylelintBin, ['--formatter', 'json', '--config', cfgPath, '--allow-empty-input'], [...new Set(owners.map(({ f }) => f.path))], { cwd: sourceRoot, timeoutMs, okStatus: [0, 2] });
+        if (r.error) { engines.stylelint.error = r.error; notRunAll(owners, 'stylelint failed', 'stylelint'); } else {
+          // An unknown rule comes back as a warning "Unknown rule x." and a bad option as an
+          // invalidOptionWarning: that rule did not run - its entries are skipped, its words no hit.
+          const broken = new Map();
+          for (const s of r.results) {
+            for (const w of s.warnings || []) if (/^Unknown rule /.test(w.text || '')) broken.set(w.rule, 'rule not found in installed stylelint');
+            for (const w of s.invalidOptionWarnings || []) { const m = /for rule "([^"]+)"/.exec(w.text || ''); if (m) broken.set(m[1], `invalid options: ${w.text}`); }
+          }
+          for (const x of owners) if (broken.has(x.e.entry.rule)) notRunAll([x], broken.get(x.e.entry.rule), 'stylelint');
+          for (const s of r.results) {
+            const messages = (s.warnings || []).filter((w) => !broken.has(w.rule))
+              .map((w) => ({ ruleId: w.rule, line: w.line, endLine: w.endLine, message: stripRuleSuffix(w.text, w.rule), fatal: w.rule === 'CssSyntaxError' }));
+            for (const p of s.parseErrors || []) messages.push({ fatal: true, line: p.line, message: p.text });
+            results.push({ filePath: s.source, messages });
+          }
         }
       } finally {
         try { fs.rmSync(cfgPath, { force: true }); } catch { /* best effort */ }
@@ -544,6 +636,6 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { planFor, overlayConfig, mapMessages, inChange, run, emitConfig, globMatch, rulePrefix, pluginModule, detectAvailable, chunks };
+module.exports = { planFor, overlayConfig, mapMessages, inChange, run, emitConfig, globMatch, rulePrefix, pluginModule, detectAvailable, chunks, typedParserOptions };
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));

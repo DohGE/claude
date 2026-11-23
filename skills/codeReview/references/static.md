@@ -44,7 +44,11 @@ Optional on every entry:
 - `messageIds`: a list of the rule's message ids the entry stands for (a rule entry only); a
   message of another id is not credited to it. Without it every message of the rule is credited
   to every entry mapping that rule (two items may share a rule on one file).
-- `needsTypes: true` - a type-aware rule; run only when the runner got a tsconfig (see runner).
+- `needsTypes: true` - a type-aware rule; run only when the runner is told the tree is complete
+  (`typed` / `tsconfig`, see runner). Such an entry is `points`, or `decides` only on a `partial`
+  item with no other `decides` entry: without types it does not run, and it must never turn an item
+  that is decided without types into an undecided one. The same holds for `stylelint` entries
+  (most projects have no stylelint; the builtin `scss-*` checks settle the style items there).
 - `note`: free text for maintainers.
 
 `level`:
@@ -65,9 +69,21 @@ marks that with `"partial": true` on the item level:
 never closed by the script: its clean result is printed under it (`statyczna: czysto - <rules>`)
 so the walker skips that half, and its hits bind like any other.
 
+A partial item may carry `rest`: `{ "partial": true, "rest": "<text>", "entries": [...] }` - what
+remains to judge once every `decides` entry of the item that applies to the file ran and none hit a
+changed line. Same language and terms as the item text, self-contained, and strictly a subset of it:
+it never adds a requirement and never drops one the entries do not settle; an entry scoped by
+`files` may not apply, so the rest stays true for every file whose applicable entries ran. The
+bundle prints it instead of the item text exactly then (every applicable `decides` entry's label is
+in the file's `clean` list, no hit of the item in the change), and the clean line ends
+`(powyżej tylko reszta reguły)`; otherwise - no ESLint, an entry skipped, a hit - the full text.
+`rulebook.cjs` drops (with a warning) a `rest` on a non-partial item, an empty one, or one not
+shorter than the item text. A project map may set it too. Items the entries settle wholly are left
+partial without a `rest` until someone promotes them deliberately.
+
 ## The runner: `scripts/static-checks.cjs`
 
-    run({ projectRoot, files, map, kindItems, changedLines, sourceRoot?, tsconfig?, timeoutMs? }) -> document
+    run({ projectRoot, files, map, kindItems, changedLines, sourceRoot?, typed?, tsconfig?, timeoutMs?, typedTimeoutMs? }) -> document
 
 - `projectRoot` - where `node_modules` is resolved from (the main checkout).
 - `sourceRoot` - where the reviewed revision's files lie; default `projectRoot`. Paths in `files`
@@ -79,6 +95,13 @@ so the walker skips that half, and its hits bind like any other.
 - `kindItems` - `{ <kind>: [address, ...] }`, the items each kind walks.
 - `changedLines` - `{ <path>: [[from, to], ...] }`, 1-based inclusive ranges of the new file;
   a path absent from it has every line changed (an added file).
+- `typed` - `true` when `sourceRoot` is a complete tree (tsconfigs, sources, `node_modules`): the
+  `needsTypes` entries run. Step 1 passes it only with `--static-types` and only when it reviews the working tree (the run costs tens of seconds before the first file); the gate step never does. The parser
+  options follow the installed `@typescript-eslint/parser`: v8+ `projectService: true` (each file
+  finds its own tsconfig), v6/v7 `project: true`, older the root `tsconfig.json`. `tsconfig` (a path)
+  forces `project: [tsconfig]` and implies `typed`.
+- `typedTimeoutMs` (default 240 s) - the type-aware run's own bound; `timeoutMs` (120 s) bounds
+  the untyped ESLint run and stylelint.
 - CLI: `node static-checks.cjs --project=<dir> --input=<json file of the object above minus map> --out=<file>`.
 
 It generates one ESLint flat config (an overlay, written to a temp file inside `projectRoot` so
@@ -87,7 +110,21 @@ that plugin imports resolve; removed afterwards), with `--no-config-lookup`, run
 files, and maps every message back to its item: by `ruleId` for rule entries, by a `[doh:<address>]`
 tag it put on the message of selector / restricted-import entries, matched anywhere in the
 message (`no-restricted-imports` puts its own words before the custom message). stylelint likewise.
-Builtin entries call `static-builtin.cjs`. A rule the installed plugin does not have is dropped
+Builtin entries call `static-builtin.cjs`.
+
+Type-aware entries run in a SECOND ESLint invocation with its own overlay (the same rules plus the
+parser options above). Its failure or timeout skips only them (`skipped`, reason `type-aware eslint
+failed: ...`, detail in `engines.eslint.typed.error`); a file it cannot parse (no tsconfig includes
+it) skips only that file's type-aware entries; a rule reporting that it needs `strictNullChecks`
+is skipped on that file and its messages there are dropped. The untyped results never depend on it.
+`engines.eslint.typed` = `{ mode, ms, error? }`.
+
+stylelint: one JSON config for all style files (a rule has one setting per run; a second entry of
+the same rule with other options is skipped), `customSyntax` = the project's `postcss-scss` for
+`.scss` (not installed: the `.scss` files' entries are skipped), `--formatter json`, whose output is
+read from stdout (stylelint 15) or stderr (16+); exit 0/2 = linted. A rule stylelint does not know
+comes back as an `Unknown rule` warning and a bad option as an `invalidOptionWarning`: that rule's
+entries are skipped, its words are no hit. `CssSyntaxError` / `parseErrors` make the file's `error`. A rule the installed plugin does not have is dropped
 from the overlay and listed in `skipped` (found by loading the plugin and reading its `rules`).
 Parsers: `@typescript-eslint/parser` for `.ts`, `@angular-eslint/template-parser` for `.html`.
 The project's own ESLint config is NOT loaded: only mapped rules run, so the result does not
@@ -146,7 +183,9 @@ named `template-<name>` and receive the Angular template AST from `@angular-esli
   on that item (no `fakt nie dotyczy:` escape - the only way out is fixing the map).
 - An `inChange` hit of level `points` is printed as `SONDA L4: <rule> - <message>` and held like a
   probe hit.
-- A partial item's `clean` entries print `statyczna: czysto - <rules>` under the item.
+- A partial item's `clean` entries print `statyczna: czysto - <rules>` under the item; with a
+  map `rest` and every applicable `decides` entry clean, the item line holds only the rest and the
+  clean line ends `(powyżej tylko reszta reguły)`.
 - No runner result (no engine, a crash, `--no-static`): nothing changes, every item is walked.
 
 ## The project preset
@@ -157,3 +196,10 @@ pre-commit, CI) - the same rules before the review as in it. The preset resolves
 from its own location (`createRequire(import.meta.url)`), not from a path of the plugin cache,
 which changes with every version; when it uses a `doh/` rule, a copy of `eslint-plugin-doh.cjs`
 is written beside it and loaded as `./eslint-plugin-doh.cjs`.
+
+`node scripts/static-gate.cjs --project=<worktree> [--base=<ref>]` runs the same Step 1 stage (kinds,
+rulebook, map, `staticStage`) over the working tree's changes since the merge-base with `<ref>`
+(default `origin/HEAD`) and prints every `inChange` `decides` hit as `path:line  rule - message  [address]`,
+exit 1 when there is any; `points` hits never print. fixPr's `checks.cjs` runs it as its opt-in
+`static checks` step (`"steps": { "static": true }` in `.claude/doh/checks.json`). A red step is
+fixed in the code, never with an `eslint-disable`.

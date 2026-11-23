@@ -36,6 +36,24 @@
         }
       ]
     },
+    "accessibility#8": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "stylelint",
+          "rule": "declaration-property-unit-disallowed-list",
+          "options": [
+            {
+              "height": [
+                "px"
+              ]
+            }
+          ],
+          "level": "points",
+          "note": "fixed px heights only; the rest of the item stays walked."
+        }
+      ]
+    },
     "accessibility#10": {
       "partial": true,
       "entries": [
@@ -79,6 +97,20 @@
           "check": "scss-outline-none",
           "level": "points",
           "note": "a :focus-visible replacement may exist."
+        },
+        {
+          "engine": "stylelint",
+          "rule": "declaration-property-value-disallowed-list",
+          "options": [
+            {
+              "outline": [
+                "none",
+                "0"
+              ]
+            }
+          ],
+          "level": "points",
+          "note": "a :focus-visible replacement may exist."
         }
       ]
     },
@@ -112,6 +144,7 @@
     ],
     "app-config#2": {
       "partial": true,
+      "rest": "In `provideHttpClient(...)` the interceptors are the functional ones, registered with `withInterceptors([...])`.",
       "entries": [
         {
           "engine": "builtin",
@@ -129,6 +162,7 @@
     },
     "app-config#3": {
       "partial": true,
+      "rest": "Feature areas are referenced from the routes through `loadChildren`/`loadComponent`, never imported eagerly (architecture instruction).",
       "entries": [
         {
           "engine": "builtin",
@@ -140,6 +174,7 @@
     },
     "app-config#5": {
       "partial": true,
+      "rest": "`strictActionWithinNgZone` belongs only to a zone-based app: under `provideZonelessChangeDetection()` every dispatch trips it.",
       "entries": [
         {
           "engine": "builtin",
@@ -162,6 +197,7 @@
     },
     "app-config#9": {
       "partial": true,
+      "rest": "Animations are provided only when they are needed at all; new animation work prefers native CSS transitions and view transitions over the `@angular/animations` DSL.",
       "entries": [
         {
           "engine": "eslint",
@@ -184,6 +220,7 @@
     },
     "architecture#3": {
       "partial": true,
+      "rest": "Facade and effects classes are `@Injectable()` **without** `providedIn: 'root'` - each route gets a fresh instance and fresh state; state that must outlive its view or be shared by several views is an NgRx slice.",
       "entries": [
         {
           "engine": "eslint",
@@ -224,6 +261,7 @@
     },
     "architecture#7": {
       "partial": true,
+      "rest": "An `index.ts` barrel is allowed ONLY in `models/` and as a shared library's public entry point. An `export` line added to any other barrel, or a new import through one, is a finding - consumers import the concrete file (`shared/utils/build-user-table.util`, `shared/guards/users-loaded.guard`). Facades and services are never exported through a barrel, a library's entry point included.",
       "entries": [
         {
           "engine": "builtin",
@@ -238,6 +276,7 @@
     },
     "best-practices#1": {
       "partial": true,
+      "rest": "Strict typing everywhere: prefer inference where the type is obvious; exported functions and service methods declare their parameter and return types. A signal input or output carries a type argument only when its default cannot express the type - `input.required<T>()`, `output<T>()`, `input<Item[]>([])`, `input<string | null>(null)` - never one its default already infers (`input(0)`, `input(false)`, `signal('')`, not `input<number>(0)`).",
       "entries": [
         {
           "engine": "eslint",
@@ -248,6 +287,7 @@
     },
     "best-practices#3": {
       "partial": true,
+      "rest": "No new `NgModule`s.",
       "entries": [
         {
           "engine": "eslint",
@@ -270,6 +310,7 @@
     },
     "best-practices#4": {
       "partial": true,
+      "rest": "Signals are the primary reactive primitive: `signal()` for local state, `computed()` for derived state, `input()`/`input.required()`/`output()`/`model()` for the component API; state updates only via `.set()`/`.update()` with pure transformations, never mutation of the stored object/array.",
       "entries": [
         {
           "engine": "eslint",
@@ -293,6 +334,7 @@
     },
     "best-practices#10": {
       "partial": true,
+      "rest": "`output()` names are past-tense events (`saved`, not `save`).",
       "entries": [
         {
           "engine": "eslint",
@@ -355,6 +397,7 @@
     },
     "best-practices#24": {
       "partial": true,
+      "rest": "Dependencies are injected with `inject()` in a field initializer, a store's `withProps`/`withMethods`, or the body of a functional guard, resolver or interceptor.",
       "entries": [
         {
           "engine": "eslint",
@@ -406,6 +449,13 @@
             }
           ],
           "level": "decides"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/no-unnecessary-condition",
+          "needsTypes": true,
+          "level": "points",
+          "note": "a condition, `?.` or `??` the types already settle; skipped on files whose tsconfig lacks strictNullChecks."
         }
       ]
     },
@@ -432,17 +482,40 @@
           "check": "scss-hard-coded-color",
           "level": "decides",
           "note": "hex / numeric rgb-hsl / named colour; dark-mode counterpart stays walked. Variable definitions in theme/palette/variables/tokens files skipped."
+        },
+        {
+          "engine": "stylelint",
+          "rule": "color-no-hex",
+          "level": "points"
+        },
+        {
+          "engine": "stylelint",
+          "rule": "color-named",
+          "options": "never",
+          "level": "points"
         }
       ]
     },
     "component-styles#5": {
       "partial": true,
+      "rest": "`::ng-deep` is used only when nothing else reaches the element.",
       "entries": [
         {
           "engine": "builtin",
           "check": "scss-ng-deep",
           "level": "decides",
           "note": "the :host wrapper only; \"nothing else reaches it\" stays walked."
+        },
+        {
+          "engine": "stylelint",
+          "rule": "selector-pseudo-element-disallowed-list",
+          "options": [
+            [
+              "ng-deep"
+            ]
+          ],
+          "level": "points",
+          "note": "every ::ng-deep; the :host wrapper and the need stay walked."
         }
       ]
     },
@@ -461,6 +534,25 @@
           "check": "scss-nesting-depth",
           "level": "decides",
           "note": "nesting depth > 3 (wrappers, :host and &-suffix blocks not counted); BEM-in-BEM nesting and long single selectors stay walked."
+        },
+        {
+          "engine": "stylelint",
+          "rule": "max-nesting-depth",
+          "options": [
+            3,
+            {
+              "ignoreAtRules": [
+                "media",
+                "supports",
+                "include"
+              ],
+              "ignorePseudoClasses": [
+                "host",
+                "host-context"
+              ]
+            }
+          ],
+          "level": "points"
         }
       ]
     },
@@ -530,6 +622,7 @@
     },
     "component-template#10": {
       "partial": true,
+      "rest": "A translation containing HTML markup is rendered with `[innerHTML]=\"'key' | translate\"`, not interpolation; the key piped into it is a translation key, never a user-/API-derived value.",
       "entries": [
         {
           "engine": "eslint",
@@ -643,6 +736,7 @@
     ],
     "component#4": {
       "partial": true,
+      "rest": "The `imports` array holds only the concrete components, directives and pipes the template uses.",
       "entries": [
         {
           "engine": "eslint",
@@ -655,6 +749,7 @@
     },
     "component#5": {
       "partial": true,
+      "rest": "An injected field's name is the full descriptive name derived from the injected type (keeping the feature/area part of the class name), never shortened to a generic role name.",
       "entries": [
         {
           "engine": "eslint",
@@ -748,6 +843,7 @@
     },
     "component#27": {
       "partial": true,
+      "rest": "The `templateUrl` and `styleUrl`/`styleUrls` paths are relative to the `.ts`.",
       "entries": [
         {
           "engine": "eslint",
@@ -793,6 +889,7 @@
     },
     "components-folder#4": {
       "partial": true,
+      "rest": "A component's `.component.{ts,html,scss}` files never lie in a folder another component shares: every component owns a folder named after it, holding its `.component.{ts,html,scss}` files and a `tests/` folder, and a second component added next to an existing one gets, together with the first, a folder of its own.",
       "entries": [
         {
           "engine": "builtin",
@@ -929,6 +1026,7 @@
     },
     "feature-component#17": {
       "partial": true,
+      "rest": "A dialog component exposes to its template only the named readonly values the template needs from its injected dialog data (`readonly slots = this._dialogData.slots`), never the whole data object.",
       "entries": [
         {
           "engine": "eslint",
@@ -952,6 +1050,13 @@
           "selector": "TSAsExpression[typeAnnotation.type='TSNeverKeyword']",
           "message": "as never",
           "level": "points"
+        },
+        {
+          "engine": "eslint",
+          "rule": "@typescript-eslint/no-unnecessary-type-assertion",
+          "needsTypes": true,
+          "level": "points",
+          "note": "an assertion (`as`, also `!`) that changes no type; runs on the working tree only."
         }
       ]
     },
@@ -985,6 +1090,7 @@
     },
     "general#16": {
       "partial": true,
+      "rest": "A signal store's private props and methods carry the `_` prefix (`_usersService`, `_buildRows()`).",
       "entries": [
         {
           "engine": "eslint",
@@ -1076,6 +1182,7 @@
     },
     "guards#2": {
       "partial": true,
+      "rest": "Every route API is functional (`CanActivateFn`, `CanActivateChildFn`, `CanMatchFn`, `CanDeactivateFn<T>`, `ResolveFn<T>`) — never a class.",
       "entries": [
         {
           "engine": "eslint",
@@ -1183,6 +1290,7 @@
     },
     "http-service#12": {
       "partial": true,
+      "rest": "Forbidden: injecting the store, cross-area services, keeping state, composing requests (that belongs to the signal-store method or effect calling the service), logging, HTTP interceptors (global ones already apply).",
       "entries": [
         {
           "engine": "eslint",
@@ -1279,6 +1387,7 @@
     ],
     "interceptors#1": {
       "partial": true,
+      "rest": "The export is a functional `const <purpose>Interceptor: HttpInterceptorFn`, registered through `provideHttpClient(withInterceptors([...]))`.",
       "entries": [
         {
           "engine": "eslint",
@@ -1325,6 +1434,7 @@
     },
     "models#1": {
       "partial": true,
+      "rest": "`models/` is the only source of the area's types, enums and constants, split into `consts/`, `enums/`, `interfaces/`, `types/` (optional thematic subfolders for large areas).",
       "entries": [
         {
           "engine": "builtin",
@@ -1339,6 +1449,7 @@
     },
     "models#5": {
       "partial": true,
+      "rest": "Files are purely declarative — only `export interface/type/enum/const`, and no logic inside constants (a const is a literal or a `Record`, never an IIFE or function result).",
       "entries": [
         {
           "engine": "builtin",
@@ -1367,6 +1478,7 @@
     },
     "models#7": {
       "partial": true,
+      "rest": "The models barrel `index.ts` has commented sections in fixed order (`// consts`, `// enums`, `// interfaces`, `// types`); consumers outside `models/` import only through the barrel.",
       "entries": [
         {
           "engine": "builtin",
@@ -1404,6 +1516,7 @@
     },
     "models#20": {
       "partial": true,
+      "rest": "Enum values equal the API strings.",
       "entries": [
         {
           "engine": "eslint",
@@ -1442,6 +1555,7 @@
     },
     "models#25": {
       "partial": true,
+      "rest": "Names follow the declaration kind: every const is camelCase, never SCREAMING_SNAKE_CASE; interfaces, types and enums are PascalCase domain names.",
       "entries": [
         {
           "engine": "eslint",
@@ -1486,6 +1600,7 @@
     },
     "ngrx-actions#3": {
       "partial": true,
+      "rest": "Every async operation is a trio kept together: `'X'`, `'X success'`, `'X fail'`.",
       "entries": [
         {
           "engine": "eslint",
@@ -1536,6 +1651,7 @@
     },
     "ngrx-effects-unit-test#4": {
       "partial": true,
+      "rest": "Every `it` uses a `done` callback typed `() => void` or `jest.DoneCallback` and a bounded subscription: `pipe(take(1))` for a single-action effect, `pipe(bufferCount(actionCount))` for a multi-action effect; assertions run inside `subscribe` and end with `done()`.",
       "entries": [
         {
           "engine": "eslint",
@@ -1554,6 +1670,7 @@
     },
     "ngrx-effects#1": {
       "partial": true,
+      "rest": "Class `<PascalCaseArea>Effects` with `@Injectable()`, registered through `provideEffects([...])` on the route; `/* eslint-disable @typescript-eslint/member-ordering */` at the top is allowed.",
       "entries": [
         {
           "engine": "builtin",
@@ -1572,6 +1689,7 @@
     },
     "ngrx-effects#2": {
       "partial": true,
+      "rest": "Dependencies come via `inject()`, each field named in full after the injected type (keeping the feature/area part of the class name), never shortened to a generic role name; every effect field is camelCase.",
       "entries": [
         {
           "engine": "eslint",
@@ -1613,6 +1731,7 @@
     },
     "ngrx-effects#5": {
       "partial": true,
+      "rest": "In an effect, `catchError` returns `of(failAction)`: an error branch that is only a `tap`, or returns no fail action, swallows the failure — the reducer never receives a fail action, so `loading` stays `true`, the spinner never stops and the user is told nothing; report from that consequence (🔴 High).",
       "entries": [
         {
           "engine": "eslint",
@@ -1637,6 +1756,7 @@
     },
     "ngrx-effects#8": {
       "partial": true,
+      "rest": "`concatLatestFrom` is imported from `@ngrx/operators`.",
       "entries": [
         {
           "engine": "eslint",
@@ -1665,6 +1785,7 @@
     },
     "ngrx-effects#22": {
       "partial": true,
+      "rest": "Forbidden: injecting a facade, mutating action payloads, a global `catchError`, domain logic inside `tap`, `Date.now()`/`Math.random()` in success payloads.",
       "entries": [
         {
           "engine": "eslint",
@@ -1697,6 +1818,7 @@
     },
     "ngrx-facade-unit-test#2": {
       "partial": true,
+      "rest": "One flat `it` per public method.",
       "entries": [
         {
           "engine": "eslint",
@@ -1709,6 +1831,7 @@
     },
     "ngrx-facade-unit-test#3": {
       "partial": true,
+      "rest": "Every assertion is `expect(storeMock.dispatch).toHaveBeenCalledWith(actions.x({ ...exact payload }))`.",
       "entries": [
         {
           "engine": "eslint",
@@ -1721,6 +1844,7 @@
     },
     "ngrx-facade-unit-test#7": {
       "partial": true,
+      "rest": "Signals are not tested (the mock returns `signal(null)`; selector logic has its own spec, component behavior mocks the facade).",
       "entries": [
         {
           "engine": "eslint",
@@ -1733,6 +1857,7 @@
     },
     "ngrx-facade#1": {
       "partial": true,
+      "rest": "The file is named `<area>.facade.ts`; class `<PascalCaseArea>Facade` with `@Injectable()`; provided in the route `providers`, never globally and never in `@Component.providers`.",
       "entries": [
         {
           "engine": "builtin",
@@ -1763,6 +1888,7 @@
     },
     "ngrx-facade#3": {
       "partial": true,
+      "rest": "Every exposed signal is `readonly <name> = this._store.selectSignal(query.select<Name>)`; only selectors actually consumed by components/effects are exposed.",
       "entries": [
         {
           "engine": "eslint",
@@ -1774,6 +1900,7 @@
     },
     "ngrx-facade#4": {
       "partial": true,
+      "rest": "Every action is exposed as a method named after the action verb phrase in camelCase, with return type `void`, dispatching `actions.x({ ...shorthand payload })` — no transformations of the payload.",
       "entries": [
         {
           "engine": "eslint",
@@ -1785,6 +1912,7 @@
     },
     "ngrx-facade#8": {
       "partial": true,
+      "rest": "No local caching of signals in the facade.",
       "entries": [
         {
           "engine": "eslint",
@@ -1849,6 +1977,7 @@
     ],
     "ngrx-reducer#3": {
       "partial": true,
+      "rest": "The reducer is pure and immutable: always spread (`{ ...state, field }`); arrays via `[...]`/`map`/`filter` (never `push`/`splice`/`pop`); maps via `new Map([...])`; no HTTP.",
       "entries": [
         {
           "engine": "eslint",
@@ -1899,6 +2028,7 @@
     },
     "ngrx-reducer#16": {
       "partial": true,
+      "rest": "Complex domain logic is extracted to `shared/utils/` ONLY when a second consumer exists or the body is long (~10+ lines) and genuinely complex; a reducer handler is allowed to hold its own logic — mapping, merging, branching, computing a derived field — inline, and demanding a util per case is a finding, not a review comment.",
       "entries": [
         {
           "engine": "eslint",
@@ -1937,6 +2067,7 @@
     },
     "ngrx-selectors-unit-test#1": {
       "partial": true,
+      "rest": "Selectors are tested exclusively through `.projector(...)` — no mocks.",
       "entries": [
         {
           "engine": "eslint",
@@ -1992,6 +2123,7 @@
     },
     "ngrx-selectors#6": {
       "partial": true,
+      "rest": "Selectors are pure: no side effects; results are new structures, inputs are never mutated.",
       "entries": [
         {
           "engine": "eslint",
@@ -2061,6 +2193,7 @@
     },
     "performance#4": {
       "partial": true,
+      "rest": "No state mutation inside `ngAfterViewInit`/`ngAfterContentInit` (ExpressionChangedAfterItHasBeenChecked).",
       "entries": [
         {
           "engine": "eslint",
@@ -2117,6 +2250,7 @@
     },
     "pipes#9": {
       "partial": true,
+      "rest": "The pipe's spec covers each branch of `transform` plus `null`/empty input.",
       "entries": [
         {
           "engine": "builtin",
@@ -2171,6 +2305,7 @@
     ],
     "security#3": {
       "partial": true,
+      "rest": "DOM changes go through templates and bindings — nothing bypasses Angular sanitization.",
       "entries": [
         {
           "engine": "eslint",
@@ -2208,6 +2343,7 @@
     ],
     "security#9": {
       "partial": true,
+      "rest": "`HttpClient` XSRF protection stays enabled; `withCredentials`/`credentials: 'include'` is added only for a reviewed, documented cross-origin case.",
       "entries": [
         {
           "engine": "eslint",
@@ -2225,6 +2361,7 @@
     },
     "signal-store#1": {
       "partial": true,
+      "rest": "The file is named `<name>.store.ts`, with its spec in `+state/tests/`; it has one export, the `signalStore(...)` const.",
       "entries": [
         {
           "engine": "builtin",
@@ -2317,6 +2454,7 @@
     ],
     "state-interface#4": {
       "partial": true,
+      "rest": "No logic; field types are imported by concrete relative paths or external aliases — never through the area's own barrel.",
       "entries": [
         {
           "engine": "eslint",
@@ -2402,6 +2540,7 @@
     },
     "unit-tests#8": {
       "partial": true,
+      "rest": "Each `it.each` / `describe.each` / `test.each` row keeps its values as literals in place — never per-case variables (fixtures, inputs, expected values) declared above and referenced from the rows. Rows that repeat a value write it out again; the no-duplicated-test-data rule below never pulls data out of a dataset row.",
       "entries": [
         {
           "engine": "eslint",
@@ -2457,6 +2596,7 @@
     },
     "unit-tests#15": {
       "partial": true,
+      "rest": "Any spy or mock called with arguments is asserted on those arguments with `toHaveBeenCalledWith(...)` (or `toHaveBeenLastCalledWith(...)` for effect-driven repeats) — a bare `toHaveBeenCalled()`/`toHaveBeenCalledTimes(n)` that ignores the payload is insufficient; `toHaveBeenCalled()` is reserved for genuinely argument-less calls.",
       "entries": [
         {
           "engine": "eslint",
@@ -2476,6 +2616,7 @@
     },
     "unit-tests#22": {
       "partial": true,
+      "rest": "No forced casts to satisfy the type checker - a mock or fixture is typed properly (`Partial<X>` + `satisfies`) instead; no indexed-access type annotation where the type has a name.",
       "entries": [
         {
           "engine": "eslint",
@@ -2594,6 +2735,7 @@
     },
     "utils#4": {
       "partial": true,
+      "rest": "Functions are pure: same inputs → same output; no side effects, no mutation of arguments; a defensive copy (`[...input]`) is made when the result must not share the caller's reference.",
       "entries": [
         {
           "engine": "eslint",
@@ -2623,6 +2765,7 @@
     },
     "utils#11": {
       "partial": true,
+      "rest": "The util's spec covers every function the file exports (one `describe` per exported function).",
       "entries": [
         {
           "engine": "builtin",
@@ -2632,6 +2775,22 @@
             "**/*.{util,pipe,guard,directive,interceptor}.ts"
           ],
           "note": "existence only; what the spec covers stays walked. Map it on the source file kinds (util, pipe, guard, directive, interceptor), the items sit on the spec kinds. null on a partial tree."
+        }
+      ]
+    },
+    "accessibility#37": {
+      "partial": true,
+      "entries": [
+        {
+          "engine": "stylelint",
+          "rule": "property-disallowed-list",
+          "options": [
+            [
+              "order"
+            ]
+          ],
+          "level": "points",
+          "note": "`order` only; row-reverse and absolute positioning stay walked."
         }
       ]
     }

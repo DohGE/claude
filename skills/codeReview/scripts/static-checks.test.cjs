@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { planFor, overlayConfig, mapMessages, inChange, run, globMatch } = require('./static-checks.cjs');
+const { planFor, overlayConfig, mapMessages, inChange, run, globMatch, typedParserOptions } = require('./static-checks.cjs');
 
 const map = {
   version: 1,
@@ -167,4 +167,168 @@ test('mapMessages: a restricted-import tag after ESLint\'s lead-in binds; an unt
   ], plan, {});
   assert.deepEqual(files['x.ts'].hits.map((h) => [h.address, h.message]), [['best-practices#25', 'import from rxjs']]);
   assert.deepEqual(files['y.ts'].hits.map((h) => [h.address, h.line, h.rule]), [['best-practices#25', 2, '@typescript-eslint/no-restricted-imports']]);
+});
+
+// ---- type-aware entries and stylelint, with stub engines (no dependency) ----
+
+// A temp project holding `files` (path -> text), its node_modules included.
+function stubProject(t, files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'doh-static-stub-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const [p, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true });
+    fs.writeFileSync(path.join(root, p), text);
+  }
+  return root;
+}
+
+// ESLint stub: the overlay after -c says which run it is (type-aware = it holds projectService).
+// The untyped run reports rule `a` on every file; the type-aware one reports `b` on y.ts, a parse
+// error on x.ts, and crashes when STUB_TYPED=crash.
+const eslintStub = [
+  "const fs = require('fs'); const path = require('path');",
+  "const args = process.argv.slice(2); const cfg = fs.readFileSync(args[args.indexOf('-c') + 1], 'utf8');",
+  'const files = args.filter((a) => /\\.ts$/.test(a)); const typed = /projectService/.test(cfg);',
+  "if (typed && process.env.STUB_TYPED === 'crash') { process.stderr.write('Oops'); process.exit(2); }",
+  "const out = files.map((f) => ({ filePath: path.resolve(f), messages: !typed ? [{ ruleId: '@typescript-eslint/a', line: 1, message: 'A' }]",
+  "  : f.endsWith('x.ts') ? [{ fatal: true, line: 1, message: 'Parsing error: x.ts was not found by the project service' }]",
+  "  : [{ ruleId: '@typescript-eslint/b', line: 2, message: 'B' }, { ruleId: '@typescript-eslint/c', line: 1, message: 'This rule requires the `strictNullChecks` compiler option to be turned on to function correctly.' }, { ruleId: '@typescript-eslint/c', line: 3, message: 'C' }] }));",
+  'process.stdout.write(JSON.stringify(out)); process.exit(1);',
+].join('\n');
+function typedProject(t) {
+  return stubProject(t, {
+    'node_modules/eslint/bin/eslint.js': eslintStub,
+    'node_modules/eslint/package.json': '{"version":"9.0.0"}',
+    'node_modules/@typescript-eslint/parser/package.json': '{"version":"8.30.0","main":"index.js"}',
+    'node_modules/@typescript-eslint/parser/index.js': 'module.exports = {};',
+    'node_modules/@typescript-eslint/eslint-plugin/package.json': '{"main":"index.js"}',
+    'node_modules/@typescript-eslint/eslint-plugin/index.js': 'module.exports = { rules: { a: {}, b: {}, c: {} } };',
+    'x.ts': 'export const x = 1;\n',
+    'y.ts': 'export const y = 1;\n',
+  });
+}
+const typedMap = { items: {
+  'u#1': [{ engine: 'eslint', rule: '@typescript-eslint/a', level: 'decides' }],
+  't#1': { partial: true, entries: [{ engine: 'eslint', rule: '@typescript-eslint/b', needsTypes: true, level: 'points' }] },
+  't#2': { partial: true, entries: [{ engine: 'eslint', rule: '@typescript-eslint/c', needsTypes: true, level: 'points' }] },
+} };
+const typedInput = (root, extra) => ({ projectRoot: root, files: [{ path: 'x.ts', kind: 'k' }, { path: 'y.ts', kind: 'k' }], map: typedMap, kindItems: { k: ['u#1', 't#1', 't#2'] }, builtin: {}, ...extra });
+
+test('typedParserOptions: projectService on v8+, project:true on v6/7, the root tsconfig before, an explicit tsconfig wins', (t) => {
+  const v = (version, extra = {}) => stubProject(t, { 'node_modules/@typescript-eslint/parser/package.json': JSON.stringify({ version }), ...extra });
+  assert.deepEqual(typedParserOptions({ projectRoot: v('8.1.0'), sourceRoot: '/s' }).typed, { projectService: true });
+  assert.deepEqual(typedParserOptions({ projectRoot: v('6.4.0'), sourceRoot: '/s' }).typed, { project: true });
+  const old = v('5.62.0', { 'tsconfig.json': '{}' });
+  assert.deepEqual(typedParserOptions({ projectRoot: old, sourceRoot: old }).typed, { project: [path.join(old, 'tsconfig.json').replace(/\\/g, '/')] });
+  const bare = v('5.62.0');
+  assert.match(typedParserOptions({ projectRoot: bare, sourceRoot: bare }).reason, /no tsconfig/);
+  assert.deepEqual(typedParserOptions({ projectRoot: v('8.1.0'), tsconfig: '/p/tsconfig.app.json' }).typed, { project: ['/p/tsconfig.app.json'] });
+  assert.match(typedParserOptions({ projectRoot: stubProject(t, {}) }).reason, /parser not installed/);
+});
+
+test('run, typed: a separate invocation; a file it cannot parse skips only its type-aware entries; a strictNullChecks complaint skips its rule', (t) => {
+  const root = typedProject(t);
+  const off = run(typedInput(root));
+  assert.deepEqual(off.skipped.map((s) => [s.address, s.reason]), [['t#1', 'needs type information'], ['t#2', 'needs type information']]);
+  assert.deepEqual(off.files['y.ts'].decided, ['u#1']);
+  const on = run(typedInput(root, { typed: true }));
+  assert.equal(on.engines.eslint.typed.mode, 'projectService');
+  assert.equal(on.files['x.ts'].error, undefined);
+  assert.deepEqual(on.files['x.ts'].decided, ['u#1']);
+  assert.deepEqual(on.files['x.ts'].clean, {});
+  assert.deepEqual(on.files['y.ts'].hits.map((h) => [h.address, h.rule]), [['u#1', '@typescript-eslint/a'], ['t#1', '@typescript-eslint/b']]);
+  assert.deepEqual(on.skipped.map((s) => [s.address, s.reason]), [['t#1', 'type-aware parse failed: the file is in no tsconfig'], ['t#2', 'type-aware parse failed: the file is in no tsconfig'], ['t#2', 'type-aware rule needs strictNullChecks']]);
+});
+
+test('run, typed: a crashing type-aware run skips the type-aware entries and keeps the untyped results', (t) => {
+  const root = typedProject(t);
+  process.env.STUB_TYPED = 'crash';
+  try {
+    const doc = run(typedInput(root, { typed: true }));
+    assert.equal(doc.engines.eslint.error, undefined);
+    assert.match(doc.engines.eslint.typed.error, /Oops/);
+    assert.deepEqual(doc.files['x.ts'].decided, ['u#1']);
+    assert.deepEqual(doc.files['y.ts'].hits.map((h) => h.address), ['u#1']);
+    assert.deepEqual(doc.skipped.map((s) => s.address), ['t#1', 't#2']);
+    assert.match(doc.skipped[0].reason, /^type-aware eslint failed/);
+  } finally { delete process.env.STUB_TYPED; }
+});
+
+// stylelint stub in stylelint 16's shape: the json formatter on stderr, exit 2 on problems; an
+// unknown rule and an invalid option come back as warnings, a.scss has one hit, bad.css a syntax error.
+const stylelintStub = [
+  "import path from 'node:path';",
+  'const args = process.argv.slice(2).filter((a) => /\\.(s?css|less)$/.test(a));',
+  'const out = args.map((f) => ({ source: path.resolve(f), deprecations: [], parseErrors: [], errored: true,',
+  '  invalidOptionWarnings: [{ text: \'Invalid option "x" for rule "selector-max-id"\' }],',
+  "  warnings: f.endsWith('bad.css') ? [{ line: 1, column: 1, rule: 'CssSyntaxError', severity: 'error', text: 'Unclosed block (CssSyntaxError)' }]",
+  "    : [{ line: 1, column: 1, rule: 'no-such-rule', severity: 'error', text: 'Unknown rule no-such-rule.' },",
+  "       { line: 2, column: 3, endLine: 2, rule: 'color-named', severity: 'error', text: 'Disallowed named color \"red\" (color-named)' },",
+  "       { line: 3, column: 1, rule: 'selector-max-id', severity: 'error', text: 'should not count' }] }));",
+  'process.stderr.write(JSON.stringify(out)); process.exit(2);',
+].join('\n');
+const styleMap = { items: {
+  's#1': { partial: true, entries: [{ engine: 'stylelint', rule: 'color-named', options: 'never', level: 'points' }] },
+  's#2': { partial: true, entries: [{ engine: 'stylelint', rule: 'no-such-rule', level: 'points' }] },
+  's#3': { partial: true, entries: [{ engine: 'stylelint', rule: 'selector-max-id', options: 'x', level: 'points' }] },
+  's#4': [{ engine: 'stylelint', rule: 'declaration-no-important', level: 'decides' }],
+} };
+const styleInput = (root) => ({ projectRoot: root, files: [{ path: 'src/a.scss', kind: 'k' }, { path: 'src/bad.css', kind: 'k' }, { path: 'src/c.ts', kind: 'k' }], map: styleMap, kindItems: { k: ['s#1', 's#2', 's#3', 's#4'] }, changedLines: { 'src/a.scss': [[2, 2]] }, builtin: {} });
+
+test('run, stylelint (stub): stderr JSON, exit 2, unknown rule and bad option skipped, hits mapped, inChange, syntax error', (t) => {
+  const root = stubProject(t, {
+    'node_modules/stylelint/bin/stylelint.mjs': stylelintStub,
+    'node_modules/stylelint/package.json': '{"version":"16.2.0"}',
+    'node_modules/postcss-scss/package.json': '{"main":"index.js"}',
+    'node_modules/postcss-scss/index.js': 'module.exports = {};',
+    'src/a.scss': '.a {\n  color: red;\n}\n', 'src/bad.css': '.a {', 'src/c.ts': '',
+  });
+  const doc = run(styleInput(root));
+  assert.deepEqual(doc.engines.stylelint, { available: true, version: '16.2.0' });
+  const a = doc.files['src/a.scss'];
+  assert.deepEqual(a.hits, [{ address: 's#1', level: 'points', line: 2, endLine: 2, rule: 'color-named', message: 'Disallowed named color "red"', inChange: true }]);
+  assert.deepEqual(a.clean, {});
+  assert.deepEqual(a.decided, ['s#4']);
+  const reasons = Object.fromEntries(doc.skipped.map((s) => [s.address, s.reason]));
+  assert.equal(reasons['s#2'], 'rule not found in installed stylelint');
+  assert.match(reasons['s#3'], /^invalid options/);
+  assert.match(doc.files['src/bad.css'].error, /Unclosed block/);
+  assert.deepEqual(doc.files['src/c.ts'], { decided: [], clean: {}, hits: [] });
+  assert.deepEqual(fs.readdirSync(path.join(root, 'node_modules', '.cache', 'doh-static')), []);
+});
+
+test('run, stylelint (stub) without postcss-scss: .scss entries skipped with reason, .css still linted', (t) => {
+  const root = stubProject(t, {
+    'node_modules/stylelint/bin/stylelint.mjs': stylelintStub,
+    'node_modules/stylelint/package.json': '{"version":"16.2.0"}',
+    'src/a.scss': '', 'src/bad.css': '', 'src/c.ts': '',
+  });
+  const doc = run(styleInput(root));
+  assert.ok(doc.skipped.some((s) => s.address === 's#1' && /postcss-scss not installed/.test(s.reason)));
+  assert.deepEqual(doc.files['src/a.scss'], { decided: [], clean: {}, hits: [] });
+  assert.match(doc.files['src/bad.css'].error, /Unclosed block/);
+});
+
+const styleProject = process.env.DOH_STATIC_TEST_STYLELINT_PROJECT;
+test('integration: real stylelint', { skip: !(styleProject && fs.existsSync(path.join(styleProject, 'node_modules', 'stylelint'))) && 'DOH_STATIC_TEST_STYLELINT_PROJECT not set' }, () => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'doh-static-style-'));
+  try {
+    fs.writeFileSync(path.join(src, 'a.component.scss'), ':host {\n  .a { color: red; }\n  .b { outline: none; height: 10px; }\n}\n::ng-deep .x { color: #fff; }\n');
+    fs.writeFileSync(path.join(src, 'b.css'), '.ok { color: rgb(var(--c)); }\n');
+    const m = { items: {
+      'cs#4': { partial: true, entries: [{ engine: 'stylelint', rule: 'color-named', options: 'never', level: 'points' }, { engine: 'stylelint', rule: 'color-no-hex', level: 'points' }] },
+      'cs#5': { partial: true, entries: [{ engine: 'stylelint', rule: 'selector-pseudo-element-disallowed-list', options: [['ng-deep']], level: 'points' }] },
+      'a#13': { partial: true, entries: [{ engine: 'stylelint', rule: 'declaration-property-value-disallowed-list', options: [{ outline: ['none', '0'] }], level: 'points' }] },
+      'x#1': { partial: true, entries: [{ engine: 'stylelint', rule: 'no-such-rule-at-all', level: 'points' }] },
+    } };
+    const doc = run({ projectRoot: styleProject, sourceRoot: src, files: [{ path: 'a.component.scss', kind: 'k' }, { path: 'b.css', kind: 'k' }], map: m, kindItems: { k: Object.keys(m.items) }, changedLines: { 'a.component.scss': [[1, 3]] }, builtin: {} });
+    assert.equal(doc.engines.stylelint.error, undefined, doc.engines.stylelint.error);
+    const a = doc.files['a.component.scss'];
+    assert.equal(a.error, undefined);
+    assert.deepEqual(a.hits.map((h) => [h.address, h.line, h.rule, h.inChange]).sort((x, y) => x[1] - y[1] || x[2].localeCompare(y[2])), [
+      ['cs#4', 2, 'color-named', true], ['a#13', 3, 'declaration-property-value-disallowed-list', true], ['cs#4', 5, 'color-no-hex', false], ['cs#5', 5, 'selector-pseudo-element-disallowed-list', false],
+    ]);
+    assert.deepEqual(doc.files['b.css'].clean, { 'cs#4': ['color-named', 'color-no-hex'], 'cs#5': ['selector-pseudo-element-disallowed-list'], 'a#13': ['declaration-property-value-disallowed-list'] });
+    assert.deepEqual(doc.skipped.map((s) => [s.address, s.reason]), [['x#1', 'rule not found in installed stylelint']]);
+  } finally { fs.rmSync(src, { recursive: true, force: true }); }
 });

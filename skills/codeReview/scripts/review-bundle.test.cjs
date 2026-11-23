@@ -711,3 +711,35 @@ test('static lines past the cap end with a count', () => {
   assert.strictEqual(lines.length, 9);
   assert.strictEqual(lines[8], '  - … i 3 kolejnych');
 });
+
+test('a partial item prints its map "rest" only when every applicable decides entry ran clean and nothing hit', () => {
+  const any = { engine: 'eslint', rule: '@typescript-eslint/no-explicit-any', level: 'decides' };
+  const sel = { engine: 'eslint', selector: 'X', message: 'm', level: 'decides', files: '**/*.facade.ts' };
+  const full = 'No any; every export declares its return type.';
+  const rest = 'Every export declares its return type.';
+  const instructions = new Map([['c', instruction('c', [full], { 1: { static: { partial: true, rest, entries: [any, sel] } } })]]);
+  const plan = [{ id: 'c', numbers: [1] }];
+  const render = (filePath, staticFile) => {
+    const bound = rb.bindFile({ plan, instructions, filePath, text: 'x\n', staticFile });
+    const file = { path: filePath, status: 'M', changedLines: '1-9', checklistTotal: 1, contentPath: 'w/x.ts', diffPath: null };
+    return { bound, bundle: rb.renderBundle({ file, kind: { name: 'ts', role: 'TS.', notes: [], plan }, instructions, bound, partPath: 'r/raport.part01.md' }) };
+  };
+  const clean = { decided: [], clean: { 'c#1': ['@typescript-eslint/no-explicit-any'] }, hits: [] };
+  const short = render('src/a.util.ts', clean);
+  assert.deepStrictEqual(short.bound.staticRest, ['c#1'], 'the facade-only selector does not apply to a util');
+  assert.ok(short.bundle.includes(`- c#1: ${rest}\n`), short.bundle);
+  assert.ok(!short.bundle.includes(full));
+  assert.ok(short.bundle.includes(`  - statyczna: czysto - @typescript-eslint/no-explicit-any (${rb.staticRestNote})`));
+  const skipped = render('src/a.facade.ts', clean);
+  assert.strictEqual(skipped.bound.staticRest, undefined, 'the selector applies to a facade but did not run');
+  assert.ok(skipped.bundle.includes(`- c#1: ${full}`));
+  assert.ok(skipped.bundle.includes('  - statyczna: czysto - @typescript-eslint/no-explicit-any\n'));
+  const both = render('src/a.facade.ts', { decided: [], clean: { 'c#1': ['@typescript-eslint/no-explicit-any', 'no-restricted-syntax'] }, hits: [] });
+  assert.deepStrictEqual(both.bound.staticRest, ['c#1']);
+  const hit = render('src/a.util.ts', { decided: [], clean: { 'c#1': ['@typescript-eslint/no-explicit-any'] }, hits: [{ address: 'c#1', level: 'decides', line: 2, endLine: 2, rule: 'no-restricted-syntax', message: 'm', inChange: true }] });
+  assert.strictEqual(hit.bound.staticRest, undefined);
+  assert.ok(hit.bundle.includes(`- c#1: ${full}`));
+  assert.ok(hit.bundle.includes('  - STATYCZNA L2: no-restricted-syntax - m'));
+  const noStatic = render('src/a.util.ts', null);
+  assert.ok(noStatic.bundle.includes(`- c#1: ${full}`), 'no runner result: the full text');
+});

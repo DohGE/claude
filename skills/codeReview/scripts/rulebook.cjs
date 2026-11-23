@@ -969,16 +969,23 @@ function staticEntryProblem(entry) {
   return null;
 }
 
-// An item's value - the entries, or `{ partial, entries }` - as `{ partial, entries }` holding
-// only the valid entries; null when none is left.
+// An item's value - the entries, or `{ partial, rest?, entries }` - as `{ partial, entries }`
+// (plus `rest` when given) holding only the valid entries; null when none is left. `rest` is
+// checked against the item's text in applyStaticMap, where the text is known.
 function normalizeStaticValue(value, address, where, warnings) {
   let partial = false;
+  let rest;
   let list = value;
   if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const extra = Object.keys(value).filter((key) => key !== 'partial' && key !== 'entries');
+    const extra = Object.keys(value).filter((key) => key !== 'partial' && key !== 'entries' && key !== 'rest');
     if (extra.length > 0) warnings.push(`${where}: ${address} has unknown key(s) ${extra.join(', ')} - ignored.`);
     if (value.partial !== undefined && typeof value.partial !== 'boolean') warnings.push(`${where}: ${address} "partial" ${JSON.stringify(value.partial)} is not true or false - taken as false.`);
     partial = value.partial === true;
+    if (value.rest !== undefined) {
+      if (!partial) warnings.push(`${where}: ${address} "rest" on an item that is not partial - ignored.`);
+      else if (typeof value.rest !== 'string' || !value.rest.trim()) warnings.push(`${where}: ${address} "rest" is not a non-empty string - ignored.`);
+      else rest = value.rest.trim();
+    }
     list = value.entries;
   }
   if (!Array.isArray(list)) {
@@ -991,7 +998,8 @@ function normalizeStaticValue(value, address, where, warnings) {
     if (problem) warnings.push(`${where}: ${address} static entry ${i + 1} ${problem} - ignored.`);
     else entries.push(entry);
   });
-  return entries.length > 0 ? { partial, entries } : null;
+  if (entries.length === 0) return null;
+  return rest !== undefined ? { partial, rest, entries } : { partial, entries };
 }
 
 // The layered map: address -> { value, where }. A later map naming an address replaces the
@@ -1051,7 +1059,13 @@ function applyStaticMap(staticMap, instructions, kinds, warnings) {
       warnings.push(`${where}: ${address} is marked "unverified" - no tool can settle it, its static entries are ignored.`);
       continue;
     }
-    instruction.extras.set(n, { ...extra, static: value });
+    let item = value;
+    if (value.rest !== undefined && value.rest.length >= String(instruction.items.get(n) || '').length) {
+      warnings.push(`${where}: ${address} "rest" is not shorter than the item's text - ignored.`);
+      const { rest, ...others } = value; // eslint-disable-line no-unused-vars
+      item = others;
+    }
+    instruction.extras.set(n, { ...extra, static: item });
   }
 }
 
@@ -1105,6 +1119,27 @@ function defaultLanguageMatch(entry, relPath) {
 // The entries of an item's `static` that apply to the file at `path`. `kind` is accepted for
 // the callers' symmetry; the map is one value in every kind, so it filters nothing.
 // eslint-disable-next-line no-unused-vars
+// The label static-checks.cjs gives an entry in `clean` and in `skipped` (its entryLabel).
+function staticEntryLabel(entry) {
+  if (entry.rule) return entry.rule;
+  if (entry.check) return entry.check;
+  if (entry.selector) return 'no-restricted-syntax';
+  if (entry.restrictedImport) return 'no-restricted-imports';
+  return '?';
+}
+
+// An item's `rest` (the text left to walk) when the static check settled the rest of it on the
+// file: the item has `rest`, at least one `decides` entry applies to the file and every one that
+// does is in the file's `clean` list (ran, no hit on a changed line). null otherwise - the walker
+// then reads the full text. `clean` is the file's `static.json` `clean[address]` (labels).
+function staticRestFor(extra, { path: relPath, clean } = {}) {
+  const value = extra && extra.static;
+  if (!value || !value.partial || typeof value.rest !== 'string' || !Array.isArray(clean)) return null;
+  const decides = staticEntriesFor(extra, { path: relPath }).filter((entry) => entry.level === 'decides');
+  if (decides.length === 0) return null;
+  return decides.every((entry) => clean.includes(staticEntryLabel(entry))) ? value.rest : null;
+}
+
 function staticEntriesFor(extra, { path: relPath, kind } = {}) {
   const value = extra && extra.static;
   if (!value || !Array.isArray(value.entries)) return [];
@@ -1117,7 +1152,7 @@ function staticEntriesFor(extra, { path: relPath, kind } = {}) {
 }
 
 module.exports = {
-  staticEngines, staticLevels, loadStaticMap, staticEntriesFor, globMatch, defaultStaticMaps,
+  staticEngines, staticLevels, loadStaticMap, staticEntriesFor, staticEntryLabel, staticRestFor, globMatch, defaultStaticMaps,
   reInstructionId, formatItemSpec, expandAlternations, compilePattern, loadRulebook, matchKind, renderNumbered,
   severityLevels, severityRank, unverifiedReasons, fixedSeverity, lightRulebook,
   contentGates, walkerEfforts, loadLocalInstructions, parseLocalMarkdown, appliesTo, planOf, subjectAbsent, reSpecFile,
