@@ -402,6 +402,9 @@ its own commands for the four steps, run on the files the pull request changes s
 for a free slot first: gate steps of every run on the machine share a few of them, the lowest
 `--priority` first. A red typecheck skips the tests and the build (`reason`: "typecheck is red") -
 they compile the same code: repair the typecheck, and the next pass runs them.
+A project that opted in (`"static": true` in checks.json) also gets a `static checks` step: each line of
+its `errorsPath` is a checklist rule the code review decides by linter (`path:line  rule - message  [item]`).
+Fix the code; an `eslint-disable` comment is no fix - the review reads it as a finding of its own.
 
 A step's `status` is its command's exit code, decided by the script. It is never yours to decide by
 reading output: a `passed` step has nothing for you to read, and no output ever turns it into a failure.

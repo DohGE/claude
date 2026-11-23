@@ -28,6 +28,17 @@ const itemPrefix = { severity: 'ważność stała:', sameAs: 'ta sama wada:', pr
 const closedEvidence = 'brak wystąpień - zamknięte przez skrypt';
 // The same for an item whose subject only the lines the diff left alone hold (bindFile).
 const closedUntouchedEvidence = 'brak wystąpień w zmienionych liniach - zamknięte przez skrypt';
+// FIXED IDENTIFIERS: an item a static check settled with no hit in the change (static.md) - the
+// check accepts `statyczna: czysto` wherever it accepts `brak wystąpień`; `STATYCZNA` is the line
+// prefix of a `decides` hit, a tool's verdict the walker cannot overrule.
+const staticClean = 'statyczna: czysto';
+const closedStaticEvidence = `${staticClean} - zamknięte przez skrypt`;
+// A partial item whose every applicable `decides` entry ran clean prints only the rest of its text
+// (static-map.json `rest`); its clean line then ends with this note.
+const staticRestNote = 'powyżej tylko reszta reguły';
+const staticPrefix = 'STATYCZNA';
+// Static lines printed under one item; the rest is a count.
+const staticLineCap = 8;
 const factsFileName = 'facts.json';
 const crossBundleName = 'cross-file.bundle.md';
 const notesFileName = 'rulebook-notes.md';
@@ -132,13 +143,31 @@ function lineCountOf(text) {
 // fact no walked item names, and no `{ fact }` probe points at, is information only.
 // `text` is null for a file with no readable content (deleted, binary): no probe runs on it.
 // `answers` are the file's repo-facts.cjs answers by name, one per item whose `answer` names it.
-function bindFile({ plan, instructions, filePath, text, facts = [], context = {}, partial = false, answers = {}, changedText = null }) {
+// `staticFile`: the file's entry of static.json (static-checks.cjs run) - its in-change hits bind
+// their items (`decides` as `static`, `points` as a probe hit), its `decided` items with no such
+// hit close, its partial items' `clean` rules are printed for the walker to skip.
+function bindFile({ plan, instructions, filePath, text, facts = [], context = {}, partial = false, answers = {}, changedText = null, staticFile = null }) {
   const entries = new Map();
   const entry = (address) => {
-    if (!entries.has(address)) entries.set(address, { strong: [], hints: [], probes: new Map() });
+    if (!entries.has(address)) entries.set(address, { strong: [], hints: [], probes: new Map(), static: [] });
     return entries.get(address);
   };
   const steps = plan.map((step) => ({ step, instruction: instructions.get(step.id) })).filter((s) => s.instruction);
+  const planned = new Set(steps.flatMap(({ step }) => step.numbers.map((n) => `${step.id}#${n}`)));
+  const staticHit = new Set();
+  for (const hit of (staticFile && staticFile.hits) || []) {
+    if (!hit.inChange || !planned.has(hit.address)) continue;
+    staticHit.add(hit.address);
+    if (hit.level === 'decides') {
+      entry(hit.address).static.push({ line: hit.line, endLine: hit.endLine, rule: hit.rule, message: hit.message });
+    } else {
+      const at = entry(hit.address).probes;
+      const texts = at.get(hit.line) || [];
+      const shown = `${hit.rule} - ${hit.message}`;
+      if (!texts.includes(shown)) texts.push(shown);
+      at.set(hit.line, texts);
+    }
+  }
   let unbound = [];
   for (const fact of facts) {
     let address = null;
@@ -181,6 +210,7 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
     if (e.strong.length > 0) out.strong = e.strong;
     if (e.hints.length > 0) out.hints = e.hints;
     if (e.probes.size > 0) out.probes = [...e.probes].sort((a, b) => a[0] - b[0]).map(([line, texts]) => ({ line, text: texts.join('; ') }));
+    if (e.static.length > 0) out.static = e.static;
     if (e.secondQuestion) out.secondQuestion = e.secondQuestion;
     if (e.answer) out.answer = e.answer;
     if (Object.keys(out).length > 0) items[address] = out;
@@ -206,7 +236,35 @@ function bindFile({ plan, instructions, filePath, text, facts = [], context = {}
       }
     }
   }
-  return { items, info: unbound, ...(closed.length > 0 ? { closed } : {}), ...(closedUntouched.length > 0 ? { closedUntouched } : {}) };
+  // A static check that settled the item with no hit in the change closes it too - under the same
+  // exceptions: a fact, probe, second question or prepared verdict keeps it the walker's.
+  const closedStatic = [];
+  const decided = new Set((staticFile && !staticFile.error && staticFile.decided) || []);
+  const staticClean = {};
+  const staticRest = [];
+  for (const { step, instruction } of steps) {
+    for (const n of step.numbers) {
+      const address = `${step.id}#${n}`;
+      const extra = instruction.extras.get(n);
+      const clean = staticFile && staticFile.clean && staticFile.clean[address];
+      if (clean && clean.length && !staticHit.has(address)) {
+        staticClean[address] = clean;
+        if (rulebook.staticRestFor(extra, { path: filePath, clean })) staticRest.push(address);
+      }
+      if (!decided.has(address) || closed.includes(address) || items[address] || staticHit.has(address) || (extra && extra.unverified)) continue;
+      closed.push(address);
+      closedStatic.push(address);
+    }
+  }
+  return {
+    items,
+    info: unbound,
+    ...(closed.length > 0 ? { closed } : {}),
+    ...(closedUntouched.length > 0 ? { closedUntouched } : {}),
+    ...(closedStatic.length > 0 ? { closedStatic } : {}),
+    ...(Object.keys(staticClean).length > 0 ? { staticClean } : {}),
+    ...(staticRest.length > 0 ? { staticRest } : {}),
+  };
 }
 
 // A binding kept to the lines a walk reads (a data file read in ranges, readRangesOf): a fact or a
@@ -241,6 +299,7 @@ function narrowBinding(bound, ranges) {
     if (strong.length) out.strong = strong;
     if (hints.length) out.hints = hints;
     if (probes.length) out.probes = probes;
+    if (binding.static) out.static = binding.static;
     if (binding.secondQuestion) out.secondQuestion = binding.secondQuestion;
     if (binding.answer) out.answer = binding.answer;
     if (Object.keys(out).length > 0) items[address] = out;
@@ -254,7 +313,12 @@ function renderBinding(binding) {
   const out = [];
   for (const fact of binding.strong || []) out.push(`  - ${linePrefix.strong} [${fact.kind}] ${lineList(fact.lines)}: ${fact.text}`);
   for (const fact of binding.hints || []) out.push(`  - ${linePrefix.hint} [${fact.kind}] ${lineList(fact.lines)}: ${fact.text}`);
-  for (const hit of binding.probes || []) out.push(`  - ${linePrefix.probe} L${hit.line}: ${hit.text}`);
+  const shown = [
+    ...(binding.static || []).map((hit) => `  - ${staticPrefix} L${hit.line}${hit.endLine && hit.endLine !== hit.line ? `-L${hit.endLine}` : ''}: ${hit.rule} - ${hit.message}`),
+    ...(binding.probes || []).map((hit) => `  - ${linePrefix.probe} L${hit.line}: ${hit.text}`),
+  ];
+  out.push(...shown.slice(0, shown.length > staticLineCap + 1 ? staticLineCap : shown.length));
+  if (shown.length > staticLineCap + 1) out.push(`  - … i ${shown.length - staticLineCap} kolejnych`);
   if (binding.secondQuestion) out.push(`  - ${linePrefix.second} ${binding.secondQuestion}`);
   if (binding.answer) out.push(`  - ${linePrefix.answer} ${binding.answer}`);
   return out;
@@ -357,6 +421,9 @@ function renderWriteRules({ file, kind, instructions, bound, lineCount }) {
   if (steps.some(({ instruction }) => instruction.severity) || extras.some((extra) => extra.severity || extra.severityInSpec)) {
     out.push('- Znalezisko pod pozycją z ważnością stałą ma tę ważność (przy kilku adresach najwyższą).');
   }
+  if (Object.values(bound.items).some((b) => (b.static || []).length)) out.push(`- \`${staticPrefix}\` to werdykt narzędzia: pozycja dostaje \`NARUSZENIE\` z tymi liniami, nigdy OK.`);
+  if (bound.staticClean) out.push(`- \`${staticClean} - <reguły>\` pod pozycją: te reguły narzędzie sprawdziło w zmienionych liniach - tej części pozycji nie przechodzisz.`);
+  if (bound.staticRest) out.push(`- \`${staticClean} - <reguły> (${staticRestNote})\`: pozycja ma wypisaną tylko resztę reguły, której narzędzie nie rozstrzyga - przechodzisz tylko ją; werdykt i znalezisko należą do całej pozycji.`);
   if (extras.some((extra) => extra.unverified)) out.push('- Gotowy werdykt dopisuje hook, gdy linii brak; OK takiej pozycji jest odrzucane.');
   if ((bound.closed || []).length > 0) {
     out.push(`- Pozycje zamknięte przez skrypt dopisuje hook jako \`OK (${closedEvidence})\`: nie piszesz ich linii. Gdy mimo to widzisz w pliku ich przedmiot, daj pozycji własną linię z werdyktem - Twoja linia wygrywa.`);
@@ -370,6 +437,7 @@ function pointedLinesOf(binding) {
   const lines = new Set();
   for (const fact of [...(binding.strong || []), ...(binding.hints || [])]) for (const line of fact.lines) lines.add(line);
   for (const hit of binding.probes || []) lines.add(hit.line);
+  for (const hit of binding.static || []) lines.add(hit.line);
   return [...lines].sort((a, b) => a - b);
 }
 
@@ -421,6 +489,7 @@ function renderDuties({ kind, instructions, bound }) {
       const what = [];
       if ((b.strong || []).length) what.push(`${linePrefix.strong} ${b.strong.map((f) => lineList(f.lines)).join(', ')}`);
       if ((b.hints || []).length) what.push(`${linePrefix.hint} ${b.hints.map((f) => lineList(f.lines)).join(', ')}`);
+      if ((b.static || []).length) what.push(`${staticPrefix} ${b.static.map((h) => `L${h.line}`).join(', ')}`);
       if ((b.probes || []).length) what.push(`${linePrefix.probe} ${b.probes.map((h) => `L${h.line}`).join(', ')}`);
       if (b.secondQuestion) what.push(linePrefix.second.replace(/:$/, ''));
       // A prepared verdict owes nothing: the check writes it in.
@@ -502,7 +571,7 @@ function renderBundle({
     : '- rodzaj: brak - żaden rodzaj pliku nie opisuje tej ścieżki; recenzja tylko wobec CLAUDE.md i punktów uniwersalnych');
   const changed = file.status === 'A' ? 'cały plik' : file.status === 'D' ? 'brak (plik usunięty)' : (file.changedLines || 'brak');
   const closed = new Set(bound.closed || []);
-  const closedNote = closed.size > 0 ? ` (${closed.size} zamknął skrypt: przedmiotu brak w pliku)` : '';
+  const closedNote = closed.size > 0 ? ` (${closed.size} zamknął skrypt: przedmiotu brak w pliku${(bound.closedStatic || []).length ? ` albo ${staticClean}` : ''})` : '';
   out.push(`- status: ${file.status}${file.oldPath ? ` (dawniej ${file.oldPath})` : ''}; zmienione linie: ${changed}; pozycji planu: ${file.checklistTotal}${closedNote}`);
   // What the walk needs of a rename, here rather than in every walker's system prompt.
   if (/^R/.test(file.status || '') && file.oldPath) {
@@ -554,8 +623,11 @@ function renderBundle({
     out.push(`### ${instruction.name} (\`${step.id}:${rulebook.formatItemSpec(step.numbers)}\`)`);
     if (instruction.gate) out.push(`Bramka: ${instruction.gate}`);
     if (instruction.severity) out.push(`Ważność stała: ${severityText(instruction.severity)}`);
-    const shut = step.numbers.filter((n) => closed.has(`${step.id}#${n}`));
+    const byStatic = new Set(bound.closedStatic || []);
+    const shut = step.numbers.filter((n) => closed.has(`${step.id}#${n}`) && !byStatic.has(`${step.id}#${n}`));
     if (shut.length > 0) out.push(`- zamknięte przez skrypt (przedmiotu brak w pliku; linie dopisze hook): ${step.id}#${rulebook.formatItemSpec(shut).replace(/,/g, ',#')}`);
+    const settled = step.numbers.filter((n) => byStatic.has(`${step.id}#${n}`));
+    if (settled.length > 0) out.push(`- zamknięte przez skrypt (${staticClean}; linie dopisze hook): ${step.id}#${rulebook.formatItemSpec(settled).replace(/,/g, ',#')}`);
     // A prepared verdict is the rulebook's answer for an item no reading of the code settles
     // (unit-tests#24-25: test-first order, a green run): the check writes it in, so its text is
     // nothing to walk - 45 of 174 files of one run had it as their only open items (2026-11-02).
@@ -564,8 +636,10 @@ function renderBundle({
     for (const n of step.numbers) {
       const address = `${step.id}#${n}`;
       if (closed.has(address) || ready.includes(n)) continue;
-      out.push(`- ${address}: ${instruction.items.get(n)}`);
+      const rest = (bound.staticRest || []).includes(address) ? ((instruction.extras.get(n) || {}).static || {}).rest : null;
+      out.push(`- ${address}: ${rest || instruction.items.get(n)}`);
       out.push(...renderBinding(bound.items[address]));
+      if (bound.staticClean && bound.staticClean[address]) out.push(`  - ${staticClean} - ${bound.staticClean[address].join(', ')}${rest ? ` (${staticRestNote})` : ''}`);
       out.push(...renderItemRules(instruction, address, instruction.extras.get(n), inPlan, spec));
     }
     out.push('');
@@ -1103,7 +1177,7 @@ function factsDocument({ files, factRoot = '', partial = false, rules = null }) 
 }
 
 module.exports = {
-  linePrefix, itemPrefix, closedEvidence, closedUntouchedEvidence, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
+  linePrefix, itemPrefix, closedEvidence, closedUntouchedEvidence, staticClean, closedStaticEvidence, staticRestNote, staticPrefix, staticLineCap, specCaps, renderSpecs, itemSeverity, narrowBinding, factsFileName, crossBundleName, notesFileName, factsVersion, crossInstructions,
   reportedStart, reportedEnd, unverifiedMinFiles, batchLimits, windowLimits, outputCost, walkOutput, crossOutput, crossInScope, windowReplies, windowBriefName, skillDir,
   crossBriefName, crossReplies, questionsOpen, questionIds, crossQuestions, walkRulesPath, bundleCaps,
   bindFile, renderBinding, renderBundle, renderCrossBundle, renderCrossBrief, renderRulebookNotes, factsDocument, fitBundle, renderSkeleton,

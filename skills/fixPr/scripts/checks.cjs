@@ -60,6 +60,12 @@ const commandSteps = [
 ];
 const commandStepNames = commandSteps.map((s) => s.step);
 
+// The review's `decides` static checks (codeReview references/static.md) over the lines the branch
+// changed, run by codeReview's static-gate.cjs. OPT-IN: only a checks.json holding `"static": true`
+// (or `{ "base": "<ref>" }`) runs it, after the other steps; without it the gate is what it was.
+const staticStep = { step: 'static', label: 'static checks', scripts: [], timeoutMs: 5 * minute };
+const staticGateScript = path.resolve(__dirname, '..', '..', 'codeReview', 'scripts', 'static-gate.cjs');
+
 // A runner left watching is a hang, not a pass, and `CI=1` alone does not stop
 // all of them. Matched against the text of the project's own `test` script, so
 // the flag is the one THAT runner understands rather than a guess sprayed at
@@ -123,6 +129,7 @@ function parseArgs(argv) {
   // which is the one answer this script must never give by accident.
   for (const name of args.only) {
     if (commandStepNames.includes(name) && (args.command !== null || name === 'precommit')) continue;
+    if (name === staticStep.step && args.command === null) continue;
     if (!stepNames.includes(name)) {
       throw new Error(`Unknown step in --only: ${name} (expected ${stepNames.join(', ')}).`);
     }
@@ -628,8 +635,14 @@ function gateConfigOf(root, pkg, mainOf = mainCheckoutOf) {
   const steps = config && typeof config.steps === 'object' && config.steps && !Array.isArray(config.steps) ? config.steps : null;
   if (!steps) problems.push('it has no "steps" object');
   for (const [name, value] of Object.entries(steps || {})) {
+    if (name === staticStep.step) {
+      const ok = typeof value === 'boolean' || (value && typeof value === 'object' && !Array.isArray(value)
+        && (value.base === undefined || (typeof value.base === 'string' && value.base.trim())));
+      if (!ok) problems.push('step "static" takes true, false or { "base": "<ref>" }');
+      continue;
+    }
     if (!stepNames.includes(name)) {
-      problems.push(`Unknown gate step "${name}" (expected ${stepNames.join(', ')})`);
+      problems.push(`Unknown gate step "${name}" (expected ${[...stepNames, staticStep.step].join(', ')})`);
       continue;
     }
     if (value === false) continue;
@@ -1372,6 +1385,23 @@ function runChecksUncached(options) {
     });
   }
 
+  // The opt-in static checks: after the steps above, on the base the pass was given, else the config's.
+  const staticWanted = !command && !commandStep && gate && gate.steps.static;
+  if (staticWanted && only.length > 0 && !only.includes(staticStep.step)) {
+    result.steps.push(skippedStep(staticStep, `not selected by --only=${only.join(',')}`, outDir));
+  } else if (staticWanted) {
+    const base = options.changedSince || (typeof gate.steps.static === 'object' && gate.steps.static.base) || '';
+    const args = [staticGateScript, `--project=${root}`, ...(base ? [`--base=${base}`] : [])];
+    const timeoutMs = options.timeoutMs || staticStep.timeoutMs;
+    const startedAt = Date.now();
+    const outcome = run(process.execPath, args, { cwd: root, env, timeoutMs, shell: false, step: staticStep.step });
+    recordStep(result, staticStep, {
+      script: null, display: `node static-gate.cjs --project=${root}${base ? ` --base=${base}` : ''}`, outcome, durationMs: Date.now() - startedAt, timeoutMs, outDir,
+      // Its output IS the list of violations, one line each: the excerpt is all of it.
+      errorsText: outcome.output,
+    });
+  }
+
   // No unit test ran because the project has none the gate knows of - not because the change
   // touched none, or a pass left the step out. A gate that ran only the build is no green gate.
   const testStep = result.steps.find((s) => s.step === 'test');
@@ -1486,7 +1516,7 @@ function runConfiguredStep(spec, gate, { root, outDir, run, env, changed, specs 
 }
 
 // A step that ran: its log, the failure excerpt of a red one, and its entry in the result.
-function recordStep(result, spec, { script, display, outcome, durationMs, timeoutMs, outDir, slotWaitMs = 0 }) {
+function recordStep(result, spec, { script, display, outcome, durationMs, timeoutMs, outDir, slotWaitMs = 0, errorsText = null }) {
   const logPath = path.join(outDir, `${spec.step}.log`);
   const log = truncateLog(outcome.output);
   try {
@@ -1506,7 +1536,7 @@ function recordStep(result, spec, { script, display, outcome, durationMs, timeou
     if (status === 'failed') {
       // A timeout is the failure itself, and nothing the command printed says so.
       const lead = timedOut ? `(the command timed out after ${timeoutMs}ms; what it printed until then:)\n` : '';
-      fs.writeFileSync(errorsAt, `${lead}${extractErrors(outcome.output) || '(the command printed nothing)'}\n`, 'utf8');
+      fs.writeFileSync(errorsAt, `${lead}${(errorsText !== null ? String(errorsText || '').trim() : extractErrors(outcome.output)) || '(the command printed nothing)'}\n`, 'utf8');
       errorsPath = errorsAt;
     } else if (fs.existsSync(errorsAt)) {
       // Left by a red pass of a --only run; a green step pointing at errors would lie.
@@ -1579,7 +1609,7 @@ function main() {
 }
 
 module.exports = {
-  parseArgs, defaultRun, truncateLog, extractErrors, extraArgsFor, runChecks, exitCodeFor, gateSteps, reapTree,
+  parseArgs, defaultRun, truncateLog, extractErrors, extraArgsFor, runChecks, exitCodeFor, gateSteps, staticStep, staticGateScript, reapTree,
   precommitCommandFor, jestMajorOf, gateConfigOf, changedFilesOf, expandFiles, acquireSlot, writeResultFile,
   nearSpecsOf, ticketName, detectTests, angularTestProjects, testPlanOf, ciTestGap, ciFilesOf, escapeRegex, specRegex,
   relatedLines, renderLines,

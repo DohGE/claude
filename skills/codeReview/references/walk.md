@@ -295,6 +295,11 @@ For each file:
      that only points, or facts drawn from part of the repository).
    - `SONDA L…: <text>` — a line matching the item's probe, a pattern of code that often breaks it.
      A probe never makes a finding by itself: it names a line the verdict must look at.
+   - `STATYCZNA L…: <rule> - <message>` — a linter's verdict on a changed line (static checks):
+     the item is `NARUSZENIE` citing that line, never `OK` — no `fakt nie dotyczy:` overrules it.
+     `statyczna: czysto - <rules>` under an item: the tool checked that half of it; walk the rest.
+     When that line ends `(powyżej tylko reszta reguły)`, the item text above it is already only the
+     rest the tool does not settle: walk exactly that; the verdict still covers the whole item.
    - `drugie pytanie: <question>` — asked only of items whose `OK` measurably went wrong often:
      an `OK` on that item carries `drugie pytanie: <answer>` in its evidence.
    - `odpowiedź skryptu: <text>` — under a second question the script answers from the whole

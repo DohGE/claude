@@ -17,6 +17,8 @@ const reviewBundle = require('./review-bundle.cjs');
 const reviewScope = require('./review-scope.cjs');
 const mechanical = require('./mechanical.cjs');
 const patternChecks = require('./pattern-checks.cjs');
+const staticChecks = require('./static-checks.cjs');
+const os = require('node:os');
 
 const defaultSkillDir = path.resolve(__dirname, '..');
 const baseBranchNames = ['main', 'master', 'develop', 'dev'];
@@ -109,6 +111,11 @@ function parseArgs(argv) {
     if (arg === '--with-checklist') { args.withChecklist = true; args.withRuleText = true; continue; }
     // No item of severity low is walked, and the report keeps no Low finding and no code snippet.
     if (arg === '--light') { args.light = true; continue; }
+    // No static checks (references/static.md): every item is walked.
+    if (arg === '--no-static') { args.static = false; continue; }
+    // The type-aware entries of the static checks run too (working tree only; a run of its own,
+    // about 40 s on an Angular workspace before the first file) - off unless asked for.
+    if (arg === '--static-types') { args.staticTypes = true; continue; }
     // A bundle read in one compaction window shows an item's text once (review-hooks.cjs), always;
     // `--dedup-items` is the old opt-in, kept so a caller that still passes it works.
     if (arg === '--dedup-items') { args.dedupItems = true; continue; }
@@ -475,6 +482,92 @@ function listFolderFiles(project, dir) {
   };
   walk(dir);
   return files.sort();
+}
+
+// ---- Static checks (references/static.md, "What the review does with it") ----
+
+// The map the loaded rulebook kept (rulebook.cjs applyStaticMap put each item's valid entries on
+// its extras): the project layer and the validation are already applied.
+function staticMapOf(instructions) {
+  const items = {};
+  for (const [id, instruction] of instructions) {
+    for (const [n, extra] of instruction.extras || []) if (extra && extra.static) items[`${id}#${n}`] = extra.static;
+  }
+  return { version: 1, items };
+}
+
+// '12-15, 20' -> [[12, 15], [20, 20]]; '' (a deletion only) -> [].
+function rangesOfChangedLines(text) {
+  return String(text).split(',').map((part) => part.trim().split('-').map(Number))
+    .filter(([from]) => Number.isFinite(from)).map(([from, to = from]) => [from, to]);
+}
+
+// One target's static checks, never fatal: `{ doc, line }` with the document and the summary line,
+// `{ warning }` when the runner failed, `{}` when there was nothing to run.
+// `files`: the target's files (with `plan` indexing `planCatalog`); `mechanical`: the paths the
+// script found mechanical; `texts`: the reviewed revision's texts by path (Map); `fromWorkTree`:
+// the reviewed revision is the project's working tree, so the engines read it in place.
+function staticStage({ project, files, planCatalog, instructions, mechanical = new Set(), texts, patches = new Map(), fromWorkTree, typed = false, enabled = true, runner = staticChecks.run, timeoutMs = 120000 }) {
+  if (!enabled) return {};
+  const map = staticMapOf(instructions);
+  if (Object.keys(map.items).length === 0) return {};
+  const reviewed = files.filter((f) => f.status !== 'D' && !mechanical.has(f.path) && planCatalog[f.plan] && (fromWorkTree || texts.has(f.path)));
+  if (reviewed.length === 0) return {};
+  // Each file's own scoped plan is its "kind": light mode and appliesWhen are already applied.
+  const kindItems = {};
+  for (const f of reviewed) kindItems[String(f.plan)] = planCatalog[f.plan].plan.flatMap((step) => step.numbers.map((n) => `${step.id}#${n}`));
+  const changedLines = {};
+  for (const f of reviewed) if (f.status !== 'A' && f.changedLines !== null && f.changedLines !== undefined) changedLines[f.path] = rangesOfChangedLines(f.changedLines);
+  let sourceRoot = project;
+  let temp = null;
+  const started = Date.now();
+  try {
+    if (!fromWorkTree) {
+      // The revision is read from git objects: the engines read files, so the reviewed ones and
+      // the sibling a template rule reads (.html <-> .ts) are written to a folder of their own.
+      temp = fs.mkdtempSync(path.join(os.tmpdir(), 'doh-static-'));
+      sourceRoot = temp;
+      const wanted = new Set();
+      for (const f of reviewed) {
+        wanted.add(f.path);
+        if (/\.html?$/.test(f.path)) wanted.add(f.path.replace(/\.html?$/, '.ts'));
+        else if (/\.ts$/.test(f.path)) wanted.add(f.path.replace(/\.ts$/, '.html'));
+      }
+      for (const p of wanted) {
+        const text = texts.get(p);
+        if (typeof text !== 'string') continue;
+        fs.mkdirSync(path.dirname(path.join(temp, p)), { recursive: true });
+        fs.writeFileSync(path.join(temp, p), text);
+      }
+    }
+    const doc = runner({
+      projectRoot: project,
+      files: reviewed.map((f) => ({ path: f.path, kind: String(f.plan) })),
+      map,
+      kindItems,
+      changedLines,
+      sourceRoot,
+      // Type-aware rules only when asked for (`--static-types`: their run costs tens of seconds)
+      // and only on the working tree: a snapshot holds the reviewed files, not the tree
+      // (tsconfigs, the rest of the sources) a type-aware rule needs.
+      typed: Boolean(typed && fromWorkTree),
+      timeoutMs,
+      texts,
+      patches: Object.fromEntries(patches),
+    });
+    const docFiles = Object.values((doc && doc.files) || {});
+    const decided = docFiles.reduce((sum, f) => sum + (f.decided || []).length, 0);
+    const hits = docFiles.reduce((sum, f) => sum + (f.hits || []).filter((h) => h.inChange).length, 0);
+    // An engine no entry needed is no news: only the ones whose entries did not run are named.
+    const skippedList = (doc && doc.skipped) || [];
+    const down = Object.entries((doc && doc.engines) || {}).filter(([name, e]) => (!e.available || e.error) && skippedList.some((s) => s.engine === name)).map(([name]) => name);
+    const line = `Kontrole statyczne: ${decided} pozycji plików rozstrzygnął linter, ${hits} trafień w zmienionych liniach${down.length ? `; silniki niedostępne: ${down.join(', ')}` : ''}${skippedList.length ? `; pominięte wpisy mapy: ${skippedList.length}` : ''} (${Math.round((Date.now() - started) / 100) / 10} s).`;
+    return { doc, line };
+  } catch (err) {
+    return { warning: `Kontrole statyczne nie ruszyły (${String((err && err.message) || err).slice(0, 300)}) - każdą pozycję przechodzi recenzent.` };
+  } finally {
+    if (temp) try { fs.rmSync(temp, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
 }
 
 // New-file line ranges touched by a diff, read from `git diff -U0` hunk
@@ -1185,7 +1278,8 @@ function buildContext(options) {
   const localInstructionsDir = path.join(project, '.claude', 'doh', 'local');
   const loaded = rulebook.loadRulebook(
     [path.join(skillDir, 'instructions'), hasProjectInstructions ? projectInstructionsDir : null],
-    { localDir: isDirectory(localInstructionsDir) ? localInstructionsDir : null },
+    // The static maps by path: a project with a map and no instructions folder still has its map.
+    { localDir: isDirectory(localInstructionsDir) ? localInstructionsDir : null, staticMaps: options.staticMaps || rulebook.defaultStaticMaps([path.join(skillDir, 'instructions'), projectInstructionsDir]) },
   );
   // --light walks the plans without their items of severity low. What it leaves out is
   // known on every run: a resume across the two settings is safe only while it is none.
@@ -1774,9 +1868,22 @@ function buildContext(options) {
         .sort((a, b) => rank(a.f) - rank(b.f) || (kindName(a.f) < kindName(b.f) ? -1 : kindName(a.f) > kindName(b.f) ? 1 : 0) || a.i - b.i)
         .map(({ f }) => f);
     }
+    // The static checks (static-checks.cjs) over the files walked by checklist: what a linter
+    // settles closes, what it hits binds (review-bundle.cjs bindFile).
+    const ran = staticStage({
+      project, files: target.files, planCatalog, instructions: rules.instructions, mechanical: new Set(mechanicalOf.keys()),
+      texts: universe.files, patches, fromWorkTree: !blobs, typed: options.staticTypes === true, enabled: options.static !== false, runner: options.staticRunner,
+    });
+    const staticDoc = ran.doc || null;
+    if (ran.warning) result.warnings.push(`[${target.branch}] ${ran.warning}`);
+    // Written with the work folder (it is recreated then), so a failed write fails like the bundles'.
+    if (staticDoc) {
+      target.staticPath = `${target.workDir}/static.json`;
+      target.staticSummary = ran.line;
+    }
     // The part files' own width (check-part.cjs), so `03-a.ts` pairs with `part03.md`.
     const width = Math.max(2, String(target.files.length + 2).length);
-    const writes = [];
+    const writes = staticDoc ? [[target.staticPath, JSON.stringify(staticDoc)]] : [];
     // Rendered once every file is known: a bundle ends with the Reads of the next batch.
     const bundles = [];
     target.files.forEach((f, i) => {
@@ -1855,6 +1962,7 @@ function buildContext(options) {
           const ranges = reviewBundle.readRangesOf(f.changedLines, reviewBundle.lineCountOf(text));
           return ranges ? reviewBundle.textOfRanges(text, ranges) : null;
         })(),
+        staticFile: staticDoc && staticDoc.files ? staticDoc.files[f.path] || null : null,
       });
       // A data file read in ranges owes answers only to the lines it reads.
       const bound = f.readRanges ? reviewBundle.narrowBinding(fullBound, f.readRanges) : fullBound;
@@ -1943,7 +2051,8 @@ function buildContext(options) {
           const [from, to = from] = range.trim().split('-').map(Number);
           return Number.isFinite(from) ? sum + Math.max(1, to - from + 1) : sum;
         }, 0);
-      return reviewBundle.walkOutput({ items: b.file.checklistTotal || 0, changed, mechanical: isMechanical(number) });
+      // An item a static check closed is no line the walker writes.
+      return reviewBundle.walkOutput({ items: Math.max(0, (b.file.checklistTotal || 0) - (b.render.bound.closedStatic || []).length), changed, mechanical: isMechanical(number) });
     };
     const planned = options.windows === false || drafts
       ? []
@@ -2664,6 +2773,7 @@ function writeContext(context) {
         ...(t.stackTip ? { stackTip: t.stackTip } : {}),
         ...(t.stackTipRevision ? { stackTipRevision: t.stackTipRevision } : {}),
         crossBundlePath: t.crossBundlePath,
+        ...(t.staticPath ? { staticPath: t.staticPath, static: t.staticSummary } : {}),
         crossBriefPath: t.crossBriefPath || null,
         ...(t.gapsBriefPath ? { gapsBriefPath: t.gapsBriefPath } : {}),
         ...(t.crossInline ? { crossInline: true } : {}),
@@ -2682,6 +2792,6 @@ function writeContext(context) {
   };
 }
 
-module.exports = { foldWarnings, bigRunWindows, contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, laterPartsOf, briefSettingsOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext };
+module.exports = { foldWarnings, bigRunWindows, contextPointerName, reportHeader, reportedText, reportStem, runOf, cacheDirOf, pruneRuns, oldSideRanges, stackOf, laterPartsOf, briefSettingsOf, runWorkflow, ensureDohGitignore, extractImports, formatImportLedger, readBlobs, listRevision, loadFactUniverse, revisionScope, unquoteGitPath, patchPathOf, splitPatchByPath, layoutJson, findInterruptedRun, writeContext, countOf, parseArgs, globToRegExp, sanitizeBranchName, formatTimestamp, git, tryGit, resolveRef, detectPrBase, detectForkBase, aheadCounts, detectCandidateBase, detectBaseBranch, parseRawDiff, parseDiffRangesByPath, parseHunkRanges, isSkippedPath, listFolderFiles, pruneReports, buildContext, staticStage, staticMapOf, reportedText };
 
 if (require.main === module) main();

@@ -89,6 +89,8 @@ Without that tool, re-read the file or re-run the command with narrower output.
 - Never run `lint`, `test` or `build` yourself, in the user's checkout or anywhere else. The gate
   belongs to the agent, inside its worktree, through `checks.cjs` - and, for a held part of a stack,
   to `restack.cjs`, which runs it inside that part's worktree and hands you only the verdict.
+  A project whose `.claude/doh/checks.json` has `"static": true` in `steps` adds a `static checks`
+  step: the code review's `decides` linter checks on the changed lines, red on any hit (README, "The gate").
 - Branches run in PARALLEL, one background agent each. Never fix a branch yourself, not for a single
   comment, not to save time, not because only one branch was named.
 - A resolved thread is finished work. The collector already dropped them; never reach for the REST

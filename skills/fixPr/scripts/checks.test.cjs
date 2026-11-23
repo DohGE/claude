@@ -1293,3 +1293,48 @@ test('ciTestGap warns when CI runs a test command the gate does not', (t) => {
   assert.deepStrictEqual(missing.ciFiles, ['.github/workflows/ci.yml']);
   assert.strictEqual(checks.ciTestGap(makeProject(t, { test: 'jest' })), null, 'no CI file, nothing to compare');
 });
+
+// The opt-in static checks (codeReview static-gate.cjs): a step of its own, never on by default.
+test('the static checks step runs only when checks.json opts in, and a red one hands its hit lines over', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { lint: { command: 'npx eslint .' } } });
+  const off = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedFiles: [] });
+  assert.ok(!off.steps.some((s) => s.step === 'static'), 'no opt-in, no static step');
+
+  configure(root, { steps: { lint: { command: 'npx eslint .' }, static: { base: 'origin/develop' } } });
+  const hit = 'src/a.ts:12  no-restricted-syntax - bare subscribe() in a store  [signal-store#6]\nstatic checks: 1 violation(s)';
+  const run = fakeRunner({ static: { exitCode: 1, output: `${hit}\n` } });
+  const outDir = outDirFor(t);
+  const red = checks.runChecks({ root, outDir, run, changedFiles: [] });
+  const step = stepNamed(red, 'static');
+  assert.strictEqual(step.label, 'static checks');
+  assert.strictEqual(step.status, 'failed');
+  assert.strictEqual(red.gate, 'red');
+  assert.strictEqual(fs.readFileSync(step.errorsPath, 'utf8').trim(), hit);
+  const call = run.calls.find((c) => c.options.step === 'static');
+  assert.strictEqual(call.command, process.execPath);
+  assert.deepStrictEqual(call.args, [checks.staticGateScript, `--project=${root}`, '--base=origin/develop']);
+  assert.strictEqual(call.options.shell, false);
+
+  const green = checks.runChecks({ root, outDir, run: fakeRunner(), changedFiles: [], changedSince: 'origin/main' });
+  assert.strictEqual(stepNamed(green, 'static').status, 'passed');
+  assert.strictEqual(green.gate, 'green-no-tests');
+  assert.ok(fs.existsSync(checks.staticGateScript));
+});
+
+test('the static step takes --changed-since as its base, answers --only, and refuses a bad config', (t) => {
+  const root = makeProject(t, {});
+  configure(root, { steps: { static: true } });
+  const run = fakeRunner();
+  checks.runChecks({ root, outDir: outDirFor(t), run, changedFiles: [], changedSince: 'origin/main' });
+  assert.deepStrictEqual(run.calls.find((c) => c.options.step === 'static').args.slice(1), [`--project=${root}`, '--base=origin/main']);
+  const only = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), only: ['static'] });
+  assert.strictEqual(stepNamed(only, 'static').status, 'passed');
+  assert.strictEqual(only.gate, 'partial');
+  const other = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), only: ['lint'] });
+  assert.match(stepNamed(other, 'static').reason, /not selected by --only/);
+  assert.deepStrictEqual(checks.parseArgs(['--root=/a', '--out-dir=/b', '--only=static']).only, ['static']);
+  configure(root, { steps: { static: 'yes' } });
+  const bad = checks.runChecks({ root, outDir: outDirFor(t), run: fakeRunner(), changedFiles: [] });
+  assert.match(bad.errors.join(' '), /step "static" takes true, false/);
+});

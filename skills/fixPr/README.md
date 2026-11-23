@@ -250,6 +250,15 @@ uncommitted and untracked files included): a command none of whose files changed
 step the config does not name is skipped. Measured on dpx: its `build` script builds three apps and
 there is no `test` script, so the gate of 2026-11-03 ran three builds a pass and no test at all.
 
+### Static checks (opt-in)
+
+`"static": true` in `steps` (or `{ "base": "origin/develop" }`) adds one more step, `static checks`:
+codeReview's `scripts/static-gate.cjs` runs the review's `decides` static checks (ESLint rules and
+builtin checks of `static/static-map.json`, the project's own ESLint) over the lines changed since the
+base - `--changed-since` when the pass has one, else the config's `base`, else `origin/HEAD`. Every
+hit is a line `path:line  rule - message  [item]` in `static.errors.log`, and a hit fails the step:
+the review would report it as a violation. Off unless the project names it; `--only=static` runs it alone.
+
 Gate steps of every run on the machine share `maxParallel` slots (default: a quarter of the cores;
 `DOH_CHECKS_SLOTS` or `--slots=` override it, `0` lifts the limit): five agents building at once made
 a grep over one translation file take two minutes. A step waits for a free slot (`slotWaitMs`).

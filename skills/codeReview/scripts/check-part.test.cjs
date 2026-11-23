@@ -1032,6 +1032,9 @@ test('findContextFor reads the context the report folder names before it searche
   fs.mkdirSync(other, { recursive: true });
   const decoy = path.join(other, '.review-context-branch.json');
   fs.writeFileSync(decoy, JSON.stringify({ ...f.context, decoy: true }));
+  // Written in the same tick as the fixture's context, the decoy can share its mtime and lose the tie.
+  const newer = new Date(fs.statSync(f.contextPath).mtimeMs + 60000);
+  fs.utimesSync(decoy, newer, newer);
   assert.strictEqual(cp.findContextFor(f.part(1)).context.decoy, true);
   fs.writeFileSync(path.join(f.branchDir, '.review-context-path'), `${f.contextPath}\n`);
   const found = cp.findContextFor(f.part(1));
@@ -1331,4 +1334,26 @@ test('a finding no item covers names one of the fixed sources, whatever words th
   const out = normalizeRuleSources(text);
   assert.deepStrictEqual(out.text.split('\n'), ['- **Reguła:** Regresja → spec nie kompiluje się', '- **Reguła:** Spójność → spójność', '- **Reguła:** Regresja → x', '- **Reguła:** general#2', '- **Reguła:** Inne → y']);
   assert.strictEqual(out.fixes.length, 2);
+});
+
+test('a STATYCZNA item takes only NARUSZENIE citing the hit; a closed-by-static item is written in and accepted in a range', (t) => {
+  const f = fixture(t);
+  const hit = { line: 4, endLine: 4, rule: '@angular-eslint/prefer-on-push-component-change-detection', message: 'OnPush' };
+  const facts = (file) => ({ ...withRules({}), files: { 'src/a.ts': { info: [], ...file } } });
+  const onComponent = facts({ items: { 'component#1': { static: [hit] } } });
+  // The default part gives component#1 NARUSZENIE (4, 9): accepted.
+  assert.deepStrictEqual(check(f, 1, partA(), { facts: onComponent }), []);
+  const onGeneral = facts({ items: { 'general#1': { static: [hit] } } });
+  const general1 = (verdict) => partA({ general13: `[x] general#1 — ${verdict}\n[x] general#3 — OK (brak wystąpień)` });
+  has(check(f, 1, general1('OK (L4: fakt nie dotyczy: komponent bez wejść)'), { facts: onGeneral }), 'general#1: STATYCZNA L4 (@angular-eslint/prefer-on-push-component-change-detection) - narzędzie rozstrzygnęło tę pozycję');
+  has(check(f, 1, partA(), { facts: onGeneral }), 'general#1: STATYCZNA L4');
+  const elsewhere = facts({ items: { 'general#2': { static: [{ ...hit, line: 7, endLine: 7 }] } } });
+  has(check(f, 1, partA(), { facts: elsewhere }), 'general#2: NARUSZENIE nie wskazuje L7');
+
+  const closed = facts({ items: {}, closed: ['general#3'], closedStatic: ['general#3'] });
+  const walked = partA({ general13: '[x] general#1 — OK (brak wystąpień)' });
+  const filled = cp.fillPart(f.context, f.target, f.part(1), walked, closed);
+  assert.ok(filled.text.includes(`[x] general#3 — OK (${bundle.closedStaticEvidence})`), filled.text);
+  assert.deepStrictEqual(check(f, 1, filled.text, { facts: closed }), []);
+  assert.deepStrictEqual(check(f, 1, partA({ general13: '[x] general#1,#3 — OK (statyczna: czysto)' })), [], 'the range form, like brak wystąpień');
 });
