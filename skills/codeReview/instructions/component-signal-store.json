@@ -15,7 +15,7 @@
   "notes": [
     "A signal store is the default for view state; an NgRx slice is kept only for data several independent views share (architecture#13), and a store holding such data is reported under signal-store#10."
   ],
-  "itemCount": 53,
+  "itemCount": 54,
   "instructions": [
     {
       "id": "signal-store",
@@ -23,8 +23,8 @@
       "preamble": [
         "This instruction OWNS a view's `signalStore()` file: its location, state, dependencies, derivations, mutations, async methods and provisioning. Whether data belongs in a signal store or an NgRx slice is decided by the architecture instruction (architecture#12, architecture#13); the signals API itself belongs to the best-practices instruction."
       ],
-      "selectedItems": "1-11",
-      "checklistSize": 11,
+      "selectedItems": "1-12",
+      "checklistSize": 12,
       "items": [
         {
           "id": "signal-store#1",
@@ -76,6 +76,11 @@
         {
           "id": "signal-store#11",
           "text": "The store exposes only what its consumers call: a loader or helper that a guarded init method wraps (the init checks whether the data is already loaded, then calls the loader) stays an internal `_`-prefixed member, never a public method a consumer could call past the guard; a public method or computed signal nothing outside the store and its spec reads is made internal or removed (code-quality#3), and its spec tests the public method instead (signal-store-unit-test#6).",
+          "severity": "medium"
+        },
+        {
+          "id": "signal-store#12",
+          "text": "A signal store holds view state of its own. A store whose `withComputed` signals only combine NgRx selectors or facade signals, with no state of its own behind them (`signalStore(withComputed(() => ({ label: computed(() => facade.name() ?? otherFacade.fallbackName()) })))`), is not added - a derivation of NgRx state is no view state (architecture#12): it is a selector in the area's `query` object, which may take a selector of another area's query as an input (`createSelector(selectName, otherAreaQuery.selectFallbackName, (name, fallback) => name ?? fallback)`), exposed through the facade (`readonly label = this._store.selectSignal(areaQuery.selectLabel)`).",
           "severity": "medium"
         }
       ]

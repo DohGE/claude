@@ -58,8 +58,14 @@
         },
         {
           "id": "component-template#5",
-          "text": "Every `@switch` covers its fallback with `@default`, including when the subject is an enum (a member added later must not render nothing).",
-          "subject": "@switch|ngswitch"
+          "text": "Every `@switch` covers its fallback with `@default`, including when the subject is an enum (a member added later must not render nothing). A `@default` is never empty: an empty `@default {}` renders nothing, exactly as no `@default` does, so it is removed - a `@switch` whose unlisted values are meant to render nothing ends after its last `@case`, and one whose unlisted values must show something renders that fallback inside its `@default`.",
+          "subject": "@switch|ngswitch",
+          "probe": [
+            {
+              "pattern": "(?<at>@default)\\s*\\{\\s*\\}",
+              "message": "pusty blok `@default {}`"
+            }
+          ]
         },
         {
           "id": "component-template#7",
@@ -106,7 +112,7 @@
         },
         {
           "id": "component-template#13",
-          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant), its value naming the element's role or intent - never its translated text. On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template. The element name ends with the kind of control it hooks - `-input`, `-select`, `-checkbox`, `-toggle`, `-radio`, `-button`, `-link` - never a generic `-control`, `-field` or `-element`.",
+          "text": "Every interactive native element carries `[attr.data-test]=\"dataTestPrefix + '<element-name>'\"` (or a plain `data-test` attribute when the prefix is constant), its value naming the element's role or intent - never its translated text. On a component selector `data-test` is allowed only when that component is a wrapper around the native element the test must reach (`button`, `input`, `select`, `textarea`, `a`, …) and the attribute is meant to land on it — the wrapper is then the only way to hook that native element. On any other component selector (a feature/container component, a card, a list, `<ui-user-card data-test=\"...\">`) it stays a finding: the tag is already a unique selector and the hook belongs on the native elements inside that component's own template. The element name ends with the kind of control it hooks - `-input`, `-select`, `-checkbox`, `-toggle`, `-radio`, `-button`, `-link` - never a generic `-control`, `-field` or `-element`. A non-interactive element - a text `span`, a label, a heading, a layout `div` - carries a `data-test` only when a spec or e2e test in the repository targets that hook: a `data-test` on such an element that no test selects is a finding and is removed (`<span [attr.data-test]=\"dataTestPrefix + 'last-update-time'\">` becomes `<span>`).",
           "severity": "medium"
         },
         {

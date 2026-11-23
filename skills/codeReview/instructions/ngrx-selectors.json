@@ -28,7 +28,7 @@
         },
         {
           "id": "ngrx-selectors#3",
-          "text": "Every exported selector belongs to a query object; a selector in no query is dead code and is removed.",
+          "text": "Every exported selector belongs to a query object, and a query object lists only selectors read outside the selectors file - by the facade, an effect, a guard or resolver, or another area's selectors. A selector that only feeds other selectors of the same file stays a local const, out of every query (in `export const areaQuery = { selectStatus, selectIsReady }`, where `selectStatus` only feeds `selectIsReady`, `selectStatus` is dropped from the query). A selector nothing reads at all is dead code and is removed.",
           "severity": "medium"
         },
         {
